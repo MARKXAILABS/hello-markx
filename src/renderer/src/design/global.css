@@ -2,10 +2,17 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
-/* The app is a fixed cream/light design. Without declaring it, Chromium on a
-   dark-mode OS styles form controls with the DARK UA scheme — most visibly a
-   white (invisible) text caret on our cream textareas. */
+/* Light mode is a cream design. Without declaring it, Chromium on a dark-mode
+   OS styles form controls with the DARK UA scheme — most visibly a white
+   (invisible) text caret on our cream textareas. */
 :root { color-scheme: light; }
+
+/* ...and the mirror image once the theme flips. `light` pinned in BOTH themes
+   meant every native control the UA draws for itself — <select> popups,
+   checkboxes, radios, the scrollbars, the autofill wash — kept its white
+   chrome on a near-black app (#24). This is the whole fix: the tokens below
+   already handle everything we draw ourselves. */
+:root[data-cth-theme='dark'] { color-scheme: dark; }
 
 html, body, #root {
   margin: 0;
@@ -36,6 +43,18 @@ button, input, textarea, select {
 
 /* Belt + suspenders for the caret: follow the ink, never the UA scheme. */
 input, textarea { caret-color: var(--cth-ink-900); }
+
+/* A control's hairline is structure, not decoration — it is the only thing
+   saying "you can type here", so it has to clear the 3:1 border floor. `ink-100`
+   is deliberately QUIET (1.4-1.7:1 in dark, see the tokens.css note) for
+   dividers that should recede, yet ~25 inline styles reach for it as an input's
+   border, where it disappeared against the dark ground (#24).
+   Rather than chase every call site — and every one written next week — the
+   token is redefined INSIDE a control: custom properties inherit, so an
+   `inset 0 0 0 1px var(--cth-ink-100)` written on an <input> resolves to the
+   border-grade ink-300 without that style knowing. Verified that no form
+   control uses ink-100 for anything but its border, so nothing else moves. */
+input, textarea, select { --cth-ink-100: var(--cth-ink-300); }
 
 /* The MOUSE text-select pointer (the I-beam) is a different beast from the
    caret: it comes from the OS cursor scheme, which `color-scheme` can't touch.

@@ -53,6 +53,11 @@ export interface Agent {
   recentTextTs?: number;
   /** populated when status === 'blocked' */
   blockReason?: BlockReason;
+  /** Blocked ON MICHAEL rather than on you: a sub-agent parked at a permission
+   *  prompt the god normally answers. Both are 'blocked' (a prompt is a full
+   *  stop); this records WHO it is parked on, and only the god escalates to the
+   *  human. Ephemeral — derived from hooks/pty output, never persisted. */
+  waitingOnGod?: boolean;
   /** present iff this agent has a real PTY in the main process */
   ptyId?: string;
   /** Incremented by Restart & Continue to remount this agent's xterm without
@@ -185,6 +190,10 @@ interface State {
   sidebarWidth: number;
   sidebarTab: SidebarTab;
   godStatus: GodStatus;
+  /** WHY the god boot failed (spawn error message), when godStatus === 'failed'.
+   *  The empty-floor UI shows it so an uninstalled CLI reads as its real cause
+   *  instead of a bare "EMPTY FLOOR". */
+  godError?: string;
   /** Per-agent outgoing message queue (agent id → messages awaiting delivery).
    *  Lets the user keep "talking" to a busy agent: messages park here and are
    *  drained to the terminal one-by-one once the agent is free. */
@@ -193,7 +202,7 @@ interface State {
    *  shown in the command center (interactive sessions don't expose billed $). */
   toolCounts: Record<string, number>;
   bumpToolCount: (id: string) => void;
-  setGodStatus: (status: GodStatus) => void;
+  setGodStatus: (status: GodStatus, error?: string) => void;
   select: (id: string) => void;
   updateAgent: (id: string, patch: Partial<Agent>) => void;
   setAgentNote: (id: string, note: string) => void;
@@ -610,7 +619,7 @@ export const useStore = create<State>((set) => ({
   toolCounts: {},
   bumpToolCount: (id) =>
     set((s) => ({ toolCounts: { ...s.toolCounts, [id]: (s.toolCounts[id] ?? 0) + 1 } })),
-  setGodStatus: (status) => set({ godStatus: status }),
+  setGodStatus: (status, error) => set({ godStatus: status, godError: error }),
   select: (id) => set((s) => { persistAgents(s.agents, id); return { selectedId: id, ccTabRequest: null }; }),
   updateAgent: (id, patch) =>
     set((s) => {

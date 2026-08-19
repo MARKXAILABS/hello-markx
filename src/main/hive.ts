@@ -19,7 +19,8 @@
  */
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync, renameSync,
-  readdirSync, statSync, rmSync, appendFileSync, symlinkSync, copyFileSync, chmodSync
+  readdirSync, statSync, rmSync, appendFileSync, symlinkSync, copyFileSync, chmodSync,
+  openSync, readSync, closeSync
 } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -37,6 +38,7 @@ import {
 } from '../shared/agentProvider';
 import { MCP_CATALOG } from '../shared/mcpCatalog';
 import { expandTilde } from './fs';
+import { memoryBin } from './memory';
 
 /** The subset of HarnessConfig the hive consumes for the default-MCP merge.
  *  Kept as a local shape so hive.ts never imports the foundation-owned config
@@ -187,10 +189,35 @@ export interface SpawnInjection {
 
 const HOP_CAP = 12;
 
-function sleepSync(ms: number): void {
-  const sab = new SharedArrayBuffer(4);
-  Atomics.wait(new Int32Array(sab), 0, 0, ms);
-}
+// ─── git + log budgets ──────────────────────────────────────────────────────
+// Every number here used to be an order of magnitude larger and paid for on the
+// MAIN THREAD (see commit()). They are deliberately small: git is history, not
+// data — the files are already durable on disk before any of this runs.
+
+/** Trailing debounce on hive commits. A busy floor commits per message; one
+ *  commit per 5 s window is the same history at a fraction of the git. */
+const COMMIT_DEBOUNCE_MS = 5_000;
+/** Per-git-child timeout on the commit path. */
+const GIT_TIMEOUT_MS = 2_000;
+/** Attempts before a commit gives up — the NEXT mutation retries anyway. */
+const GIT_ATTEMPTS = 2;
+/** Base backoff between attempts (async timer, never a blocking sleep). */
+const GIT_RETRY_MS = 50;
+/** How old `.git/index.lock` must be before we treat it as abandoned. Must stay
+ *  comfortably ABOVE GIT_TIMEOUT_MS — the old 10 s was BELOW the old 8 s git
+ *  timeout, so a slow-but-alive git (a big `add -A` behind Windows antivirus)
+ *  could have its live lock deleted out from under it. */
+const STALE_LOCK_MS = 60_000;
+/** Rotate log.jsonl past this size (one generation kept). It is append-only with
+ *  a dozen writers and was never rotated. */
+const LOG_ROTATE_BYTES = 8 * 1024 * 1024;
+/** How much of log.jsonl's tail logTail() reads. Bounded so an IPC/voice read
+ *  never slurps a multi-megabyte file to show the last 200 events. */
+const LOG_TAIL_BYTES = 64 * 1024;
+/** Paths the hive repo must stop VERSIONING — see untrackIgnored(). Mirrors the
+ *  churny half of the .gitignore seed in ensureHive; a `.gitignore` line alone
+ *  does nothing to a file git is already tracking. */
+const UNTRACK_PATHS = ['cost-ledger.jsonl', 'log.jsonl', 'log.jsonl.1', 'backups'];
 
 /** Filesystem- and sort-safe timestamp, e.g. 2026-05-30T14-03-11-123Z. */
 function stamp(): string {
@@ -268,6 +295,75 @@ export function redactSecrets(text: unknown): string {
   );
   return s;
 }
+
+/**
+ * The standing `permissions.deny` list written into every hive-authored
+ * per-agent settings.json.
+ *
+ * WHY IT EXISTS. `autoMode` defaults to true, and it appends
+ * `--permission-mode bypassPermissions` (and `--yolo` / `--dangerously-*` on the
+ * other engines). So the tool-permission PROMPT that HIVE.md §2.3 and
+ * PROTOCOL.md both describe as the human-in-the-loop gate never fires — the gate
+ * was prose. A `deny` rule is still enforced UNDER bypassPermissions, which makes
+ * it the only gate on that path that actually holds, and it costs one array.
+ *
+ * CALIBRATION. Deny only what is UNRECOVERABLE or leaks a credential. Anything
+ * an agent can undo — an ordinary commit, an ordinary push, deleting one file —
+ * stays allowed, because a floor of agents that cannot work is not a security
+ * control, it is an outage. Everything listed below either destroys committed or
+ * uncommitted work with no reflog to recover it, escalates privilege, or reads a
+ * secret the agent has no business holding. Deliberately NOT here: `curl`/`wget`
+ * (the `curl | sh` shape cannot be matched by a prefix rule without denying all
+ * network fetches, which is most of an agent's day), and `git commit`/`git push`
+ * without `--force` (undoable, and integration is the god's actual job).
+ *
+ * HONEST LIMITS, so nobody mistakes this for a sandbox. (1) `Bash(…)` rules are
+ * PREFIX matches on the command string: a model that wants past them writes a
+ * shell script, or varies the spacing. This stops the confident accident — the
+ * failure that actually happens — not a hostile model. (2) The `Read`/`Edit`
+ * rules bind the file tools, not `cat`; they keep the default path to a secret
+ * closed. (3) Claude Code only — the hookless engines take no settings file, so
+ * their `--yolo` really is ungated. The real gate for all three is autoMode off
+ * plus `control.toolDecision`.
+ */
+const AGENT_DENY_RULES = [
+  // Destructive git. `push --force` (which prefix-matches --force-with-lease
+  // too), `reset --hard` and `clean -f…` each throw away work that no reflog
+  // brings back — someone else's history, the index, the untracked tree.
+  'Bash(git push --force:*)',
+  'Bash(git push -f:*)',
+  'Bash(git reset --hard:*)',
+  'Bash(git clean -f:*)',
+  'Bash(git clean -d:*)',
+  'Bash(git clean -x:*)',
+  // Recursive force-delete. `rm -r` without `-f` is still allowed, so cleaning a
+  // build dir is one flag away — the deny is on the shape that eats a home
+  // directory when a path variable came back empty.
+  'Bash(rm -rf:*)',
+  'Bash(rm -fr:*)',
+  'Bash(rm -r -f:*)',
+  'Bash(rm -f -r:*)',
+  // Windows equivalents — the floor runs there too.
+  'Bash(rd /s:*)',
+  'Bash(rmdir /s:*)',
+  'Bash(Remove-Item -Recurse -Force:*)',
+  // Privilege escalation: whatever follows runs outside every other limit here.
+  'Bash(sudo:*)',
+  'Bash(doas:*)',
+  'Bash(runas:*)',
+  // Credentials and keys — read AND write, so an agent can neither exfiltrate a
+  // secret through its context nor quietly rewrite the machine's auth.
+  'Read(~/.ssh/**)', 'Edit(~/.ssh/**)',
+  'Read(~/.aws/**)', 'Edit(~/.aws/**)',
+  'Read(~/.config/gcloud/**)',
+  'Read(~/.config/gh/**)', 'Edit(~/.config/gh/**)',
+  'Read(~/.docker/config.json)',
+  'Read(~/.npmrc)', 'Edit(~/.npmrc)',
+  'Read(~/.netrc)', 'Edit(~/.netrc)',
+  'Read(~/.claude/.credentials.json)',
+  'Read(**/*.pem)', 'Read(**/*.p12)', 'Read(**/id_rsa*)', 'Read(**/id_ed25519*)',
+  'Read(./.env)', 'Read(./.env.*)'
+];
 
 // ─── HiveManager ────────────────────────────────────────────────────────────
 
@@ -500,9 +596,23 @@ export class HiveManager {
     // so it tracks the bundled list).
     writeFileSync(join(root, 'COMMANDS.md'), COMMANDS_MD, 'utf8');
 
-    // Keep the churny/ephemeral live files out of the hive git repo.
+    // Keep the churny/ephemeral live files out of the hive git repo. Anything
+    // append-only or regenerated belongs here: a TRACKED file of that shape
+    // stores a fresh copy of its WHOLE self in every hive commit, and the hive
+    // commits constantly (this is the cost-ledger pathology — see untrackIgnored,
+    // which drops the copies already in the index for everything listed here).
     const gitignore = join(root, '.gitignore');
-    const want = ['fleet.json', 'hooks.sock', 'cost-ledger.jsonl', '.DS_Store'];
+    const want = [
+      'fleet.json', 'hooks.sock', 'cost-ledger.jsonl', '.DS_Store',
+      // Append-only event log + its one rotated generation.
+      'log.jsonl', 'log.jsonl.1',
+      // reflect.ts copies EVERY agent's memory.md in here on every condense
+      // attempt, successful or not.
+      'backups/',
+      // atomicWriteJson's staging files. Transient, but a crash mid-write leaves
+      // one behind and `git add -A` would commit the corpse.
+      '*.tmp-*'
+    ];
     let lines: string[] = [];
     if (existsSync(gitignore)) { try { lines = readFileSync(gitignore, 'utf8').split('\n'); } catch { lines = []; } }
     const missing = want.filter((w) => !lines.includes(w));
@@ -883,6 +993,12 @@ export class HiveManager {
     });
     const mcpServers = this.buildDefaultMcpServers(cwd, cfg);
     return {
+      // The standing HITL backstop — see AGENT_DENY_RULES. `deny` is the one
+      // permission surface that survives `--permission-mode bypassPermissions`,
+      // which autoMode turns on by default; without it the "permission prompts
+      // are the gate" contract in HIVE.md §2.3 / PROTOCOL.md is documentation
+      // describing a prompt that never appears.
+      permissions: { deny: AGENT_DENY_RULES },
       // Match the TUI's truecolor palette to the harness terminal theme —
       // PER SESSION, so the user's global Claude theme (their own terminals
       // outside the app) is never touched.
@@ -1127,11 +1243,21 @@ export class HiveManager {
     // Native-separator path helpers — see the 🪟 note above.
     const inDir = (...parts: string[]): string => join(dir, ...parts);
     const inRoot = (...parts: string[]): string => join(root, ...parts);
+    // The mempalace binary is BAKED as an absolute path, for exactly the reason
+    // the KG CLI below is: the agent was told to type a bare `mempalace`, which
+    // resolves against the PTY's PATH — not the set of places memoryBin() looks.
+    // A GUI-launched app rarely has the uv/brew/pip shim dir on PATH, so the
+    // green "semantic memory READY" dot meant nothing for the command the agent
+    // was actually instructed to run. Prompt-cache-safe: one fixed path for the
+    // life of an install (memoryBin() is probed once per process and cached), no
+    // more volatile than kgCliPath. Falls back to the bare command when the CLI
+    // isn't installed — i.e. never worse than before.
+    const mem = semanticMemory ? memoryBin() ?? 'mempalace' : '';
     const memoryLine = semanticMemory
       // The palace location is named, not spelled as `$MEMPALACE_PALACE_PATH`:
       // `mempalace` reads that env var itself, and the POSIX `$` form was noise
       // (or an empty expansion) for a Windows agent that tried to use it literally.
-      ? 'Semantic memory: the whole hive shares a searchable MemPalace at the path in your MEMPALACE_PALACE_PATH environment variable. To recall relevant past knowledge across the team, run `mempalace search "<query>"`; run `mempalace wake-up` at the start of a task for a memory digest. Your notes in memory.md are mined into the palace automatically — write durable facts there.'
+      ? `Semantic memory: the whole hive shares a searchable MemPalace at the path in your MEMPALACE_PALACE_PATH environment variable. To recall relevant past knowledge across the team, run \`"${mem}" search "<query>"\`; run \`"${mem}" wake-up\` at the start of a task for a memory digest. (That is the absolute path to the mempalace CLI — use it instead of a bare \`mempalace\`, which may not be on your PATH.) Your notes in memory.md are mined into the palace automatically — write durable facts there.`
       : '';
     // Enterprise Knowledge Graph (opt-in). Volatile-free: the bundled-node launcher
     // and the KG CLI are both fixed absolute paths for an install, so baking them
@@ -1191,11 +1317,17 @@ export class HiveManager {
     };
   }
 
-  /** Atomically deliver a message into a recipient agent's inbox. */
-  private deliver(msg: HiveMessage, toId: string): void {
+  /** Atomically deliver a message into a recipient agent's inbox. Returns FALSE
+   *  when the recipient has no inbox on disk — an id that was never registered
+   *  here. The caller must not report such a message as sent: routeMessage's
+   *  guards all pass for an unknown id (canReceiveInbox(undefined) falls back to
+   *  the claude preset → true), so the drop was silent while the log said
+   *  "message" and the floor flew an envelope. */
+  private deliver(msg: HiveMessage, toId: string): boolean {
     const inbox = join(this.agentDir(toId), 'inbox');
-    if (!existsSync(inbox)) return; // unknown recipient — dropped (logged by caller)
+    if (!existsSync(inbox)) return false;
     this.atomicWriteJson(join(inbox, `${msg.id}.json`), msg);
+    return true;
   }
 
   /** Inject a message directly (used by the orchestrator / UI / tests). */
@@ -1278,7 +1410,19 @@ export class HiveManager {
         }
         continue;
       }
-      this.deliver(msg, t);
+      // Last stop: an id nobody registered (a stale name remembered from a
+      // pre-restart transcript, a typo). It has no workspace, so there is no
+      // inbox to write into — bounce it to god with the full body, the same
+      // shape as the three handoff bounces above, and record the drop so the
+      // 'message' line below is never the only trace.
+      if (!this.deliver(msg, t)) {
+        this.appendLog({ kind: 'undeliverable', reason: 'unknown-agent', from: msg.from, to: t, id: msg.id });
+        this.deliver({
+          ...msg,
+          to: godId,
+          subject: `[undeliverable — "${t}" is not an agent on this floor (no workspace); it may have been removed] ${msg.subject}`
+        }, godId);
+      }
     }
     this.appendLog({ kind: 'message', from: msg.from, to: msg.to, act: msg.act, subject: msg.subject, id: msg.id });
     this.emitMessage(msg, targets);
@@ -1905,10 +2049,28 @@ export class HiveManager {
         + 'Route work to someone on this list before spawning anyone new.';
     } catch { return null; }
   }
+  /** The last `n` log events. Reads only the last LOG_TAIL_BYTES of the file:
+   *  this is called from IPC and the voice read-layer, and log.jsonl is an
+   *  append-only file with a dozen writers, so slurping it whole to show 200
+   *  lines was a growing per-call read. */
   logTail(n = 200): unknown[] {
     const root = this.root();
-    if (!root || !existsSync(join(root, 'log.jsonl'))) return [];
-    const lines = readFileSync(join(root, 'log.jsonl'), 'utf8').trim().split('\n').filter(Boolean);
+    if (!root) return [];
+    const path = join(root, 'log.jsonl');
+    if (!existsSync(path)) return [];
+    let text: string;
+    try {
+      const size = statSync(path).size;
+      const start = Math.max(0, size - LOG_TAIL_BYTES);
+      const buf = Buffer.alloc(size - start);
+      const fd = openSync(path, 'r');
+      try { readSync(fd, buf, 0, buf.length, start); } finally { closeSync(fd); }
+      text = buf.toString('utf8');
+      // A window that starts mid-file almost always starts mid-record; drop that
+      // fragment rather than hand the caller a {raw:…} shard of one event.
+      if (start > 0) text = text.slice(text.indexOf('\n') + 1);
+    } catch { return []; }
+    const lines = text.trim().split('\n').filter(Boolean);
     return lines.slice(-n).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } });
   }
 
@@ -1922,11 +2084,35 @@ export class HiveManager {
   }
 
   // — log —
+
+  /** Size of log.jsonl, tracked in-process so the rotation check is not a stat
+   *  on every append (a dozen writers hit this path). -1 = not seeded yet. */
+  private logBytes = -1;
+
   appendLog(event: Record<string, unknown>): void {
     const root = this.root();
     if (!root) return;
+    const path = join(root, 'log.jsonl');
     const line = JSON.stringify({ ts: Date.now(), ...event }) + '\n';
-    try { appendFileSync(join(root, 'log.jsonl'), line, 'utf8'); } catch { /* noop */ }
+    try {
+      if (this.logBytes < 0) {
+        try { this.logBytes = statSync(path).size; } catch { this.logBytes = 0; }
+      }
+      // Rotate, ONE generation deep. The log is append-only, has never been
+      // rotated, and is read by logTail — an unbounded file is an unbounded read
+      // and (until the ignore seed above) an unbounded repo. Renaming over the
+      // previous generation keeps recent history without a retention policy.
+      if (this.logBytes >= LOG_ROTATE_BYTES) {
+        // A rotation that fails (a Windows file lock, say) must not also cost us
+        // the event, so it gets its own catch and we append to the oversized file
+        // regardless. The counter resets either way — a stuck rename should be
+        // retried at the next window, not on every single append.
+        try { renameSync(path, `${path}.1`); } catch { /* keep appending */ }
+        this.logBytes = 0;
+      }
+      appendFileSync(path, line, 'utf8');
+      this.logBytes += Buffer.byteLength(line);
+    } catch { /* noop */ }
   }
 
   /**
@@ -1969,8 +2155,20 @@ export class HiveManager {
   private readJson<T>(p: string, fallback: T): T {
     try { return JSON.parse(readFileSync(p, 'utf8')) as T; } catch { return fallback; }
   }
+  /**
+   * EVERY json the hive persists goes through the atomic write below — this used
+   * to be a bare writeFileSync, and it is what persists registry.json and
+   * tasks.json.
+   *
+   * A truncated write is not a loud failure here: readJson swallows the parse
+   * error and hands back the fallback, so a crash (power loss, OOM kill) partway
+   * through one of these silently resets the god id, every agent's
+   * cwd/provider/session and the entire kanban — and the app boots into
+   * onboarding as if the floor had never existed. tmp+rename costs one extra
+   * file operation; the truncation window is worth more than that.
+   */
   private writeJson(p: string, data: unknown): void {
-    writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+    this.atomicWriteJson(p, data);
   }
   private atomicWriteJson(p: string, data: unknown): void {
     const tmp = `${p}.tmp-${shortRand()}`;
@@ -1978,7 +2176,11 @@ export class HiveManager {
     renameSync(tmp, p);
   }
 
-  // — git (single committer, retry + stale-lock recovery) —
+  // — git (single committer: debounced, off the main thread, stale-lock recovery) —
+
+  /** Blocking git. The ONLY caller left is `git init` in ensureHive — a one-shot
+   *  at bootstrap on an empty directory. Everything on the commit path uses
+   *  gitAsync; see commit() for why that matters. */
   private git(args: string[], cwd: string): { ok: boolean; out: string; err: string } {
     const res = spawnSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args], {
       cwd, encoding: 'utf8', timeout: 8000
@@ -1986,54 +2188,152 @@ export class HiveManager {
     return { ok: res.status === 0, out: res.stdout ?? '', err: res.stderr ?? '' };
   }
 
-  /** Has the one-time cost-ledger untrack pass run in this process yet? */
-  private untrackedCostLedger = false;
+  /** Set while a git child WE spawned is alive, so clearStaleLock can never
+   *  delete an index.lock that belongs to a live child of ours. */
+  private gitInFlight = false;
 
-  /**
-   * Stop versioning the cost ledger.
-   *
-   * `cost-ledger.jsonl` is append-only and gains a row per usage sample, so a
-   * repo that tracks it stores a fresh copy of the WHOLE file on every hive
-   * commit — and the hive commits constantly. A quarter-gigabyte ledger with a
-   * few thousand commits behind it is several hundred gigabytes of blob that
-   * git has to walk, which is what turns a routine `gc` into a multi-gigabyte
-   * `pack-objects` run. The ignore line in ensureHive keeps new copies out;
-   * this drops the one already in the index, because git keeps recording a
-   * file it is already tracking no matter what .gitignore says — so the ignore
-   * line alone reads as a fix while the repo goes on growing. The ledger stays
-   * on disk, so the cost history the app reads is untouched.
-   */
-  private untrackCostLedger(root: string): void {
-    if (this.untrackedCostLedger) return;
-    this.untrackedCostLedger = true;
-    // Probe before mutating: `rm --cached` on a repo that never tracked it
-    // would still rewrite the index on every launch, inside the retry path.
-    const tracked = this.git(['ls-files', '--', 'cost-ledger.jsonl'], root);
-    if (!tracked.ok || !tracked.out.trim()) return;
-    this.git(['rm', '--cached', '-q', '--ignore-unmatch', '--', 'cost-ledger.jsonl'], root);
-    console.warn('[hive] untracked the cost ledger from the hive repo');
+  /** Same as {@link git}, but awaits the child instead of blocking the loop. */
+  private gitAsync(args: string[], cwd: string): Promise<{ ok: boolean; out: string; err: string }> {
+    return new Promise((resolve) => {
+      let out = '';
+      let err = '';
+      this.gitInFlight = true;
+      const done = (ok: boolean): void => { this.gitInFlight = false; resolve({ ok, out, err }); };
+      try {
+        const child = spawn(
+          'git',
+          ['-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args],
+          { cwd, timeout: GIT_TIMEOUT_MS }
+        );
+        child.stdout?.on('data', (d) => { out += d.toString(); });
+        child.stderr?.on('data', (d) => { err += d.toString(); });
+        child.on('error', (e) => { err += String(e); done(false); });
+        child.on('close', (code) => done(code === 0));
+      } catch (e) { err = String(e); done(false); }
+    });
   }
 
-  /** Commit all hive changes. No-op if there is nothing staged. */
+  /** Has the one-time untrack pass run in this process yet? */
+  private untrackedIgnored = false;
+
+  /**
+   * Stop versioning the churny files the ignore seed lists.
+   *
+   * `cost-ledger.jsonl`, `log.jsonl` and `backups/` are all append-only or
+   * regenerated wholesale, so a repo that TRACKS them stores a fresh copy of the
+   * whole thing in every hive commit — and the hive commits constantly. A
+   * quarter-gigabyte ledger with a few thousand commits behind it is several
+   * hundred gigabytes of blob that git has to walk, which is what turns a routine
+   * `gc` into a multi-gigabyte `pack-objects` run. The ignore lines in ensureHive
+   * keep NEW copies out; this drops the ones already in the index, because git
+   * keeps recording a file it already tracks no matter what .gitignore says — so
+   * the ignore line alone reads as a fix while the repo goes on growing.
+   *
+   * The files stay on disk; only their history is dropped.
+   */
+  private async untrackIgnored(root: string): Promise<void> {
+    if (this.untrackedIgnored) return;
+    this.untrackedIgnored = true;
+    // Probe before mutating: `rm --cached` on a repo that never tracked any of
+    // these would still rewrite the index on every launch, inside the retry path.
+    const tracked = await this.gitAsync(['ls-files', '--', ...UNTRACK_PATHS], root);
+    if (!tracked.ok || !tracked.out.trim()) return;
+    await this.gitAsync(['rm', '--cached', '-r', '-q', '--ignore-unmatch', '--', ...UNTRACK_PATHS], root);
+    console.warn('[hive] untracked churny files from the hive repo:', tracked.out.trim().split('\n').length, 'path(s)');
+  }
+
+  /** Trailing debounce timer for the next commit, and the messages folded into it. */
+  private commitTimer: NodeJS.Timeout | null = null;
+  private pendingCommits: string[] = [];
+  /** Set for the whole flush, so two flushes can never interleave `add -A`. */
+  private committing = false;
+
+  /**
+   * Commit all hive changes. Fire-and-forget: DEBOUNCED and never blocking.
+   *
+   * This used to run `git add -A` + `git commit` synchronously, with an 8 s
+   * timeout, five attempts and an `Atomics.wait` backoff — all on the Electron
+   * main thread, once per hive message, and also from the router tick,
+   * writeTasks(), ensureAgent() and setArchived(). A repo whose index was locked
+   * froze the supervisor for something like 80 seconds: no IPC, no PTY bytes
+   * forwarded, hook shims timing out, the UI beachballed.
+   *
+   * Nothing is lost if the app quits with a commit pending — git here is history,
+   * not storage. Every file was already written (atomically) before commit() was
+   * called, and the next launch's `add -A` picks up whatever the timer did not.
+   * That is also why the timer is unref'd: a pending commit must never be the
+   * reason the process stays alive.
+   */
   commit(message: string): void {
     const root = this.root();
     if (!root || !existsSync(join(root, '.git'))) return;
-    this.untrackCostLedger(root);
-    for (let attempt = 0; attempt < 5; attempt++) {
-      this.clearStaleLock(root);
-      const add = this.git(['add', '-A'], root);
-      const commit = this.git(['commit', '-q', '-m', message], root);
-      if (commit.ok) return;
-      if (/nothing to commit/i.test(commit.out + commit.err)) return;
-      if (!add.ok || /index\.lock/i.test(commit.err)) { sleepSync(50 * (attempt + 1)); continue; }
-      return; // a non-lock failure — give up quietly, the next mutation retries
+    this.pendingCommits.push(message);
+    this.scheduleCommit(root);
+  }
+
+  private scheduleCommit(root: string): void {
+    if (this.commitTimer) return;
+    this.commitTimer = setTimeout(() => {
+      this.commitTimer = null;
+      void this.flushCommit(root);
+    }, COMMIT_DEBOUNCE_MS);
+    this.commitTimer.unref?.();
+  }
+
+  /** Fold the batched messages into one commit: the first as the subject, the
+   *  full list as the body so a 5 s window's worth of history is still readable. */
+  private drainCommitMessages(): { subject: string; body: string } {
+    const msgs = this.pendingCommits;
+    this.pendingCommits = [];
+    const uniq = [...new Set(msgs)];
+    const subject = uniq.length <= 1
+      ? uniq[0] ?? 'hive: update'
+      : `${uniq[0]} (+${uniq.length - 1} more)`;
+    return { subject, body: uniq.length > 1 ? uniq.join('\n') : '' };
+  }
+
+  /** The debounced commit body — async end to end. Two attempts at a 2 s timeout,
+   *  with a TIMER backoff rather than a blocking sleep: a repo whose lock is held
+   *  by something outside this process is retried by the next mutation anyway, so
+   *  a long in-process fight buys nothing and costs the supervisor. */
+  private async flushCommit(root: string): Promise<void> {
+    // A flush is already running — fold this window into the next one rather
+    // than run two `add -A` passes against the same index.
+    if (this.committing) { this.scheduleCommit(root); return; }
+    this.committing = true;
+    try {
+      await this.untrackIgnored(root);
+      const { subject, body } = this.drainCommitMessages();
+      for (let attempt = 0; attempt < GIT_ATTEMPTS; attempt++) {
+        this.clearStaleLock(root);
+        const add = await this.gitAsync(['add', '-A'], root);
+        const commit = await this.gitAsync(
+          ['commit', '-q', '-m', subject, ...(body ? ['-m', body] : [])],
+          root
+        );
+        if (commit.ok) return;
+        if (/nothing to commit/i.test(commit.out + commit.err)) return;
+        if (!add.ok || /index\.lock/i.test(commit.err)) {
+          await new Promise((r) => setTimeout(r, GIT_RETRY_MS * (attempt + 1)));
+          continue;
+        }
+        return; // a non-lock failure — give up quietly, the next mutation retries
+      }
+    } finally {
+      this.committing = false;
     }
   }
 
+  /** Delete an ABANDONED `.git/index.lock` (a git that crashed leaves one behind
+   *  and every later commit fails on it). Never one of ours — gitInFlight — and
+   *  never one younger than STALE_LOCK_MS, which must stay well above our own git
+   *  timeout: the old 10 s was BELOW the old 8 s timeout, so a slow-but-alive git
+   *  (a large `add -A` behind Windows antivirus) could have its LIVE lock deleted. */
   private clearStaleLock(root: string): void {
+    if (this.gitInFlight) return;
     const lock = join(root, '.git', 'index.lock');
     try {
-      if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock);
+      if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock);
     } catch { /* noop */ }
   }
 }

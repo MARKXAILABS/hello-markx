@@ -19,7 +19,7 @@
  * Deliberately free of any `electron` import so node --test can drive it with a
  * real TelemetryCollector in front (test/claude-account-failover.test.cjs).
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
 import {
@@ -126,11 +126,19 @@ export class AccountPoolManager {
   }
 
   private save(): void {
+    const path = this.deps.statePath();
+    const tmp = `${path}.tmp`;
     try {
-      const path = this.deps.statePath();
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify(this.state));
+      // Temp + rename: `rename` is atomic within a filesystem, so an OOM-kill or a
+      // power cut mid-write leaves either the old pool state or the new one, never
+      // a truncated file — which `load()` discards, resetting every cooldown and
+      // every dead-token mark back to "active" and sending agents straight at an
+      // account we already know is rate-limited (#3). Same shape as roster.ts.
+      writeFileSync(tmp, JSON.stringify(this.state));
+      renameSync(tmp, path);
     } catch (e) {
+      try { rmSync(tmp, { force: true }); } catch { /* noop */ }
       this.log('could not persist state:', e instanceof Error ? e.message : String(e));
     }
   }

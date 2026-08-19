@@ -20,8 +20,33 @@ const agent = join(__dirname, '..', 'node_modules', 'node-pty', 'lib', 'conpty_c
 if (!existsSync(agent)) process.exit(0);
 
 const src = readFileSync(agent, 'utf8');
-// Idempotent: only patch the original unguarded form.
-if (!src.includes('var consoleProcessList = getConsoleProcessList(shellPid);')) process.exit(0);
+const MARKER = 'var consoleProcessList = getConsoleProcessList(shellPid);';
+const APPLIED = 'PATCHED: AttachConsole can fail';
+
+// Idempotent: our own patch consumes the marker, so an already-guarded file is a
+// success and not a miss.
+if (src.includes(APPLIED)) process.exit(0);
+
+// Marker gone AND not ours => node-pty rewrote the line and this guard silently
+// did nothing. Fail the install loudly instead: exiting 0 here used to ship a
+// Windows build that takes the whole app down (exit 255) the first time an agent
+// CLI exits with its console already gone, which is exactly the crash this file
+// exists to prevent. node-pty is pinned EXACTLY in package.json (#43) precisely
+// because the match below is byte-exact, so this can only fire on a deliberate
+// bump — at which point a human needs to re-derive the patch.
+if (!src.includes(MARKER)) {
+  const version = require(join(__dirname, '..', 'node_modules', 'node-pty', 'package.json')).version;
+  console.error(
+    `[patch-node-pty-conpty] node-pty ${version} no longer contains the expected line\n` +
+      `    ${MARKER}\n` +
+      `  in ${agent}\n` +
+      '  The conpty AttachConsole crash guard was NOT applied, so a Windows build from\n' +
+      '  this tree can crash the whole app (exit 255) when an agent CLI exits with its\n' +
+      '  console already gone. Re-derive the patch against the new node-pty source, or\n' +
+      '  pin node-pty back, before shipping Windows.'
+  );
+  process.exit(1);
+}
 
 const guarded =
   'var consoleProcessList = [];\n' +
@@ -30,7 +55,7 @@ const guarded =
   '// crash this forked helper and cascade into a whole-app crash.\n' +
   'try { consoleProcessList = getConsoleProcessList(shellPid); } catch (e) { consoleProcessList = []; }';
 
-let out = src.replace('var consoleProcessList = getConsoleProcessList(shellPid);', guarded);
+let out = src.replace(MARKER, guarded);
 out = out.replace(
   'process.send({ consoleProcessList: consoleProcessList });',
   'try { process.send({ consoleProcessList: consoleProcessList }); } catch (e) { /* parent gone */ }'

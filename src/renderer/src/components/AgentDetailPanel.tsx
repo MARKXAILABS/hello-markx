@@ -12,6 +12,7 @@ import { SidebarTabs } from './SidebarTabs';
 import { ThreadsPanel } from './ThreadsPanel';
 import { ToolWaterfall } from './ToolWaterfall';
 import { AgentControlStrip } from './AgentControlStrip';
+import { BlockedBanner } from './BlockedBanner';
 import { GitTab } from './GitTab';
 import { Icon } from './Icon';
 import { useStore, type Agent } from '@/store/store';
@@ -187,6 +188,26 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
           background: 'var(--cth-coral-light)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
         }}>{openTerminalError}</div>
+      )}
+
+      {/* #12 — "what needs me". usePtyParser has written blockReason since the
+          parser was added and NOTHING rendered it: an agent sitting on "Do you
+          want to proceed?" was a red dot on a 16px avatar and nothing else.
+          Above the tabs on purpose — a prompt waiting on a human outranks
+          whichever tab happens to be open, and it is the one thing in this
+          panel the user has to act on. */}
+      {agent.blockReason && (
+        <BlockedBanner
+          reason={agent.blockReason}
+          onAction={(_label, send) => {
+            // `send` is the literal keystrokes for the prompt on screen ('y\r').
+            // No pty, or a purely informational action, means nothing to type —
+            // clear the banner either way so a stale prompt does not sit here
+            // after the terminal has moved on.
+            if (send && agent.ptyId) void window.cth.writePty(agent.ptyId, send);
+            updateAgent(agent.id, { blockReason: undefined });
+          }}
+        />
       )}
 
       {/* #7C — operator control (pause / halt / steer) for live agents */}

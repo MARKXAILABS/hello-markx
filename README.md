@@ -44,8 +44,9 @@ in order to get things done.
 - **The hive coordinates them.** Agents read their memory and drain a mailbox; the router moves
   messages between inboxes; the orchestrator adjudicates, assigns, and escalates only when it
   needs you.
-- **Memory that persists.** A markdown-first memory layer, with an optional semantic recall index,
-  means agents remember across sessions.
+- **Memory that persists.** A markdown-first memory layer — per-agent `memory.md`, condensed
+  when it grows — plus an optional semantic index if you install the MemPalace CLI. Agents
+  remember across sessions with or without it.
 
 ## How it works
 
@@ -72,12 +73,17 @@ in order to get things done.
    their own `outbox/`; the harness's router delivers into recipients' `inbox/`. No agent ever
    touches git (single-committer design avoids `index.lock` corruption).
 3. **The orchestrator runs the floor** — it reads every request, resolves routine ones itself,
-   and escalates critical items (spend, destructive ops, scope changes) to you.
+   and escalates critical items (spend, destructive ops, scope changes) to you. Escalation is
+   the orchestrator's *instructions*, not an enforced gate: with auto mode on (the default)
+   nothing pauses for approval. See [`SECURITY.md`](./SECURITY.md#known-limitations).
 4. **Everything is visible** — avatars move, envelopes fly, the terminal stream is live; you can
    type back into any session, browse its files, and read its git history.
 
-See [`HIVE.md`](./HIVE.md) for the multi-agent design, [`SPEC.md`](./SPEC.md) for the
-terminal/event plane, and [`DESIGN.md`](./DESIGN.md) for the visual system.
+See [`HIVE.md`](./HIVE.md) for the multi-agent design,
+[`docs/message-queue.md`](./docs/message-queue.md) for how anything gets typed into a live
+agent's terminal, [`docs/adr/`](./docs/adr/) for the standing architectural decisions, and
+[`DESIGN.md`](./DESIGN.md) for the visual system. [`SPEC.md`](./SPEC.md) is the original
+tmux-era MVP spec, kept for history — it no longer describes the app.
 
 ## Features
 
@@ -90,11 +96,19 @@ terminal/event plane, and [`DESIGN.md`](./DESIGN.md) for the visual system.
 **Memory & coordination**
 - The hive — per-agent memory, atomic-file mailboxes, a shared blackboard, an append-only event
   log, single-committer git.
-- Semantic recall (optional MemPalace index) and a knowledge base of your own documents,
-  queryable by any agent.
+- Semantic recall — optional, and only if the MemPalace CLI is on your `PATH`; each call
+  spawns it, so the first one pays an embedding-model load. Markdown memory works without it.
+- A knowledge base of your own documents, queryable by any agent. **Off by default**; search
+  is keyword scoring over text chunks, not entities or a graph.
 
 **Control & safety**
-- Human gates — spend, scope, and destructive ops escalate to you. Steer mid-run or stop gracefully.
+- Human gates — spend, scope, and destructive ops escalate to you. Steer mid-run or stop
+  gracefully. Note **auto mode ships on**, which removes each engine's tool-approval prompt.
+  A standing deny list still blocks the unrecoverable (`push --force`, `reset --hard`,
+  `rm -rf`, reading credential files) on Claude agents; turn auto mode off in
+  Settings → General to be asked before every tool. See
+  [`SECURITY.md`](./SECURITY.md#known-limitations) for exactly what that list does and
+  does not cover.
 - Circuit breaker — a steer → constrain → stop ladder for agents that loop, storm errors, or blow
   their budget.
 - Budgets & telemetry — per-agent token budgets, real cost from transcripts, a durable ledger,
@@ -149,7 +163,8 @@ On first launch you'll go through the onboarding wizard, then land on the floor.
 ```bash
 npm run build         # production build via electron-vite
 npm run typecheck     # type-check the node (main/preload) and web (renderer) projects
-npm run test:focused  # unit tests (node:test)
+npm test              # the whole node:test suite
+npm run test:focused  # the curated subset CI gates on
 npm run dist          # package installers with electron-builder
 ```
 
@@ -219,7 +234,9 @@ src/
     assets/                  tilesets, maps, character sheets (see ATTRIBUTION.md)
 test/                        node:test unit tests
 docs/                        technical docs (accounts, message queue, release drops, design)
-HIVE.md · SPEC.md · DESIGN.md   multi-agent · terminal/event · visual design
+docs/adr/                    architecture decision records (the standing decisions)
+HIVE.md · DESIGN.md          multi-agent layer · visual design
+SPEC.md                      superseded — the original tmux-era MVP spec, kept for history
 ```
 
 ## Design system
@@ -232,8 +249,9 @@ avatars are an office cast, differentiated by hair/skin/shirt recipes.
 ## Contributing
 
 Contributions are welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md). The short
-version: `npm install && npm run dev`, keep `npm run typecheck` and `npm run test:focused`
-green, and **derive any new UI from [`DESIGN.md`](./DESIGN.md) tokens**.
+version: `npm install && npm run dev`, keep `npm run typecheck` and `npm test` green, and
+**derive any new UI from [`DESIGN.md`](./DESIGN.md) tokens**. There are 11 known Windows
+failures in the suite (POSIX path assumptions); that is the current baseline, not your change.
 
 ## Telemetry
 

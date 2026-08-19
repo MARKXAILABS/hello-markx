@@ -1,5 +1,6 @@
 import { readdir, readFile, writeFile, stat } from 'node:fs/promises';
-import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { imageMimeForPath } from '../shared/imageTypes';
 
@@ -14,9 +15,67 @@ import { imageMimeForPath } from '../shared/imageTypes';
 export function safeJoin(root: string, rel: string): string | null {
   const absRoot = resolve(root);
   const absPath = isAbsolute(rel) ? normalize(rel) : resolve(absRoot, rel);
-  const rel2 = relative(absRoot, absPath);
+  // Compare the paths the OS will ACTUALLY use, not the strings the caller typed:
+  // a symlink sitting INSIDE the root but pointing outside it passes a purely
+  // textual containment check, and then the read/write lands on the target (#9).
+  // `realish` degrades to the lexical path for anything not on disk yet — a file
+  // about to be created, or a rel path validated against a git rev rather than
+  // the working tree — so no legitimate caller loses.
+  const rel2 = relative(realish(absRoot), realish(absPath));
   if (rel2.startsWith('..') || isAbsolute(rel2)) return null;
   return absPath;
+}
+
+/** The on-disk truth for `p`: its realpath when it exists, else its parent's
+ *  realpath plus the final segment (the about-to-be-created file), else `p`
+ *  unchanged. SYNC on purpose — every caller is a guard that has to answer
+ *  before the work it guards. */
+function realish(p: string): string {
+  try { return realpathSync(p); } catch { /* not on disk */ }
+  try { return join(realpathSync(dirname(p)), basename(p)); } catch { return p; }
+}
+
+/**
+ * Is `p` inside at least one of `roots`?
+ *
+ * `safeJoin` confines a relative path to whatever root it was HANDED — and for
+ * every `fs:*` / `git:*` IPC that root is named by the RENDERER, so on its own it
+ * proves nothing about WHICH folder was opened (#9). This is the other half of
+ * the guard: the caller-named root must itself be one of the app's managed
+ * folders (a registered repo, the harness home, an agent's cwd). Both sides get
+ * the same realpath treatment, so neither a symlinked root nor a symlinked
+ * target escapes.
+ *
+ * Prefix comparison via `relative`, which is case-insensitive on win32 — the
+ * same comparison `safeJoin` has always used.
+ */
+export function isWithinRoots(p: string, roots: readonly string[]): boolean {
+  if (typeof p !== 'string' || !p.trim()) return false;
+  const target = realish(resolve(expandTilde(p)));
+  return roots.some((r) => {
+    if (typeof r !== 'string' || !r.trim()) return false;
+    const root = realish(resolve(expandTilde(r)));
+    const rel = relative(root, target);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  });
+}
+
+/**
+ * May this string be handed to the OS to open? ONE policy, because there is more
+ * than one door: the `app:openExternal` IPC (renderer buttons + the onboarding
+ * System Settings deep-link) and `setWindowOpenHandler` (a `window.open`, or a
+ * MIDDLE-CLICK on an AGENT-AUTHORED link — which the markdown click guard never
+ * sees). The second door used to pass `shell.openExternal` anything at all, so a
+ * crafted `file:` / `ms-msdt:` / `smb:` URL reached the OS handler (#8).
+ *
+ * https only, plus the macOS Settings deep-link for the one caller that needs it.
+ * Deliberately NOT http: every in-app link path already goes through
+ * `openExternal`, which has been https-only since it was written.
+ */
+export function isAllowedExternalUrl(url: unknown, opts: { settingsDeepLink?: boolean } = {}): boolean {
+  if (typeof url !== 'string' || url.length > 2048) return false;
+  if (opts.settingsDeepLink && url.startsWith('x-apple.systempreferences:')) return true;
+  return url.startsWith('https://') && url.length > 'https://'.length;
 }
 
 export interface DirEntry {

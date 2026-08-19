@@ -1,4 +1,27 @@
-# Hello MarkX — Spec
+# Hello MarkX — Spec (SUPERSEDED — original MVP, kept for history)
+
+> [!IMPORTANT]
+> **This is the original MVP spec and it no longer describes the app.** It is kept
+> unedited because the reasoning in it — why two data planes, why the event plane
+> can't be output-parsing, why the avatar metaphor has to be *informational* — is
+> still the reasoning the app runs on. The execution model it specifies is not.
+>
+> | This document says | The app actually does |
+> | --- | --- |
+> | Attaches to `claude` processes already running in **tmux** (`pipe-pane`, `send-keys`); tmux is a hard prerequisite | **Owns** every process itself through **`node-pty`**. There is no tmux anywhere in the tree, and ten CLI engines are supported, not just `claude` |
+> | "**Not** an agent-to-agent message bus. Avatars don't hand things off to each other." (§1) | It **is** a message bus: file-backed outbox → router → inbox, a shared blackboard, a task ledger and a god orchestrator. See [`HIVE.md`](./HIVE.md) |
+> | "Not a code editor. We show terminal output, not source files." (§1) | Ships a built-in Monaco IDE with a file tree and git rails |
+> | **macOS-first**, "`.dmg` for Mac, defer Linux/Windows" (§1, §8) | macOS, Windows and Linux all ship, with a dedicated ConPTY patch for Windows (`tools/patch-node-pty-conpty.cjs`) |
+> | SQLite tables `agents` / `events` / `commands` / `layout` (§9) | Persistence is `src/main/db.ts` + `config.json`; none of those four tables exist |
+> | §13 "Decisions still needed from you" | All answered years of commits ago. Do not treat them as open |
+>
+> **Read these instead:** [`HIVE.md`](./HIVE.md) for the multi-agent layer,
+> [`docs/message-queue.md`](./docs/message-queue.md) for how anything gets typed
+> into an agent's terminal, [`docs/adr/`](./docs/adr/) for the standing decisions,
+> [`DESIGN.md`](./DESIGN.md) for the visual system, and [`README.md`](./README.md)
+> for the architecture as built.
+
+---
 
 A desktop control room for the Claude Code agents you already run in terminals. Each agent is a Sims-style avatar in a shared 2D workspace; you can watch them work, send them commands, and configure their goals/skills/MCP from one place.
 

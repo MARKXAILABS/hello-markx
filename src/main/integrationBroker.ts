@@ -24,7 +24,7 @@
  * Contract: hive/docs/integrations-spec.md.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import {
   type IntegrationRecord,
@@ -63,6 +63,12 @@ export interface IntegrationBrokerDeps {
   getRecord: (id: string) => IntegrationRecord | undefined;
   /** Decrypt a secret by ref (injected — the secret store). Main-internal. */
   getSecret: (secretRef: string | undefined) => string | undefined;
+}
+
+/** Fixed-width digest of a candidate token, so a constant-time compare never has
+ *  to branch on (and therefore leak) its length. Mirrors slack.ts / webhook.ts. */
+function sha256(s: string): Buffer {
+  return createHash('sha256').update(s, 'utf8').digest();
 }
 
 /** True for IPv4 loopback (127.0.0.0/8) and IPv6 ::1 (incl. v4-mapped). Mirrors slack.ts. */
@@ -140,13 +146,15 @@ export class IntegrationBroker {
     if (token) { this.byToken.delete(token); this.byWorker.delete(workerId); }
   }
 
-  /** Constant-time-ish lookup of a presented token against live capabilities. */
+  /** Constant-time-ish lookup of a presented token against live capabilities.
+   *  Both sides are SHA-256'd to a fixed 32 bytes before the compare: the old
+   *  `a.length === b.length &&` short-circuit skipped the crypto entirely for a
+   *  wrong-length guess, which told a caller the token's length for free. */
   private resolveCapability(provided: string | undefined): Capability | undefined {
     if (!provided) return undefined;
-    const a = Buffer.from(provided);
+    const a = sha256(provided);
     for (const [token, cap] of this.byToken) {
-      const b = Buffer.from(token);
-      if (a.length === b.length && timingSafeEqual(a, b)) return cap;
+      if (timingSafeEqual(a, sha256(token))) return cap;
     }
     return undefined;
   }

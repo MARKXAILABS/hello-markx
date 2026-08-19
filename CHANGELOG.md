@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- **Shipped docs now describe the code, not the plan** (#46, from the floor-inspection
+  audit). `SECURITY.md` lists the real network surface — six HTTP servers, the
+  token-gated hook socket, the opt-in public tunnel — and gained a *Known limitations*
+  section covering auto mode and what the `permissions.deny` list does and does not
+  cover (#4), the one `fs:*` handler still outside the managed-root gate (#9), and the
+  tunnel that `stop()` cannot close. `HIVE.md` records that the `Stop`-hook drain loop
+  was reversed (#5) and that the SQLite FTS index was never built. `SPEC.md` is marked **superseded** — it is the
+  original tmux-era MVP spec and is kept for history only. `MEMORY_GRAPH_SPEC.md` is
+  marked shipped. `README.md` no longer implies an enforced approval gate.
+- **`docs/adr/`** — four architecture decision records, extracted from rationale that was
+  already written down in source comments: the one gate for automatic PTY writes, the
+  prompt-cache invariant on the injected system prompt, fail-safe worktree GC, and
+  single-committer git for the hive.
+
 ### Changed
 
 - **The project is now Hello MarkX.** Package name, app id (`com.markxailabs.hellomarkx`),

@@ -1,7 +1,16 @@
 # Memory Graph Visualization — Spec (Phase 1)
 
 **Feature #8** of the Hello MarkX harness roadmap · author: Jim · branch `feature/memory-graph`
-**Status:** awaiting god sign-off. No component code is written yet — this document is the contract for Phase 2.
+**Status:** ✅ **shipped.** Phase 2 was built to this contract — `MemoryGraphPanel.tsx`
+plus `memoryGraph/buildGraph.ts`, `memoryGraph/extractTopics.ts` and
+`memoryGraph/forceLayout.ts`, rendered as the `graph` tab of `CommandCenterPanel.tsx`.
+The three commitments that mattered all held: no new IPC handlers or main-process
+code, topic nodes default **off**, and the graph reads only the preload bridge
+listed in §2. Treat this document as the as-built description, not a plan.
+
+One gap worth naming: `buildGraph` and `extractTopics` are pure functions with no
+unit test in `test/`, so the aggregation rules below (edge weighting, `broadcast`
+collapse, unknown-id skip) are documented but not regression-guarded.
 
 ---
 

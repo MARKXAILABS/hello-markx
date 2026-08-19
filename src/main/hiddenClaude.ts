@@ -26,6 +26,15 @@ import { ensureKilled } from './procKill';
 /** ms of PTY silence that signals the TUI is ready for input (boot complete). */
 const BOOT_QUIET_MS = 1500;
 
+/** Tools NO hidden session may ever hold, unioned into whatever the caller asks
+ *  to disallow (a caller-supplied list otherwise REPLACES the default, which is
+ *  how the condense pass ended up with WebFetch). Every hidden session runs with
+ *  `--permission-mode bypassPermissions` over agent-authored — often web-scraped
+ *  — text, so a prompt injection in that text would have both the pinned facts
+ *  it was handed and a tool to send them somewhere. `Task` counts: a subagent
+ *  inherits the bypass and has its own network tools. */
+const NEVER_ALLOWED_TOOLS = ['WebFetch', 'WebSearch', 'Task'];
+
 export interface HiddenClaudeOptions {
   /** Model to use (e.g. 'claude-haiku-4-5'). */
   model: string;
@@ -33,7 +42,8 @@ export interface HiddenClaudeOptions {
   cwd: string;
   /** Base claude command/binary. Defaults to 'claude'. */
   command?: string;
-  /** Tools the session is forbidden to use. Defaults to ['Edit','Write','NotebookEdit']. */
+  /** Tools the session is forbidden to use. Defaults to ['Edit','Write','NotebookEdit'];
+   *  NEVER_ALLOWED_TOOLS is added on top of whatever is passed. */
   disallowedTools?: string[];
   /** Directories added via --add-dir (for context gathering). */
   addDirs?: string[];
@@ -109,7 +119,10 @@ export function runHiddenClaude(prompt: string, opts: HiddenClaudeOptions): Prom
 
     const binary = (opts.command || 'claude').trim().split(/\s+/)[0] || 'claude';
     const exe = resolveCommand(binary);
-    const disallowed = opts.disallowedTools ?? ['Edit', 'Write', 'NotebookEdit'];
+    const disallowed = [...new Set([
+      ...(opts.disallowedTools ?? ['Edit', 'Write', 'NotebookEdit']),
+      ...NEVER_ALLOWED_TOOLS
+    ])];
     const addDirs = (opts.addDirs ?? []).filter((d) => d && existsSync(d));
 
     const args: string[] = [

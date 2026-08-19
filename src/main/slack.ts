@@ -20,7 +20,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 // NOTE: `tunnelmole` is an ESM-only package. The Electron main process is bundled
 // as CommonJS, so a static `import` gets externalized into `require('tunnelmole')`
 // and throws ERR_REQUIRE_ESM at load. It is imported dynamically inside
@@ -155,7 +155,10 @@ export class SlackWebhookServer {
       const url = await this.openTunnel();
       if (!url) throw new Error('tunnelmole returned empty URL');
       this.tunnelUrl = url;
-      // tunnelmole runs in the background; there is no close handle to wire here.
+      // tunnelmole() resolves with a URL STRING and nothing else — no websocket,
+      // no disposer (see tunnelmole/dist/src/tunnelmole.js). There is genuinely
+      // no handle to capture, so `stop()` reports the leftover rather than
+      // pretending it tore the tunnel down. See `stop()`.
       return { ok: true, url };
     } catch (e) {
       // Surface the tunnel failure rather than silently returning ok:true with no url.
@@ -163,12 +166,27 @@ export class SlackWebhookServer {
     }
   }
 
-  /** Close the HTTP server. Idempotent and best-effort.
-   *  Note: tunnelmole has no documented close handle; teardown is best-effort. */
-  stop(): void {
+  /**
+   * Close the HTTP server. Idempotent and best-effort.
+   *
+   * HONEST ABOUT THE TUNNEL: tunnelmole exposes no close handle, so the public
+   * hostname stays REGISTERED to this process until the process exits. What stop
+   * actually buys is that the hostname now forwards to a closed port (Slack gets
+   * an error, and the signing-secret gate is gone with it) — so the window that
+   * matters is another process grabbing this port before we quit. Returned AND
+   * logged rather than swallowed, so a caller can tell the operator that the
+   * Request URL they pasted into Slack is still resolvable.
+   */
+  stop(): { tunnelStillOpen: string | null } {
+    const orphan = this.tunnelUrl;
     this.tunnelUrl = null;
     try { this.server?.close(); } catch { /* noop */ }
     this.server = null;
+    if (orphan) {
+      console.warn(`[slack] local server closed, but the public tunnel ${orphan} stays registered `
+        + 'until the app quits (tunnelmole exposes no close handle). It now forwards to a closed port.');
+    }
+    return { tunnelStillOpen: orphan };
   }
 
   private listen(): Promise<void> {
@@ -176,7 +194,13 @@ export class SlackWebhookServer {
       const server = createServer((req, res) => this.handleRequest(req, res));
       const onError = (e: Error): void => reject(e);
       server.once('error', onError);
-      server.listen(this.port, () => {
+      // '127.0.0.1' ONLY. The public reach of this server is the tunnel, and
+      // tunnelmole forwards to `localhost` from THIS machine — binding every
+      // interface additionally hands the whole LAN an un-tunneled copy of the
+      // Slack event surface, for nothing. Matches SlackReplyServer below.
+      // (Node ≥20 resolves `localhost` happy-eyeballs-style, so the tunnel still
+      // reaches us on an IPv6-preferring box.)
+      server.listen(this.port, '127.0.0.1', () => {
         server.off('error', onError);
         this.server = server;
         resolve();
@@ -296,12 +320,11 @@ export class SlackWebhookServer {
     const expected = 'v0=' + createHmac('sha256', this.signingSecret)
       .update(`v0:${ts}:${rawBody}`)
       .digest('hex');
-    const provided = Buffer.from(sig);
-    const computed = Buffer.from(expected);
-    // timingSafeEqual throws on length mismatch — guard, and a differing length
-    // is itself a mismatch, so bail before the constant-time compare.
-    if (provided.length !== computed.length) return false;
-    return timingSafeEqual(provided, computed);
+    // Hash BOTH sides to a fixed 32 bytes first. timingSafeEqual throws on a
+    // length mismatch, and the obvious `if (a.length !== b.length) return false`
+    // guard answers a wrong-length signature measurably faster than a
+    // right-length one — a free length oracle on a public surface.
+    return timingSafeEqual(sha256(sig), sha256(expected));
   }
 }
 
@@ -338,6 +361,12 @@ interface SlackPayload {
 /** Strip a single leading `<@BOTID>` app-mention so "@bot do X" enqueues "do X". */
 function stripLeadingMention(text: string): string {
   return text.replace(/^\s*<@[A-Z0-9]+>\s*/i, '').trim();
+}
+
+/** Fixed-width digest of a candidate secret/signature, so a constant-time
+ *  compare never has to branch on (and therefore leak) its length. */
+function sha256(s: string): Buffer {
+  return createHash('sha256').update(s, 'utf8').digest();
 }
 
 function errMsg(e: unknown): string {
@@ -491,13 +520,12 @@ export class SlackReplyServer {
     req.on('error', () => { if (!aborted) { try { res.writeHead(400); res.end(); } catch { /* socket gone */ } } });
   }
 
-  /** Constant-time match of the request's reply token against the session token. */
+  /** Constant-time match of the request's reply token against the session token.
+   *  Both sides hashed to a fixed width first, so a wrong-LENGTH guess costs
+   *  exactly what a right-length one does (no early return, no length oracle). */
   private checkToken(provided: string | string[] | undefined): boolean {
     if (typeof provided !== 'string') return false;
-    const a = Buffer.from(provided);
-    const b = Buffer.from(this.token);
-    if (a.length !== b.length) return false;
-    return timingSafeEqual(a, b);
+    return timingSafeEqual(sha256(provided), sha256(this.token));
   }
 }
 

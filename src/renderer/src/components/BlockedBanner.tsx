@@ -68,6 +68,17 @@ export function BlockedBanner({ reason, onAction }: BlockedBannerProps) {
             {a.label}
           </PixelButton>
         ))}
+        {/* A banner with no buttons would be un-closable. Not hypothetical: the
+            operator-gated-tool reason raised from useHive carries `actions: []`
+            because there is nothing to answer — the call was already denied and
+            the agent kept running, so this is a notice, not a prompt. It still
+            has to be dismissable, and the callers' onAction already clears the
+            reason whether or not there are keystrokes to send. */}
+        {reason.actions.length === 0 && (
+          <PixelButton variant="secondary" size="sm" onClick={() => onAction('dismiss')}>
+            dismiss
+          </PixelButton>
+        )}
       </div>
     </div>
   );

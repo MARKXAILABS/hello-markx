@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import {
@@ -11,6 +11,8 @@ import {
 } from '../shared/agentProvider';
 import { defaultMcpDefaults } from '../shared/mcpCatalog';
 import { expandTilde, normalizeHiveHome } from './fs';
+import { PersistStore } from './db';
+import { deleteSecret, deleteSecretsWithPrefix, getSecret, setSecret } from './integrations';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
 import type { IntegrationRecord } from '../shared/integrations';
 import {
@@ -182,7 +184,19 @@ export interface HarnessConfig {
   recentHives?: string[];
   /** Folders the user registered during onboarding (used as quick-picks). */
   registeredRepos: string[];
-  /** When true, new agents are spawned with --permission-mode bypassPermissions. */
+  /** When true — and it is TRUE BY DEFAULT — every new agent is spawned with its
+   *  engine's "stop asking me" flag: `--permission-mode bypassPermissions`
+   *  (claude/grok), `--dangerously-bypass-approvals-and-sandbox` (codex),
+   *  `--yolo` (qwen/crush), `--dangerously-skip-permissions` (agy). See
+   *  `commandForAutoMode` below for the one place that appends it.
+   *
+   *  Say it plainly, because HIVE.md §2.3 and PROTOCOL.md still describe the
+   *  tool-permission prompt as "the HITL gate" (#4): with autoMode on there IS no
+   *  prompt, so there is no human in the loop. The gate has to be a standing
+   *  `permissions.deny` block in the per-agent settings the hive writes — that
+   *  list applies UNDER a bypass, and it is the only thing between a worker and
+   *  `rm -rf` / `git push --force` / `curl | sh`. This flag must also be visible
+   *  on the agent card and in onboarding rather than silently on. */
   autoMode: boolean;
   /** The command we run when spawning a new agent. */
   defaultCommand: string;
@@ -487,6 +501,195 @@ function configPath(): string {
   return join(app.getPath('userData'), 'config.json');
 }
 
+// ─── Secrets live in the encrypted store, not in config.json (#10) ────
+/**
+ * config.json used to hold the Slack signing secret, the Slack bot token, the
+ * webhook secrets and the Groq key as plaintext with no file mode — and
+ * `config:get` handed every one of them to the renderer. They now live in the
+ * SAME encrypted store the integrations broker already uses (Electron
+ * `safeStorage` + a 0o600 file, src/main/integrations.ts). One store, not two.
+ *
+ * The move is INVISIBLE to every consumer: `readConfig` decrypts them back onto
+ * the object it returns, so `cfg.slackSigningSecret` reads exactly as it always
+ * did in main, and `persistConfig` strips them out again on the way to disk.
+ * That strip is also the migration — the first read of a config that still
+ * carries plaintext writes it back through `persistConfig` once, and the
+ * plaintext is gone.
+ *
+ * The renderer is the one consumer that must NOT see them: it gets
+ * `redactedConfig()` (below), which is why REDACTED round-trips as "unchanged".
+ */
+const SECRET_FIELDS = {
+  slackSigningSecret: 'cfg:slackSigningSecret',
+  slackBotToken: 'cfg:slackBotToken',
+  webhookSecret: 'cfg:webhookSecret',
+  groqApiKey: 'cfg:groqApiKey'
+} as const;
+type SecretField = keyof typeof SECRET_FIELDS;
+const SECRET_FIELD_NAMES = Object.keys(SECRET_FIELDS) as SecretField[];
+/** The prefix every ref this module owns shares, so a reset drops them together. */
+const SECRET_PREFIX = 'cfg:';
+/** Per-endpoint webhook secrets: one ref per trigger id, so revoking one caller
+ *  never disturbs the others (the same promise WebhookTrigger.secret makes). */
+function triggerSecretRef(id: string): string { return `${SECRET_PREFIX}webhookTrigger:${id}`; }
+
+/** What the renderer is shown in place of a secret. Fixed-width on purpose: a
+ *  placeholder that echoed the real length would leak it. It is also exactly what
+ *  the Settings form hands back on save when the user did not retype the field,
+ *  which is why `writeConfig` reads it as "leave the stored secret alone". */
+export const REDACTED = '***';
+
+/** Decrypted secrets, cached for the process. `readConfig` runs on hot paths
+ *  (every spawn, every mission beat, most IPC), and a miss is an OS keychain
+ *  round-trip. Dropped on every write — the only way a value changes. */
+let secretCache: Record<string, string | undefined> | null = null;
+/** Warn once, not on every write, when the OS has no encryption to offer. */
+let warnedNoEncryption = false;
+
+function cachedSecret(ref: string): string | undefined {
+  if (!secretCache) secretCache = {};
+  if (!(ref in secretCache)) secretCache[ref] = getSecret(ref);
+  return secretCache[ref];
+}
+
+/** Put the stored secrets back onto the object every main-process consumer
+ *  already reads. A value still sitting in config.json (pre-migration, or an
+ *  install with no OS encryption) is used only when the store has nothing. */
+function withSecrets(cfg: HarnessConfig): HarnessConfig {
+  const out: HarnessConfig = { ...cfg };
+  for (const f of SECRET_FIELD_NAMES) {
+    const stored = cachedSecret(SECRET_FIELDS[f]);
+    if (stored) out[f] = stored;
+  }
+  if (Array.isArray(out.webhookTriggers)) {
+    out.webhookTriggers = out.webhookTriggers.map((t) => {
+      const stored = cachedSecret(triggerSecretRef(t.id));
+      return stored ? { ...t, secret: stored } : t;
+    });
+  }
+  return out;
+}
+
+/**
+ * Persist one secret and return whatever still has to go into config.json
+ * (`undefined` once the store has it — which is the point).
+ *
+ * `setSecret` fails CLOSED when the OS offers no encryption. Losing the user's
+ * Slack setup on such a machine would be a worse bug than the one this fixes, so
+ * the plaintext stays exactly where it was and we say so once.
+ */
+function storeSecret(ref: string, value: string | undefined): string | undefined {
+  const v = typeof value === 'string' ? value.trim() : '';
+  // Belt to `writeConfig`'s braces: never store the placeholder, and never let it
+  // erase what is already stored.
+  if (v === REDACTED) return undefined;
+  if (!v) { deleteSecret(ref); return undefined; }
+  const r = setSecret(ref, v);
+  if (r.ok) return undefined;
+  if (!warnedNoEncryption) {
+    warnedNoEncryption = true;
+    console.warn(`[config] ${r.error ?? 'secret store unavailable'} — secrets stay in config.json on this machine`);
+  }
+  return v;
+}
+
+/** Move every secret out of the object we are about to write. */
+function stripSecrets(cfg: HarnessConfig): HarnessConfig {
+  const out: HarnessConfig = { ...cfg };
+  for (const f of SECRET_FIELD_NAMES) out[f] = storeSecret(SECRET_FIELDS[f], cfg[f]);
+  if (Array.isArray(cfg.webhookTriggers)) {
+    // `secret` is required on WebhookTrigger, so it is emptied rather than
+    // deleted — the shape on disk stays valid and `withSecrets` refills it.
+    out.webhookTriggers = cfg.webhookTriggers.map((t) => ({
+      ...t,
+      secret: storeSecret(triggerSecretRef(t.id), t.secret) ?? ''
+    }));
+  }
+  secretCache = null;
+  return out;
+}
+
+/**
+ * A renderer-safe copy of the config: every secret replaced by a fixed
+ * placeholder, never the real value and never its length (#10).
+ *
+ * KEEP THIS EXPORTED — `ipcMain.handle('config:get')` in src/main/index.ts is its
+ * caller, and without it the renderer receives the Slack signing secret, the bot
+ * token, every webhook secret and the Groq key in the clear on every boot.
+ * Presence is preserved (a set secret redacts to a truthy placeholder) because
+ * the renderer legitimately shows "a key is configured".
+ */
+export function redactedConfig(cfg: HarnessConfig): HarnessConfig {
+  const out: HarnessConfig = { ...cfg };
+  for (const f of SECRET_FIELD_NAMES) if (out[f]) out[f] = REDACTED;
+  if (Array.isArray(cfg.webhookTriggers)) {
+    out.webhookTriggers = cfg.webhookTriggers.map((t) => ({ ...t, secret: t.secret ? REDACTED : '' }));
+  }
+  return out;
+}
+
+// ─── Mission fire stamps live in the kv store, not in config.json (#3) ───
+/**
+ * `lastFiredAt` is the only field the scheduler ever writes, and it writes it on
+ * every mission tick and every heartbeat beat — which rewrote the whole
+ * config.json on a timer, each rewrite a window in which a crash truncates the
+ * file and the app reboots into onboarding.
+ *
+ * The stamps go into the existing SQLite kv (PersistStore) instead. `readConfig`
+ * overlays them back onto the missions, so `m.lastFiredAt` reads the same
+ * everywhere, and `persistConfig` diverts them there rather than into the file —
+ * after which the scheduler's write is byte-identical to what is already on disk
+ * and is skipped outright.
+ */
+const MISSION_FIRED_KEY = 'missionLastFiredAt';
+/** undefined = not opened yet; null = unavailable, so stamps stay in config.json. */
+let firedDb: PersistStore | null | undefined;
+
+function firedStore(): PersistStore | null {
+  if (firedDb !== undefined) return firedDb;
+  firedDb = null;
+  try {
+    // A second connection to the same harness.db index.ts already opens. SQLite in
+    // WAL mode is fine with that, and it keeps config.ts free of an import from
+    // index.ts — which imports config.
+    const s = new PersistStore();
+    s.open();
+    firedDb = s;
+  } catch (e) {
+    console.warn('[config] mission stamps stay in config.json:', e instanceof Error ? e.message : String(e));
+  }
+  return firedDb;
+}
+
+function withMissionStamps(cfg: HarnessConfig): HarnessConfig {
+  if (!Array.isArray(cfg.missions) || cfg.missions.length === 0) return cfg;
+  const fired = firedStore()?.getKv<Record<string, number>>(MISSION_FIRED_KEY);
+  if (!fired || typeof fired !== 'object') return cfg;
+  return {
+    ...cfg,
+    missions: cfg.missions.map((m) => {
+      // Keep the newer of the two: an install upgrading from the config-file era
+      // carries its stamps in the file until the first write moves them.
+      const ts = Math.max(m.lastFiredAt ?? 0, fired[m.id] ?? 0);
+      return ts ? { ...m, lastFiredAt: ts } : m;
+    })
+  };
+}
+
+function stripMissionStamps(cfg: HarnessConfig): HarnessConfig {
+  const store = firedStore();
+  if (!store || !Array.isArray(cfg.missions)) return cfg;
+  const fired: Record<string, number> = {};
+  const missions: ScheduledMission[] = cfg.missions.map((m) => {
+    if (!(typeof m.lastFiredAt === 'number' && m.lastFiredAt > 0)) return m;
+    fired[m.id] = m.lastFiredAt;
+    const { lastFiredAt: _moved, ...rest } = m;
+    return rest;
+  });
+  store.setKv(MISSION_FIRED_KEY, fired);
+  return { ...cfg, missions };
+}
+
 /**
  * Deep-fill the trigger sub-objects, and hand back copies of them.
  *
@@ -581,31 +784,102 @@ function migrateTriggersV1(cfg: HarnessConfig): HarnessConfig {
   }
 }
 
+/**
+ * One-shot per damaged file: move an unreadable config aside instead of letting
+ * the defaults we are about to return quietly overwrite it (#3).
+ *
+ * Returning bare defaults for a config we could not parse is what makes a
+ * truncated write look like a fresh install — harnessHome null, no missions, no
+ * god — and the very next `writeConfig` would then commit that fiction over the
+ * only copy of the floor. The rename keeps the bytes (recoverable by hand) AND
+ * means the next read takes the honest "no file yet" path instead of quarantining
+ * the same file again on every read.
+ */
+function quarantineConfig(p: string, err: unknown): void {
+  try {
+    const kept = `${p}.corrupt-${Date.now()}`;
+    renameSync(p, kept);
+    console.error(
+      `[config] ${p} is unreadable (${err instanceof Error ? err.message : String(err)}) — `
+      + `kept it at ${kept} and booting on defaults; the previous floor is recoverable from that file`
+    );
+  } catch { /* best-effort: never block a boot on the rescue */ }
+}
+
 export function readConfig(): HarnessConfig {
   const p = configPath();
   // No file yet = a first run with nothing to migrate; the defaults ARE the
   // post-migration shape. Deliberately does not persist — a bare read must not
   // conjure a config.json before onboarding has written one.
   if (!existsSync(p)) return withTriggerDefaults({ ...DEFAULTS });
+  let parsed: Partial<HarnessConfig>;
   try {
-    const raw = readFileSync(p, 'utf8');
-    const parsed = JSON.parse(raw);
-    return migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...parsed }));
-  } catch {
+    parsed = JSON.parse(readFileSync(p, 'utf8')) as Partial<HarnessConfig>;
+  } catch (e) {
+    quarantineConfig(p, e);
     return withTriggerDefaults({ ...DEFAULTS });
   }
+  const merged = withMissionStamps(withSecrets(withTriggerDefaults({ ...DEFAULTS, ...parsed })));
+  return migrateTriggersV1(migrateSecrets(merged, parsed));
 }
+
+/** Fold a plaintext-era config forward: `persistConfig` does the actual moving
+ *  (and the strip), so this only has to notice that there is something to move.
+ *  Idempotent and un-latched — one write later there is no plaintext to find, so
+ *  a config that is never written again still gets cleaned on its first read. */
+function migrateSecrets(cfg: HarnessConfig, raw: Partial<HarnessConfig>): HarnessConfig {
+  const plaintext =
+    SECRET_FIELD_NAMES.some((f) => typeof raw[f] === 'string' && (raw[f] as string).length > 0)
+    || (Array.isArray(raw.webhookTriggers) && raw.webhookTriggers.some((t) => !!t?.secret));
+  if (!plaintext) return cfg;
+  try { return persistConfig(cfg); } catch { return cfg; }
+}
+
+/** `<path>\n<body>` of the last successful write. The scheduler now hands us
+ *  configs that differ in nothing at all, and rewriting the file for one of those
+ *  is a crash window bought for no gain. Keyed by path so two different userData
+ *  dirs can never alias each other. */
+let lastPersisted: string | null = null;
 
 function persistConfig(next: HarnessConfig): HarnessConfig {
   const p = configPath();
+  // Secrets and mission stamps go to their own stores first; what survives that
+  // is everything config.json is still allowed to hold.
+  const body = JSON.stringify(stripSecrets(stripMissionStamps(next)), null, 2);
+  const stamp = `${p}\n${body}`;
+  if (stamp === lastPersisted) return next;
   mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(next, null, 2), 'utf8');
+  // Temp + rename: `rename` is atomic within a filesystem, so a crash mid-write
+  // leaves either the old config or the new one, never the truncated file that
+  // `readConfig` would have to fall back to defaults for — losing harnessHome,
+  // the god id, every agent's cwd and the whole mission list (#3). Same shape as
+  // roster.ts, which has always done it right.
+  const tmp = `${p}.tmp`;
+  try {
+    writeFileSync(tmp, body, 'utf8');
+    renameSync(tmp, p);
+  } catch (e) {
+    try { rmSync(tmp, { force: true }); } catch { /* noop */ }
+    throw e;
+  }
+  lastPersisted = stamp;
   return next;
 }
 
 export function writeConfig(patch: Partial<HarnessConfig>): HarnessConfig {
   const current = readConfig();
   const next: HarnessConfig = { ...current, ...patch };
+  // The renderer is shown REDACTED instead of a secret (#10), and the Settings
+  // form hands that placeholder straight back whenever the user saves without
+  // retyping the field. Read it as "unchanged" HERE, where the real value is
+  // still in `current` — a save must never be able to erase a secret.
+  for (const f of SECRET_FIELD_NAMES) if (next[f] === REDACTED) next[f] = current[f];
+  if (Array.isArray(patch.webhookTriggers)) {
+    const prior = new Map((current.webhookTriggers ?? []).map((t) => [t.id, t.secret]));
+    next.webhookTriggers = patch.webhookTriggers.map((t) =>
+      t.secret === REDACTED ? { ...t, secret: prior.get(t.id) ?? '' } : t
+    );
+  }
   // Project INGESTION — a registered repo is typed by hand ("~/dev/foo") as often
   // as it is picked from the folder dialog. Expand `~` here so the persisted list
   // (and therefore every agent's default cwd) is ABSOLUTE; Node's fs/spawn treat
@@ -637,9 +911,15 @@ export function writeConfig(patch: Partial<HarnessConfig>): HarnessConfig {
 /** Wipe the persisted config back to first-run defaults so the app boots into
  *  onboarding again. Used by the "reset & start over" flow. */
 export function resetConfig(): HarnessConfig {
-  const p = configPath();
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(DEFAULTS, null, 2), 'utf8');
+  // Drop every secret this module owns BEFORE the write. A reset used to erase
+  // them simply by overwriting the whole file; now that they live in the
+  // encrypted store, the per-endpoint webhook secrets would otherwise survive a
+  // "reset & start over" as orphans nothing references (#10).
+  deleteSecretsWithPrefix(SECRET_PREFIX);
+  secretCache = null;
+  // Straight through persistConfig, which is atomic and also clears the mission
+  // fire stamps (DEFAULTS carry none), so reset has one write path like the rest.
+  persistConfig({ ...DEFAULTS });
   // Drop the migration latch too: the file on disk is back to `triggersMigratedV1:
   // false`, and a latch left set would keep the flag from ever being written again
   // in this process. The migration itself is a no-op on defaults either way.
@@ -681,7 +961,14 @@ export function modelForRole(
   return MODEL_WORKER;
 }
 
-/** Auto-suggested command string given current autoMode preference. */
+/** Auto-suggested command string given current autoMode preference.
+ *
+ *  This is the ONE place the permission bypass is appended, so it is also the one
+ *  place worth reading to know what `autoMode: true` actually buys: every engine's
+ *  flag here removes the interactive tool-approval prompt entirely (#4). Nothing
+ *  in this function can put a human back in the loop — the enforcement that
+ *  survives a bypass is the `permissions.deny` list in the per-agent settings the
+ *  hive writes, plus `control.toolDecision` at PreToolUse. */
 export function commandForAutoMode(
   config: HarnessConfig,
   provider?: AgentProvider

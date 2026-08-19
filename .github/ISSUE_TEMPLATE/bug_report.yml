@@ -25,14 +25,31 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Logs / screenshots
-      description: Console output, stack traces, or a screenshot/clip if it's visual.
+      # The app writes no log file (#13), so asking for "the logs" just sends
+      # people hunting for a file that does not exist. Say where the output
+      # actually is instead.
+      label: Console output / screenshots
+      description: >-
+        There is no log file yet. From a dev build, paste the terminal output of
+        `npm run dev`. From an installed build, open the DevTools console
+        (View → Toggle Developer Tools) and paste anything red. A screenshot or
+        short clip is just as good for anything visual.
       render: shell
-  - type: input
-    id: macos
+  - type: dropdown
+    id: os
     attributes:
-      label: macOS version
-      placeholder: e.g. 15.0
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: e.g. macOS 15.0, Windows 11 23H2, Ubuntu 24.04
     validations:
       required: true
   - type: input

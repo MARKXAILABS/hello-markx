@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
 import { spawn } from 'node:child_process';
 import {
   rmSync, existsSync, readFileSync, readdirSync, statSync, cpSync, writeFileSync,
@@ -8,16 +8,20 @@ import {
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { join, resolve, sep, basename, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { inspect } from 'node:util';
 import { request as httpsRequest } from 'node:https';
 import { PtyManager, type SpawnOptions } from './pty';
 import { resolveCommand as resolveCliCommand } from './shellEnv';
 import { initAutoUpdater } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
 import {
-  readConfig, writeConfig, resetConfig, ensureHarnessHome, ensureClaudePermissionsAccepted,
+  readConfig, writeConfig, resetConfig, redactedConfig, ensureHarnessHome, ensureClaudePermissionsAccepted,
   modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
 } from './config';
-import { listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde } from './fs';
+import {
+  listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde,
+  isWithinRoots, isAllowedExternalUrl
+} from './fs';
 import {
   getBranch, getStatus, getLog, getBranches, getAheadBehind, isRepo, getDiff, mainRepoRoot,
   addWorktree, removeWorktree, worktreeHasUnintegratedWork, worktreeIsGcSafe,
@@ -25,7 +29,7 @@ import {
 } from './git';
 import { HiveManager, redactSecrets, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
 import { AccountPoolManager } from './accountPool';
-import { HookServer } from './hooks';
+import { HookServer, hookSockToken } from './hooks';
 import { CircuitBreaker, type BreakerInput } from './breaker';
 import type { UsageProvider } from './usage';
 import { MemoryManager } from './memory';
@@ -94,12 +98,111 @@ import {
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
 
+// ─── Diagnostics: a file sink for every console.* in src/main (#13) ─────────
+// Packaged, the main process has NO attached stdout, so all 157 `console.*`
+// calls went to a void — including the single most diagnostic line in the
+// codebase, pty.ts's Windows npm-shim warning ("the agent will look healthy
+// without ever receiving the hive protocol"). The bug template asks users for
+// logs that did not exist. Rather than rewrite 157 call sites, tee `console`
+// into a rotating file under app.getPath('logs'). Installed at module load,
+// BEFORE the uncaughtException handlers below, so a boot-time throw is the
+// first thing in the file.
+const LOG_ROTATE_BYTES = 5 * 1024 * 1024;
+let logStream: ReturnType<typeof createWriteStream> | null = null;
+let logPath = '';
+let logBytes = 0;
+let loggingInstalled = false;
+
+/** Electron's per-app log dir (~/Library/Logs/<app>, %APPDATA%\<app>\logs).
+ *  Falls back to userData/logs if the platform path can't be resolved yet. */
+function logsDir(): string {
+  try { return app.getPath('logs'); } catch { return join(app.getPath('userData'), 'logs'); }
+}
+
+function openLogSink(): void {
+  logPath = join(logsDir(), 'main.log');
+  mkdirSync(dirname(logPath), { recursive: true });
+  try { logBytes = statSync(logPath).size; } catch { logBytes = 0; }
+  const s = createWriteStream(logPath, { flags: 'a' });
+  // A full or locked disk must never take the app down: drop the sink and keep
+  // the original console behaviour.
+  s.on('error', (e) => { if (logStream === s) logStream = null; console.error('[log] sink error:', e); });
+  logStream = s;
+}
+
+function writeLogLine(level: string, args: unknown[]): void {
+  if (!logStream) return;
+  const text = `${new Date().toISOString()} [${level}] `
+    + args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 3 }))).join(' ') + '\n';
+  logBytes += Buffer.byteLength(text);
+  logStream.write(text);
+  if (logBytes < LOG_ROTATE_BYTES) return;
+  // Rotate, keeping exactly ONE previous generation. ponytail: two files bound
+  // the disk cost and still survive a crash loop's worth of noise; make it a
+  // real ring only if someone actually needs more history than that.
+  const old = logStream;
+  logStream = null;
+  try { old.end(); } catch { /* noop */ }
+  try { renameSync(logPath, `${logPath}.1`); } catch { /* noop */ }
+  try { openLogSink(); } catch { /* stay console-only */ }
+}
+
+/** Tee `console` into the file sink. Idempotent; a no-op when the sink can't be
+ *  opened, in which case console behaves exactly as it always did. */
+function initFileLogging(): void {
+  if (loggingInstalled) return;
+  try { openLogSink(); } catch { return; }
+  loggingInstalled = true;
+  // One cast, so the five identical methods can be shimmed in a loop instead of
+  // five copy-pasted blocks. `console` is a plain object at run time.
+  const sink = console as unknown as Record<string, (...args: unknown[]) => void>;
+  for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+    const original = sink[level].bind(console);
+    sink[level] = (...args: unknown[]): void => {
+      original(...args);
+      try { writeLogLine(level, args); } catch { /* logging must never throw into a caller */ }
+    };
+  }
+  console.log(`[log] main log: ${logPath} (pid ${process.pid})`);
+}
+// app.getPath is available before 'ready' on every platform we ship, but if it
+// ever isn't, whenReady() retries — the shim is idempotent.
+initFileLogging();
+// Native crash minidumps, next to the log (app.getPath('crashDumps')).
+// uploadToServer:false — nothing leaves the machine; the point is that a hard
+// crash leaves a FILE the user can attach to the issue the template asks for.
+try { crashReporter.start({ uploadToServer: false }); }
+catch (e) { console.error('[main] crashReporter.start failed:', e); }
+
+// A dead renderer takes the whole floor's UI with it — cards, terminals, the
+// lot — while its PTYs keep running headless underneath. Say what killed it,
+// then reload so the user gets the floor back (a reattaching terminal replays
+// the missed output through `pty:attach`). Cooled down, because a renderer that
+// dies ON LOAD would otherwise become a reload loop.
+let lastRendererReloadAt = 0;
+app.on('render-process-gone', (_e, contents, details) => {
+  console.error(`[renderer] process gone: reason=${details.reason} exitCode=${details.exitCode}`);
+  if (details.reason === 'clean-exit' || contents.isDestroyed()) return;
+  const now = Date.now();
+  if (now - lastRendererReloadAt < 30_000) {
+    console.error('[renderer] gone again within 30s — NOT reloading (that would be a loop)');
+    return;
+  }
+  lastRendererReloadAt = now;
+  try { contents.reload(); } catch (e) { console.error('[renderer] reload failed:', e); }
+});
+app.on('child-process-gone', (_e, details) => {
+  console.error(`[main] child process gone: type=${details.type} reason=${details.reason}`);
+});
+
 // Keep the main process alive on an unexpected throw/rejection. The harness is a
 // multi-agent supervisor — a single stray throw (e.g. node-pty's ConPTY console
 // helper choking when a fast-exiting agent CLI's console is already gone) must
 // NOT take the whole app and every running agent down with it. Log and continue
 // rather than letting the default handler exit the process.
 // (Restored during the #71 merge — the PR's rebase dropped these handlers.)
+// NOT silent any more: both handlers land in the file sink above, which is the
+// only reason a user could ever report what the harness swallowed here (#13).
 process.on('uncaughtException', (err) => {
   console.error('[main] uncaughtException (kept alive):', err);
 });
@@ -347,6 +450,11 @@ const worktreePaths = new Map<string, string>();
 /** id → the original repo cwd the worktree was created from (needed to run
  *  `git worktree remove` from the parent tree, not the worktree itself). */
 const worktreeOrigins = new Map<string, string>();
+/** id → the branch the worktree was cut from. Recorded at creation rather than
+ *  re-derived at teardown: the user may have switched the parent repo's branch
+ *  in the meantime, and this is the ref the "is there unintegrated work here?"
+ *  gate compares against (#1). */
+const worktreeBases = new Map<string, string>();
 
 /** A live god-triggered ephemeral worker, tracked from spawn to teardown. */
 interface WorkerRec {
@@ -404,6 +512,32 @@ interface PreservedWorktree {
  *  sweep drains this: an entry is removed (worktree + scratch GC'd) only when the
  *  work is provably integrated, or when the worktree is already gone from disk. */
 const preservedWorktrees = new Map<string, PreservedWorktree>();
+/** kv key for the ledger below. */
+const PRESERVED_KV = 'worktrees.preserved';
+/** Persist the ledger. It was in-memory only, so a quit between "this worker
+ *  ended holding unintegrated work" and "that work landed in base" dropped the
+ *  entry forever — the worktree and its scratch dir then leaked in the user's
+ *  real repo with nothing left that knew they were reclaimable (#14). */
+function savePreservedWorktrees(): void {
+  try { persist.setKv(PRESERVED_KV, [...preservedWorktrees.values()]); }
+  catch (e) { console.error('[worker gc] could not persist preserved worktrees:', e); }
+}
+/** Reload it at boot. Entries whose worktree is already gone are reclaimed by
+ *  the normal GC sweep (its path-gone branch), so nothing here needs to touch
+ *  the disk. A live in-memory entry always wins over the snapshot. */
+function loadPreservedWorktrees(): void {
+  try {
+    const rows = persist.getKv<PreservedWorktree[]>(PRESERVED_KV);
+    if (!Array.isArray(rows)) return;
+    for (const r of rows) {
+      if (!r || typeof r.wtPath !== 'string' || !r.wtPath || typeof r.workerId !== 'string') continue;
+      if (!preservedWorktrees.has(r.wtPath)) preservedWorktrees.set(r.wtPath, r);
+    }
+    if (preservedWorktrees.size > 0) {
+      console.log(`[worker gc] reloaded ${preservedWorktrees.size} preserved worktree(s) awaiting integration`);
+    }
+  } catch (e) { console.error('[worker gc] could not reload preserved worktrees:', e); }
+}
 
 /**
  * Tear down everything tied to a PTY id: archive its hive agent, remove its
@@ -429,6 +563,14 @@ function teardownPty(id: string): void {
     ptyToAgent.delete(id);
     // Drop breaker state so a dead agent can't leak/zombie a tripped level.
     try { breaker.forget(agentId); } catch { /* best-effort */ }
+    // …and the other two registries keyed by the same id (#14). Ids are REUSED:
+    // "Restart & Continue", a model change and an account failover all respawn
+    // under the SAME agent id, so a stale pause would deny every PreToolUse of
+    // the fresh session ("Paused by operator") with nothing in the UI to explain
+    // it, and dead sessions would keep summing into the live telemetry sample
+    // the breaker diffs.
+    try { control.forget(agentId); } catch { /* best-effort */ }
+    try { telemetry.forget(agentId); } catch { /* best-effort */ }
     // W1 — kill this agent's proxy-bridge sidecar (qwen), if any, so a dead
     // PTY never leaves an orphan loopback listener. No-op for non-proxy agents.
     try { hive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
@@ -442,18 +584,21 @@ function teardownPty(id: string): void {
     const origCwd = worktreeOrigins.get(id) ?? wtPath;
     worktreePaths.delete(id);
     worktreeOrigins.delete(id);
-    // Ephemeral workers get a SAFETY-GATED teardown: never auto-remove a worktree
-    // that holds unintegrated work. This sits INSIDE teardownPty so it covers ALL
-    // teardown routes — a worker that finished (controller kill), crashed, or was
-    // idle-reaped all land here. Normal agents keep the immediate force-remove.
+    // EVERY isolated agent gets a SAFETY-GATED teardown: never auto-remove a
+    // worktree that holds unintegrated work. This sits INSIDE teardownPty so it
+    // covers ALL teardown routes — finished (controller kill), crashed, idle-
+    // reaped, breaker-stopped, or respawned by an account failover all land here.
+    // Normal agents used to take an immediate `worktree remove --force` on that
+    // same path, so an isolated agent whose CLI died after an hour lost every
+    // untracked and dirty file it had produced (#1).
     const worker = liveWorkers.get(id);
+    const baseBranch = worktreeBases.get(id) ?? 'main';
+    worktreeBases.delete(id);
     if (worker) {
       liveWorkers.delete(id);
       void finalizeWorkerWorktree(wtPath, origCwd, worker);
     } else {
-      void removeWorktree(origCwd, wtPath)
-        .then(r => { if (!r.ok) console.error('[worktree] removeWorktree failed:', r.error); })
-        .catch(e => console.error('[worktree] removeWorktree threw:', e));
+      void finalizeAgentWorktree(id, wtPath, origCwd, baseBranch);
     }
   }
   // A worker whose isolation failed (non-repo cwd) has no worktree to gate above —
@@ -496,6 +641,7 @@ async function finalizeWorkerWorktree(wtPath: string, origCwd: string, worker: W
         workerId: worker.workerId, wtPath, origCwd, baseBranch: worker.baseBranch,
         scratchDir: workerScratchDir(worker.workerId), slack: worker.slack, preservedAt: Date.now()
       });
+      savePreservedWorktrees();
       informGod(
         `[worker worktree preserved] ${worker.workerId}`,
         `Ephemeral worker ${worker.workerId} ended but its worktree holds unintegrated work, so it was NOT auto-removed (you are the sole integrator).\n`
@@ -518,8 +664,39 @@ async function finalizeWorkerWorktree(wtPath: string, origCwd: string, worker: W
       workerId: worker.workerId, wtPath, origCwd, baseBranch: worker.baseBranch,
       scratchDir: workerScratchDir(worker.workerId), slack: worker.slack, preservedAt: Date.now()
     });
+    savePreservedWorktrees();
   } catch (e) {
     console.error('[worker] finalizeWorkerWorktree threw (worktree left in place):', e);
+  }
+}
+
+/** Gated worktree teardown for a NORMAL (non-worker) isolated agent: remove it
+ *  only when `worktreeHasUnintegratedWork` proves there is nothing to lose —
+ *  the same fail-safe gate ephemeral workers get, through the same tested
+ *  function. Async + best-effort; ANY uncertainty keeps the worktree.
+ *
+ *  Deliberately does NOT register in `preservedWorktrees`: that sweep also
+ *  reclaims HIVE_ROOT/agents/<id>, which for a real agent is its memory and
+ *  inbox rather than a worker's disposable scratch. So a kept worktree is kept
+ *  until a human (or the agent's own restore, which re-enters this exact path)
+ *  deals with it — and the log line says exactly how. */
+async function finalizeAgentWorktree(
+  id: string, wtPath: string, origCwd: string, baseBranch: string
+): Promise<void> {
+  try {
+    const work = await worktreeHasUnintegratedWork(wtPath, baseBranch);
+    if (work.keep) {
+      console.warn(
+        `[worktree] PRESERVING ${id}'s worktree — it holds unintegrated work: ${wtPath} `
+        + `(branch ${work.branch}, ${work.detail}). Restarting this agent re-enters it; `
+        + `once the work has landed, remove it with: git -C "${origCwd}" worktree remove "${wtPath}"`
+      );
+      return;
+    }
+    const r = await removeWorktree(origCwd, wtPath);
+    if (!r.ok) console.error('[worktree] removeWorktree failed:', r.error);
+  } catch (e) {
+    console.error('[worktree] finalizeAgentWorktree threw (worktree left in place):', e);
   }
 }
 
@@ -2154,7 +2331,12 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      // The preload's only VALUE import is 'electron' (contextBridge, ipcRenderer,
+      // webUtils — all available to a sandboxed preload) and the renderer bundle
+      // touches no Node global, so the bridge holds with the sandbox on. With a
+      // ~160-channel bridge including pty:spawn behind it, a renderer compromise
+      // through agent-authored markdown should not also hand over a Node process (#8).
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
       // The renderer runs the hive's heartbeat loops (inbox nudge, message
@@ -2227,10 +2409,32 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
 
   win.once('ready-to-show', () => win.show());
 
+  // The renderer renders AGENT-AUTHORED content. Nothing in this app ever
+  // navigates the main frame away from its own entry point, so anything that
+  // tries is either a bug or an injected link — refuse it and say where it
+  // wanted to go (#8). Same-URL navigation is a reload, which is legitimate.
+  win.webContents.on('will-navigate', (e, url) => {
+    if (url === win.webContents.getURL()) return;
+    e.preventDefault();
+    console.warn('[window] blocked in-app navigation to:', url);
+  });
+
+  // A middle-click on an agent-authored link reaches here with the raw href —
+  // the markdown click guard only intercepts `click`. This used to hand
+  // `shell.openExternal` ANY scheme, so a crafted file: / ms-msdt: / smb: URL
+  // was passed straight to the OS handler. One policy, shared with the
+  // app:openExternal IPC (#8).
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
+    else console.warn('[window] blocked external open of non-https url:', url.slice(0, 200));
     return { action: 'deny' };
   });
+
+  // Not fatal and never killed here — a wedged renderer usually un-wedges — but
+  // it is the one symptom users describe as "the app froze", so it belongs in
+  // the log (#13).
+  win.on('unresponsive', () => console.error('[renderer] window unresponsive'));
+  win.on('responsive', () => console.log('[renderer] window responsive again'));
 
   // Close interception when live PTYs exist. The red-X destroys the window;
   // intercept it the same way before-quit does so PTY users aren't surprised.
@@ -2591,6 +2795,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           opts.cwd = wtPath;
           worktreePaths.set(opts.id, wtPath);
           worktreeOrigins.set(opts.id, origCwd);
+          worktreeBases.set(opts.id, baseBranch);
         } else {
           console.error('[worktree] addWorktree failed:', wt.error);
         }
@@ -2898,6 +3103,15 @@ ipcMain.handle('pty:kill', (_evt, id: string) => {
   return res;
 });
 ipcMain.handle('pty:list', () => ptyManager.list());
+/** Prime a reattaching xterm from the PTY's own tail buffer (#13).
+ *  A renderer reload — or a renderer CRASH plus the automatic reload above —
+ *  used to lose every byte the agents emitted in the gap: the terminal came back
+ *  blank while the CLI carried on underneath, which reads as "the agent died".
+ *  Non-destructive, so calling it twice just replays the same tail. */
+ipcMain.handle('pty:attach', (_evt, id: unknown) => {
+  if (typeof id !== 'string') return { ok: false as const, error: 'invalid id' };
+  return { ok: true as const, tail: ptyManager.outputTail(id) };
+});
 
 // Resolve a pasted Claude session id to the cwd it originally ran in, so the Add
 // Agent dialog can auto-fill the folder for a resume (#2 zero-step resume). Reads
@@ -3099,7 +3313,12 @@ ipcMain.handle('integrations:test', async (_evt, payload: unknown) => {
 });
 
 // ─── IPC: config ────────────────────────────────────────────────────────────
-ipcMain.handle('config:get', (): HarnessConfig => readConfig());
+// Redacted: the renderer needs the SHAPE of the config (is a Slack secret set?
+// which webhook triggers exist?) but never the secret values themselves — they
+// live in the encrypted store and only main materializes them. redactedConfig
+// substitutes a fixed-width placeholder that writeConfig reads back as "leave
+// the stored secret alone", so a round-trip through Settings is lossless (#10).
+ipcMain.handle('config:get', (): HarnessConfig => redactedConfig(readConfig()));
 ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   // FIRST RUN: every hive-bound service is started by bootstrapHiveServices(),
   // which runs once at app-ready and early-returns on `!hive.enabled()` — i.e.
@@ -3207,13 +3426,62 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
   return { ok: true as const }; // unreachable (process exits) — typed for the renderer
 });
 
-// ─── IPC: filesystem (sandboxed to a root) ──────────────────────────────────
+// ─── IPC: filesystem (sandboxed to a MANAGED root) ──────────────────────────
+/**
+ * Every `fs:*` and `git:*` handler takes its root/cwd FROM THE RENDERER.
+ * `safeJoin` then confines the relative path to that root — but a root the
+ * caller chose confines nothing, so `fs:writeFile('/', 'Users/x/.zshrc', …)` was
+ * in-contract for any renderer code path, and SECURITY.md's claim that these
+ * calls are "rooted at an agent's working directory" was not true (#9). This is
+ * the missing half: the named root must be a folder the app actually manages.
+ *
+ * ENUMERATED, never hardcoded, so legitimate IDE browsing keeps working:
+ *   - every registered repo (the projects the user added)
+ *   - the harness home (hive root, agent dirs, isolated worktrees)
+ *   - every agent cwd in the hive registry, live or archived — the IDE opens
+ *     files for agents that have no PTY at all
+ *   - every live PTY cwd, plus each isolated agent's worktree and ORIGIN repo
+ *     (the git panel runs against the main checkout a worktree belongs to)
+ */
+let managedRootsCache: { at: number; roots: string[] } | null = null;
+function managedRoots(): string[] {
+  const now = Date.now();
+  // ponytail: 2s TTL, because the registry is a JSON file read and the file tree
+  // asks once per directory expansion. A repo the user just added is browsable a
+  // blink later; drop the cache if that ever surprises anyone.
+  if (managedRootsCache && now - managedRootsCache.at < 2_000) return managedRootsCache.roots;
+  const cfg = readConfig();
+  const roots: string[] = [
+    ...(cfg.registeredRepos ?? []),
+    ...(cfg.harnessHome ? [cfg.harnessHome] : []),
+    ...ptyManager.list().map((p) => p.cwd),
+    ...worktreePaths.values(),
+    ...worktreeOrigins.values()
+  ];
+  try {
+    for (const agent of Object.values(hive.registry().agents)) {
+      if (typeof agent?.cwd === 'string' && agent.cwd) roots.push(agent.cwd);
+    }
+  } catch { /* no hive yet — the config roots still stand */ }
+  const out = [...new Set(roots.filter((r) => typeof r === 'string' && r.trim().length > 0))];
+  managedRootsCache = { at: now, roots: out };
+  return out;
+}
+/** Is this renderer-named root/cwd one of ours? The single gate in front of
+ *  every fs:* / git:* handler below. */
+function managedRoot(p: unknown): p is string {
+  return typeof p === 'string' && isWithinRoots(p, managedRoots());
+}
+const OUTSIDE_MANAGED_ROOT = 'path is outside every managed folder';
+
 ipcMain.handle('fs:listDir', (_evt, root: unknown, rel: unknown) => {
   if (typeof root !== 'string' || typeof rel !== 'string') return { ok: false, error: 'invalid args' };
+  if (!managedRoot(root)) return { ok: false, error: OUTSIDE_MANAGED_ROOT };
   return listDir(root, rel);
 });
 ipcMain.handle('fs:readFile', (_evt, root: unknown, rel: unknown) => {
   if (typeof root !== 'string' || typeof rel !== 'string') return { ok: false, error: 'invalid args' };
+  if (!managedRoot(root)) return { ok: false, error: OUTSIDE_MANAGED_ROOT };
   return readFileText(root, rel);
 });
 // Raw bytes for files the text reader refuses (images). The renderer cannot
@@ -3222,12 +3490,14 @@ ipcMain.handle('fs:readFile', (_evt, root: unknown, rel: unknown) => {
 // URL on the other side. Same root confinement as every other fs handler.
 ipcMain.handle('fs:readBinary', (_evt, root: unknown, rel: unknown) => {
   if (typeof root !== 'string' || typeof rel !== 'string') return { ok: false, error: 'invalid args' };
+  if (!managedRoot(root)) return { ok: false, error: OUTSIDE_MANAGED_ROOT };
   return readFileBinary(root, rel);
 });
 ipcMain.handle('fs:writeFile', (_evt, root: unknown, rel: unknown, content: unknown) => {
   if (typeof root !== 'string' || typeof rel !== 'string' || typeof content !== 'string') {
     return { ok: false, error: 'invalid args' };
   }
+  if (!managedRoot(root)) return { ok: false, error: OUTSIDE_MANAGED_ROOT };
   return writeFileText(root, rel, content);
 });
 // v0.3.4: existence check for the terminal ⌘-click markdown flow (metadata only).
@@ -3240,72 +3510,77 @@ ipcMain.handle('fs:statAbs', (_evt, p: unknown) => {
 
 // ─── IPC: git ───────────────────────────────────────────────────────────────
 ipcMain.handle('git:isRepo', (_evt, cwd: unknown) => {
-  if (typeof cwd !== 'string') return false;
+  if (!managedRoot(cwd)) return false;
   return isRepo(cwd);
 });
 
 // The repo a cwd belongs to, following a linked worktree back to its main
 // checkout — the renderer groups the agent roster by this.
 ipcMain.handle('git:mainRepo', (_evt, cwd: unknown) => {
-  if (typeof cwd !== 'string' || !cwd) return null;
+  if (!managedRoot(cwd)) return null;
   return mainRepoRoot(cwd);
 });
 ipcMain.handle('git:branch', (_evt, cwd: unknown) => {
-  if (typeof cwd !== 'string') return { error: 'invalid cwd' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   return getBranch(cwd);
 });
 ipcMain.handle('git:status', (_evt, cwd: unknown) => {
-  if (typeof cwd !== 'string') return { error: 'invalid cwd' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   return getStatus(cwd);
 });
 ipcMain.handle('git:log', (_evt, cwd: unknown, n: unknown) => {
-  if (typeof cwd !== 'string') return { error: 'invalid cwd' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   const count = typeof n === 'number' ? Math.min(500, Math.max(1, n)) : 50;
   return getLog(cwd, count);
 });
 ipcMain.handle('git:branches', (_evt, cwd: unknown) => {
-  if (typeof cwd !== 'string') return { error: 'invalid cwd' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   return getBranches(cwd);
 });
 ipcMain.handle('git:aheadBehind', (_evt, cwd: unknown) => {
-  if (typeof cwd !== 'string') return { error: 'invalid cwd' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   return getAheadBehind(cwd);
 });
 ipcMain.handle('git:diff', (_evt, cwd: unknown, relPath: unknown) => {
   if (typeof cwd !== 'string' || typeof relPath !== 'string') {
     return { ok: false, error: 'invalid args' };
   }
+  if (!managedRoot(cwd)) return { ok: false, error: OUTSIDE_MANAGED_ROOT };
   return getDiff(cwd, relPath);
 });
 // ─── v0.3.4: history / compare / checkout (git visualization) ───────────────
 ipcMain.handle('git:logGraph', (_evt, cwd: unknown, n: unknown, skip: unknown) => {
-  if (typeof cwd !== 'string') return { error: 'invalid args' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   const count = Math.min(500, Math.max(1, typeof n === 'number' ? n : 200));
   const off = Math.max(0, typeof skip === 'number' ? skip : 0);
   return getLogGraph(cwd, count, off);
 });
 ipcMain.handle('git:commitFiles', (_evt, cwd: unknown, sha: unknown) => {
   if (typeof cwd !== 'string' || typeof sha !== 'string') return { error: 'invalid args' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   return getCommitFiles(cwd, sha);
 });
 ipcMain.handle('git:showFile', (_evt, cwd: unknown, rev: unknown, relPath: unknown) => {
   if (typeof cwd !== 'string' || typeof rev !== 'string' || typeof relPath !== 'string') {
     return { ok: false, error: 'invalid args' };
   }
+  if (!managedRoot(cwd)) return { ok: false, error: OUTSIDE_MANAGED_ROOT };
   return getFileAtRev(cwd, rev, relPath);
 });
 ipcMain.handle('git:compareRefs', (_evt, cwd: unknown, base: unknown, head: unknown, mode: unknown) => {
   if (typeof cwd !== 'string' || typeof base !== 'string' || typeof head !== 'string') {
     return { error: 'invalid args' };
   }
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   return compareRefs(cwd, base, head, mode === 'two' ? 'two' : 'three');
 });
 ipcMain.handle('git:worktrees', (_evt, cwd: unknown) => {
-  if (typeof cwd !== 'string') return { error: 'invalid args' };
+  if (!managedRoot(cwd)) return { error: OUTSIDE_MANAGED_ROOT };
   return listWorktrees(cwd);
 });
 ipcMain.handle('git:checkout', async (_evt, cwd: unknown, ref: unknown, detach: unknown) => {
   if (typeof cwd !== 'string' || typeof ref !== 'string') return { ok: false, error: 'invalid args' };
+  if (!managedRoot(cwd)) return { ok: false, error: OUTSIDE_MANAGED_ROOT };
   // Guard: never swap files under an actively-working agent. Objective signal
   // owned by main — any live pty whose cwd sits in this tree and emitted output
   // in the last 10s is treated as mid-run. (Idle-but-open terminals are fine:
@@ -3591,27 +3866,44 @@ ipcMain.handle('history:search', (_evt, query: unknown, limit: unknown) =>
   persist.searchHistory(typeof query === 'string' ? query : '', typeof limit === 'number' ? limit : undefined));
 
 // ─── IPC: quit confirmation ─────────────────────────────────────────────────
+/** Every background service this app starts, in the order it must be stopped.
+ *  ONE list, because there are two teardown paths — the quit and the full reset
+ *  — and they were hand-maintained copies that had DRIFTED: resetAll stopped
+ *  neither the webhook server nor the proxy-bridge sidecars, so a reset left the
+ *  public tunnel open and every qwen sidecar running against a hive that had
+ *  just been wiped (#34). Now a new service can only be added in one place. */
+const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
+  { name: 'clearMissionTimers', stop: () => clearMissionTimers() },
+  { name: 'clearContextTimers', stop: () => clearContextTimers() },
+  { name: 'stopWebhookDoneObserver', stop: () => stopWebhookDoneObserver() },
+  { name: 'stopWorkerWatcher', stop: () => stopEphemeralWorkerWatcher() },
+  { name: 'broker.stop', stop: () => integrationBroker.stop() },
+  { name: 'stopRouter', stop: () => hive.stopRouter() },
+  { name: 'hookServer.stop', stop: () => hookServer.stop() },
+  { name: 'telemetry.stop', stop: () => telemetry.stop() },
+  { name: 'slack.stop', stop: () => stopSlackServer() },
+  { name: 'webhook.stop', stop: () => stopWebhookServer() },
+  { name: 'memory.stop', stop: () => memory.stop() },
+  { name: 'reflector.stop', stop: () => reflector.stop() },
+  { name: 'stopAllProxyBridges', stop: () => hive.stopAllProxyBridges() },
+  { name: 'persist.close', stop: () => persist.close() },
+  { name: 'killAll', stop: () => ptyManager.killAll() }
+];
+
+/** Run the whole list, best-effort: a throw in one step (a dying child, a
+ *  half-torn-down socket) must never abort the rest, the quit, or pop a crash
+ *  dialog. `tag` keeps quit and reset distinguishable in the log. */
+function runShutdown(tag: 'quit' | 'reset'): void {
+  for (const step of SHUTDOWN_STEPS) {
+    try { step.stop(); } catch (e) { console.error(`[${tag}] ${step.name}:`, e); }
+  }
+}
+
 /** Tear the harness down and quit. Shared by the hard "kill all & quit" path
  *  and the closing-time conclusion (after the god confirmed the floor saved). */
 function teardownAndQuit(): void {
   allowQuit = true;
-  // Each teardown step is best-effort: a throw here (e.g. a dying child or a
-  // half-torn-down socket) must never abort the quit or pop a crash dialog.
-  try { clearMissionTimers(); } catch (e) { console.error('[quit] clearMissionTimers:', e); }
-  try { clearContextTimers(); } catch (e) { console.error('[quit] clearContextTimers:', e); }
-  try { stopWebhookDoneObserver(); } catch (e) { console.error('[quit] stopWebhookDoneObserver:', e); }
-  try { stopEphemeralWorkerWatcher(); } catch (e) { console.error('[quit] stopWorkerWatcher:', e); }
-  try { integrationBroker.stop(); } catch (e) { console.error('[quit] broker.stop:', e); }
-  try { hive.stopRouter(); } catch (e) { console.error('[quit] stopRouter:', e); }
-  try { hookServer.stop(); } catch (e) { console.error('[quit] hookServer.stop:', e); }
-  try { telemetry.stop(); } catch (e) { console.error('[quit] telemetry.stop:', e); }
-  try { stopSlackServer(); } catch (e) { console.error('[quit] slack.stop:', e); }
-  try { stopWebhookServer(); } catch (e) { console.error('[quit] webhook.stop:', e); }
-  try { memory.stop(); } catch (e) { console.error('[quit] memory.stop:', e); }
-  try { reflector.stop(); } catch (e) { console.error('[quit] reflector.stop:', e); }
-  try { persist.close(); } catch (e) { console.error('[quit] persist.close:', e); }
-  try { hive.stopAllProxyBridges(); } catch (e) { console.error('[quit] stopAllProxyBridges:', e); }
-  try { ptyManager.killAll(); } catch (e) { console.error('[quit] killAll:', e); }
+  runShutdown('quit');
   app.quit();
 }
 ipcMain.handle('app:confirmClose', () => {
@@ -3653,20 +3945,9 @@ ipcMain.handle('app:cancelClosingTime', () => closingTime.cancel());
 // ─── IPC: full reset (wipe data + config, relaunch into onboarding) ──────────
 ipcMain.handle('app:resetAll', () => {
   allowQuit = true;
-  // Tear everything down first so nothing writes back into the dirs we wipe.
-  try { clearMissionTimers(); } catch (e) { console.error('[reset] clearMissionTimers:', e); }
-  try { clearContextTimers(); } catch (e) { console.error('[reset] clearContextTimers:', e); }
-  try { stopWebhookDoneObserver(); } catch (e) { console.error('[reset] stopWebhookDoneObserver:', e); }
-  try { stopEphemeralWorkerWatcher(); } catch (e) { console.error('[reset] stopWorkerWatcher:', e); }
-  try { integrationBroker.stop(); } catch (e) { console.error('[reset] broker.stop:', e); }
-  try { hive.stopRouter(); } catch (e) { console.error('[reset] stopRouter:', e); }
-  try { hookServer.stop(); } catch (e) { console.error('[reset] hookServer.stop:', e); }
-  try { telemetry.stop(); } catch (e) { console.error('[reset] telemetry.stop:', e); }
-  try { stopSlackServer(); } catch (e) { console.error('[reset] slack.stop:', e); }
-  try { memory.stop(); } catch (e) { console.error('[reset] memory.stop:', e); }
-  try { reflector.stop(); } catch (e) { console.error('[reset] reflector.stop:', e); }
-  try { persist.close(); } catch (e) { console.error('[reset] persist.close:', e); }
-  try { ptyManager.killAll(); } catch (e) { console.error('[reset] killAll:', e); }
+  // Tear everything down first so nothing writes back into the dirs we wipe —
+  // the SAME list the quit path uses, so the two can never drift again (#34).
+  runShutdown('reset');
   // Erase the hive (Michael's + every agent's memory, inboxes, tasks, board,
   // git history) and the semantic-memory palace. Only these harness-created
   // subdirs are removed — never the user's whole harnessHome folder.
@@ -3884,11 +4165,25 @@ ipcMain.handle('app:setNotifications', (_evt, val) => writeConfig({ notification
  *  Restricted to Settings panes / https so the renderer can't shell arbitrary
  *  schemes. Used by the onboarding "Permissions & reliability" step. */
 ipcMain.handle('app:openExternal', async (_evt, url: unknown) => {
-  if (typeof url !== 'string' || !/^(x-apple\.systempreferences:|https:\/\/)/.test(url)) {
+  // Same policy object as the window-open handler in createWindow (#8) — there
+  // is exactly one answer to "may this string be handed to the OS?".
+  if (!isAllowedExternalUrl(url, { settingsDeepLink: true })) {
     return { ok: false, error: 'blocked url' };
   }
-  await shell.openExternal(url);
+  await shell.openExternal(url as string);
   return { ok: true };
+});
+/** Reveal the log folder (#13). The bug template asks users for "Logs"; this is
+ *  how they reach them without knowing where Electron hides them per platform. */
+ipcMain.handle('app:openLogs', async () => {
+  try {
+    const dir = logsDir();
+    mkdirSync(dir, { recursive: true });
+    const err = await shell.openPath(dir);
+    return err ? { ok: false as const, error: err } : { ok: true as const, path: dir };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+  }
 });
 /** Toggle macOS "Open at Login" — fully programmatic, no permission prompt.
  *  Returns the resulting state so the renderer toggle reflects reality. */
@@ -4607,6 +4902,7 @@ async function gcPreservedWorktrees(): Promise<void> {
     }
   } finally {
     gcSweepRunning = false;
+    savePreservedWorktrees(); // one write per sweep, not one per reclaimed entry
   }
 }
 
@@ -4777,6 +5073,7 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
 function bootstrapHiveServices(): void {
   if (!hive.enabled()) return;
   hive.ensureHive();
+  loadPreservedWorktrees(); // worktrees awaiting integration survive a restart (#14)
   control.replaceAutoDeliveryPauses(readConfig().autoDeliveryPausedAgents ?? []);
   archiveOrphanedAgents(); // #57/#58: archive stale archived:false entries with no live PTY
   hive.startRouter();
@@ -4910,6 +5207,10 @@ function onSystemResume(reason: string): void {
 }
 
 app.whenReady().then(() => {
+  // No-op when the module-load attempt already succeeded; the retry only matters
+  // on a platform where app.getPath('logs') isn't resolvable before 'ready'.
+  initFileLogging();
+
   // Realtime Michael mic-gate hygiene (rt-8 / Pam rt-10 nit): the voice session
   // opens the mic permission gate by persisting realtimeVoiceEnabled=true and
   // closes it on disconnect — but a hard crash/reload mid-session skips that
@@ -4936,6 +5237,15 @@ app.whenReady().then(() => {
   // server is running; the FILE only exists while it is, so the helper degrades
   // to "endpoint not running" cleanly. NO secret is in the env — only the path.
   process.env.MD_SLACK_REPLY_CONFIG = slackReplyConfigPath();
+  // The hook socket's shared secret, by the same inheritance route. HookServer
+  // rejects every payload whose `sock_token` doesn't equal hookSockToken(), and
+  // the hook shims read this value out of the env they inherit — as PTY
+  // descendants (pty.ts merges process.env) AND, for the qwen proxy bridge, as a
+  // sidecar main spawns with `...process.env`. Setting it here rather than at
+  // each spawn site is what makes BOTH of those work. Get this wrong and every
+  // hook in the app goes dead at once; hooks.ts's rejection log names this exact
+  // variable for that reason.
+  process.env.HIVE_SOCK_TOKEN = hookSockToken();
   // Open the durable store first — createWindow() reads the saved window bounds.
   // Guarded: a DB failure (e.g. a bad native build) must degrade to defaults,
   // never block app startup.

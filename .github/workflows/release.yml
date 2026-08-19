@@ -13,8 +13,28 @@ permissions:
   contents: write
 
 jobs:
+  # Cheapest possible pre-flight, ahead of three platform builds. RELEASE.md is
+  # published verbatim as the release body and its download table pins EXACT
+  # artifact filenames, so one stale version string 404s every download link the
+  # moment the release goes out. That is not hypothetical: the table sat at 0.3.2
+  # from v0.3.4 through v0.3.7 and mac DMG downloads collapsed to single digits
+  # while everything stayed green. Twenty seconds here, or a dead release page.
+  # (Full story in the header of tools/check-release-links.cjs.)
+  links:
+    name: Verify advertised download links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Offline mode — no node_modules needed, the checker is fs + fetch only.
+      - name: RELEASE.md / docs versions match package.json
+        run: npm run check:links
+
   build:
     name: Build (${{ matrix.os }})
+    needs: links
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -29,9 +49,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 22, matching .nvmrc and package.json `engines`. Node 24 has no
+      # better-sqlite3 prebuild and breaks node-pty's winpty gyp build.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # node-gyp (used to rebuild native node-pty) imports distutils, which was
@@ -44,6 +66,8 @@ jobs:
       - name: Provide distutils for node-gyp
         run: python -m pip install --upgrade setuptools
 
+      # Full install, scripts and all: this is the one place the native rebuild
+      # (and tools/patch-node-pty-conpty.cjs) MUST actually succeed.
       - name: Install dependencies
         run: npm ci
 
@@ -56,10 +80,43 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
 
+      # Windows code signing (Azure Trusted Signing). electron-builder hard-FAILS
+      # the instant `win.azureSignOptions` exists in the config without
+      # AZURE_TENANT_ID / AZURE_CLIENT_ID in the environment — app-builder-lib's
+      # codeSign/windowsSignAzureManager.js verifies them before it signs
+      # anything — so the block cannot live in electron-builder.yml
+      # unconditionally: a fork, or a contributor running `npm run dist:win`,
+      # would stop being able to build at all. It is layered on from here
+      # instead, only on the Windows runner and only when the secrets actually
+      # exist. With them unset this resolves to an empty string and Windows ships
+      # unsigned exactly as it does today — no behaviour change, just the wire.
+      - name: Resolve Windows signing arguments
+        id: winsign
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          # The `secrets` context is not available in a step `if:`, so the
+          # presence check has to happen here in the shell.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        run: |
+          if [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_ENDPOINT" ] && [ -n "$AZURE_CODE_SIGNING_ACCOUNT" ] && [ -n "$AZURE_CERT_PROFILE" ]; then
+            echo "args=-c.win.azureSignOptions.endpoint=$AZURE_ENDPOINT -c.win.azureSignOptions.codeSigningAccountName=$AZURE_CODE_SIGNING_ACCOUNT -c.win.azureSignOptions.certificateProfileName=$AZURE_CERT_PROFILE" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing Windows artifacts with Azure Trusted Signing."
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+            echo "::warning::Azure Trusted Signing is not configured - Windows installers ship UNSIGNED and every user hits SmartScreen on the primary install path. Set AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_ENDPOINT, AZURE_CODE_SIGNING_ACCOUNT and AZURE_CERT_PROFILE to turn signing on."
+          fi
+
       - name: Package installers
         # GH_TOKEN lets electron-builder skip its own publish; we upload via the
         # release step below for full control over the asset set.
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        # steps.winsign.outputs.args is empty on macOS/Linux (the step is skipped)
+        # and on Windows without the Azure secrets.
+        run: npx electron-builder ${{ matrix.args }} ${{ steps.winsign.outputs.args }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code signing + notarization — MUST be macOS-only. CSC_LINK is the
@@ -76,6 +133,12 @@ jobs:
           APPLE_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
+          # Azure Trusted Signing credentials — same per-runner discipline as the
+          # Apple block above. Inert unless the step above actually turned signing
+          # on: electron-builder only reads them when azureSignOptions is present.
+          AZURE_TENANT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET || '' }}
 
       - name: Generate checksums
         shell: bash
@@ -116,6 +179,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -150,3 +217,14 @@ jobs:
             release/*.blockmap
             release/latest*.yml
             release/SHA256SUMS.txt
+
+      # The `links` job above only proved the version strings agree with each
+      # other. This HEADs every advertised /releases/latest/download/ URL and
+      # requires 200 — the only moment that answer is meaningful, and the check
+      # that would have caught the v0.3.4–v0.3.7 download outage on day one.
+      # Skipped for pre-release tags: GitHub deliberately excludes pre-releases
+      # from /releases/latest, so those URLs still point at the last stable
+      # release and --live would be answering the wrong question.
+      - name: Verify published downloads resolve
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: npm run check:links -- --live
