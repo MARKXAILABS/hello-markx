@@ -6,31 +6,92 @@ on:
   pull_request:
     branches: [main]
 
+# Node 22 everywhere. Node 24 ships no better-sqlite3 prebuild and breaks
+# node-pty's winpty gyp build on Windows; package.json `engines` and .nvmrc say
+# the same thing, and CONTRIBUTING.md explains the toolchain behind it.
+env:
+  NODE_VERSION: "22"
+
 jobs:
   typecheck:
     name: Typecheck
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
+      # --ignore-scripts skips postinstall's electron-rebuild: tsc needs the
+      # .d.ts files, not compiled native bindings.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Typecheck (node + web)
         run: npm run typecheck
+      - name: npm audit (high and above)
+        # Advisory. A fresh advisory in a transitive dep should be visible on the
+        # PR, not block an unrelated change; dependabot (.github/dependabot.yml)
+        # is what opens the actual bump PR.
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    # KNOWN BASELINE (#7): 11 tests fail on Windows only, and every one of them is
+    # a POSIX-path assumption in the TEST rather than a bug in the source —
+    # test/cli-install-ladder.test.cjs, test/codex-remote.test.cjs (socket path),
+    # test/expand-tilde.test.cjs (including the #140 recents cases) and
+    # test/transcript-project-dir.test.cjs (legacy twin). Until those four are
+    # made platform-aware the Windows job reports but does not block.
+    # ubuntu-latest and macos-latest MUST stay hard gates — the whole point of #7
+    # is that a PR which breaks the suite can go red.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      # The suite is plain node:test over TypeScript transpiled in-process by
+      # test/load-ts.cjs, and the only thing it reaches into node_modules for
+      # (node-pty/lib/windowsPtyAgent.js) is pure JS with no binding load at
+      # require time. Skipping the native rebuild keeps the gate fast and free of
+      # node-gyp flake; the release workflow does the real, blocking rebuild.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      # `test/*.test.cjs` is a glob Node expands itself (so it also works from
+      # cmd.exe on Windows, which does not glob). Deliberately NOT a hand-written
+      # file list: that is how eight test files went unrun for months (#7).
+      - name: Run the test suite
+        run: npm test
 
   build:
     name: Build
-    runs-on: macos-latest
-    # Build exercises the native node-pty rebuild; allowed to fail without blocking.
-    continue-on-error: true
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
-      - run: npm ci
-      - run: npm run build
+      - name: Install dependencies (without the native rebuild)
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules (node-pty, better-sqlite3)
+        # This is the one historically flaky step — node-gyp, winpty, prebuilds.
+        # It used to make the WHOLE build job continue-on-error, which meant a
+        # real TypeScript/bundler break merged green too (#7). Isolated here so
+        # the compile below is a hard gate. The release workflow rebuilds for
+        # real on every platform, and there it must pass.
+        continue-on-error: true
+        run: npx electron-rebuild -f
+
+      # electron-vite build needs the electron package's version, not its
+      # binary, so it is a genuine gate even after the step above is skipped.
+      - name: Compile (electron-vite -> out/)
+        run: npm run build

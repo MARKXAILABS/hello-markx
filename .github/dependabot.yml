@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # npm — one weekly batch. Three deps are pinned EXACTLY on purpose (#43) and a
+  # dependabot PR for any of them needs a human before merge:
+  #   node-pty                 tools/patch-node-pty-conpty.cjs matches a
+  #                            byte-exact line in node-pty's own source; the
+  #                            script now fails the install if that line moves.
+  #   typescript               test/load-ts.cjs and the typecheck must be
+  #                            reproducible across machines and CI.
+  #   @openai/agents-realtime  0.x, so a minor bump is a breaking bump.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # The renderer toolchain (codemirror, xterm, @types/*) churns constantly
+      # and is pure noise one PR at a time.
+      dev-dependencies:
+        dependency-type: development
+
+  # The workflows pin actions by major tag; this keeps those majors current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

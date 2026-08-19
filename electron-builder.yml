@@ -116,6 +116,20 @@ dmg:
   title: Hello MarkX ${version}
 
 # ---- Windows ----
+# Code signing: Azure Trusted Signing, wired up in .github/workflows/release.yml
+# rather than here. It is NOT a stylistic choice — app-builder-lib's
+# codeSign/windowsSignAzureManager.js verifies AZURE_TENANT_ID and
+# AZURE_CLIENT_ID the moment a `win.azureSignOptions` key exists, and throws
+# InvalidConfigurationError if they are missing. Putting the block in this file
+# would therefore break `npm run dist:win` for every contributor and every fork
+# that does not hold the org's Entra credentials. The release workflow layers the
+# same three fields on with `-c.win.azureSignOptions.<field>=…` CLI overrides,
+# on the Windows runner only, and only when all five secrets are present:
+#   AZURE_ENDPOINT               e.g. https://weu.codesigning.azure.net
+#   AZURE_CODE_SIGNING_ACCOUNT   the Trusted Signing account name
+#   AZURE_CERT_PROFILE           the certificate profile inside that account
+#   AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET   (Entra service principal)
+# Until those exist the Windows installers ship unsigned and users hit SmartScreen.
 win:
   icon: build/icon.ico
   target:
