@@ -1,11 +1,24 @@
 /**
  * MemoryManager — semantic memory for the hive, backed by the MemPalace CLI.
  *
- * CLI-only (no MCP): the harness keeps a single shared palace under harnessHome,
- * points every agent's `MEMPALACE_PALACE_PATH` at it, and mines each agent's
- * `memory.md` into its own wing so the whole team can recall by meaning via
- * `mempalace search` / `mempalace wake-up`. Degrades silently to no-op when the
- * `mempalace` CLI isn't installed — the markdown memory still works.
+ * CLI-only (no MCP): the harness keeps a palace under harnessHome, points each
+ * agent's `MEMPALACE_PALACE_PATH` at it, and mines that agent's `memory.md` into
+ * its own wing so recall by meaning works via `mempalace search` /
+ * `mempalace wake-up`. Degrades silently to no-op when the `mempalace` CLI isn't
+ * installed — the markdown memory still works.
+ *
+ * SHARING MODEL (`MemorySettings.scope`) — this is the thing to be explicit
+ * about, because the default is the permissive one:
+ *   'shared' (default) — ONE palace for the whole hive. Every agent can recall
+ *     every other agent's notes: that is the feature (a team that remembers
+ *     together), and it is also the exposure. An agent handed a credential, a
+ *     customer name, or a private instruction writes it to memory.md, the miner
+ *     indexes it, and any sibling can surface it with one `mempalace search`.
+ *   'agent' — one palace per agent, isolation enforced by the PATH itself rather
+ *     than by asking an agent nicely to pass `--wing`. Costs an index (and a
+ *     first-run embedding-model load) per agent, and cross-agent recall is gone.
+ * Whichever is in force is reported in `status().scope` so the UI can say so
+ * instead of leaving the user to infer it.
  *
  *   init    : mempalace init <home> --yes --no-llm        (heuristics-only, no LLM)
  *   store   : mempalace mine <agentDir> --wing <id> --agent <id>
@@ -16,6 +29,7 @@
 import { existsSync, statSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { ensureKilled } from './procKill';
 
 /** Non-memory files `mempalace mine` must not ingest: the Claude Code hooks
@@ -48,10 +62,15 @@ function ensureMineIgnore(agentDir: string): void {
 }
 
 export type EmbeddingModel = 'minilm' | 'embeddinggemma';
+/** Who can recall whose memories. See the sharing-model note at the top. */
+export type MemoryScope = 'shared' | 'agent';
 
 export interface MemorySettings {
   enabled: boolean;
   model: EmbeddingModel;
+  /** Absent → 'shared', so an existing install keeps its one palace and its
+   *  cross-agent recall exactly as it was. */
+  scope?: MemoryScope;
 }
 
 export interface MemoryStatus {
@@ -62,6 +81,26 @@ export interface MemoryStatus {
   palacePath: string | null;
   model: EmbeddingModel;
   bin: string | null;
+  /** 'shared' = every agent recalls every other agent's notes. Surfaced so the
+   *  UI can state the sharing model rather than leaving the user to guess. */
+  scope: MemoryScope;
+}
+
+/** An agent id is about to become a directory name. Ids come off the registry —
+ *  ultimately from an agent NAME the user typed — so reduce every one of them to
+ *  a plain path segment: no separator, no `..`, no leading dot.
+ *
+ *  The usual id (`pam-m3k9x`) passes through untouched. Anything else is scrubbed
+ *  AND suffixed with a hash of the original, because a name that is entirely
+ *  non-Latin or emoji slugs down to nothing and two such ids must not scrub to
+ *  the same folder — under 'agent' scope that would silently hand two agents one
+ *  shared palace, which is the exact failure this scoping exists to prevent. */
+function safeAgentSegment(id: string | undefined): string | null {
+  const raw = String(id ?? '').trim();
+  if (!raw) return null;
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) return raw;
+  const scrubbed = raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 40);
+  return `${scrubbed || 'agent'}-${createHash('sha256').update(raw).digest('hex').slice(0, 8)}`;
 }
 
 const MINE_INTERVAL_MS = 180_000; // re-mine changed memories every 3 min
@@ -149,9 +188,21 @@ export class MemoryManager {
     private getSettings: () => MemorySettings
   ) {}
 
-  palacePath(): string | null {
+  /** The palace ONE agent reads and writes.
+   *
+   *  Under 'shared' scope every id resolves to the same `<home>/palace`, which
+   *  is the pre-existing path — an install that never changes the setting is
+   *  byte-identical to before. Under 'agent' scope each id gets its own
+   *  `<home>/palaces/<id>`, so the isolation is the path, not a `--wing` flag an
+   *  agent could simply omit. Returns null when there is no home, and — under
+   *  'agent' scope — when the caller supplied no usable id, because the honest
+   *  answer there is "no palace", never "everybody's palace". */
+  palacePath(agentId?: string): string | null {
     const h = this.getHome();
-    return h ? join(h, 'palace') : null;
+    if (!h) return null;
+    if (this.scope() === 'shared') return join(h, 'palace');
+    const seg = safeAgentSegment(agentId);
+    return seg ? join(h, 'palaces', seg) : null;
   }
 
   /** Resolve the mempalace CLI against the user's PATH + common uv/pip spots. */
@@ -163,9 +214,14 @@ export class MemoryManager {
   enabled(): boolean { return this.getSettings().enabled; }
   active(): boolean { return this.available() && this.enabled() && this.getHome() !== null; }
   model(): EmbeddingModel { return this.getSettings().model === 'embeddinggemma' ? 'embeddinggemma' : 'minilm'; }
+  scope(): MemoryScope { return this.getSettings().scope === 'agent' ? 'agent' : 'shared'; }
 
   status(): MemoryStatus {
-    const palace = this.palacePath();
+    const home = this.getHome();
+    const scope = this.scope();
+    // Under 'agent' scope there is no single palace to name; report the root the
+    // per-agent ones live under, and count it initialized once any exists.
+    const palace = scope === 'shared' ? this.palacePath() : (home ? join(home, 'palaces') : null);
     return {
       available: this.available(),
       enabled: this.enabled(),
@@ -173,21 +229,26 @@ export class MemoryManager {
       initialized: !!palace && existsSync(palace),
       palacePath: palace,
       model: this.model(),
-      bin: this.bin()
+      bin: this.bin(),
+      scope
     };
   }
 
-  /** Env merged into each agent's spawn so its `mempalace` CLI hits the shared palace. */
-  env(): Record<string, string> {
-    const palace = this.palacePath();
+  /** Env merged into ONE agent's spawn so its `mempalace` CLI hits the palace it
+   *  is entitled to. Pass the agent's id: under 'agent' scope it selects that
+   *  agent's own palace, and without it there is nothing safe to point at, so
+   *  nothing is injected (the agent gets no semantic memory rather than someone
+   *  else's). Under the default 'shared' scope the id is irrelevant. */
+  env(agentId?: string): Record<string, string> {
+    const palace = this.palacePath(agentId);
     if (!this.active() || !palace) return {};
     return { MEMPALACE_PALACE_PATH: palace, MEMPALACE_EMBEDDING_MODEL: this.model() };
   }
 
-  private childEnv(): NodeJS.ProcessEnv {
+  private childEnv(agentId?: string): NodeJS.ProcessEnv {
     return {
       ...process.env,
-      MEMPALACE_PALACE_PATH: this.palacePath() ?? '',
+      MEMPALACE_PALACE_PATH: this.palacePath(agentId) ?? '',
       MEMPALACE_EMBEDDING_MODEL: this.model()
     };
   }
@@ -200,7 +261,9 @@ export class MemoryManager {
    *  that --yes doesn't cover, so a spawned child would hang forever. */
   start(): void {
     if (!this.active() || this.initStarted) return;
-    if (!this.bin() || !this.getHome() || !this.palacePath()) return;
+    // No palacePath() check: under 'agent' scope there is no palace until an
+    // agent id names one, and gating on it here would kill the mine loop outright.
+    if (!this.bin() || !this.getHome()) return;
     this.initStarted = true;
     this.startMineLoop();
   }
@@ -276,10 +339,14 @@ export class MemoryManager {
     return new Promise((resolve) => {
       const bin = this.bin();
       if (!bin) { resolve(); return; }
+      // Under 'agent' scope this is what routes the mine into THAT agent's own
+      // palace; null means the id could not be made into a safe path segment, and
+      // mining into the fallback would silently pool it with everyone else's.
+      if (!this.palacePath(id)) { resolve(); return; }
       ensureMineIgnore(agentDir); // keep settings.json / cursor / messages out of the index
       // stdin closed (mempalace can prompt); mempalace dedups so re-mining is safe.
       const proc = spawn(bin, ['mine', agentDir, '--wing', id, '--agent', id], {
-        env: this.childEnv(), stdio: ['ignore', 'ignore', 'pipe']
+        env: this.childEnv(id), stdio: ['ignore', 'ignore', 'pipe']
       });
       let err = '';
       proc.stderr?.on('data', (d) => { err += d.toString(); });
@@ -310,13 +377,19 @@ export class MemoryManager {
    *  with a 120s timeout — on a cold model load that BLOCKED the Electron main
    *  process (renderer IPC, timers, every window) for up to two minutes. Same
    *  contract, but the event loop keeps breathing and a wedged CLI is swept. */
-  private runCli(args: string[], label: string): Promise<{ ok: boolean; output: string; error?: string }> {
+  private runCli(args: string[], label: string, agentId?: string): Promise<{ ok: boolean; output: string; error?: string }> {
     return new Promise((resolve) => {
       const bin = this.bin();
       if (!this.active() || !bin) { resolve({ ok: false, output: '', error: 'semantic memory not active' }); return; }
+      // Refuse rather than fall through to mempalace's own default path: under
+      // 'agent' scope a read with no agent named has no palace to read.
+      if (!this.palacePath(agentId)) {
+        resolve({ ok: false, output: '', error: 'semantic memory is scoped per agent — name an agent to recall from' });
+        return;
+      }
       let proc: ReturnType<typeof spawn>;
       try {
-        proc = spawn(bin, args, { env: this.childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+        proc = spawn(bin, args, { env: this.childEnv(agentId), stdio: ['ignore', 'pipe', 'pipe'] });
       } catch (e) {
         resolve({ ok: false, output: '', error: e instanceof Error ? e.message : String(e) });
         return;
@@ -344,17 +417,19 @@ export class MemoryManager {
     });
   }
 
-  /** Semantic search across the shared palace. Returns the CLI's text output. */
+  /** Semantic search. `wing` is an agent id: under the default 'shared' scope it
+   *  narrows the one palace to that agent's wing, and under 'agent' scope it also
+   *  selects which palace is opened at all. Returns the CLI's text output. */
   search(query: string, opts: { wing?: string; results?: number } = {}): Promise<{ ok: boolean; output: string; error?: string }> {
     const args = ['search', query, '--results', String(opts.results ?? 5)];
     if (opts.wing) args.push('--wing', opts.wing);
-    return this.runCli(args, 'search');
+    return this.runCli(args, 'search', opts.wing);
   }
 
   /** Session-start digest (~600-900 tokens). */
   wakeUp(wing?: string): Promise<{ ok: boolean; output: string; error?: string }> {
     const args = ['wake-up'];
     if (wing) args.push('--wing', wing);
-    return this.runCli(args, 'wake-up');
+    return this.runCli(args, 'wake-up', wing);
   }
 }
