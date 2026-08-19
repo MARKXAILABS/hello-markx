@@ -12,19 +12,57 @@ participating, you agree to uphold it.
 
 ### Prerequisites
 
-- **macOS, Windows, or Linux.**
-- **Node.js 20 or 22** and npm. Node 24 is not supported yet: `better-sqlite3`
-  ships no prebuilt binary for it and `node-pty`'s winpty build fails under it.
+- **macOS, Windows, or Linux.** CI type-checks, builds, and runs the full test
+  suite on all three.
+- **Node.js 20 or 22** and npm — enforced by `"engines": { "node": ">=20 <23" }`
+  in `package.json`. `.nvmrc` pins **22**, which is the version CI runs, so
+  `nvm use` gets you the supported one. Node 24 is **not** supported:
+  `better-sqlite3` ships no prebuilt binary for it and `node-pty`'s winpty build
+  fails under it.
 - A **C/C++ toolchain** for the native addons (`node-pty`, `better-sqlite3`):
   - macOS: `xcode-select --install`
-  - Windows: Visual Studio 2019/2022 Build Tools with the **C++ workload**, the
-    **Spectre-mitigated libraries** (winpty needs them) and the **ClangCL toolset**
-    (`better-sqlite3` uses it). If `npm install` fails inside winpty's
-    `GetCommitHash.bat`, make sure the `NoDefaultCurrentDirectoryInExePath`
-    environment variable is **not** set in that shell.
+  - Windows: see [Windows prerequisites](#windows-prerequisites) below.
   - Linux: `build-essential` + `python3`.
 - At least one agent CLI on your `PATH` (Claude Code is the default) if you want
   agents to actually run.
+
+### Windows prerequisites
+
+The native rebuild is the one genuinely fiddly part of setup on Windows, and it
+fails with opaque node-gyp output, so here is the exact list.
+
+**Use Node 22, not 24.** Node 24 has no `better-sqlite3` prebuild and breaks
+`node-pty`'s winpty gyp build. `nvm use` reads `.nvmrc`.
+
+**Visual Studio 2019 or 2022 Build Tools**, C++ workload, plus three components
+that are *not* selected by default:
+
+| Component ID | Needed by |
+|---|---|
+| `Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre` | `node-pty` — winpty links against the Spectre-mitigated CRT |
+| `Microsoft.VisualStudio.Component.VC.Llvm.Clang` | `better-sqlite3` — it builds with the ClangCL toolset |
+| `Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset` | `better-sqlite3` — the MSBuild integration for the above |
+
+Installable in one shot:
+
+```powershell
+vs_BuildTools.exe --quiet --wait --norestart `
+  --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended `
+  --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre `
+  --add Microsoft.VisualStudio.Component.VC.Llvm.Clang `
+  --add Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset
+```
+
+**If `npm install` dies inside winpty's `GetCommitHash.bat`,** make sure the
+`NoDefaultCurrentDirectoryInExePath` environment variable is **not** set in that
+shell. That batch file calls `git` with a bare name and relies on the current
+directory being searched.
+
+**If `postinstall` fails with `[patch-node-pty-conpty] node-pty … no longer
+contains the expected line`,** do not skip it. `node-pty` is pinned to an exact
+version because `tools/patch-node-pty-conpty.cjs` matches a byte-exact line in
+its source; that message means a bump moved the line and the Windows crash guard
+it applies is no longer being applied.
 
 ### Install & run
 
@@ -44,8 +82,16 @@ npm run dev        # live-reloading Electron build
 ## Before you open a PR
 
 1. **Keep the type-checker green:** `npm run typecheck` (node + web TS projects).
-2. **Run the tests:** `npm run test:focused`. On Windows a small set of POSIX-path
-   tests is known to fail; say so in the PR if you hit them.
+2. **Run the tests:** `npm test` runs everything in `test/`. (`npm run
+   test:focused` is a hand-picked subset for tight edit loops — handy, but never
+   the thing you gate a PR on: a hand-written file list is how eight test files
+   went unrun for months.)
+
+   **Known Windows baseline:** 11 tests fail on Windows today, all of them
+   POSIX-path assumptions in the tests rather than bugs in the source —
+   `cli-install-ladder`, `codex-remote`, `expand-tilde` and
+   `transcript-project-dir`. That is issue #7, not something you broke. CI marks
+   the Windows job non-blocking for exactly those; Linux and macOS are hard gates.
 3. **Confirm a production build works:** `npm run build`.
 4. **Match the aesthetic.** Any new UI **must** derive from the design tokens in
    [`DESIGN.md`](./DESIGN.md) / `src/renderer/src/design/tokens.ts` — no ad-hoc
