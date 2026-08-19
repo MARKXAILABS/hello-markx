@@ -17,7 +17,7 @@
  * Contract: hive/docs/integrations-spec.md.
  */
 import { app, safeStorage } from 'electron';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   type IntegrationRecord,
@@ -99,7 +99,18 @@ function readSecretBlob(): Record<string, string> {
 function writeSecretBlob(blob: Record<string, string>): void {
   const p = secretsPath();
   mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(blob, null, 2), { encoding: 'utf8', mode: 0o600 });
+  // Temp + rename, like roster.ts: a crash mid-write must leave the OLD blob, not
+  // a truncated one. Every secret in here is unrecoverable if the file is lost —
+  // there is no second copy to fall back on (#3). The 0o600 goes on the temp file
+  // so the secrets are never briefly world-readable under their final name.
+  const tmp = `${p}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(blob, null, 2), { encoding: 'utf8', mode: 0o600 });
+    renameSync(tmp, p);
+  } catch (e) {
+    try { rmSync(tmp, { force: true }); } catch { /* noop */ }
+    throw e;
+  }
 }
 
 /** Store a secret ENCRYPTED. Fail closed if OS encryption is unavailable (never
@@ -152,5 +163,22 @@ export function deleteSecret(secretRef: string | undefined): void {
     } else {
       writeSecretBlob(blob);
     }
+  }
+}
+
+/** Delete every stored secret whose ref starts with `prefix`. Idempotent.
+ *  Exists for `resetConfig`, which has to drop a whole FAMILY of refs it cannot
+ *  enumerate — one per webhook endpoint the user ever created — and which used to
+ *  wipe them for free by overwriting config.json (#10). */
+export function deleteSecretsWithPrefix(prefix: string): void {
+  if (!prefix) return;
+  const blob = readSecretBlob();
+  const refs = Object.keys(blob).filter((r) => r.startsWith(prefix));
+  if (!refs.length) return;
+  for (const r of refs) delete blob[r];
+  if (Object.keys(blob).length === 0) {
+    try { rmSync(secretsPath(), { force: true }); } catch { /* best-effort */ }
+  } else {
+    writeSecretBlob(blob);
   }
 }
