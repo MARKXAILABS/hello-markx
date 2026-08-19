@@ -228,11 +228,76 @@ export async function mainRepoRoot(cwd: string): Promise<string | null> {
   return stripped || gitDir;
 }
 
-/** Derive a safe `agent/<id>` branch name from a worktree path's basename. */
-function agentBranchFor(wtPath: string): string {
-  const base = wtPath.split(/[\\/]/).filter(Boolean).pop() ?? 'agent';
-  const slug = base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+/** The `agent/<id>` branch an agent's work lives on. The slug is what makes it a
+ *  legal, injection-free ref: lowercased, non-ref characters collapsed to `-`. */
+export function agentBranch(agentId: string): string {
+  const slug = agentId.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
   return `agent/${slug}`;
+}
+
+/** Derive a safe `agent/<id>` branch name from a worktree path's basename — the
+ *  worktree dir IS the agent id (see mainRepoRoot). */
+function agentBranchFor(wtPath: string): string {
+  return agentBranch(wtPath.split(/[\\/]/).filter(Boolean).pop() ?? 'agent');
+}
+
+export interface GitIntegrateResult {
+  ok: boolean;
+  /** The branch that was merged, e.g. `agent/jim-1`. */
+  branch: string;
+  /** Files left in a conflicted state. Empty when the merge succeeded, or when it
+   *  failed for a reason other than conflicts (see `error`). */
+  conflicts: string[];
+  error?: string;
+}
+
+/**
+ * Merge one agent's branch into `baseBranch` — the missing half of "own branch
+ * integration".
+ *
+ * The harness could CREATE parallel worktrees (addWorktree) but had no merge or
+ * rebase path at all, so every agent branch was a dead end that only a human at a
+ * terminal could land. This closes that loop.
+ *
+ * Runs in the MAIN checkout (`cwd`), never in the agent's worktree — a worktree
+ * cannot check out the base branch that the main tree already holds. A conflicted
+ * merge is ABORTED and the conflict list returned, rather than leaving the user's
+ * repo sitting in a half-merged state they never asked for: the caller mails the
+ * list to god, who resolves it deliberately. Never throws.
+ */
+export async function integrateAgentBranch(
+  cwd: string, agentId: string, baseBranch: string
+): Promise<GitIntegrateResult> {
+  const branch = agentBranch(agentId);
+  if (!isSafeRev(baseBranch)) return { ok: false, branch, conflicts: [], error: 'invalid base branch' };
+
+  // The branch has to exist before anything else is worth doing.
+  const exists = await runGit(cwd, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+  if (!exists.ok) return { ok: false, branch, conflicts: [], error: `no branch ${branch}` };
+
+  // Merging into a dirty tree, or from somewhere that isn't the base branch,
+  // silently sweeps unrelated work into the merge commit. Refuse both.
+  const head = await getBranch(cwd);
+  if ('error' in head) return { ok: false, branch, conflicts: [], error: head.error };
+  if (head.current !== baseBranch) {
+    return { ok: false, branch, conflicts: [], error: `${cwd} is on '${head.current ?? 'a detached HEAD'}', not '${baseBranch}' — check it out first` };
+  }
+  const status = await getStatus(cwd);
+  if ('error' in status) return { ok: false, branch, conflicts: [], error: status.error };
+  const dirty = status.staged.length + status.unstaged.length;
+  if (dirty > 0) {
+    return { ok: false, branch, conflicts: [], error: `working tree has ${dirty} uncommitted change${dirty === 1 ? '' : 's'} — commit or stash first` };
+  }
+
+  const merge = await runGit(cwd, ['merge', '--no-ff', '-m', `hive: integrate ${branch}`, branch], 30000);
+  if (merge.ok) return { ok: true, branch, conflicts: [] };
+
+  // `diff --name-only --diff-filter=U` is the conflict list; read it BEFORE the
+  // abort throws the merge state away.
+  const unmerged = await runGit(cwd, ['diff', '--name-only', '--diff-filter=U']);
+  const conflicts = unmerged.ok ? unmerged.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+  await runGit(cwd, ['merge', '--abort']);
+  return { ok: false, branch, conflicts, error: conflicts.length ? `${conflicts.length} conflicted file(s)` : merge.error };
 }
 
 /** Provision an isolated git worktree for an agent at `wtPath`, branching off

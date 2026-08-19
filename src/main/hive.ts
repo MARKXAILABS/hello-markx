@@ -124,6 +124,30 @@ export interface HiveTask {
    *  once and never persisted), so a GET status lookup can match by hashing the
    *  presented token. Read-only capability: it never widens routing or exposure. */
   webhook?: { tokenHash: string };
+  /** Peer review of a finished card (#18). `act:'done'` used to be terminal with
+   *  no reviewer, so "is this actually done?" was always a human question. When a
+   *  card reaches 'done' the review sweep asks the least-loaded idle non-assignee
+   *  to check it; their `agree` sets `ok:true`, their `refuse` sets `ok:false` and
+   *  sends the card back to 'doing'. */
+  review?: { by: string; askedAt: string; ok?: boolean };
+  /** Per-card token cap set at dispatch (#34). Cost-ledger rows carry `task_id`,
+   *  so spend against ONE card is attributable — see taskSpend(), which is the
+   *  read side breaker.ts enforces against. */
+  budgetTokens?: number;
+}
+
+/** The task ledger exactly as it is persisted to `tasks.json`.
+ *
+ *  `rev` is the whole point: the ledger has several independent writers (the god
+ *  hand-editing it, the renderer patching a card, the webhook/Slack paths, the
+ *  realtime actions) and none of them could tell that the copy they read 30 s ago
+ *  had been superseded — so a write-back silently erased whatever landed in
+ *  between (#17). Every mutation now compare-and-swaps on `rev`; a stale write is
+ *  REFUSED rather than applied. */
+export interface TaskLedger {
+  tasks: HiveTask[];
+  rev: number;
+  updatedAt: string;
 }
 
 export interface AgentMeta {
@@ -176,6 +200,19 @@ export interface Registry {
   agents: Record<string, RegistryAgent>;
 }
 
+/** One open `requires_reply` obligation, persisted in `pending-replies.json` so
+ *  a restart doesn't forget who owes whom an answer (#18). */
+interface PendingReply {
+  id: string;
+  from: string;
+  to: string;
+  subject: string;
+  conversation: string;
+  /** When the sweep next acts on this: re-deliver once, then escalate to god. */
+  due: number;
+  redelivered: boolean;
+}
+
 /** Build env + extra spawn args that make an agent process hive-aware. */
 export interface SpawnInjection {
   args: string[];
@@ -188,6 +225,23 @@ export interface SpawnInjection {
 }
 
 const HOP_CAP = 12;
+
+// ─── protocol deadlines (#18) ───────────────────────────────────────────────
+/** How long a `requires_reply` message may sit unanswered before the sweep acts.
+ *  First expiry re-delivers it once; the second bounces it to god as
+ *  `[unanswered]`. `requires_reply` was set on every request/query/propose and
+ *  enforced by NOTHING, so a worker that died after its nudge left the requester
+ *  waiting forever with no signal at all. */
+const REPLY_DEADLINE_MS = 15 * 60_000;
+/** How often the router tick actually runs the deadline + review sweeps. The
+ *  router itself ticks every 1.5 s; these are minute-scale concerns. */
+const SWEEP_INTERVAL_MS = 60_000;
+/** Tail window for cost-ledger reads (taskSpend). Same bounded-read discipline as
+ *  logTail: an append-only file must never be slurped whole to answer one query.
+ *  ponytail: a card whose spend predates this window under-reports; widen it (or
+ *  move to Kevin's cost_ledger table, whose row shape this already matches) if
+ *  that ever matters. */
+const COST_TAIL_BYTES = 1024 * 1024;
 
 // ─── git + log budgets ──────────────────────────────────────────────────────
 // Every number here used to be an order of magnitude larger and paid for on the
@@ -576,8 +630,12 @@ export class HiveManager {
     if (!root) return;
     mkdirSync(join(root, 'agents'), { recursive: true });
 
-    const protocol = join(root, 'PROTOCOL.md');
-    if (!existsSync(protocol)) writeFileSync(protocol, PROTOCOL_MD, 'utf8');
+    // Refreshed on every bootstrap, exactly like COMMANDS.md below. It used to be
+    // write-once, so every existing floor was frozen on the protocol of the day it
+    // was created — a new rule (the task CLI, reply deadlines, review) would only
+    // ever reach a brand-new install. It is harness-owned prose with nothing
+    // user-authored in it, so rewriting loses nothing.
+    this.writeIfChanged(join(root, 'PROTOCOL.md'), PROTOCOL_MD);
 
     const registry = join(root, 'registry.json');
     if (!existsSync(registry)) {
@@ -594,7 +652,7 @@ export class HiveManager {
 
     // The Claude Code command reference Michael consults (refreshed each bootstrap
     // so it tracks the bundled list).
-    writeFileSync(join(root, 'COMMANDS.md'), COMMANDS_MD, 'utf8');
+    this.writeIfChanged(join(root, 'COMMANDS.md'), COMMANDS_MD);
 
     // Keep the churny/ephemeral live files out of the hive git repo. Anything
     // append-only or regenerated belongs here: a TRACKED file of that shape
@@ -624,6 +682,10 @@ export class HiveManager {
     writeFileSync(this.shimPath()!, HOOK_SHIM, 'utf8');
     // The proxy-bridge sidecar for hookless CLIs (qwen). Same refresh policy.
     writeFileSync(this.proxyShimPath()!, PROXY_BRIDGE_SHIM, 'utf8');
+    // The one-card ledger CLI (#17). Agents mutate tasks.json THROUGH this, under
+    // compare-and-swap, instead of rewriting the whole file with their Write tool
+    // and erasing whatever landed while they were composing.
+    this.writeIfChanged(join(root, 'bin', 'task.cjs'), TASK_CLI);
     // The bundled-node launcher every shim above is invoked through — MUST be
     // written before any hook installer runs (they probe for it).
     this.writeNodeLauncher();
@@ -634,6 +696,15 @@ export class HiveManager {
       this.git(['init', '-q'], root);
       this.commit('hive: init');
     }
+  }
+
+  /** Write a generated file only when its content actually differs. ensureHive
+   *  runs on every task write, and these are ~20 KB of identical bytes each time;
+   *  a read+compare is the cheaper half of that, and it keeps a doc the agent may
+   *  have open from being replaced under it for no reason. */
+  private writeIfChanged(path: string, content: string): void {
+    try { if (readFileSync(path, 'utf8') === content) return; } catch { /* absent or unreadable → write */ }
+    writeFileSync(path, content, 'utf8');
   }
 
   /** Validate an agent's cwd the way a spawn does — it must be an ABSOLUTE path
@@ -1270,7 +1341,7 @@ export class HiveManager {
       : '';
     const godLine = meta.isGod
       ? 'You are the GOD / ORCHESTRATOR of this hive — your job is to ORCHESTRATE, not to implement: maintain live situational awareness and delegate the work. (1) AWARENESS — always know what is going on: keep an accurate picture of every agent (active vs archived/idle), the task board, and all in-flight work; drain your inbox continually and triage every other agent\'s requests, answering clarifications so the team runs autonomously. (2) DELEGATE — decompose work and fan it out to the hive agents via their inboxes (route messages and assign owners; do not do their jobs); do NOT take on grunt implementation yourself. Stay aware of who is already on the floor and delegate OPPORTUNISTICALLY: BEFORE you spawn anything, CHECK THE LIVE ROSTER (active agents in registry.json + their state in fleet.json) and prefer routing to an EXISTING agent that fits — above all when the request names one ("ask Pam to…", "have Jim…"), route to that agent instead of reflexively creating a new one. Reuse an idle or already-running agent whose role matches; only spawn a fresh agent when no existing one is a sensible fit, and say that you checked. One capable owner beats a duplicate. (3) OWN ONLY THE IMPORTANT, high-leverage things — task decomposition, dispatch decisions, sign-offs, conflict resolution, branch integration, and final QA — and remain the sole scribe of board.md. You are otherwise fully autonomous — there is NO separate approval queue. For the genuinely critical (destructive actions, spending real money, scope changes, unresolvable conflicts), ask the human directly in your own session and let the tool-permission prompt gate the action; the human approves natively, including remotely from their phone via /remote-control. Keep the team unblocked. When you DISPATCH a task, write it as a 4-part contract so the agent can run autonomously: (1) OBJECTIVE — the concrete goal; (2) OUTPUT — the expected deliverable/format; (3) TOOLS — what to use or avoid, and any references to read instead of re-deriving; (4) BOUNDARIES — scope limits + the definition of done. Pass references (file paths, message ids, board sections), not pasted content — keep dispatches short.'
-        + ` MONITOR the floor by reading ${inRoot('fleet.json')} (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${inRoot('registry.json')} — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${inRoot('COMMANDS.md')} (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. In tasks.json, ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — set its status to "blocked" and append the concrete ask to the card's "humanQA" array (push {"q":"...","askedAt":"<iso>"}; phrase actions as clear to-dos; keep every past entry — the history documents the card's decisions). The harness surfaces open questions on the office floor's ASK ME board; the human's answer lands in the same entry ("a") AND arrives as an inbox message to you — read it, act on it, and unblock the card so work continues. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. Steward the token budget.`
+        + ` MONITOR the floor by reading ${inRoot('fleet.json')} (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${inRoot('registry.json')} — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${inRoot('COMMANDS.md')} (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. NEVER edit tasks.json with your Write tool — it has several concurrent writers (you, the kanban UI, inbound webhooks and Slack), so writing back a copy you read a minute ago ERASES whatever landed in between, including answers the human just gave. Mutate ONE card at a time with \`"${hiveNode}" "${inRoot('bin', 'task.cjs')}" {add|patch|claim|done}\`, which compare-and-swaps on the ledger revision (full usage in PROTOCOL.md). ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — run \`task.cjs patch <id> --q "<the ask>"\`, which appends to the card's "humanQA" history and blocks it (phrase actions as clear to-dos; every past entry is kept — the history documents the card's decisions). The harness surfaces open questions on the office floor's ASK ME board; the human's answer lands in the same entry ("a") AND arrives as an inbox message to you — read it, act on it, and unblock the card so work continues. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. Steward the token budget.`
       : meta.isAssistant
       ? 'You are Michael\'s PREP ASSISTANT. You will be handed short, possibly vague instructions (each begins with "ENRICH TASK:"). For each one: (1) figure out which project it concerns and cd into the most relevant repo — you start in Michael\'s home directory; (2) gather concrete context READ-ONLY (exact file paths, current state, relevant code, conventions, active branch, gotchas) — NEVER modify, create, or delete files; (3) rewrite the instruction into ONE clear, self-contained prompt that Michael can execute autonomously, preserving the user\'s original intent without inventing scope. Then deliver it: write ONE message JSON into your outbox with "to":"god", "act":"request", a short subject, and the finished prompt as the body. Do NOT perform the task yourself — your only output is the improved prompt sent to Michael.'
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
@@ -1339,14 +1410,30 @@ export class HiveManager {
   }
 
   private routeMessage(msg: HiveMessage): void {
-    if (msg.hops > HOP_CAP) {
-      // loop guard — drop a runaway message rather than let agents ping-pong.
-      // There's no human queue to fall back on; the god agent owns conflicts.
-      this.appendLog({ kind: 'drop', reason: 'hop-cap', from: msg.from, to: msg.to, id: msg.id });
-      return;
-    }
     const reg = this.registry();
     const godId = reg.godId ?? 'god';
+    if (msg.hops > HOP_CAP) {
+      // Loop guard. This used to DROP the message — but HIVE.md promises
+      // escalation, and a silent drop is the worst of both: the two agents stop
+      // ping-ponging AND neither they nor anyone else learns the thread died. So
+      // hand it to god, who owns conflicts, and stop routing it. Delivered
+      // DIRECTLY rather than re-routed, so the escalation cannot itself loop, and
+      // with requires_reply cleared so it never enters the deadline sweep.
+      // deliver() returning false means god has no workspace to write into — say
+      // "dropped", never "escalated", when that is what actually happened (the
+      // whole point of that return value; see its doc comment).
+      const escalated = this.deliver({
+        ...msg,
+        to: godId,
+        requires_reply: false,
+        subject: `[hop-cap — this thread bounced ${msg.hops} times between "${msg.from}" and "${msg.to}"; break the loop] ${msg.subject}`
+      }, godId);
+      this.appendLog({
+        kind: escalated ? 'escalate' : 'drop',
+        reason: 'hop-cap', from: msg.from, to: msg.to, id: msg.id, hops: msg.hops
+      });
+      return;
+    }
     // The hive has no separate human-approval queue — approvals are native to
     // each agent's Claude Code session (and approvable remotely). A message aimed
     // at "human" is handled by the god/orchestrator, the human's proxy here.
@@ -1425,6 +1512,8 @@ export class HiveManager {
       }
     }
     this.appendLog({ kind: 'message', from: msg.from, to: msg.to, act: msg.act, subject: msg.subject, id: msg.id });
+    this.trackReplies(msg, targets);
+    this.applyReviewVerdict(msg);
     this.emitMessage(msg, targets);
     // Main-process observer (e.g. the closing-time controller watching for the
     // team's ACKs and the god's COMPLETE). Best-effort, never breaks routing.
@@ -1486,6 +1575,11 @@ export class HiveManager {
     if (this.routerTimer || !this.enabled()) return;
     this.routerTimer = setInterval(() => {
       try { this.routeOnce(); } catch { /* keep the loop alive */ }
+      // The protocol sweeps (#18) ride the router's own timer rather than the
+      // optional heartbeat mission — the heartbeat ships DISABLED, and a reply
+      // deadline that only fires when the user opted into a standup is not a
+      // deadline. Self-throttled to SWEEP_INTERVAL_MS.
+      try { this.sweep(); } catch { /* keep the loop alive */ }
     }, intervalMs);
   }
   stopRouter(): void {
@@ -1521,6 +1615,208 @@ export class HiveManager {
     return routed;
   }
 
+  // — protocol enforcement: reply deadlines + done review (#18) —
+
+  /** `<root>/pending-replies.json` — the open `requires_reply` obligations.
+   *  Keyed by message id; small, and deliberately ON DISK so a restart doesn't
+   *  forget who owes whom an answer. */
+  private pendingPath(): string | null {
+    const root = this.root();
+    return root ? join(root, 'pending-replies.json') : null;
+  }
+  private pendingReplies(): Record<string, PendingReply> {
+    const p = this.pendingPath();
+    return p ? this.readJson<Record<string, PendingReply>>(p, {}) : {};
+  }
+  private writePendingReplies(map: Record<string, PendingReply>): void {
+    const p = this.pendingPath();
+    if (p) this.writeJson(p, map);
+  }
+
+  /**
+   * Open and close reply obligations as messages route past.
+   *
+   * A reply CLOSES an obligation two ways, because agents are inconsistent about
+   * threading: an explicit `in_reply_to`, or any message from the party who owed
+   * the answer inside the same `conversation`.
+   *
+   * ponytail: single-recipient messages only. A broadcast that "requires a reply"
+   * would mean N obligations for one id, and nothing on the floor asks the whole
+   * team to answer individually — add per-target keys if that ever becomes real.
+   */
+  private trackReplies(msg: HiveMessage, targets: string[]): void {
+    const map = this.pendingReplies();
+    let dirty = false;
+
+    if (msg.in_reply_to && map[msg.in_reply_to]) { delete map[msg.in_reply_to]; dirty = true; }
+    for (const [id, entry] of Object.entries(map)) {
+      if (entry.to === msg.from && entry.conversation && entry.conversation === msg.conversation) {
+        delete map[id];
+        dirty = true;
+      }
+    }
+
+    if (msg.requires_reply && targets.length === 1 && targets[0] !== msg.from) {
+      map[msg.id] = {
+        id: msg.id,
+        from: msg.from,
+        to: targets[0],
+        subject: msg.subject,
+        conversation: msg.conversation,
+        due: Date.now() + REPLY_DEADLINE_MS,
+        redelivered: false
+      };
+      dirty = true;
+    }
+    if (dirty) this.writePendingReplies(map);
+  }
+
+  /** Find a routed message's file wherever it now lives in an agent's mailbox. */
+  private findMessage(agentId: string, msgId: string): HiveMessage | null {
+    const base = this.agentDir(agentId);
+    for (const dir of [join(base, 'inbox'), join(base, 'inbox', '.done')]) {
+      const p = join(dir, `${msgId}.json`);
+      if (!existsSync(p)) continue;
+      try { return JSON.parse(readFileSync(p, 'utf8')) as HiveMessage; } catch { return null; }
+    }
+    return null;
+  }
+
+  /**
+   * Re-deliver, then escalate, every `requires_reply` message nobody answered.
+   *
+   * First expiry: one re-delivery to the same recipient (a worker that was busy,
+   * compacting, or restarted simply missed it). Second: the requester's ask goes
+   * to god as `[unanswered]` and the obligation is closed — the point is that the
+   * silence becomes VISIBLE to someone who can act, never that we retry forever.
+   *
+   * Returns how many obligations it acted on. Never throws (runs off a timer).
+   */
+  sweepUnansweredReplies(now = Date.now()): number {
+    const map = this.pendingReplies();
+    const godId = this.registry().godId ?? 'god';
+    let acted = 0;
+    for (const [id, entry] of Object.entries(map)) {
+      if (entry.due > now) continue;
+      const original = this.findMessage(entry.to, id);
+      if (!entry.redelivered && original) {
+        this.deliver({
+          ...original,
+          id: `${id}-reminder`,
+          subject: `[reminder — unanswered for ${Math.round((now - (entry.due - REPLY_DEADLINE_MS)) / 60_000)}m] ${entry.subject}`
+        }, entry.to);
+        this.appendLog({ kind: 'reply-reminder', id, from: entry.from, to: entry.to });
+        map[id] = { ...entry, redelivered: true, due: now + REPLY_DEADLINE_MS };
+      } else {
+        // No original on disk means the recipient's workspace is gone — escalate
+        // immediately rather than spend a re-delivery round on a dead mailbox.
+        const bounced = this.deliver(this.normalize({
+          to: godId,
+          act: 'inform',
+          requires_reply: false,
+          conversation: entry.conversation,
+          subject: `[unanswered] ${entry.subject}`,
+          body: `"${entry.to}" never answered "${entry.from}" (message ${id}). It has been re-delivered once and is still unanswered — chase it, reassign it, or answer it yourself.`
+        }, 'system'), godId);
+        this.appendLog({ kind: bounced ? 'unanswered' : 'drop', reason: 'unanswered', id, from: entry.from, to: entry.to });
+        delete map[id];
+      }
+      acted++;
+    }
+    if (acted) this.writePendingReplies(map);
+    return acted;
+  }
+
+  /** Card statuses as of the previous review sweep. Seeded (acting on nothing) on
+   *  the first sweep so a ledger full of historic 'done' cards is never
+   *  mass-reviewed at boot — only a card that reaches 'done' while we are watching
+   *  gets a reviewer. A restart re-seeds; a card finished while the app was closed
+   *  is not reviewed, which is the right trade against mailing the floor a hundred
+   *  stale queries. */
+  private lastTaskStatus: Map<string, string> | null = null;
+
+  /** The least-loaded idle agent that can actually take mail, excluding `skip`
+   *  (the assignee) and god. Null when nobody qualifies — the sweep then simply
+   *  leaves the card alone and tries again next minute. */
+  private leastLoadedIdle(skip: string[]): string | null {
+    const reg = this.registry();
+    const godId = reg.godId ?? 'god';
+    return Object.entries(reg.agents)
+      .filter(([id, a]) => id !== godId && !skip.includes(id) && !a?.archived && !a?.isAssistant
+        && !a?.isGod && a?.status === 'idle' && canReceiveInbox(a?.provider))
+      .map(([id]) => ({ id, load: this.inboxBacklog(id) }))
+      .sort((a, b) => a.load - b.load)[0]?.id ?? null;
+  }
+
+  /**
+   * Ask a peer to check every card that just reached 'done'.
+   *
+   * `act:'done'` was terminal by design and nothing verified it, so "is this
+   * actually done?" was always a human question. The reviewer is mailed a `query`
+   * on conversation `review-<taskId>`; their verdict comes back through
+   * applyReviewVerdict — `refuse` sends the card back to 'doing'.
+   *
+   * Detects the transition from the LEDGER rather than from writeTasks, so it
+   * catches every writer including a god that hand-edits tasks.json.
+   */
+  sweepTaskReviews(): number {
+    const tasks = this.ledger().tasks;
+    const seen = new Map<string, string>(tasks.map((t) => [t.id, t.status]));
+    const previous = this.lastTaskStatus;
+    this.lastTaskStatus = seen;
+    if (!previous) return 0; // first sweep: learn the floor, act on nothing
+
+    let asked = 0;
+    for (const task of tasks) {
+      if (task.status !== 'done' || task.review || !task.assignee) continue;
+      if (previous.get(task.id) === 'done' || !previous.has(task.id)) continue;
+      const reviewer = this.leastLoadedIdle([task.assignee]);
+      if (!reviewer) continue;
+      this.send({
+        to: reviewer,
+        act: 'query',
+        conversation: `review-${task.id}`,
+        subject: `[review] ${task.title}`,
+        body: [
+          `"${task.assignee}" marked task ${task.id} ("${task.title}") DONE. Check it before it counts as finished.`,
+          task.description ? `Objective: ${task.description}` : '',
+          `Reported result: ${task.result ?? '(none written)'}`,
+          `Reply with act:"agree" if it holds up, or act:"refuse" with what is missing — which sends the card back to "doing". Carry conversation "review-${task.id}" either way.`
+        ].filter(Boolean).join('\n')
+      }, 'system');
+      this.patchTask(task.id, { review: { by: reviewer, askedAt: new Date().toISOString() } });
+      asked++;
+    }
+    return asked;
+  }
+
+  /** Apply a reviewer's verdict: `refuse` reopens the card, `agree` signs it off.
+   *  Keyed off the `review-<taskId>` conversation the query carried. */
+  private applyReviewVerdict(msg: HiveMessage): void {
+    if (msg.act !== 'agree' && msg.act !== 'refuse') return;
+    const taskId = /^review-(.+)$/.exec(msg.conversation ?? '')?.[1];
+    if (!taskId) return;
+    const task = this.ledger().tasks.find((t) => t.id === taskId);
+    if (!task?.review || task.review.by !== msg.from) return;
+    const ok = msg.act === 'agree';
+    this.patchTask(taskId, {
+      review: { ...task.review, ok },
+      ...(ok ? {} : { status: 'doing' as const })
+    });
+    this.appendLog({ kind: 'review', taskId, by: msg.from, ok });
+  }
+
+  /** Run both protocol sweeps. Throttled to SWEEP_INTERVAL_MS so the 1.5 s router
+   *  tick can call it unconditionally. Best-effort — never throws into the loop. */
+  private sweep(): void {
+    const now = Date.now();
+    if (now - this.lastSweep < SWEEP_INTERVAL_MS) return;
+    this.lastSweep = now;
+    try { this.sweepUnansweredReplies(now); } catch (e) { console.error('[hive] reply sweep failed:', e); }
+    try { this.sweepTaskReviews(); } catch (e) { console.error('[hive] review sweep failed:', e); }
+  }
+  private lastSweep = 0;
+
   // — read helpers (for IPC / UI) —
 
   registry(): Registry {
@@ -1533,53 +1829,96 @@ export class HiveManager {
     return root && existsSync(join(root, 'board.md')) ? readFileSync(join(root, 'board.md'), 'utf8') : '';
   }
   tasks(): unknown {
-    const root = this.root();
-    return root ? this.readJson(join(root, 'tasks.json'), { tasks: [] }) : { tasks: [] };
+    return this.ledger();
   }
 
-  /** Persist the task ledger to hive/tasks.json and commit it. Mirrors the
-   *  board/message persist pattern: write JSON, log the change, single-commit. */
-  writeTasks(tasks: HiveTask[]): void {
+  /** The task ledger with its revision — the typed read every mutation path goes
+   *  through. Tolerates a pre-`rev` ledger (rev 0) and any partial/corrupt file. */
+  private ledger(): TaskLedger {
     const root = this.root();
-    if (!root) return;
+    const raw = root ? this.readJson<Partial<TaskLedger>>(join(root, 'tasks.json'), {}) : {};
+    return {
+      tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
+      rev: typeof raw.rev === 'number' && raw.rev >= 0 ? raw.rev : 0,
+      updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : ''
+    };
+  }
+
+  /**
+   * Persist the task ledger to hive/tasks.json and commit it. Mirrors the
+   * board/message persist pattern: write JSON, log the change, single-commit.
+   *
+   * `expectedRev` is the compare-and-swap: pass the `rev` you read and the write
+   * is REFUSED (returns false) if anyone else wrote in between. Omitting it is a
+   * blind whole-ledger overwrite — the exact move that erased a card the human
+   * had just answered (#17) — so every mutation helper below supplies it, and
+   * agents mutate one card at a time through `bin/task.cjs` instead.
+   */
+  writeTasks(tasks: HiveTask[], expectedRev?: number): boolean {
+    const root = this.root();
+    if (!root) return false;
     this.ensureHive();
-    this.writeJson(join(root, 'tasks.json'), { tasks });
-    this.appendLog({ kind: 'tasks', count: tasks.length });
+    const current = this.ledger();
+    if (typeof expectedRev === 'number' && expectedRev !== current.rev) {
+      this.appendLog({ kind: 'tasks-conflict', expectedRev, rev: current.rev });
+      return false;
+    }
+    const next: TaskLedger = { tasks, rev: current.rev + 1, updatedAt: new Date().toISOString() };
+    this.writeJson(join(root, 'tasks.json'), next);
+    this.appendLog({ kind: 'tasks', count: tasks.length, rev: next.rev });
     this.commit(`hive: tasks (${tasks.length})`);
+    return true;
+  }
+
+  /**
+   * Read-modify-write ONE card against the live ledger under compare-and-swap.
+   * `fn` returns the next card array, or null to abort (nothing to do).
+   *
+   * Retries once: a single lost race is normal on a busy floor, two in a row is
+   * real contention and the caller deserves to be told rather than have its write
+   * silently win.
+   *
+   * ponytail: CAS + retry, not a lock. It closes the window this was written for
+   * — a writer that reads the ledger, composes for 30 s, and writes it back — and
+   * leaves a sub-millisecond read-rev→rename race. Upgrade path if that ever
+   * bites: an O_EXCL lockfile at `<root>/tasks.lock`, shared with bin/task.cjs.
+   */
+  private mutateTasks(fn: (tasks: HiveTask[]) => HiveTask[] | null): boolean {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ledger = this.ledger();
+      const next = fn(ledger.tasks);
+      if (next === null) return false;
+      if (this.writeTasks(next, ledger.rev)) return true;
+    }
+    return false;
   }
 
   /** Append one card against the latest on-disk ledger. Renderer callers must
    *  use this instead of re-writing a collection they read before another
    *  source (webhook, Slack, god, voice) added work. Idempotent by task id. */
   addTask(task: HiveTask): boolean {
-    const ledger = this.tasks() as { tasks?: HiveTask[] };
-    const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
-    if (tasks.some((current) => current?.id === task.id)) return false;
-    this.writeTasks([...tasks, task]);
-    return true;
+    return this.mutateTasks((tasks) =>
+      tasks.some((current) => current?.id === task.id) ? null : [...tasks, task]);
   }
 
   /** Patch one card against the latest on-disk ledger, preserving unrelated
    *  cards and fields (notably webhook.tokenHash and Slack thread metadata). */
   patchTask(id: string, patch: Partial<Omit<HiveTask, 'id'>>): boolean {
-    const ledger = this.tasks() as { tasks?: HiveTask[] };
-    const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
-    const index = tasks.findIndex((task) => task?.id === id);
-    if (index < 0) return false;
-    const next = tasks.slice();
-    next[index] = { ...tasks[index], ...patch, id };
-    this.writeTasks(next);
-    return true;
+    return this.mutateTasks((tasks) => {
+      const index = tasks.findIndex((task) => task?.id === id);
+      if (index < 0) return null;
+      const next = tasks.slice();
+      next[index] = { ...tasks[index], ...patch, id };
+      return next;
+    });
   }
 
   /** Delete only the named card from the latest on-disk ledger. */
   deleteTask(id: string): boolean {
-    const ledger = this.tasks() as { tasks?: HiveTask[] };
-    const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
-    const next = tasks.filter((task) => task?.id !== id);
-    if (next.length === tasks.length) return false;
-    this.writeTasks(next);
-    return true;
+    return this.mutateTasks((tasks) => {
+      const next = tasks.filter((task) => task?.id !== id);
+      return next.length === tasks.length ? null : next;
+    });
   }
   memory(id: string): string {
     const p = join(this.agentDir(id), 'memory.md');
@@ -2000,6 +2339,14 @@ export class HiveManager {
    * told to read fleet.json, but "told to" is not "always knows" — so we push the
    * truth in on every turn instead. One line, so the cost is negligible.
    *
+   * 🔒 …and it is therefore the ONE cache-safe home for anything volatile god
+   * needs to know about the floor, including the per-engine capability line
+   * (#44/#19). That line must NEVER go in injectedPrompt(): that prefix rides
+   * --append-system-prompt and is deliberately volatile-free so Anthropic's
+   * prompt cache holds across turns; a roster-derived sentence there would
+   * re-prime the whole system prompt every time an agent's engine changed. Here it
+   * costs one line on a channel that is already re-sent per prompt.
+   *
    * Returns null when there is nothing to say (no hive, no snapshot, no agents),
    * so the hook stays a no-op rather than injecting noise.
    */
@@ -2029,8 +2376,16 @@ export class HiveManager {
       // remainder is still counted, and fleet.json is one Read away.
       const MAX = 24;
       const shown = agents.slice(0, MAX);
+      // The engine each agent runs on lives in registry.json, not the snapshot.
+      // It rides HERE (#44) because this is the cache-safe path — see the note
+      // above — and because god cannot delegate sensibly without it: a capability
+      // an engine lacks is a dispatch that silently fails.
+      const reg = this.registry();
+      const engines = new Set<string>();
       const rows = shown.map((a) => {
-        const bits = [a.role ?? 'agent',
+        const engine = reg.agents[a.id]?.provider ?? 'claude';
+        engines.add(engine);
+        const bits = [a.role ?? 'agent', engine,
           typeof a.lastActiveSecAgo === 'number' ? `active ${ago(a.lastActiveSecAgo)}` : 'no activity yet'];
         if (a.tokens) bits.push(`${Math.round(a.tokens / 1000)}k tok`);
         if (a.usd) bits.push(`$${a.usd.toFixed(2)}`);
@@ -2042,12 +2397,30 @@ export class HiveManager {
       const more = agents.length > shown.length ? ` +${agents.length - shown.length} more` : '';
       const age = typeof snap.ts === 'number' ? ago(Math.round((Date.now() - snap.ts) / 1000)) : 'unknown';
 
+      // The capability legend, for the engines actually on this floor only. Empty
+      // until the engine-cost cluster calls setEngineCapabilities() — an unset map
+      // renders nothing, so the roster is byte-for-byte what it was.
+      const legend = [...engines]
+        .map((e) => (this.engineCapabilities[e] ? `${e} — ${this.engineCapabilities[e]}` : ''))
+        .filter(Boolean)
+        .join('; ');
+
       return `[LIVE ROSTER — auto-injected from ${join(root, 'fleet.json')}, snapshot ${age}] `
         + `${agents.length} ACTIVE agent(s): ${rows.join('; ')}.${more} `
+        + (legend ? `Engine capabilities: ${legend}. ` : '')
         + 'This is the CURRENT floor and it SUPERSEDES any roster earlier in this conversation — '
         + 'agents you remember that are absent here have been archived or killed, so do not message them. '
         + 'Route work to someone on this list before spawning anyone new.';
     } catch { return null; }
+  }
+
+  /** Per-engine capability text for the roster line, keyed by provider id (#19).
+   *  Owned by the engine-cost cluster, which knows what each engine can do; the
+   *  hive only guarantees it lands on the CACHE-SAFE path (#44) — the roster,
+   *  never the system-prompt prefix. Unset renders nothing. */
+  private engineCapabilities: Record<string, string> = {};
+  setEngineCapabilities(map: Record<string, string>): void {
+    this.engineCapabilities = { ...map };
   }
   /** The last `n` log events. Reads only the last LOG_TAIL_BYTES of the file:
    *  this is called from IPC and the voice read-layer, and log.jsonl is an
@@ -2056,12 +2429,19 @@ export class HiveManager {
   logTail(n = 200): unknown[] {
     const root = this.root();
     if (!root) return [];
-    const path = join(root, 'log.jsonl');
+    const lines = this.tailLines(join(root, 'log.jsonl'), LOG_TAIL_BYTES);
+    return lines.slice(-n).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } });
+  }
+
+  /** The last `maxBytes` of an append-only file, as whole lines. Shared by
+   *  logTail and taskSpend: both read a file with a dozen writers that only ever
+   *  grows, and neither may slurp it whole to answer one query. */
+  private tailLines(path: string, maxBytes: number): string[] {
     if (!existsSync(path)) return [];
     let text: string;
     try {
       const size = statSync(path).size;
-      const start = Math.max(0, size - LOG_TAIL_BYTES);
+      const start = Math.max(0, size - maxBytes);
       const buf = Buffer.alloc(size - start);
       const fd = openSync(path, 'r');
       try { readSync(fd, buf, 0, buf.length, start); } finally { closeSync(fd); }
@@ -2070,8 +2450,7 @@ export class HiveManager {
       // fragment rather than hand the caller a {raw:…} shard of one event.
       if (start > 0) text = text.slice(text.indexOf('\n') + 1);
     } catch { return []; }
-    const lines = text.trim().split('\n').filter(Boolean);
-    return lines.slice(-n).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } });
+    return text.trim().split('\n').filter(Boolean);
   }
 
   private listMessages(dir: string): HiveMessage[] {
@@ -2140,6 +2519,12 @@ export class HiveManager {
     const row = {
       agent_id: sample.agentId,
       session_id: sample.sessionId,
+      // #34 — WHICH CARD this spend belongs to. Without it the ledger could only
+      // answer "what has this agent cost, ever", never "what did this card cost"
+      // or "spend at most N on this one". Null when the agent has no card in
+      // flight (idle chatter, the god orchestrating). The column is part of the
+      // row shape breaker.ts enforces caps against; see taskSpend().
+      task_id: this.activeTaskId(sample.agentId),
       ts: sample.ts,
       input: sample.input,
       output: sample.output,
@@ -2149,6 +2534,52 @@ export class HiveManager {
       usd: sample.usd
     };
     try { appendFileSync(join(root, 'cost-ledger.jsonl'), JSON.stringify(row) + '\n', 'utf8'); } catch { /* noop */ }
+  }
+
+  /** assignee → their in-flight card id, rebuilt at most once a beat.
+   *  appendCostLedger runs per usage sample; re-reading tasks.json on each would
+   *  turn cost accounting into a file read per token report. */
+  private activeTaskCache: { at: number; map: Map<string, string> } | null = null;
+
+  /** The card an agent is currently working — its first 'doing' card. Null when
+   *  it has none. */
+  private activeTaskId(agentId: string): string | null {
+    const now = Date.now();
+    if (!this.activeTaskCache || now - this.activeTaskCache.at > 5_000) {
+      const map = new Map<string, string>();
+      for (const t of this.ledger().tasks) {
+        if (t?.status === 'doing' && t.assignee && !map.has(t.assignee)) map.set(t.assignee, t.id);
+      }
+      this.activeTaskCache = { at: now, map };
+    }
+    return this.activeTaskCache.map.get(agentId) ?? null;
+  }
+
+  /**
+   * What ONE card has cost so far, against the cap its dispatch set (#34).
+   *
+   * This is the read side of the per-task cap: `task_id` on the ledger rows makes
+   * the spend attributable, `budgetTokens` on the card is the cap, and breaker.ts
+   * (the engine-cost cluster's file) owns the enforcement decision. Reads only the
+   * ledger's tail — see COST_TAIL_BYTES for that ceiling.
+   */
+  taskSpend(taskId: string): { tokens: number; usd: number; budgetTokens: number | null; over: boolean } {
+    const root = this.root();
+    let tokens = 0;
+    let usd = 0;
+    if (root) {
+      for (const line of this.tailLines(join(root, 'cost-ledger.jsonl'), COST_TAIL_BYTES)) {
+        try {
+          const row = JSON.parse(line) as { task_id?: string; input?: number; output?: number; usd?: number };
+          if (row.task_id !== taskId) continue;
+          tokens += (row.input ?? 0) + (row.output ?? 0);
+          usd += row.usd ?? 0;
+        } catch { /* skip a torn line */ }
+      }
+    }
+    const cap = this.ledger().tasks.find((t) => t.id === taskId)?.budgetTokens;
+    const budgetTokens = typeof cap === 'number' && cap > 0 ? cap : null;
+    return { tokens, usd, budgetTokens, over: budgetTokens !== null && tokens > budgetTokens };
   }
 
   // — json + atomic io —
@@ -2353,6 +2784,8 @@ function renderCommandsMd(): string {
     '- **cli** commands run in your shell (Bash) and can target the fleet, spawn, or query.',
     '',
     'To MONITOR the other agents in this hive, read `fleet.json` in the hive root (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) plus `registry.json` — `claude agents` does NOT list your hive siblings. Use `claude -p "..." --output-format json` for a one-off headless query.',
+    '',
+    'Two harness commands are NOT Claude Code commands and are documented in `PROTOCOL.md`, not below: `bin/task.cjs {add|patch|claim|done}` — the ONLY safe way to change `tasks.json` — and the `spawn-requests/` queue, which spins up a fresh isolated worker from one JSON file.',
     ''
   ];
   for (const g of COMMAND_GROUPS) {
@@ -2365,6 +2798,133 @@ function renderCommandsMd(): string {
   return lines.join('\n');
 }
 const COMMANDS_MD = renderCommandsMd();
+
+// ─── bin/task.cjs — the one-card ledger CLI (#17) ────────────────────────────
+// The ledger has several independent writers and agents were told to edit
+// tasks.json with their Write tool: read the file, think, write the whole thing
+// back — erasing the humanQA answer or webhook card that landed in between. This
+// CLI mutates ONE card under compare-and-swap on the ledger's `rev`, retrying
+// when it loses a race, so an agent can never clobber work it never saw.
+//
+// Mirrors HiveManager's own CAS (see mutateTasks) rather than sharing it: this
+// runs as a separate process from the agent's shell and has no access to main.
+const TASK_CLI = `#!/usr/bin/env node
+'use strict';
+// hive/bin/task.cjs — mutate ONE task card safely. See PROTOCOL.md.
+const fs = require('fs');
+const path = require('path');
+const ROOT = path.join(__dirname, '..');
+const LEDGER = path.join(ROOT, 'tasks.json');
+const STATUSES = ['todo', 'doing', 'blocked', 'done'];
+
+function die(msg) { process.stdout.write(JSON.stringify({ ok: false, error: msg }) + '\\n'); process.exit(1); }
+function ok(extra) { process.stdout.write(JSON.stringify(Object.assign({ ok: true }, extra)) + '\\n'); }
+
+function read() {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(LEDGER, 'utf8')); } catch (e) { raw = {}; }
+  return {
+    tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
+    rev: typeof raw.rev === 'number' && raw.rev >= 0 ? raw.rev : 0
+  };
+}
+
+/** Write only if nobody else wrote since \`expectedRev\`. Atomic (tmp+rename). */
+function write(tasks, expectedRev) {
+  if (read().rev !== expectedRev) return false;
+  const tmp = LEDGER + '.tmp-' + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify({ tasks: tasks, rev: expectedRev + 1, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+  fs.renameSync(tmp, LEDGER);
+  return true;
+}
+
+/** Read → mutate one card → CAS. Retries a lost race a few times; never
+ *  overwrites a ledger it has not just read. */
+function mutate(fn) {
+  for (let i = 0; i < 5; i++) {
+    const led = read();
+    const next = fn(led.tasks);
+    if (!next) return null;               // fn refused (not found / duplicate)
+    if (write(next.tasks, led.rev)) return next.card;
+  }
+  die('ledger too busy — 5 compare-and-swap attempts lost; retry');
+}
+
+function flags(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].slice(0, 2) !== '--') continue;
+    const key = argv[i].slice(2);
+    const val = argv[i + 1] !== undefined && argv[i + 1].slice(0, 2) !== '--' ? argv[++i] : 'true';
+    out[key] = val;
+  }
+  return out;
+}
+function num(v) { const n = Number(v); return isFinite(n) ? n : undefined; }
+
+const [cmd, ...rest] = process.argv.slice(2);
+const f = flags(rest);
+const arg0 = rest[0] && rest[0].slice(0, 2) !== '--' ? rest[0] : null;
+
+if (cmd === 'add') {
+  const title = arg0 || f.title;
+  if (!title) die('usage: task.cjs add "<title>" [--assignee id] [--desc text] [--priority N] [--budget-tokens N] [--depends a,b]');
+  const card = {
+    id: 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
+    title: title,
+    status: STATUSES.indexOf(f.status) >= 0 ? f.status : 'todo',
+    dependsOn: f.depends ? String(f.depends).split(',').filter(Boolean) : [],
+    priority: num(f.priority) !== undefined ? num(f.priority) : 3,
+    createdAt: new Date().toISOString()
+  };
+  if (f.desc) card.description = f.desc;
+  if (f.assignee) card.assignee = f.assignee;
+  if (num(f['budget-tokens']) !== undefined) card.budgetTokens = num(f['budget-tokens']);
+  mutate(function (tasks) { return { tasks: tasks.concat([card]), card: card }; });
+  return ok({ task: card });
+}
+
+if (cmd === 'patch' || cmd === 'claim' || cmd === 'done') {
+  const id = arg0 || f.id;
+  if (!id) die('usage: task.cjs ' + cmd + ' <task-id> [flags]');
+  const patch = {};
+  if (cmd === 'claim') {
+    patch.assignee = f.assignee || process.env.AGENT_ID || die('claim needs --assignee (or AGENT_ID in the environment)');
+    patch.status = 'doing';
+  } else if (cmd === 'done') {
+    patch.status = 'done';
+    if (f.result) patch.result = f.result;
+  } else {
+    if (f.status) {
+      if (STATUSES.indexOf(f.status) < 0) die('status must be one of ' + STATUSES.join(', '));
+      patch.status = f.status;
+    }
+    for (const k of ['title', 'description', 'assignee', 'result']) if (f[k]) patch[k] = f[k];
+    if (num(f.priority) !== undefined) patch.priority = num(f.priority);
+    if (num(f['budget-tokens']) !== undefined) patch.budgetTokens = num(f['budget-tokens']);
+    if (f.q) patch.__q = f.q;
+  }
+  const card = mutate(function (tasks) {
+    const i = tasks.findIndex(function (t) { return t && t.id === id; });
+    if (i < 0) return null;
+    const merged = Object.assign({}, tasks[i], patch, { id: id });
+    // --q appends a human question and blocks the card, matching the humanQA
+    // contract in PROTOCOL.md (never replace the history — it IS the decision trail).
+    if (patch.__q) {
+      delete merged.__q;
+      merged.humanQA = (Array.isArray(tasks[i].humanQA) ? tasks[i].humanQA : []).concat([{ q: patch.__q, askedAt: new Date().toISOString() }]);
+      merged.status = 'blocked';
+    }
+    const next = tasks.slice();
+    next[i] = merged;
+    return { tasks: next, card: merged };
+  });
+  if (!card) die('no task with id ' + id);
+  return ok({ task: card });
+}
+
+die('usage: task.cjs {add|patch|claim|done} … — see PROTOCOL.md');
+`;
 
 const PROTOCOL_MD = `# Hive protocol
 
@@ -2401,6 +2961,11 @@ The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps.
 ## Rules of the road
 - Only \`request\`, \`query\`, and \`propose\` expect a reply. \`inform\` and \`done\` are terminal —
   don't reply to them, or two agents will loop forever.
+- A message that expects a reply has a **deadline**. If you don't answer within 15 minutes it is
+  re-delivered to you once; still unanswered 15 minutes later, it is escalated to \`god\` as
+  \`[unanswered]\` with your name on it. Answer, or say you can't — silence is now visible.
+- A thread that bounces more than 12 times is **escalated to \`god\`** (subject \`[hop-cap …]\`),
+  not dropped. If you receive one, break the loop: decide, or ask the human.
 - For anything ambiguous, cross-cutting, or needing sign-off, message \`god\` — the
   god agent clarifies answers for you so you rarely need the human directly.
 - There is NO separate human-approval queue. Human-in-the-loop is native to Claude
@@ -2417,6 +2982,63 @@ There are two shared surfaces, both in the hive root:
 - \`board.md\` — the freeform narrative plan. The god agent is its sole scribe; others \`propose\` edits.
 - \`tasks.json\` — the structured task ledger (a kanban: \`todo / doing / blocked / done\`, with title,
   assignee, priority, deps). Keep the task you're working reflected in its status.
+
+### NEVER write tasks.json with your Write tool
+It has several writers at once — you, the harness, the kanban UI, inbound webhooks and Slack. If you
+read the file, think for thirty seconds, and write the whole thing back, you **erase** every card and
+every human answer that landed while you were thinking. That is not hypothetical; it is why this
+section exists.
+
+Mutate ONE card at a time through \`bin/task.cjs\` instead. It compare-and-swaps on the ledger's
+\`rev\` and retries when it loses a race, so it can never clobber work it never saw. Run it through the
+bundled node launcher — \`bin/hive-node\` on macOS/Linux, \`bin/hive-node.cmd\` on Windows; the
+absolute path is in your \`HIVE_NODE\` environment variable — e.g.
+\`<HIVE_NODE> <hive-root>/bin/task.cjs claim task-123\`:
+
+\`\`\`
+task.cjs add "<title>" [--desc <text>] [--assignee <agent-id>] [--priority N]
+                       [--depends id1,id2] [--budget-tokens N]
+task.cjs claim <task-id> [--assignee <agent-id>]     # → assignee + status doing (defaults to you)
+task.cjs patch <task-id> [--status todo|doing|blocked|done] [--title …] [--description …]
+                         [--assignee …] [--result …] [--priority N] [--budget-tokens N]
+                         [--q "<question for the human>"]   # appends humanQA + blocks the card
+task.cjs done  <task-id> [--result "<what you actually delivered>"]
+\`\`\`
+
+Each command prints one line of JSON (\`{"ok":true,"task":{…}}\`) so you can check the result.
+\`--budget-tokens\` is that card's token cap: cost-ledger rows carry the card's \`task_id\`, so spend is
+attributed per card, not just per agent.
+
+### A finished card gets reviewed
+\`done\` is no longer the end of the story. When a card reaches \`done\`, the harness mails the
+least-loaded idle agent that is NOT the assignee a \`query\` on conversation \`review-<task-id>\`.
+If that's you: check the work and reply on the same conversation with \`act:"agree"\` (it holds up) or
+\`act:"refuse"\` (it doesn't — say what is missing). A refusal puts the card back to \`doing\`.
+So write a real \`result\` on the card: someone else is about to read it.
+
+## Spawning a fresh worker (god)
+Beyond messaging existing agents, god can ask the harness for a brand-new ISOLATED worker by
+dropping one JSON file into \`spawn-requests/\` in the hive root. Main polls that queue on the same
+cadence as the router, spins up the worker (its own git worktree by default), dispatches the
+objective through the normal inbox path, then watches it: a terminal \`act:"done"\` releases it, and
+prolonged idleness reaps it. Teardown never removes a worktree that still holds unintegrated work.
+
+\`\`\`json
+{
+  "objective": "what the worker must accomplish — the whole brief, it starts with nothing else",
+  "cwd": "/absolute/path/to/the/repo it works in",
+  "name": "display name (optional)",
+  "command": "engine CLI (optional; defaults to the configured one)",
+  "model": "model override (optional, Claude)",
+  "isolate": true,
+  "tokenCap": 200000,
+  "slack": { "channel": "C…", "thread_ts": "…" }
+}
+\`\`\`
+
+\`objective\` and \`cwd\` are the only required fields. Processed requests move to
+\`spawn-requests/.done/\`; rejected ones to \`.failed/\`, and you are informed why. Prefer routing to an
+agent already on the floor — spawn only when nobody there fits.
 
 ## Guardrails: circuit breaker & token budgets
 A circuit breaker watches every agent for runaway behavior (looping on the same tool, error storms,
