@@ -18,7 +18,8 @@
  * SECURITY — this is a PUBLIC surface (tunnel-forwarded), unlike the loopback
  * /reply endpoint, so the gate is strict. Every property of the single-endpoint
  * version is preserved, plus the ones multi-tenancy adds:
- *   - constant-time secret comparison (`timingSafeEqual`, length-guarded), against
+ *   - constant-time secret comparison (both sides hashed to a fixed width first,
+ *     so not even the secret's LENGTH leaks through an early return), against
  *     THAT endpoint's secret only — revoking one endpoint cannot affect another,
  *   - an UNKNOWN endpoint id is answered exactly like a WRONG secret: the compare
  *     still runs (against an unguessable per-process decoy) and the reply is the
@@ -40,7 +41,7 @@
  * the secret gate, schema validation, rate limiting, and the tunnel.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { validateAgainstSchema, type InboundKind } from '../shared/triggers';
 // NOTE: `tunnelmole` is an ESM-only package. The Electron main process is bundled
 // as CommonJS, so a static `import` gets externalized into `require('tunnelmole')`
@@ -220,7 +221,10 @@ export class WebhookServer {
       const url = await this.openTunnel();
       if (!url) throw new Error('tunnelmole returned empty URL');
       this.tunnelUrl = url;
-      // tunnelmole runs in the background; there is no close handle to wire here.
+      // tunnelmole() resolves with a URL STRING and nothing else — no websocket,
+      // no disposer (see tunnelmole/dist/src/tunnelmole.js). There is genuinely
+      // no handle to capture, so `stop()` reports the leftover rather than
+      // pretending it tore the tunnel down. See `stop()`.
       return { ok: true, url };
     } catch (e) {
       // Surface the tunnel failure rather than silently returning ok:true with no url.
@@ -228,12 +232,26 @@ export class WebhookServer {
     }
   }
 
-  /** Close the HTTP server. Idempotent and best-effort.
-   *  Note: tunnelmole has no documented close handle; teardown is best-effort. */
-  stop(): void {
+  /**
+   * Close the HTTP server. Idempotent and best-effort.
+   *
+   * HONEST ABOUT THE TUNNEL: tunnelmole exposes no close handle, so the public
+   * hostname stays REGISTERED to this process until the process exits. What stop
+   * actually buys is that the hostname now forwards to a closed port (502s), and
+   * that the secret gate is gone with it — so the window that matters is another
+   * process grabbing this port before we quit. Returned AND logged rather than
+   * swallowed, so a caller can tell the operator the URL is still resolvable.
+   */
+  stop(): { tunnelStillOpen: string | null } {
+    const orphan = this.tunnelUrl;
     this.tunnelUrl = null;
     try { this.server?.close(); } catch { /* noop */ }
     this.server = null;
+    if (orphan) {
+      console.warn(`[webhook] local server closed, but the public tunnel ${orphan} stays registered `
+        + 'until the app quits (tunnelmole exposes no close handle). It now forwards to a closed port.');
+    }
+    return { tunnelStillOpen: orphan };
   }
 
   private listen(): Promise<void> {
@@ -241,7 +259,13 @@ export class WebhookServer {
       const server = createServer((req, res) => this.handleRequest(req, res));
       const onError = (e: Error): void => reject(e);
       server.once('error', onError);
-      server.listen(this.port, () => {
+      // '127.0.0.1' ONLY. The public reach of this server is the tunnel, and
+      // tunnelmole forwards to `localhost` from THIS machine — binding every
+      // interface additionally hands the whole LAN an un-tunneled copy of a
+      // public-secret-gated surface, for nothing. Matches SlackReplyServer and
+      // IntegrationBroker. (Node ≥20 resolves `localhost` happy-eyeballs-style,
+      // so the tunnel still reaches us on an IPv6-preferring box.)
+      server.listen(this.port, '127.0.0.1', () => {
         server.off('error', onError);
         this.server = server;
         resolve();
@@ -373,8 +397,10 @@ export class WebhookServer {
 
   /**
    * Constant-time check that `x-md-webhook-secret` equals THIS endpoint's secret.
-   * A length mismatch is itself a failure and short-circuits before the compare
-   * (timingSafeEqual throws on unequal lengths).
+   * Both sides are SHA-256'd to a fixed 32 bytes first: `timingSafeEqual` throws
+   * on unequal lengths, and the obvious `if (a.length !== b.length) return false`
+   * guard answers a wrong-length guess measurably faster than a right-length one,
+   * which hands a public caller the secret's length for free.
    *
    * A null endpoint (unknown id) still runs the comparison, against a decoy no
    * caller can hold, and then fails unconditionally — so "no such webhook" costs
@@ -383,10 +409,7 @@ export class WebhookServer {
   private verifySecret(req: IncomingMessage, endpoint: WebhookEndpoint | null): boolean {
     const provided = req.headers['x-md-webhook-secret'];
     if (typeof provided !== 'string') return false;
-    const a = Buffer.from(provided);
-    const b = Buffer.from(endpoint ? endpoint.secret : this.decoySecret);
-    if (a.length !== b.length) return false;
-    const equal = timingSafeEqual(a, b);
+    const equal = timingSafeEqual(sha256(provided), sha256(endpoint ? endpoint.secret : this.decoySecret));
     return endpoint ? equal : false;
   }
 }
@@ -432,6 +455,12 @@ function json(res: ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
   } catch { /* socket already gone */ }
+}
+
+/** Fixed-width digest of a candidate secret, so a constant-time compare never
+ *  has to branch on (and therefore leak) its length. */
+function sha256(s: string): Buffer {
+  return createHash('sha256').update(s, 'utf8').digest();
 }
 
 function errMsg(e: unknown): string {

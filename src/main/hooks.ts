@@ -8,9 +8,18 @@
  *   - report lifecycle boundaries while renderer-side guarded queues deliver
  *     inbox work only after the session reaches a safe idle prompt.
  *
+ * AUTHENTICATED. The socket is a Unix-domain socket / named pipe, so ANY local
+ * process could connect and post a payload claiming any `agent_id` — enough to
+ * hijack another agent's --resume session id, poison the cost ledger, or clear
+ * breaker state. Every payload must therefore carry `sock_token` equal to this
+ * process's `hookSockToken()`; main puts that value in the agent PTY's child
+ * environment as HIVE_SOCK_TOKEN, and the shims (which run as PTY descendants)
+ * echo it back. Payloads without it are dropped, LOUDLY (see `authorized`).
+ *
  * Runs in the Electron main process.
  */
 import { createServer, type Server } from 'node:net';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { Notification, type WebContents } from 'electron';
 import type { HiveManager } from './hive';
@@ -22,6 +31,9 @@ import { estimateCostUsd } from './pricing';
 interface HookPayload {
   hook_event_name?: string;
   agent_id?: string | null;
+  /** Per-process shared secret proving the sender is one of OUR shims (see
+   *  `hookSockToken`). Checked at the socket boundary, never used past it. */
+  sock_token?: string;
   session_id?: string;
   transcript_path?: string;
   /** Status-line payloads only: the session's live context accounting. */
@@ -45,6 +57,34 @@ interface HookPayload {
   cache_creation?: number;
 }
 
+/**
+ * Per-process token every hook payload must carry, minted once at module load.
+ *
+ * The hook socket has no OS-level peer authentication we can lean on (a UDS
+ * under the hive root, a `\\.\pipe\` name on Windows — both reachable by any
+ * local process), so possession of this value IS the authentication. Main passes
+ * it to spawned agents as `HIVE_SOCK_TOKEN`; the shims read it out of their
+ * inherited env and put it in the payload as `sock_token`.
+ */
+const SOCK_TOKEN = randomBytes(32).toString('hex');
+
+/** The token the hook shims must echo back. Main puts this in the agent PTY's
+ *  child environment as `HIVE_SOCK_TOKEN`. */
+export function hookSockToken(): string {
+  return SOCK_TOKEN;
+}
+
+/** Fixed-width digest, so the constant-time compare below never has to branch on
+ *  (and therefore leak) the token's length. */
+function sha256(s: string): Buffer {
+  return createHash('sha256').update(s, 'utf8').digest();
+}
+
+/** Throttle for the rejection log. A BROKEN env wiring rejects every payload —
+ *  and the statusLine shim alone fires after every agent response — so an
+ *  unthrottled line per rejection would bury the log it is meant to explain. */
+const REJECT_LOG_INTERVAL_MS = 10_000;
+
 export class HookServer {
   private server: Server | null = null;
   /** agentId → the live session's transcript file, learned from hook payloads.
@@ -58,6 +98,9 @@ export class HookServer {
    *  get_agent_detail / list_agents) can report "how full is each agent's context"
    *  without depending on a renderer round-trip. */
   private contextById = new Map<string, { tokens: number; limit: number; ts: number }>();
+  /** Rejected-payload accounting for the throttled log in `authorized`. */
+  private rejected = 0;
+  private lastRejectLog = 0;
 
   constructor(
     private hive: HiveManager,
@@ -84,6 +127,11 @@ export class HookServer {
         if (nl === -1) return; // wait for the full line
         let payload: HookPayload = {};
         try { payload = JSON.parse(buf.slice(0, nl)); } catch { /* ignore */ }
+        // THE trust boundary. Anything past this line is believed — including
+        // `agent_id`, which decides whose session/ledger/breaker gets written.
+        // Answer an unauthenticated peer with the same empty object a real hook
+        // gets, so the socket is not also a probe for whether it guessed right.
+        if (!this.authorized(payload)) { conn.end('{}'); return; }
         let res: unknown = {};
         try { res = this.handle(payload); } catch { res = {}; }
         conn.end(JSON.stringify(res ?? {}));
@@ -110,6 +158,37 @@ export class HookServer {
    *  window size), or undefined if no statusLine tick has fired for it yet. */
   contextFor(agentId: string): { tokens: number; limit: number; ts: number } | undefined {
     return this.contextById.get(agentId);
+  }
+
+  /**
+   * Does this payload carry our per-process socket token?
+   *
+   * Deliberately enforced HERE, at the socket, and not inside `handle` — the
+   * socket is the trust boundary, and main-side callers that build payloads
+   * themselves are already inside it.
+   *
+   * FAIL-CLOSED, but never silently: if the PTY env ever stops carrying
+   * HIVE_SOCK_TOKEN, every hook in the app goes dead at once — avatars freeze,
+   * Stop never fires, the cost ledger stops filling — and a silent version of
+   * that is far harder to diagnose than the hijack it prevents. So each
+   * rejection says WHY, with the agent and event, throttled to one line per
+   * REJECT_LOG_INTERVAL_MS plus a running count.
+   */
+  private authorized(p: HookPayload): boolean {
+    const provided = typeof p.sock_token === 'string' ? p.sock_token : '';
+    if (timingSafeEqual(sha256(provided), sha256(SOCK_TOKEN))) return true;
+    this.rejected += 1;
+    const now = Date.now();
+    if (now - this.lastRejectLog >= REJECT_LOG_INTERVAL_MS) {
+      this.lastRejectLog = now;
+      console.error(
+        `[hive] hook payload REJECTED (${provided ? 'wrong' : 'missing'} sock_token) — `
+        + `agent=${p.agent_id ?? '?'} event=${p.hook_event_name ?? '?'}, `
+        + `${this.rejected} rejected so far. If this is every hook, the agent PTY env `
+        + 'is missing HIVE_SOCK_TOKEN (see hookSockToken() in hooks.ts).'
+      );
+    }
+    return false;
   }
 
   private handle(p: HookPayload): unknown {
