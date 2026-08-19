@@ -57,6 +57,10 @@ export type BridgeDescriptor =
       inboxDelivery: 'terminal' | 'serve';
     };
 
+/** Where an engine's token/cost accounting comes from — see
+ *  `AgentProviderPreset.costTracking`. */
+export type CostTracking = 'otel' | 'proxy' | 'transcript' | 'none';
+
 export interface AgentProviderPreset {
   id: AgentProvider;
   label: string;
@@ -109,6 +113,20 @@ export interface AgentProviderPreset {
    *  model as `config.godModel ?? preset.recommendedOrchestratorModel ?? MODEL_GOD`.
    *  Advisory + user-overridable. */
   recommendedOrchestratorModel?: string;
+  /** How this engine's spend reaches the ledger and the breaker's budgets (#19):
+   *    - 'otel'       → the CLI exports OpenTelemetry to our collector (claude).
+   *    - 'proxy'      → no telemetry, but the proxy sidecar synthesizes a
+   *                     CostSample per response, which telemetry.recordCostSample
+   *                     accumulates into the same aggregate (qwen, crush).
+   *    - 'transcript' → no live signal; the beat reads the CLI's own on-disk
+   *                     transcript (claude's fallback, codex's rollouts).
+   *    - 'none'       → NOTHING accounts for this engine's spend. Its agents are
+   *                     invisible to every cap, so a floor budget silently
+   *                     under-counts by however much they burn. Say so out loud
+   *                     in the god's capability line rather than implying parity.
+   *  Required, deliberately: a new provider must state its answer instead of
+   *  inheriting a flattering default. */
+  costTracking: CostTracking;
   /** Whether the router may DELIVER inbox mail to this provider (vs bouncing it
    *  to the god). Requires lifecycle status so the renderer can deliver only at a
    *  safe idle prompt: Claude natively, Antigravity/Codex/Grok via hook bridges.
@@ -165,6 +183,7 @@ export interface AgentProviderPreset {
 export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'claude',
+    costTracking: 'otel', // live OTel + the ~/.claude/projects transcript fallback
     label: 'Claude Code',
     defaultCommand: 'claude',
     commandGroups: CLAUDE_COMMAND_GROUPS,
@@ -190,6 +209,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   },
   {
     id: 'codex',
+    costTracking: 'transcript', // rollouts under the per-agent CODEX_HOME (readCodexUsage)
     label: 'Codex · GPT',
     defaultCommand: 'codex',
     commandGroups: CODEX_COMMAND_GROUPS,
@@ -238,6 +258,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   },
   {
     id: 'grok',
+    costTracking: 'none', // hook bridge carries lifecycle only, no usage
     label: 'Grok · xAI',
     defaultCommand: 'grok',
     commandGroups: GROK_COMMAND_GROUPS,
@@ -259,6 +280,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   },
   {
     id: 'kimi',
+    costTracking: 'none',
     label: 'Kimi Code',
     defaultCommand: 'kimi',
     commandGroups: [],
@@ -276,6 +298,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   },
   {
     id: 'antigravity',
+    costTracking: 'none', // agy's hooks carry no usage; ~/.gemini has no token ledger we read
     label: 'Antigravity · Gemini',
     defaultCommand: 'agy',
     commandGroups: [],
@@ -295,6 +318,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // endpoint (OPENAI_BASE_URL). It has no hook surface, so it rides a PROXY
     // bridge (bridge.kind==='proxy'), with the OpenAI usage/tool-call shape.
     id: 'qwen',
+    costTracking: 'proxy', // sidecar CostSample → telemetry.recordCostSample
     label: 'Qwen (local available)',
     defaultCommand: 'qwen',
     commandGroups: [],
@@ -319,6 +343,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // ex sst/opencode). NOT the archived Go opencode-ai/opencode (→ Crush). Run as
     // its interactive TUI in a PTY (like codex), oriented by --prompt.
     id: 'opencode',
+    costTracking: 'none', // the plugin bridge posts lifecycle events only
     label: 'OpenCode',
     defaultCommand: 'opencode',
     commandGroups: [],
@@ -390,6 +415,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // hooks bridge can't drain on turn-end. Hence a PROXY bridge (qwen tier): a
     // loopback sidecar observes its LLM traffic and SYNTHESIZES the Stop→drain.
     id: 'crush',
+    costTracking: 'proxy', // same sidecar path as qwen
     label: 'Crush · Charm',
     defaultCommand: 'crush',
     commandGroups: [],
@@ -435,6 +461,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // via a bundled per-agent extension (installPiHooks) that posts HIVE_SOCK payloads
     // and auto-approves tools — a `hooks` bridge with a new `pi` shim.
     id: 'pi',
+    costTracking: 'none', // the extension posts lifecycle events only
     label: 'Pi',
     defaultCommand: 'pi',
     commandGroups: [],
@@ -471,6 +498,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // done). Non-hiveAware: it has no --append-system-prompt/--settings, so the
     // hive identity+protocol rides in as the initial prompt via `-p`.
     id: 'copilot',
+    costTracking: 'none', // spend sits on the user's Copilot plan; nothing per-agent reaches us
     label: 'Copilot',
     defaultCommand: 'copilot',
     commandGroups: [],
@@ -496,6 +524,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   },
   {
     id: 'custom',
+    costTracking: 'none', // unknown binary — nothing to read
     label: 'Custom',
     defaultCommand: '',
     commandGroups: [],
