@@ -15,6 +15,9 @@ Two different queues get called "the queue". They are not the same thing:
 Everything below is about the **MD queue**. The harness cannot see the Claude queue
 and never reasons about it.
 
+The short version of §1 — one writer, everyone else enqueues — is recorded as
+[ADR-0001](./adr/0001-one-gate-for-pty-writes.md). This document is the full contract.
+
 ---
 
 ## 1. One gate

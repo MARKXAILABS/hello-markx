@@ -5,9 +5,11 @@
 > a shared blackboard, and a "god" orchestrator that runs the floor.
 
 This document is the design source of truth for the agent-collaboration layer. It
-sits alongside [`SPEC.md`](./SPEC.md) (terminal/event plane) and
-[`DESIGN.md`](./DESIGN.md) (visual system). Code is the source of truth for what's
-*built*; this is the source of truth for what we're *building toward*.
+sits alongside [`DESIGN.md`](./DESIGN.md) (visual system); [`SPEC.md`](./SPEC.md) is
+the *superseded* original MVP spec, kept for history only. Code is the source of
+truth for what's *built*; this is the source of truth for what we're *building
+toward*. Where the two have diverged the divergence is written down rather than
+smoothed over — §2 and §7 say what runs today and link the issue tracking the gap.
 
 ---
 
@@ -48,17 +50,57 @@ stream, retrieval, reflection, and planning.
    keeps running fully autonomously. **Critical** items (destructive ops, spend,
    scope changes, unresolvable conflicts) route to the god, who surfaces them to
    the human natively in his own Claude Code session — there is no separate
-   approval queue. Tool-permission prompts are the HITL gate, and they're
-   approvable remotely from a phone via `/remote-control`.
-4. **Memory: markdown first.** Per-agent `memory.md` + shared blackboard, with a
-   SQLite FTS index when keyword recall isn't enough. A heavyweight vector layer
-   (Letta/Mem0/Zep) is *not* needed at 5–15 agents and is architecturally wrong
-   here (they want to own the agent runtime; our runtime is the `claude` CLI).
-   Optional future upgrade: **MemPalace over MCP** (validate its retrieval first —
-   its public benchmarks are overstated per independent audit).
-5. **Autonomous loop = `Stop` hook.** An agent that finishes drains its inbox via
-   a `Stop` hook that returns `{"decision":"block","reason":…}` to keep it
-   working, guarded by `stop_hook_active` to prevent infinite loops.
+   approval queue.
+
+   > **What actually gates a tool today.** This decision named the CLI's own
+   > tool-permission prompt as the HITL gate. That prompt is **not there on a
+   > default install**: `autoMode` defaults to `true` and appends each engine's
+   > bypass flag at spawn (`commandForAutoMode`, `src/main/config.ts`), so nothing
+   > pauses to ask. What survives a bypass is the harness's own `PreToolUse` gate —
+   > `control.toolDecision()` returns `permissionDecision: 'deny'` for a paused
+   > agent or a gated tool (`src/main/hooks.ts`), the circuit breaker, and the
+   > standing `permissions.deny` list (`AGENT_DENY_RULES`, `src/main/hive.ts`)
+   > written into every hive-authored per-agent settings file — `deny` is the one
+   > permission surface that survives `bypassPermissions`
+   > ([#4](https://github.com/MARKXAILABS/hello-markx/issues/4)). That list is
+   > calibrated to the unrecoverable and the credential-leaking only, and it is
+   > **not** a sandbox: `Bash(…)` rules are prefix matches, and engines with no
+   > settings file take no deny list at all. Turn auto mode off and the native
+   > prompt is back, approvable remotely from a phone via `/remote-control`. See
+   > [`SECURITY.md`](./SECURITY.md#known-limitations).
+4. **Memory: markdown first.** Per-agent `memory.md` + shared blackboard. A
+   heavyweight vector layer (Letta/Mem0/Zep) is *not* needed at 5–15 agents and is
+   architecturally wrong here (they want to own the agent runtime; our runtime is
+   the `claude` CLI).
+
+   > **What recall actually is today.** The **SQLite FTS index** this decision
+   > named was never built. Keyword recall is `hive:textSearch`
+   > (`src/main/index.ts`): a linear `indexOf` scan over `board.md`, `tasks.json`
+   > and every agent's `memory.md`, capped at 3 hits per file — adequate at hive
+   > scale, but not an index. Semantic recall shipped as the **MemPalace CLI**
+   > (not MCP — see §7 Phase 3): `memory.ts` spawns the binary, so a cold call pays
+   > a process start plus an embedding-model load and is bounded by a 120 s
+   > timeout. It is optional and a no-op when `mempalace` is not installed. There
+   > is no benchmark in this repo; do not quote latency numbers for it.
+5. **Autonomous loop = `Stop` hook.** ~~An agent that finishes drains its inbox
+   via a `Stop` hook that returns `{"decision":"block","reason":…}` to keep it
+   working, guarded by `stop_hook_active` to prevent infinite loops.~~
+   **Reversed — see below.**
+
+   > `hooks.ts` now answers **every** `Stop`/`SubagentStop` with `{}`: it notifies
+   > and emits, and never forces a continuation. Turning unread mail into a forced
+   > next turn bypassed the terminal-draft and HITL gates and could spend credits
+   > while a human was mid-answer. `HiveManager.drainForStop()` still exists and
+   > still works, but nothing in the app calls it.
+   >
+   > Delivery moved to the renderer instead: `useHive.ts` effect #3 sees an **idle**
+   > agent holding unread inbox files and enqueues a nudge, which effect #4 — the
+   > one gate allowed to type into a live PTY — delivers once the terminal is
+   > genuinely free (see [`docs/message-queue.md`](./docs/message-queue.md) and
+   > [ADR-0001](./docs/adr/0001-one-gate-for-pty-writes.md)). Consequence: dedup is
+   > a per-renderer-session set of message ids, **not** the durable `cursor.json` —
+   > see §3 and §8. Tracked as
+   > [#5](https://github.com/MARKXAILABS/hello-markx/issues/5).
 
 ---
 
@@ -79,13 +121,17 @@ hive/
     inbox/               # messages delivered TO me — <ts>-<msgid>.json
     inbox/.done/         # processed messages (kept for audit, not deleted)
     outbox/              # messages I want to SEND — router drains these
-    cursor.json          # { lastProcessed: <msgid> }  — avoids reprocessing
+    cursor.json          # { lastProcessed: <msgid> } — seeded at spawn; only
+                         #   drainForStop() advances it and nothing calls that
+                         #   today, so it stays { lastProcessed: null } (§2.5)
 ```
 
 Design rules that make this robust:
 - **One JSON file per message**, written via temp-file + atomic `rename` — never
   a co-edited shared mailbox file (those conflict under git).
-- **Append-only** `log.jsonl`; consumers track their own cursor.
+- **Append-only** `log.jsonl`; consumers track their own cursor. It rotates one
+  generation deep at 8 MB (`log.jsonl.1`) and is gitignored, so an event feed
+  nobody reads to the end cannot become an unbounded read or an unbounded repo.
 - `board.md` is the one genuinely co-edited file — it goes through the god agent
   (single scribe) to avoid conflicts.
 
@@ -135,14 +181,17 @@ agent B mid-task needs something from agent C
         │ delivered to C's inbox
         ▼
 agent C finishes its current turn → Stop hook fires
-        │ hook POSTs to the hive socket; main process checks C's inbox
-        │ unread messages?  → reply {"decision":"block","reason": <messages>}
+        │ hook POSTs to the hive socket; main answers {} — never a forced continue
+        │ C goes idle; the renderer sees idle + unread inbox → enqueues a nudge
+        │ the drain loop types it in once C's prompt is genuinely free
         ▼
 agent C keeps working: reads the messages, acts, replies via its own outbox
 ```
 
 The same hook socket drives the avatars: `PreToolUse`/`PostToolUse` payloads move
-an agent to the right station (replacing today's `mockEvents.ts` / PTY-scraping).
+an agent to the right station. Every payload must carry `HIVE_SOCK_TOKEN`
+(`hookSockToken()` in `hooks.ts`), injected into agent child environments only, so
+another local process cannot forge agent events — see [`SECURITY.md`](./SECURITY.md).
 
 ---
 
@@ -171,10 +220,14 @@ is the primary control surface — tune the prompt, not the code.
   (identity, protocol, env) + IPC to read hive state. Agents are hive-aware: they
   read their memory/inbox at task start and send via outbox; the router delivers;
   everything is committed and visible.
-- **Phase 1 — Autonomy** ✅: `hooks.ts` UDS server + `cth-hook` shim (attached per
-  agent via `--settings`) + `Stop`-loop so agents drain their inbox automatically
-  and keep running (guarded by `stop_hook_active` + cursor); hook events stream to
-  the renderer to drive avatars.
+- **Phase 1 — Autonomy** ⚠️ *shipped, but not as planned*: `hooks.ts` socket
+  server + `cth-hook` shim (attached per agent via `--settings`) landed, and hook
+  events stream to the renderer to drive avatars. Codex, Grok and Antigravity got
+  their own translating hook bridges; engines with no hook system at all (Crush,
+  qwen) get a loopback proxy sidecar that derives the same events from the model
+  response. The **`Stop`-loop did not**: `Stop` returns `{}` and inbox
+  delivery is the renderer's idle-only nudge instead. See §2.5 for why, and
+  [#5](https://github.com/MARKXAILABS/hello-markx/issues/5).
 - **Phase 2 — God mode** ✅: the god agent auto-spawns into Michael's room
   (`desk-ceo` reserved) and, on a fresh spawn, is started with `/remote-control`
   (best-effort) plus an orientation prompt so it begins running the floor on its
@@ -190,8 +243,21 @@ is the primary control surface — tune the prompt, not the code.
   isn't installed (markdown memory still works). Default model `minilm` (light,
   for low-RAM Macs); `embeddinggemma` is the multilingual opt-in. A `MemoryPanel`
   lets the human search the same palace.
-  - *Still open*: reflection/summarization to bound `memory.md`; needs a live
-    `mempalace` install to validate retrieval end-to-end.
+  - *Shipped since*: reflection/summarization (`reflect.ts`) does bound
+    `memory.md` — backup-first, verify-don't-trust, atomic swap, then an immediate
+    re-mine of that agent's wing. It summarizes through an ephemeral interactive
+    PTY (`hiddenClaude.ts`), **not** headless `claude -p`, so it draws on the
+    interactive plan quota rather than metered API credit.
+  - *Still open*: **the palace never shrinks.** `memory.ts` calls only `mine`,
+    `search` and `wake-up` — there is no delete, prune or rebuild — so a chunk
+    condensed out of `memory.md` stays in the shared palace forever and keeps
+    outranking the decision that replaced it in recall
+    ([#16](https://github.com/MARKXAILABS/hello-markx/issues/16)). Retrieval
+    quality also still needs a live `mempalace` install to validate end-to-end.
+    (`log.jsonl` and `backups/` are *not* on this list: the log rotates one
+    generation at 8 MB and backups are pruned to the newest 20, and both are
+    gitignored and untracked so they stay out of the hive repo —
+    [#11](https://github.com/MARKXAILABS/hello-markx/issues/11).)
 
 ---
 
@@ -200,10 +266,10 @@ is the primary control surface — tune the prompt, not the code.
 | Risk | Mitigation |
 | --- | --- |
 | `index.lock` corruption | Single committer (main process), retry+backoff, stale-lock cleanup |
-| Infinite Stop-hook loop | Guard on `stop_hook_active`; `hops` cap; `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` |
+| Infinite Stop-hook loop | Moot today — `Stop` always answers `{}` (§2.5). The `stop_hook_active` guard and the `hops` cap stay for when a drain returns |
 | Two agents ping-ponging | Only request/query/propose obligate replies; hop cap → god escalates |
-| Reprocessing messages | Per-agent `cursor.json`; processed messages move to `inbox/.done/` |
-| `memory.md` unbounded growth | Phase 3 reflection/summarization |
+| Reprocessing messages | Agents move handled messages to `inbox/.done/` — instructed in the prompt, not enforced. `cursor.json` is seeded but never advanced; the live dedup is the renderer's per-session set of nudged message ids, lost on reload ([#5](https://github.com/MARKXAILABS/hello-markx/issues/5)) |
+| `memory.md` unbounded growth | `reflect.ts` condensation (shipped). `log.jsonl` rotates one generation at 8 MB, `backups/` keeps the newest 20 — both gitignored. The **semantic palace** is still unbounded: nothing prunes it ([#16](https://github.com/MARKXAILABS/hello-markx/issues/16)) |
 | Modifying the user's repo with hooks | Write hooks to `<cwd>/.claude/settings.local.json` (gitignored convention) |
 
 ---

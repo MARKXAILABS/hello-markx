@@ -14,7 +14,7 @@ Every event carries only these common properties:
 
 | Property | Example | Notes |
 | --- | --- | --- |
-| `app_version` | `0.4.2` | The app's own version |
+| `app_version` | `0.4.4` | The app's own version |
 | `os` | `darwin` / `win32` / `linux` | Platform, nothing more |
 | `arch` | `arm64` / `x64` | CPU architecture |
 
