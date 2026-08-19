@@ -68,6 +68,18 @@ async function run(cmd, env) {
     const child = spawn('/bin/sh', ['-c', cmd], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
     child.stderr.on('data', (d) => { stderr += d; });
+    // Two of the commands run through here — the `command -v node` probe and the
+    // bare-`node` control — exit WITHOUT ever reading stdin, so this write lands
+    // on a pipe whose reader is already gone. EPIPE is the expected outcome, not
+    // a failure; unhandled it becomes an uncaughtException, and since 'close'
+    // fires before the write settles the runner attributes it to the test AFTER
+    // the test ended (#54, ubuntu-only: the payload fits the pipe buffer on
+    // Windows, so it never errored there).
+    //
+    // The SHIPPED shim is not implicated: it registers c.on('error') and holds
+    // the socket handle open until the server's 'end' (or its own 5s unref'd
+    // timeout), so a hook firing as an agent exits does not lose its payload.
+    child.stdin.on('error', () => { /* the child never read stdin */ });
     child.stdin.end(JSON.stringify({ hook_event_name: 'Stop', session_id: 's1' }));
     child.on('close', (code) => resolve({ code, stderr }));
   });

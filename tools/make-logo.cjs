@@ -344,19 +344,27 @@ write('build/icon.ico', buildIco([16, 32, 48, 64, 128, 256].map((size) => ({
   size, data: rasterise(size, grid, 'mark', BORDERS.ink)
 }))));
 
-// macOS .icns via iconutil, from a margined+shadowed iconset.
-const setDir = D('build/icon.iconset');
-fs.rmSync(setDir, { recursive: true, force: true });
-fs.mkdirSync(setDir, { recursive: true });
-for (const [name, size] of [
-  ['icon_16x16', 16], ['icon_16x16@2x', 32], ['icon_32x32', 32], ['icon_32x32@2x', 64],
-  ['icon_128x128', 128], ['icon_128x128@2x', 256], ['icon_256x256', 256],
-  ['icon_256x256@2x', 512], ['icon_512x512', 512], ['icon_512x512@2x', 1024]
-]) {
-  fs.writeFileSync(path.join(setDir, `${name}.png`), rasterise(size, grid, 'icon', BORDERS.ink));
+// macOS .icns via iconutil, from a margined+shadowed iconset. iconutil ships
+// ONLY with macOS, and it is the one output here that is not pure Node. That is
+// why this generator cannot be a build step (#52): the rasters it writes are
+// COMMITTED, and the SVG stays the source of truth. Off macOS the tracked
+// build/icon.icns is left alone rather than half-written.
+if (process.platform === 'darwin') {
+  const setDir = D('build/icon.iconset');
+  fs.rmSync(setDir, { recursive: true, force: true });
+  fs.mkdirSync(setDir, { recursive: true });
+  for (const [name, size] of [
+    ['icon_16x16', 16], ['icon_16x16@2x', 32], ['icon_32x32', 32], ['icon_32x32@2x', 64],
+    ['icon_128x128', 128], ['icon_128x128@2x', 256], ['icon_256x256', 256],
+    ['icon_256x256@2x', 512], ['icon_512x512', 512], ['icon_512x512@2x', 1024]
+  ]) {
+    fs.writeFileSync(path.join(setDir, `${name}.png`), rasterise(size, grid, 'icon', BORDERS.ink));
+  }
+  execFileSync('iconutil', ['-c', 'icns', setDir, '-o', D('build/icon.icns')]);
+  fs.rmSync(setDir, { recursive: true, force: true });
+  wrote.push(`build/icon.icns              ${(fs.statSync(D('build/icon.icns')).size / 1024).toFixed(1)} KB`);
+} else {
+  wrote.push('build/icon.icns              kept — iconutil is macOS-only');
 }
-execFileSync('iconutil', ['-c', 'icns', setDir, '-o', D('build/icon.icns')]);
-fs.rmSync(setDir, { recursive: true, force: true });
-wrote.push(`build/icon.icns              ${(fs.statSync(D('build/icon.icns')).size / 1024).toFixed(1)} KB`);
 
 console.log(wrote.join('\n'));

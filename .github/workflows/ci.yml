@@ -57,13 +57,33 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-      # The suite is plain node:test over TypeScript transpiled in-process by
-      # test/load-ts.cjs, and the only thing it reaches into node_modules for
-      # (node-pty/lib/windowsPtyAgent.js) is pure JS with no binding load at
-      # require time. Skipping the native rebuild keeps the gate fast and free of
-      # node-gyp flake; the release workflow does the real, blocking rebuild.
+      # --ignore-scripts on purpose, and it must STAY that way: the app's own
+      # postinstall runs electron-rebuild, which builds node-pty for the ELECTRON
+      # ABI — and `node --test` then cannot load it either.
       - name: Install dependencies
         run: npm ci --ignore-scripts
+
+      # ...but two test files DO need node-pty loadable under plain Node:
+      # test/win-cmd-shim.test.cjs and test/hive-runtime-path.test.cjs both
+      # loadTs('src/main/pty.ts'), whose first line is `import * as pty from
+      # 'node-pty'`, and node-pty/lib/index.js loads the native module at MODULE
+      # scope on non-win32. node-pty ships prebuilds for darwin-* and win32-* but
+      # not linux-*, which is why those two files failed on ubuntu ALONE, and 70
+      # tests went silently uncollected there (#53).
+      #
+      # Cheap and non-flaky everywhere a prebuild exists: node-pty's install
+      # script finds it, exits 0, and nothing is compiled. Only Linux runs
+      # node-gyp — which shells out to Python, which since 3.12 no longer has
+      # distutils, so pin it exactly as the release workflow does.
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Linux'
+        with:
+          python-version: "3.11"
+      - name: Provide distutils for node-gyp
+        if: runner.os == 'Linux'
+        run: python -m pip install --upgrade setuptools
+      - name: Build node-pty for the Node ABI
+        run: npm rebuild node-pty
       # `test/*.test.cjs` is a glob Node expands itself (so it also works from
       # cmd.exe on Windows, which does not glob). Deliberately NOT a hand-written
       # file list: that is how eight test files went unrun for months (#7).
@@ -93,5 +113,13 @@ jobs:
 
       # electron-vite build needs the electron package's version, not its
       # binary, so it is a genuine gate even after the step above is skipped.
+      #
+      # It is ALSO the clean-checkout assertion for #52: nothing in this job
+      # generates anything, so an asset that is imported but never committed —
+      # as docs/logo.png was, killing the renderer bundle on every fresh clone —
+      # fails right here. tools/make-logo.cjs cannot be a build step (its last
+      # output goes through macOS-only `iconutil`), so the rasters are committed
+      # and `npm run brand` regenerates them. test/build-assets.test.cjs catches
+      # the same class in milliseconds, on all three platforms.
       - name: Compile (electron-vite -> out/)
         run: npm run build
