@@ -246,6 +246,7 @@ function StatusGroup({ label, entries }: {
           <button
             onClick={() => navigator.clipboard.writeText(e.path).catch(() => {})}
             title="Copy path"
+            aria-label={`Copy path ${e.path}`}
             style={{
               padding: 0, background: 'transparent', border: 'none',
               cursor: 'pointer', color: 'var(--cth-ink-500)'

@@ -127,7 +127,7 @@ export function HistoryPane({ gitRoot, onOpenRevDiff }: {
             <button style={smallBtn} onClick={() => void jump(selected)} title="Check out this commit (detached HEAD)">
               <Icon name="arrow-right" /> jump here
             </button>
-            <button style={{ ...smallBtn, width: 20, justifyContent: 'center' }} onClick={() => setSelected(null)} title="Close">✕</button>
+            <button style={{ ...smallBtn, width: 20, justifyContent: 'center' }} onClick={() => setSelected(null)} title="Close" aria-label="Close commit details">✕</button>
           </div>
           {/* `flex: 1` is load-bearing: without it this scroller sizes to its
               CONTENT, overflows the parent's maxHeight and never reaches its own
@@ -208,7 +208,7 @@ export function ComparePane({ gitRoot, onOpenRevDiff }: {
           <select value={base} onChange={(e) => setBase(e.target.value)} style={sel} title="Base — the branch you're comparing against">
             {branches.map((b) => <option key={b} value={b}>{b}</option>)}
           </select>
-          <button style={{ ...smallBtn, width: 22, justifyContent: 'center' }} title="Swap base ↔ compare"
+          <button style={{ ...smallBtn, width: 22, justifyContent: 'center' }} title="Swap base ↔ compare" aria-label="Swap base and compare branches"
             onClick={() => { setBase(head); setHead(base); }}>⇄</button>
           <select value={head} onChange={(e) => setHead(e.target.value)} style={sel} title="Compare — the branch whose changes you're viewing">
             {branches.map((b) => <option key={b} value={b}>{b}</option>)}

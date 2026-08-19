@@ -1,10 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { AgentCard } from './AgentCard';
 import { PixelButton } from './PixelButton';
 import { Icon } from './Icon';
 import { useStore, type Agent } from '@/store/store';
 import { type HarnessConfig } from '@/store/config';
 import { useRestoreTeam } from '@/hooks/useRestoreTeam';
+import { useFleetTelemetry } from '@/hooks/useTelemetry';
+import { groupKey, matchesAgentQuery, useAgentGroups } from './agentGroups';
+
+/** Above this many agents the strip stops being scannable, so it grows a filter
+ *  box. Below it, a search field over six cards is just clutter. */
+const FILTER_THRESHOLD = 8;
 
 export interface AgentStripProps {
   /** Needed to rebuild a spawn command when a restorable agent predates the
@@ -23,6 +29,8 @@ export function AgentStrip({ config }: AgentStripProps) {
   const setAgentNote = useStore(s => s.setAgentNote);
   // Shared with the fullscreen roster so both show one restore in progress.
   const { restoring, autoRestoring, restoreTeam } = useRestoreTeam(config);
+  // Per-agent spend for the card's cost readout (#39).
+  const { samples } = useFleetTelemetry();
   // ONE restore control (bottom-right): a button whose dropdown OPENS UPWARD and
   // lists last session's agents with per-agent dismiss. The menu is position:
   // fixed (anchored off the button's rect) because the strip scrolls with
@@ -48,6 +56,16 @@ export function AgentStrip({ config }: AgentStripProps) {
   // currently hovered as a drop target (drives the insertion-line cue).
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  // Free-text filter over name / project / repo / cwd.
+  const [filter, setFilter] = useState('');
+  const shown = useMemo(
+    () => agents.filter((a) => matchesAgentQuery(a, filter)),
+    [agents, filter]
+  );
+  // The same buckets the fullscreen roster shows (components/agentGroups.ts) —
+  // the strip used to be one flat row in store order, which past ~20 agents is
+  // several thousand pixels of horizontal scroll with nothing to navigate by.
+  const { gods, groups } = useAgentGroups(shown);
   // Note editing is EXPLICIT (✎ toggles the editor) — nothing appears on hover.
   // The editor is a fixed popover ABOVE the card (anchored off its rect): the
   // strip clips overflow and the compact cards have no room for an inline box.
@@ -75,6 +93,155 @@ export function AgentStrip({ config }: AgentStripProps) {
     const iv = setInterval(() => { void poll(); }, 5000);
     return () => { cancelled = true; clearInterval(iv); };
   }, []);
+  // One roster card + its drag wrapper + its note-editor popover. Pulled out
+  // of the render so gods and each repo group can call it without three copies
+  // of the same eighty lines.
+  const renderCard = (a: Agent) => (
+    // Draggable wrapper: reorder the roster by dragging one card onto another.
+    // Native HTML5 DnD (no dep). A plain click still selects — a drag only
+    // starts on movement — so AgentCard's onClick is unaffected.
+    <div
+      key={a.id}
+      ref={(el) => { cardRefs.current[a.id] = el; }}
+      draggable
+      onDragStart={(e) => { setDragId(a.id); e.dataTransfer.effectAllowed = 'move'; }}
+      onDragOver={(e) => {
+        if (!dragId || dragId === a.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (overId !== a.id) setOverId(a.id);
+      }}
+      onDragLeave={() => { if (overId === a.id) setOverId(null); }}
+      onDrop={(e) => {
+        e.preventDefault();
+        // Same-group only: the card's section comes from its cwd, so a
+        // cross-repo drop reorders the array and then snaps the card straight
+        // back into its own group — a move that visibly undoes itself.
+        const from = agents.find((x) => x.id === dragId);
+        if (from && dragId !== a.id && groupKey(from) === groupKey(a)) reorderAgents(dragId!, a.id);
+        setDragId(null);
+        setOverId(null);
+      }}
+      onDragEnd={() => { setDragId(null); setOverId(null); }}
+      style={{
+        position: 'relative',
+        flexShrink: 0,
+        cursor: 'grab',
+        opacity: dragId === a.id ? 0.4 : 1,
+        // Insertion-line cue on the hovered drop target.
+        boxShadow: overId === a.id && dragId && dragId !== a.id
+          ? 'inset 3px 0 0 0 var(--cth-ink-900)'
+          : 'none',
+        transition: 'opacity 120ms ease'
+      }}
+    >
+      <AgentCard
+        draggable
+        name={a.name}
+        character={a.character}
+        accent={a.accent}
+        status={a.status}
+        ptyId={a.ptyId}
+        project={a.project}
+        action={a.action}
+        progress={a.progress}
+        contextTokens={a.contextTokens}
+        contextLimit={a.contextLimit}
+        selected={a.id === selectedId}
+        isGod={a.isGod}
+        onClick={() => select(a.id)}
+        doingCount={doingByAgent[a.id]?.length ?? 0}
+        onTaskNoteClick={() => {
+          const first = doingByAgent[a.id]?.[0];
+          if (first) openTaskDetail(first);
+        }}
+        note={a.note}
+        usd={samples[a.id]?.usd}
+        onEditNote={a.isGod ? undefined : () => setNoteEditId(a.id)}
+        // Claude pool-account chip — resolve the pinned id to its label; a
+        // pin whose account was removed shows the raw id (visible, not
+        // silently hidden). Unpinned agents render exactly as before. An
+        // `auto` agent shows the account the pool resolved (or just "auto").
+        accountLabel={a.account
+          ? `${config?.claudeAccounts?.find((acc) => acc.id === a.account)?.label ?? a.account}${a.accountPolicy === 'auto' ? ' · auto' : ''}`
+          : a.accountPolicy === 'auto' ? 'auto' : undefined}
+      />
+      {/* The note itself lives INSIDE the card (its own row above the gauge).
+          This is the transient EDITOR: a fixed popover ABOVE the card —
+          the compact card has no room for an inline box, and the strip
+          clips overflow. ✎ opens it; Esc / ✕ / click-away closes. */}
+      {noteEditId === a.id && !dragId && (() => {
+        const rect = cardRefs.current[a.id]?.getBoundingClientRect();
+        if (!rect) return null;
+        const width = 280;
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+        const bottom = Math.max(8, window.innerHeight - rect.top + 8);
+        return (
+          <>
+            {/* click-away backdrop */}
+            <div
+              onClick={() => setNoteEditId(null)}
+              style={{ position: 'fixed', inset: 0, zIndex: 349, background: 'transparent' }}
+            />
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                position: 'fixed', left, bottom, width, zIndex: 350,
+                padding: 10, boxSizing: 'border-box',
+                background: 'var(--cth-paper-100)',
+                boxShadow: 'inset 0 0 0 1px var(--cth-ink-300), 3px 3px 0 rgba(26,19,32,0.14)',
+                display: 'flex', flexDirection: 'column', gap: 6
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{
+                  fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+                  color: 'var(--cth-ink-500)'
+                }}>PRIVATE NOTE · {a.name.toUpperCase()}</span>
+                <button
+                  onClick={() => setNoteEditId(null)}
+                  title="Done"
+                  aria-label="Close note editor"
+                  style={{
+                    flexShrink: 0, width: 18, height: 18, padding: 0, lineHeight: 1,
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                    color: 'var(--cth-ink-500)', background: 'transparent',
+                    border: 'none', cursor: 'pointer'
+                  }}
+                >✕</button>
+              </div>
+              {/* A textarea, not an input: the note is a bullet list (one
+                  line per bullet) and the fullscreen roster renders every
+                  line — an <input> would silently eat the newlines. */}
+              <textarea
+                autoFocus
+                rows={3}
+                value={a.note ?? ''}
+                onChange={(e) => setAgentNote(a.id, e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') setNoteEditId(null); }}
+                placeholder="one line per bullet…"
+                aria-label={`Note for ${a.name}`}
+                style={{
+                  width: '100%', padding: '6px 8px',
+                  border: 'none', outline: 'none', resize: 'none', boxSizing: 'border-box',
+                  background: 'var(--cth-cream-100)',
+                  boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
+                  fontFamily: 'var(--cth-font-mono)', fontSize: 12,
+                  lineHeight: '18px', color: 'var(--cth-ink-900)'
+                }}
+              />
+              <span style={{ fontSize: 10, color: 'var(--cth-ink-500)' }}>
+                one line = one bullet · esc to close
+              </span>
+            </div>
+          </>
+        );
+      })()}
+    </div>
+  );
+
 
   return (
     <div style={{
@@ -91,146 +258,64 @@ export function AgentStrip({ config }: AgentStripProps) {
       minHeight: 112,
       alignItems: 'center'
     }}>
-      {agents.map(a => (
-        // Draggable wrapper: reorder the roster by dragging one card onto another.
-        // Native HTML5 DnD (no dep). A plain click still selects — a drag only
-        // starts on movement — so AgentCard's onClick is unaffected.
-        <div
-          key={a.id}
-          ref={(el) => { cardRefs.current[a.id] = el; }}
-          draggable
-          onDragStart={(e) => { setDragId(a.id); e.dataTransfer.effectAllowed = 'move'; }}
-          onDragOver={(e) => {
-            if (!dragId || dragId === a.id) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            if (overId !== a.id) setOverId(a.id);
-          }}
-          onDragLeave={() => { if (overId === a.id) setOverId(null); }}
-          onDrop={(e) => {
-            e.preventDefault();
-            if (dragId && dragId !== a.id) reorderAgents(dragId, a.id);
-            setDragId(null);
-            setOverId(null);
-          }}
-          onDragEnd={() => { setDragId(null); setOverId(null); }}
-          style={{
-            position: 'relative',
-            flexShrink: 0,
-            cursor: 'grab',
-            opacity: dragId === a.id ? 0.4 : 1,
-            // Insertion-line cue on the hovered drop target.
-            boxShadow: overId === a.id && dragId && dragId !== a.id
-              ? 'inset 3px 0 0 0 var(--cth-ink-900)'
-              : 'none',
-            transition: 'opacity 120ms ease'
-          }}
-        >
-          <AgentCard
-            draggable
-            name={a.name}
-            character={a.character}
-            accent={a.accent}
-            status={a.status}
-            ptyId={a.ptyId}
-            project={a.project}
-            action={a.action}
-            progress={a.progress}
-            contextTokens={a.contextTokens}
-            contextLimit={a.contextLimit}
-            selected={a.id === selectedId}
-            isGod={a.isGod}
-            onClick={() => select(a.id)}
-            doingCount={doingByAgent[a.id]?.length ?? 0}
-            onTaskNoteClick={() => {
-              const first = doingByAgent[a.id]?.[0];
-              if (first) openTaskDetail(first);
+      {/* Filter first: with a fleet this size the strip is a horizontal
+          scroll row several thousand pixels long, and "where is my agent"
+          has no answer without one. Hidden on small floors — a search box
+          over six cards is noise. */}
+      {agents.length > FILTER_THRESHOLD && (
+        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 3, alignSelf: 'center' }}>
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="filter agents…"
+            aria-label="Filter agents by name, project or folder"
+            style={{
+              width: 132, padding: '5px 8px',
+              background: 'var(--cth-paper-100)', border: 'none',
+              boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+              fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+              color: 'var(--cth-ink-900)', outline: 'none'
             }}
-            note={a.note}
-            onEditNote={a.isGod ? undefined : () => setNoteEditId(a.id)}
-            // Claude pool-account chip — resolve the pinned id to its label; a
-            // pin whose account was removed shows the raw id (visible, not
-            // silently hidden). Unpinned agents render exactly as before. An
-            // `auto` agent shows the account the pool resolved (or just "auto").
-            accountLabel={a.account
-              ? `${config?.claudeAccounts?.find((acc) => acc.id === a.account)?.label ?? a.account}${a.accountPolicy === 'auto' ? ' · auto' : ''}`
-              : a.accountPolicy === 'auto' ? 'auto' : undefined}
           />
-          {/* The note itself lives INSIDE the card (its own row above the gauge).
-              This is the transient EDITOR: a fixed popover ABOVE the card —
-              the compact card has no room for an inline box, and the strip
-              clips overflow. ✎ opens it; Esc / ✕ / click-away closes. */}
-          {noteEditId === a.id && !dragId && (() => {
-            const rect = cardRefs.current[a.id]?.getBoundingClientRect();
-            if (!rect) return null;
-            const width = 280;
-            const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-            const bottom = Math.max(8, window.innerHeight - rect.top + 8);
-            return (
-              <>
-                {/* click-away backdrop */}
-                <div
-                  onClick={() => setNoteEditId(null)}
-                  style={{ position: 'fixed', inset: 0, zIndex: 349, background: 'transparent' }}
-                />
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  style={{
-                    position: 'fixed', left, bottom, width, zIndex: 350,
-                    padding: 10, boxSizing: 'border-box',
-                    background: 'var(--cth-paper-100)',
-                    boxShadow: 'inset 0 0 0 1px var(--cth-ink-300), 3px 3px 0 rgba(26,19,32,0.14)',
-                    display: 'flex', flexDirection: 'column', gap: 6
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{
-                      fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
-                      color: 'var(--cth-ink-500)'
-                    }}>PRIVATE NOTE · {a.name.toUpperCase()}</span>
-                    <button
-                      onClick={() => setNoteEditId(null)}
-                      title="Done"
-                      aria-label="Close note editor"
-                      style={{
-                        flexShrink: 0, width: 18, height: 18, padding: 0, lineHeight: 1,
-                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                        fontFamily: 'var(--cth-font-ui)', fontSize: 11,
-                        color: 'var(--cth-ink-500)', background: 'transparent',
-                        border: 'none', cursor: 'pointer'
-                      }}
-                    >✕</button>
-                  </div>
-                  {/* A textarea, not an input: the note is a bullet list (one
-                      line per bullet) and the fullscreen roster renders every
-                      line — an <input> would silently eat the newlines. */}
-                  <textarea
-                    autoFocus
-                    rows={3}
-                    value={a.note ?? ''}
-                    onChange={(e) => setAgentNote(a.id, e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Escape') setNoteEditId(null); }}
-                    placeholder="one line per bullet…"
-                    aria-label={`Note for ${a.name}`}
-                    style={{
-                      width: '100%', padding: '6px 8px',
-                      border: 'none', outline: 'none', resize: 'none', boxSizing: 'border-box',
-                      background: 'var(--cth-cream-100)',
-                      boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                      fontFamily: 'var(--cth-font-mono)', fontSize: 12,
-                      lineHeight: '18px', color: 'var(--cth-ink-900)'
-                    }}
-                  />
-                  <span style={{ fontSize: 10, color: 'var(--cth-ink-500)' }}>
-                    one line = one bullet · esc to close
-                  </span>
-                </div>
-              </>
-            );
-          })()}
+          <span style={{ fontSize: 11, lineHeight: '14px', color: 'var(--cth-ink-500)' }}>
+            {shown.length === agents.length
+              ? `${agents.length} agents`
+              : `${shown.length} of ${agents.length}`}
+          </span>
         </div>
+      )}
+      {gods.map(renderCard)}
+      {groups.map((g) => (
+        <Fragment key={g.key}>
+          {/* The repo this run of cards belongs to. Vertical because the strip
+              is 112px tall and a horizontal header would cost a card slot;
+              the divider is what actually separates the runs. A single-repo
+              floor needs no label — there is nothing to tell apart. */}
+          {groups.length > 1 && (
+          <div style={{ flexShrink: 0, alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--cth-ink-300)' }} />
+            <span
+              title={g.key}
+              style={{
+                writingMode: 'vertical-rl', transform: 'rotate(180deg)',
+                fontFamily: 'var(--cth-font-display)', fontSize: 8, letterSpacing: 0.5,
+                color: 'var(--cth-ink-500)',
+                maxHeight: 84, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'
+              }}
+            >{g.label.toUpperCase()}</span>
+          </div>
+          )}
+          {g.members.map(renderCard)}
+        </Fragment>
       ))}
+      {/* Only when a FILTER emptied the strip. An office with no agents at all
+          already reads as empty, and "no agent matches" with nothing in the box
+          would be answering a question nobody asked. */}
+      {shown.length === 0 && agents.length > 0 && (
+        <span style={{ flexShrink: 0, fontSize: 13, color: 'var(--cth-ink-500)' }}>
+          no agent matches “{filter.trim()}”
+        </span>
+      )}
       <PixelButton
         variant="secondary"
         size="lg"

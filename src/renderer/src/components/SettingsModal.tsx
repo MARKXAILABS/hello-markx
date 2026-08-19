@@ -10,7 +10,7 @@ import {
   type TriggerMode,
   type WebhookTrigger
 } from '@shared/triggers';
-import { PixelPanel } from './PixelPanel';
+import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
 import { UpdatesSection } from './UpdatesSection';
 import { SettingsHeroCard } from './SettingsHeroCard';
@@ -708,29 +708,20 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
       : 'SETTINGS';
 
   return (
-    <div
-      onClick={busy ? undefined : onClose}
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(26, 19, 32, 0.7)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 300
+    // locked while a reset / home-change is mid-flight: those relaunch the app,
+    // so dismissing the dialog would only hide what is happening.
+    <Modal
+      title={modalTitle}
+      onClose={onClose}
+      locked={busy || changeBusy}
+      width={840}
+      frameStyle={{
+        maxHeight: '88vh',
+        display: 'flex', flexDirection: 'column',
+        filter: 'drop-shadow(4px 4px 0 rgba(26, 19, 32, 0.25))'
       }}
+      panelStyle={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: '88vh' }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 840, maxWidth: '92vw', maxHeight: '88vh',
-          display: 'flex', flexDirection: 'column',
-          filter: 'drop-shadow(4px 4px 0 rgba(26, 19, 32, 0.25))'
-        }}
-      >
-        <PixelPanel
-          variant="dialog"
-          title={modalTitle}
-          noPadding
-          style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: '88vh' }}
-        >
           {/* === Change home sub-modal === */}
           {changeHome ? (
             <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto' }}>
@@ -2008,8 +1999,6 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
               </div>
             </>
           )}
-        </PixelPanel>
-      </div>
-    </div>
+    </Modal>
   );
 }

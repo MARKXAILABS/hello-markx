@@ -34,7 +34,10 @@ export interface AgentCardProps {
    *  sticky note stuck to the card. Clicking it opens the first task's detail. */
   doingCount?: number;
   onTaskNoteClick?: () => void;
-  draggable?: boolean; // must sit on the <button> itself — Chromium won't start a drag on an ancestor from inside a form control
+  /** Marks the card itself draggable. Chromium will not start a drag on an
+   *  ancestor when the pointer is over a form control, so the card root carries
+   *  it rather than the strip's wrapper alone. */
+  draggable?: boolean;
   /** Private note — rendered as the card's own row (v0.3.4) so it can never
    *  cover the context gauge. First line only; full text in the tooltip. */
   note?: string;
@@ -44,6 +47,10 @@ export interface AgentCardProps {
   /** Claude pool-account LABEL this agent is pinned to (resolved by the strip);
    *  unset = /login account (no chip — cards look exactly as before the pool). */
   accountLabel?: string;
+  /** Estimated USD burned by this agent so far (OTel telemetry). The one number
+   *  a user asks about first and the one none of the four agent renderings
+   *  showed, though useFleetTelemetry has carried it per agent all along. */
+  usd?: number;
 }
 
 const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
@@ -56,7 +63,7 @@ const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
 export function AgentCard({
   name, character, accent, status, ptyId, project, action, progress = 0,
   contextTokens, contextLimit, selected, isGod, onClick,
-  doingCount = 0, onTaskNoteClick, draggable, note, onEditNote, accountLabel
+  doingCount = 0, onTaskNoteClick, draggable, note, onEditNote, accountLabel, usd
 }: AgentCardProps) {
   const [hover, setHover] = useState(false);
   const typing = useHasTerminalDraft(ptyId);
@@ -127,11 +134,25 @@ export function AgentCard({
   const noteFirstLine = (note ?? '').split('\n').find((l) => l.trim()) ?? '';
 
   return (
-    <button
+    // A <div role="button">, not a <button>. The card carries THREE other
+    // controls inside it — the task sticky note, the ✎ note editor, and (on
+    // god) the voice toggle + cost readout — and interactive content inside a
+    // <button> is invalid HTML: the parser closes the outer button early, and
+    // screen readers flatten everything into one unusable control. The role +
+    // tabIndex + Enter/Space handler below give the card the same keyboard
+    // behaviour a real button had, while the controls inside stay real buttons.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return; // a nested control is handling it
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(); }
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       draggable={draggable}
+      aria-label={`${name}${isGod ? ' (boss)' : ''} — ${status}`}
       // The ring is the visual answer to "which terminal is open"; this is the
       // same answer for a screen reader. Matches SidebarRow in fullscreen.
       aria-current={selected ? 'true' : undefined}
@@ -148,11 +169,14 @@ export function AgentCard({
       {/* The taken note, stuck to the card like on the desk: this worker is
           actively DOING a ledger task. Click → the task's detail overlay. */}
       {doingCount > 0 && (
-        <span
+        <button
+          type="button"
           title={`actively working ${doingCount} task${doingCount === 1 ? '' : 's'} — click to open`}
+          aria-label={`Open ${name}'s active task${doingCount === 1 ? '' : 's'} (${doingCount})`}
           onClick={(e) => { e.stopPropagation(); onTaskNoteClick?.(); }}
           style={{
             position: 'absolute', right: -4, bottom: -5, zIndex: 2,
+            border: 'none', padding: 0,
             width: 20, height: 18,
             background: 'var(--cth-sky)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300), 1px 2px 0 rgba(26,19,32,0.18)',
@@ -163,7 +187,7 @@ export function AgentCard({
           }}
         >
           {doingCount > 1 ? doingCount : '✎'}
-        </span>
+        </button>
       )}
       <PixelPanel
         variant="default"
@@ -226,6 +250,20 @@ export function AgentCard({
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                 }}
               >{infoLine}</div>
+              {/* Cost before the account chip: money is the thing being asked
+                  about, the account is context for it. Hidden until telemetry
+                  reports a non-zero spend — "$0.00" on a fresh agent is noise. */}
+              {!!usd && usd > 0 && (
+                <span
+                  title={`Estimated spend so far: $${usd.toFixed(2)}`}
+                  style={{
+                    flexShrink: 0,
+                    fontFamily: 'var(--cth-font-mono)',
+                    fontSize: 10, lineHeight: '13px',
+                    color: 'var(--cth-ink-700)'
+                  }}
+                >${usd.toFixed(2)}</span>
+              )}
               {accountLabel && (
                 <span
                   title={`Claude account: ${accountLabel}`}
@@ -274,23 +312,20 @@ export function AgentCard({
                   >{noteFirstLine}</span>
                 ) : <span style={{ flex: 1 }} />}
                 {onEditNote && (
-                  <span
-                    role="button"
-                    tabIndex={0}
+                  <button
+                    type="button"
                     onClick={(e) => { e.stopPropagation(); onEditNote(); }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); onEditNote(); }
-                    }}
                     title={note ? 'Edit private note' : 'Add private note'}
                     aria-label={`Edit note for ${name}`}
                     style={{
+                      background: 'transparent', border: 'none', padding: 0,
                       flexShrink: 0, width: 15, height: 14,
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                       fontSize: 10, lineHeight: 1, cursor: 'pointer',
                       // Quiet until the card is hovered — discoverable, not noisy.
                       color: hover ? 'var(--cth-ink-500)' : 'var(--cth-ink-300)'
                     }}
-                  >✎</span>
+                  >✎</button>
                 )}
               </div>
             )}
@@ -309,6 +344,6 @@ export function AgentCard({
           </div>
         </div>
       </PixelPanel>
-    </button>
+    </div>
   );
 }

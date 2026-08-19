@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PixelPanel } from './PixelPanel';
+import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
 import { Icon } from './Icon';
 
@@ -35,21 +35,16 @@ export function QuitWarningModal({ ptyCount, closing, onCancel, onConfirm, onClo
   const inClosingTime = !!closing && closing.phase !== 'error';
 
   return (
-    <div
-      onClick={inClosingTime ? undefined : onCancel}
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(26, 19, 32, 0.7)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 300
-      }}
+    // locked while closing time runs: the protocol is mid-flight and every
+    // worker is still reporting back, so a stray Escape or backdrop click must
+    // not look like "cancel".
+    <Modal
+      title={inClosingTime ? 'CLOSING TIME' : 'QUITTING NOW?'}
+      onClose={onCancel}
+      locked={inClosingTime}
+      width={480}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{ width: 480, maxWidth: '92vw' }}
-      >
-        <PixelPanel variant="dialog" title={inClosingTime ? 'CLOSING TIME' : 'QUITTING NOW?'} noPadding>
-          <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
             {inClosingTime ? (
               <>
                 {/* ── Graceful shutdown in progress ──────────────────────── */}
@@ -194,9 +189,7 @@ export function QuitWarningModal({ ptyCount, closing, onCancel, onConfirm, onClo
                 </div>
               </>
             )}
-          </div>
-        </PixelPanel>
       </div>
-    </div>
+    </Modal>
   );
 }

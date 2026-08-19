@@ -352,11 +352,20 @@ export function OfficeFloor() {
 
       // Waiting spots near the entrance — where a blocked agent walks to signal
       // it needs the user. Collected as walkable tiles in rings around the door.
+      //
+      // The cap used to be 16, which is where two problems met: a blocked agent's
+      // wait tile is `waitTiles[seatIndex % waitTiles.length]`, so on a floor with
+      // more than sixteen workers agent 17 stood exactly on agent 1. Collecting a
+      // wider ring pushes the first collision out past any realistic fleet.
+      // ponytail: still a modulo — the entrance area is finite, so past
+      // WAIT_TILE_TARGET two agents share a tile again. If that ever matters,
+      // claim wait tiles from a pool the way seats are claimed.
+      const WAIT_TILE_TARGET = 48;
       const entrance = mapRenderer.getSpawnPoint('entrance')
         ?? { x: Math.floor(mapRenderer.width / 2), y: mapRenderer.height - 2 };
       const waitTiles: Tile[] = [];
       const waitSeen = new Set<string>();
-      for (let radius = 0; radius <= 6 && waitTiles.length < 16; radius++) {
+      for (let radius = 0; radius <= 10 && waitTiles.length < WAIT_TILE_TARGET; radius++) {
         for (let dy = -radius; dy <= radius; dy++) {
           for (let dx = -radius; dx <= radius; dx++) {
             if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
@@ -368,6 +377,50 @@ export function OfficeFloor() {
         }
       }
       if (waitTiles.length === 0) waitTiles.push(entrance);
+
+      // Standing room, once the desks and the boardroom are full.
+      //
+      // claimSeat() returned null when seatTiles ran out and the null fell
+      // through to the entrance spawn point — so on a 20-agent floor every agent
+      // past the sixteenth stood on ONE tile at the door, drawn on top of each
+      // other as a single smear. The floor is mostly open walkable space; give
+      // the overflow somewhere to stand instead of nowhere. These tiles have no
+      // adjacent furniture, which facingForSeat() already handles ('up', facing
+      // away — see its final fallback).
+      //
+      // Excluded: the whole cafeteria (breaks need the break room free — the
+      // same reason it was never added as desk seating) and the wait ring (a
+      // blocked agent walking to the door must not land in someone's lap).
+      const OVERFLOW_SEAT_CAP = 96;
+      if (seatTiles.length < OVERFLOW_SEAT_CAP) {
+        const offLimits = new Set<string>(waitSeen);
+        const cafe = mapRenderer.getZone('cafeteria');
+        if (cafe) {
+          for (let y = cafe.y; y < cafe.y + cafe.height; y++) {
+            for (let x = cafe.x; x < cafe.x + cafe.width; x++) offLimits.add(`${x},${y}`);
+          }
+        }
+        for (const name of [...theme.cafeSeatNames, ...theme.cafeStands.map(([n]) => n)]) {
+          const p = mapRenderer.getSpawnPoint(name);
+          if (p) offLimits.add(`${p.x},${p.y}`);
+        }
+        // Spiral out from the last real desk so overflow gathers near the work,
+        // not in a random corner.
+        const origin = seatTiles[seatTiles.length - 1]
+          ?? { x: Math.floor(mapRenderer.width / 2), y: Math.floor(mapRenderer.height / 2) };
+        const reach = Math.max(mapRenderer.width, mapRenderer.height);
+        for (let radius = 1; radius <= reach && seatTiles.length < OVERFLOW_SEAT_CAP; radius++) {
+          for (let dy = -radius; dy <= radius && seatTiles.length < OVERFLOW_SEAT_CAP; dy++) {
+            for (let dx = -radius; dx <= radius && seatTiles.length < OVERFLOW_SEAT_CAP; dx++) {
+              if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+              const x = origin.x + dx, y = origin.y + dy;
+              if (offLimits.has(`${x},${y}`)) continue;
+              if (!mapRenderer.isWalkable(x, y)) continue;
+              addSeat({ x, y });   // addSeat dedupes against the desks already listed
+            }
+          }
+        }
+      }
 
       // Seat 0 is desk-ceo — "Michael's room" — reserved for the god agent.
       // All other workers claim seats from 1 onward.

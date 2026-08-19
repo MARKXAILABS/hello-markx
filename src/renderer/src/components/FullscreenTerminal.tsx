@@ -15,9 +15,11 @@ import { CostHud } from '@/realtime/CostHud';
 import { useStore, type Agent } from '@/store/store';
 import { usePtyParser } from '@/hooks/usePtyParser';
 import { useRestoreTeam } from '@/hooks/useRestoreTeam';
+import { useFleetTelemetry } from '@/hooks/useTelemetry';
 import { useTerminalFontSize } from './terminalFontSize';
 import { useHasTerminalDraft, disposeTerminal } from './terminalPool';
 import { useAppTheme, toggleAppTheme } from '@/design/theme';
+import { basename, groupKey, useAgentGroups } from './agentGroups';
 import type { HarnessConfig } from '@/store/config';
 
 /** Roster rail width. A fixed 232px is right on a 14" laptop but reads as a
@@ -52,81 +54,6 @@ function rosterScale(zoom: number) {
   };
 }
 
-function basename(path: string): string {
-  // Split on BOTH separators: `git:mainRepo` hands back whatever the platform
-  // uses, and a Windows `C:\work\repo` contains no '/' at all — so a '/'-only
-  // split returned the whole absolute path as the group's "name".
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-/** cwd → main-repo basename, resolved once per path and shared by every mount.
- *  An isolated agent's cwd is its own git worktree (`…/worktrees/<agent-id>`),
- *  so naming the group after that path buckets each such agent under its own id
- *  instead of the repository the user actually picked. `git:mainRepo` follows a
- *  linked worktree back to its main checkout. */
-const repoRootByCwd = new Map<string, string | null>();
-/** cwds with a lookup in flight, so a re-render can't start a second one. */
-const repoLookupsInFlight = new Set<string>();
-
-/** Which repository an agent belongs to — the ABSOLUTE root, so it is a real
- *  identity. Two unrelated checkouts can share a basename (`~/client-a/app` and
- *  `~/client-b/app`); keying groups on the name merged them into one section and
- *  let agents be dragged between two different repositories.
- *
- *  Falls back to the cwd itself until the async resolution lands, and for
- *  directories that aren't git repos at all. */
-function repoKeyOf(agent: Agent): string {
-  return repoRootByCwd.get(agent.cwd) || agent.cwd || 'unknown';
-}
-
-/** What that group is CALLED — the basename, or the project the user picked. */
-function repoLabelOf(agent: Agent): string {
-  const root = repoRootByCwd.get(agent.cwd);
-  if (root) return basename(root);
-  const project = agent.project?.trim();
-  if (project) return project;
-  return basename(agent.cwd) || 'unknown';
-}
-
-/** Resolve every distinct cwd's repository root, then re-render. Exactly one git
- *  call per distinct path, ever. */
-function useResolvedRepoNames(agents: Agent[]): number {
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    const pending = [...new Set(agents.map(a => a.cwd).filter(Boolean))]
-      // `has` (not a truthiness check) so a resolved-to-null path — a cwd that
-      // is not a git repo — counts as answered. Caching only successes meant
-      // every agent outside a repo re-asked on each pass, and this effect
-      // depends on `agents`, which the pty parser replaces on every chunk of
-      // terminal output: one such agent spawned `git rev-parse` continuously
-      // for as long as it was talking. In-flight paths are skipped too, so a
-      // re-render mid-lookup doesn't stack a second round of subprocesses.
-      .filter(cwd => !repoRootByCwd.has(cwd) && !repoLookupsInFlight.has(cwd));
-    if (pending.length === 0) return;
-    pending.forEach(cwd => repoLookupsInFlight.add(cwd));
-    void Promise.all(pending.map(async (cwd) => {
-      try {
-        repoRootByCwd.set(cwd, (await window.cth.gitMainRepo(cwd)) || null);
-      } catch {
-        // Record the failure as answered as well — retrying a path that throws
-        // is what the unbounded-subprocess bug was made of.
-        repoRootByCwd.set(cwd, null);
-      } finally {
-        repoLookupsInFlight.delete(cwd);
-      }
-    })).then(() => { if (!cancelled) setVersion(v => v + 1); });
-    return () => { cancelled = true; };
-  }, [agents]);
-  return version;
-}
-
-/** The roster section an agent lives in — god agents share one ungrouped
- *  section, everyone else groups by repository. */
-function groupKey(agent: Agent): string {
-  return agent.isGod ? '__god__' : repoKeyOf(agent);
-}
-
 /** Drag-reorder wiring handed down to each row. */
 interface RowDrag {
   dragId: string | null;
@@ -152,6 +79,10 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
   const select = useStore(s => s.select);
   const setAddAgentOpen = useStore(s => s.setAddAgentOpen);
   const addAgentOpen = useStore(s => s.addAgentOpen);
+  const ideOpen = useStore(s => s.ideOpen);
+  // Per-agent spend, so the roster row carries the same figure as the floor card
+  // and the Command Center row (#39).
+  const { samples } = useFleetTelemetry();
   const setAgentNote = useStore(s => s.setAgentNote);
   const updateAgent = useStore(s => s.updateAgent);
   // The floor strip (and with it the restore button) is hidden behind the
@@ -162,7 +93,6 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
   const agent = agents.find(a => a.id === fullscreenAgentId);
   const parser = usePtyParser(agent?.id ?? '__none__');
 
-  const repoVersion = useResolvedRepoNames(agents);
   const scale = rosterScale(useTerminalFontSize());
 
   // Drag-to-reorder, same as the floor strip (native HTML5 DnD, no dep). A plain
@@ -204,40 +134,29 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
     end: () => { setDragId(null); setOverId(null); }
   };
 
-  // Roster: god agents first and ungrouped, everyone else bucketed by repo.
-  // Insertion order is preserved inside each bucket (it's the user's own
-  // drag-reorder from the floor strip) and buckets appear in first-seen order,
-  // so the list doesn't reshuffle as statuses change.
-  const { gods, groups } = useMemo(() => {
-    const godList: Agent[] = [];
-    // Keyed by absolute repo root (identity); the label is carried alongside so
-    // two same-named repos stay two groups but still read by name.
-    const byRepo = new Map<string, { label: string; members: Agent[] }>();
-    for (const a of agents) {
-      if (a.isGod) { godList.push(a); continue; }
-      const key = repoKeyOf(a);
-      const bucket = byRepo.get(key);
-      if (bucket) bucket.members.push(a);
-      else byRepo.set(key, { label: repoLabelOf(a), members: [a] });
-    }
-    return { gods: godList, groups: [...byRepo.entries()] };
-    // repoVersion: rebucket once the async main-repo lookups land.
-  }, [agents, repoVersion]);
+  // Roster: god agents first and ungrouped, everyone else bucketed by repo —
+  // the same buckets the floor strip shows (see components/agentGroups.ts).
+  const { gods, groups } = useAgentGroups(agents);
 
   // Esc exits fullscreen
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        // A modal above fullscreen owns the interaction until it closes. Without
-        // this guard, Esc from the Add Agent form unexpectedly exits fullscreen.
-        if (addAgentOpen) return;
+        // Anything ABOVE fullscreen owns the interaction until it closes:
+        // without this, Esc from the Add Agent form also exited fullscreen, and
+        // Esc in the IDE closed the editor and the fullscreen view together.
+        // (The IDE deliberately keeps its own handler on the bubble phase so
+        // Monaco gets first refusal on Escape — which is exactly why the guard
+        // has to live HERE rather than there. It also covers a dirty IDE that
+        // declines to close: fullscreen must not exit out from under it.)
+        if (addAgentOpen || ideOpen) return;
         e.preventDefault();
         setFullscreen(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [addAgentOpen, setFullscreen]);
+  }, [addAgentOpen, ideOpen, setFullscreen]);
 
   // The fullscreened agent can vanish underneath us — killed, archived, or its
   // floor closed. Leaving fullscreen is a store write, and this used to happen
@@ -418,9 +337,10 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                 onNoteChange={(note) => setAgentNote(a.id, note)}
                 drag={drag}
                 scale={scale}
+                usd={samples[a.id]?.usd}
               />
             ))}
-            {groups.map(([repoKey, { label, members }]) => (
+            {groups.map(({ key: repoKey, label, members }) => (
               // Repos are the roster's real structure, so they get real
               // separation — a hairline plus air above, not just a label.
               <div key={repoKey} style={{ marginTop: 16, paddingTop: 10, borderTop: '1px solid var(--cth-ink-300)' }}>
@@ -454,6 +374,7 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                     onNoteChange={(note) => setAgentNote(a.id, note)}
                     drag={drag}
                     scale={scale}
+                    usd={samples[a.id]?.usd}
                   />
                 ))}
               </div>
@@ -623,7 +544,8 @@ function SidebarRow({
   onClick,
   onNoteChange,
   drag,
-  scale
+  scale,
+  usd
 }: {
   agent: Agent;
   active: boolean;
@@ -631,8 +553,10 @@ function SidebarRow({
   onNoteChange: (note: string) => void;
   drag: RowDrag;
   scale: ReturnType<typeof rosterScale>;
+  /** Estimated USD burned so far — same number the floor card shows. */
+  usd?: number;
 }) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  const buttonRef = useRef<HTMLDivElement>(null);
   const noteRef = useRef<HTMLDivElement>(null);
   const [notePosition, setNotePosition] = useState<{ left: number; top: number } | null>(null);
 
@@ -671,8 +595,18 @@ function SidebarRow({
 
   return (
     <>
-      <button
+      {/* A <div role="button">, not a <button>: the row carries the ✎ note
+          control, and interactive content inside a <button> is invalid HTML —
+          the parser closes the outer button early and screen readers flatten
+          the pair into one control. Keyboard behaviour is preserved below. */}
+      <div
         ref={buttonRef}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return; // the ✎ is handling it
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(); }
+        }}
         draggable
         onDragStart={(e) => { drag.start(agent.id); e.dataTransfer.effectAllowed = 'move'; }}
         onDragOver={(e) => {
@@ -733,18 +667,15 @@ function SidebarRow({
                 agent with a draft on its prompt is not idle-and-free, it is
                 idle-and-held, and nothing else on screen said so. */}
             <PixelBadge status={typing ? 'typing' : agent.status} />
-            {/* Explicit note edit — a real control instead of a hover surprise.
-                A span, not a <button>: we're inside the row's button element. */}
-            <span
-              role="button"
-              tabIndex={0}
+            {/* Explicit note edit — a real control instead of a hover surprise,
+                and now a real <button> (the row above is no longer one). */}
+            <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); toggleEditor(); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); toggleEditor(); }
-              }}
               title={agent.note ? 'Edit private note' : 'Add private note'}
               aria-label={`Edit note for ${agent.name}`}
               style={{
+                border: 'none', padding: 0,
                 flexShrink: 0, width: 20, height: 20,
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 12, lineHeight: 1, color: 'var(--cth-ink-500)',
@@ -752,7 +683,7 @@ function SidebarRow({
                 boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
                 cursor: 'pointer'
               }}
-            >✎</span>
+            >✎</button>
           </div>
           {/* WHAT this agent is, at a glance. The roster used to carry only a
               name, a portrait and a status dot — enough to tell rows apart, not
@@ -777,6 +708,15 @@ function SidebarRow({
             }} title={agent.worktreePath || agent.cwd}>
               {basename(agent.worktreePath || agent.cwd) || agent.project}
             </span>
+            {!!usd && usd > 0 && (
+              <>
+                <span style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
+                <span
+                  title={`Estimated spend so far: $${usd.toFixed(2)}`}
+                  style={{ flexShrink: 0, fontFamily: 'var(--cth-font-mono)' }}
+                >${usd.toFixed(2)}</span>
+              </>
+            )}
           </div>
           <ContextBar tokens={agent.contextTokens} limit={agent.contextLimit} accent={agent.accent} />
           {/* Every line of every agent, always on screen — the roster's job is
@@ -809,7 +749,7 @@ function SidebarRow({
             )}
           </div>
         </div>
-      </button>
+      </div>
       {notePosition && createPortal(
         <>
         {/* click-away backdrop — the editor stays until dismissed on purpose */}

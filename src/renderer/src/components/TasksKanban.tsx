@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PixelPanel } from './PixelPanel';
+import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { Icon } from './Icon';
@@ -306,17 +306,17 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
     .filter((t): t is HiveTask => !!t);
   const created = new Date(task.createdAt);
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 280,
-        background: 'rgba(26, 19, 32, 0.6)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24
-      }}
+    <Modal
+      title="TASK"
+      onClose={onClose}
+      zIndex={280}
+      backdrop="rgba(26, 19, 32, 0.6)"
+      width={720}
+      maxWidth="94vw"
+      frameStyle={{ maxHeight: '90vh', display: 'flex' }}
+      panelStyle={{ display: 'flex', flexDirection: 'column', width: '100%', minHeight: 0 }}
     >
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 720, maxWidth: '94vw', maxHeight: '90vh', display: 'flex' }}>
-        <PixelPanel variant="dialog" title="TASK" noPadding style={{ display: 'flex', flexDirection: 'column', width: '100%', minHeight: 0 }}>
-          <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0, overflowY: 'auto' }}>
+      <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0, overflowY: 'auto' }}>
             {/* Title under a status-colored bar */}
             <div style={{ borderLeft: `4px solid ${col.accent}`, paddingLeft: 8 }}>
               <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 15, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
@@ -425,11 +425,9 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
                 </span>
               </PixelButton>
               <PixelButton variant="ghost" size="sm" onClick={onClose}>close</PixelButton>
-            </div>
-          </div>
-        </PixelPanel>
+        </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

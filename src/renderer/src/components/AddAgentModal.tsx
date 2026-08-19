@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { PixelPanel } from './PixelPanel';
+import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
 import { SpritePortrait } from './SpritePortrait';
 import { Icon } from './Icon';
@@ -250,18 +250,9 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     } catch { /* clipboard blocked — the textarea below is selectable as a fallback */ }
   };
 
-  // Close only the modal on Esc. Capture prevents the fullscreen terminal's
-  // window-level handler from also closing the view underneath.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  // Escape / backdrop dismissal (and the capture-phase trick that keeps the
+  // fullscreen terminal's own Escape from firing underneath) now live in
+  // <Modal>, together with the discard guard this eleven-field form needed.
 
   // Zero-step resume: when a session id is entered, look up the cwd it originally
   // ran in (from the transcript) and pre-fill the Folder so the user doesn't have
@@ -446,24 +437,21 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   };
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(26, 19, 32, 0.6)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        // Must sit above fullscreen terminal/file overlays (250/280) and their
-        // hover popovers. The fullscreen Add Agent button uses this same modal.
-        zIndex: 500
-      }}
+    <Modal
+      title="ADD AGENT"
+      onClose={onClose}
+      // The whole point of #21: eleven fields, and a backdrop click used to bin
+      // them without a word.
+      guardUnsaved
+      locked={busy}
+      backdrop="rgba(26, 19, 32, 0.6)"
+      // Must sit above fullscreen terminal/file overlays (250/280) and their
+      // hover popovers. The fullscreen Add Agent button uses this same modal.
+      zIndex={500}
+      width={940}
+      maxWidth="95vw"
+      panelStyle={{ padding: 16 }}
     >
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 940, maxWidth: '95vw' }}>
-        <PixelPanel
-          variant="dialog"
-          title="ADD AGENT"
-          style={{ padding: 16 }}
-          noPadding
-        >
           {/* Sectioned config with a left sidebar index. The form has 11+ fields,
               so they're grouped into 4 sections (Identity / Workspace / Engine /
               Briefing) shown one at a time; the sidebar jumps between them. The
@@ -1082,9 +1070,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               </PixelButton>
             </div>
           </div>
-        </PixelPanel>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

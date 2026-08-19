@@ -81,9 +81,17 @@ input, textarea, [contenteditable='true'] {
 /* Pixel-snapping for any rasterised content */
 canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
 
-/* Focus ring — 2px outer offset, ink */
+/* Focus ring — 2px ink, 2px outer offset.
+   It used to be 1px of `ink-300`, which is the BORDER token: deliberately held
+   at just over 3:1 so a hairline reads without shouting. That is the floor for a
+   non-text graphic, and a focus ring is the one graphic a keyboard user has to
+   find instantly, on top of whatever surface the control already sits on — at
+   1px it was indistinguishable from the control's own border. `ink-900` is the
+   text ramp (10.9-13:1 dark, near-black on cream), and the 2px offset keeps the
+   ring on the surrounding surface rather than on a filled button, so it never
+   has to fight a primary button's own ink-900 fill. */
 :focus-visible {
-  outline: 1px solid var(--cth-ink-300);
+  outline: 2px solid var(--cth-ink-900);
   outline-offset: 2px;
 }
 
