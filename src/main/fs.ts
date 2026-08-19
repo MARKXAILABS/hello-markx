@@ -274,14 +274,21 @@ export function normalizeHiveHome(
   prior: readonly string[] = [],
   cap = 8
 ): { home: string; recentHives: string[] } {
+  // Dedup KEY is case-folded on win32; the stored value keeps its original casing.
+  // Windows paths are case-insensitive, so C:\Users\Me\Hive and c:\users\me\hive are
+  // one directory and must not both sit in the recent list. isWithinRoots above already
+  // relies on `relative()` being case-insensitive on win32 — this call site simply was
+  // not following the rule the rest of the file does. Folding only the key means the
+  // launch picker still shows the path the way the user typed it.
+  const key = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
   const abs = expandTilde(home);
-  const seen = new Set<string>([abs]);
+  const seen = new Set<string>([key(abs)]);
   const recentHives = [abs];
   for (const h of prior) {
     if (typeof h !== 'string' || !h.trim()) continue;
     const e = expandTilde(h);
-    if (seen.has(e)) continue;
-    seen.add(e);
+    if (seen.has(key(e))) continue;
+    seen.add(key(e));
     recentHives.push(e);
   }
   return { home: abs, recentHives: recentHives.slice(0, cap) };
