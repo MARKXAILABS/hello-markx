@@ -147,13 +147,17 @@ export function usePtyParser(agentId: string) {
     // Not running → a genuine approval/question prompt is on screen.
     const recent = text.slice(-400);
     if (BLOCK_HINTS.some(re => re.test(recent))) {
-      // Only the god agent talks to the human, so only it is truly "blocked"
-      // (needs you). A sub-agent sitting at a prompt is autonomous — it reads as
-      // "waiting" and we don't raise a human-approval card for it.
+      // A prompt on screen is a full stop for whoever is sitting at it, so BOTH
+      // branches are 'blocked'. A sub-agent used to be downgraded to 'waiting',
+      // which is also the status for "parked with nothing to do" — so a worker
+      // stuck on "Do you want to proceed?" looked exactly like a spare one (#12).
+      // Only the god escalates to the HUMAN; a sub-agent is parked on Michael,
+      // and that difference is `waitingOnGod`, not a weaker status.
       const isGod = !!useStore.getState().agents.find((a) => a.id === agentId)?.isGod;
       if (isGod) {
         updateAgent(agentId, {
           status: 'blocked',
+          waitingOnGod: false,
           action: 'waiting on you',
           description: 'waiting on you',
           currentStation: 'mailbox',
@@ -168,11 +172,19 @@ export function usePtyParser(agentId: string) {
         });
       } else {
         updateAgent(agentId, {
-          status: 'waiting',
+          status: 'blocked',
+          waitingOnGod: true,
           action: 'waiting on god',
           description: 'waiting on god',
           currentStation: 'desk',
-          blockReason: undefined
+          blockReason: {
+            summary: 'Waiting on Michael',
+            detail: 'A permission prompt is open in this agent\'s terminal. Michael normally answers it — approve it here if he is stuck.',
+            actions: [
+              { label: 'Approve', kind: 'approve', send: 'y\r' },
+              { label: 'Deny',    kind: 'deny',    send: 'n\r' }
+            ]
+          }
         });
       }
       return;

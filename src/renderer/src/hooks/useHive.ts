@@ -85,6 +85,29 @@ async function waitForTerminalReady(
 }
 
 /**
+ * Scrub text on its way into a live TUI. The single trust boundary for #2.
+ *
+ * The bracketed-paste wrap in `submitToPty` is a FENCE, not a boundary the
+ * sender may move. A body carrying the literal bytes ESC[201~ closes the paste
+ * early, and everything after it arrives as KEYSTROKES — including "\r", which
+ * submits. Hive text is written by other agents, by Slack and by webhook
+ * `message` bodies, so this is untrusted input: into a coding CLI that is
+ * prompt injection wearing the human's face, and into a custom-command shell it
+ * is direct command execution. It defeats the whole "who may type into a
+ * terminal" model in docs/message-queue.md.
+ *
+ * So: drop both paste markers, then every C0 control except the "\n" and "\t"
+ * that real multi-line mail legitimately contains. "\r" goes with them — the
+ * submit is ours to send, never the message's. Nothing else is touched: an
+ * over-eager filter that mangles ordinary agent mail is its own bug.
+ */
+export function sanitizePtyText(text: string): string {
+  return text
+    .replace(/\x1b\[20[01]~/g, '')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+}
+
+/**
  * Type a line into an agent's Claude Code TUI and actually submit it.
  *
  * Writing the text and the carriage return in a single chunk makes the TUI
@@ -115,7 +138,10 @@ function submitToPty(
     // stray "\n" doesn't submit early (#24). Single-line text (nudges, slash
     // commands) is sent raw — some TUIs (Antigravity's agy) treat the paste
     // markers as literal input and never submit, so skipping them is more robust.
-    const payload = text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text;
+    // Sanitise BEFORE the wrap and before the multi-line test — the body decides
+    // neither where the paste ends nor when Enter is pressed (#2).
+    const clean = sanitizePtyText(text);
+    const payload = clean.includes('\n') ? `\x1b[200~${clean}\x1b[201~` : clean;
     // writePty NEVER rejects for a dead pty — it resolves { ok:false, error:
     // 'no pty: …' } — so an unchecked await here made every failed delivery look
     // successful (the queue-drain then destroyed the message it had already
@@ -359,7 +385,10 @@ export function useHive(config: HarnessConfig | null): void {
         }
       });
       if (cancelled) { godSpawning.current = false; return; }
-      if (!res.ok) { godSpawning.current = false; useStore.getState().setGodStatus('failed'); return; }
+      // Keep the reason. 'failed' on its own renders as a friendly "EMPTY FLOOR"
+      // with nothing to act on, and the usual cause is a CLI the user picked in
+      // onboarding but never installed — which the error says verbatim (#12).
+      if (!res.ok) { godSpawning.current = false; useStore.getState().setGodStatus('failed', res.error); return; }
       // The pool may have resolved `auto` / swapped a cooling pin: keep the
       // config pin in step so the engine row + the next boot agree with main.
       if (godProvider === 'claude' && res.account !== config.godAccount) {
@@ -487,9 +516,12 @@ export function useHive(config: HarnessConfig | null): void {
           || msg.includes('confirm')
           || msg.includes('needs your');
         if (needsHuman && !idleWaiting) {
-          // Only the god agent escalates to the human; sub-agents are autonomous
-          // and read as "waiting" (parked on god, not on you).
-          updateAgent(e.agentId, { status: self.isGod ? 'blocked' : 'waiting' });
+          // A permission prompt is a full stop for whoever is sitting at it, so
+          // BOTH get 'blocked'. Sub-agents used to be downgraded to 'waiting' —
+          // which also means "parked, nothing to do", so a stuck worker was
+          // indistinguishable from a spare one (#12). WHO it is parked on is a
+          // separate flag: only the god escalates to the human.
+          updateAgent(e.agentId, { status: 'blocked', waitingOnGod: !self.isGod });
         } else {
           // Idle notification — responded, nothing to do. Linger, don't flag.
           updateAgent(e.agentId, { status: 'idle', action: 'idle', carrying: undefined });
@@ -511,6 +543,28 @@ export function useHive(config: HarnessConfig | null): void {
         updateAgent(s.agentId, { status: 'looping', action: s.reason || 'breaker armed', carrying: undefined });
       }
       // 'healthy'/'steering' clear the pin; the next hook event refreshes status.
+    });
+  }, []);
+
+  // 2b2) Operator-gated tool calls (#7C.1). Main denies the call at the
+  //      PreToolUse boundary and reports it here — and nothing had ever
+  //      subscribed, so a gated tool was invisible on the floor (#12). Record it
+  //      as the agent's blockReason so the detail panel can name WHICH tool was
+  //      refused and why. `status` is deliberately left alone: the deny is
+  //      instant and the agent keeps running, and the PreToolUse hook event that
+  //      follows this on the same boundary would overwrite it anyway.
+  useEffect(() => {
+    return window.cth.onApprovalRequest(({ agentId, tool, reason }) => {
+      const { updateAgent, agents, pushFeed } = useStore.getState();
+      if (!agents.some((a) => a.id === agentId)) return;
+      updateAgent(agentId, {
+        blockReason: {
+          summary: `${tool ?? 'A tool'} was blocked`,
+          detail: reason ?? 'Denied by operator policy — ungate it from the Command Center to let this agent continue.',
+          actions: []
+        }
+      });
+      pushFeed(agentId, `\x1b[31m⛔ ${tool ?? 'tool'} blocked\x1b[0m ${reason ?? ''}`);
     });
   }, []);
 
