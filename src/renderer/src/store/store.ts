@@ -7,6 +7,7 @@ import type { AgentProvider } from '@shared/agentProvider';
 import type { HireManifest } from '@shared/hire';
 import { DEFAULT_ORG_TRIGGER, type OrgTriggerConfig, type WebhookTrigger } from '@shared/triggers';
 import { isCompactionCommand } from '@shared/providerAutomation';
+import { patchChangesAgent, touchesDurableAgentField } from './agentPatch';
 
 export type ToolKind =
   | 'Read' | 'Edit' | 'Write' | 'Bash' | 'WebFetch' | 'WebSearch'
@@ -405,20 +406,6 @@ function persistAgents(agents: Agent[], selectedId: string | null): void {
   scheduleRosterFlush();
 }
 
-/** Run-state an agent recomputes from its live pty on every reload. A patch made
- *  only of these is not worth a localStorage write; anything else is. Listed as
- *  the volatile set rather than the durable set on purpose — a new durable field
- *  then persists by default instead of being silently dropped. */
-const VOLATILE_AGENT_FIELDS = new Set<keyof Agent>([
-  'status', 'action', 'progress', 'currentStation', 'carrying',
-  'recentAssistantText', 'recentTextTs', 'blockReason',
-  'contextTokens', 'contextLimit', 'lastPrompt'
-]);
-
-function touchesDurableAgentField(patch: Partial<Agent>): boolean {
-  return Object.keys(patch).some((k) => !VOLATILE_AGENT_FIELDS.has(k as keyof Agent));
-}
-
 /** The persisted list for one slice: the shared file when it has a roster,
  *  otherwise this origin's localStorage. Returns [] on anything malformed. */
 function persistedSlice(
@@ -588,6 +575,9 @@ if (!useFileRoster && rosterMirror.agents.length + rosterMirror.archived.length 
   scheduleRosterFlush();
 }
 
+/** Lines kept per agent feed. See `pushFeed`. */
+const FEED_MAX = 200;
+
 let queuedSeq = 0;
 /** Process-unique id for a queued message (timestamp + counter avoids collisions
  *  when several are queued within the same millisecond). */
@@ -623,6 +613,12 @@ export const useStore = create<State>((set) => ({
   select: (id) => set((s) => { persistAgents(s.agents, id); return { selectedId: id, ccTabRequest: null }; }),
   updateAgent: (id, patch) =>
     set((s) => {
+      // A patch that asserts what the agent already says is a no-op, and a
+      // no-op must not notify: this is the pty parser's per-chunk write, and
+      // reallocating `agents` for it re-rendered every subscriber tree in the
+      // app dozens of times a second while nothing on screen changed (#20).
+      const current = s.agents.find((a) => a.id === id);
+      if (!current || !patchChangesAgent(current, patch)) return s;
       const agents = s.agents.map(a => a.id === id ? { ...a, ...patch } : a);
       // Persist only when something DURABLE changed. `updateAgent` is also the
       // pty parser's per-chunk write (status/action/progress), so persisting
@@ -640,7 +636,13 @@ export const useStore = create<State>((set) => ({
       return { agents };
     }),
   pushFeed: (id, line) =>
-    set((s) => ({ feeds: { ...s.feeds, [id]: [...(s.feeds[id] ?? []), line] } })),
+    set((s) => {
+      // Bounded: a feed grew for the life of the window, one entry per tool line
+      // per agent, and nothing ever trimmed it (#20). The tail is the only part
+      // any reader would want.
+      const next = [...(s.feeds[id] ?? []), line];
+      return { feeds: { ...s.feeds, [id]: next.length > FEED_MAX ? next.slice(-FEED_MAX) : next } };
+    }),
   addAgent: (agent) =>
     set((s) => {
       // Idempotent by id: a MAIN-initiated spawn broadcast (hive:agentSpawned, e.g.

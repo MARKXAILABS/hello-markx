@@ -33,6 +33,12 @@ import {
   type TerminalAutomationBlock
 } from './terminalAutomation';
 import { sanitizeTerminalSelection } from './terminalSelection';
+import {
+  orphanedTerminalIds,
+  terminalsToEvict,
+  TERMINAL_POOL_MAX,
+  type PooledTerminal
+} from '@/store/terminalPoolPolicy';
 import '@xterm/xterm/css/xterm.css';
 
 export interface TerminalEntry {
@@ -70,10 +76,23 @@ export interface TerminalEntry {
    * the OLD process carry the generation they were registered under, so they can
    * be recognised and dropped instead of corrupting the replacement. */
   generation: number;
+  /** epoch ms of the last `acquireTerminal` — the LRU clock for the pool cap. */
+  lastUsedAt: number;
   webgl?: WebglAddon;
 }
 
 const pool = new Map<string, TerminalEntry>();
+
+/** The pool as the eviction policy sees it. `host.parentElement` is the honest
+ *  test for "a view is showing this right now" — attachTerminal parents it and
+ *  detachTerminal unparents it, so nothing else has to be kept in step. */
+function poolSnapshot(): PooledTerminal[] {
+  return [...pool.values()].map((e) => ({
+    ptyId: e.ptyId,
+    lastUsedAt: e.lastUsedAt,
+    attached: !!e.host.parentElement
+  }));
+}
 
 type ThemeMap = Record<string, string>;
 
@@ -81,7 +100,10 @@ type ThemeMap = Record<string, string>;
  *  only used at creation; an attaching view re-applies its own afterwards. */
 export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14): TerminalEntry {
   const existing = pool.get(ptyId);
-  if (existing) return existing;
+  if (existing) {
+    existing.lastUsedAt = Date.now();
+    return existing;
+  }
 
   const host = document.createElement('div');
   host.style.width = '100%';
@@ -96,7 +118,10 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
     lineHeight: 1.0,
     cursorBlink: true,
     cursorStyle: 'block',
-    scrollback: 100000,
+    // 100_000 lines is ~40-150 MB of buffer PER TERMINAL, and the pool keeps one
+    // terminal per agent alive for the session (#20). 20_000 is still far more
+    // scrollback than anyone reads back through, at a fifth of the memory.
+    scrollback: 20000,
     // Guarantee legible text no matter what colors a running program sets.
     // When a program paints a coloured cell background (e.g. a git-diff add line
     // with a green bg, or a yellow-highlighted line) while leaving the default
@@ -136,7 +161,8 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
     inputDirtyAt: 0,
     automationSettleUntil: 0,
     lineBuf: '',
-    generation: 0
+    generation: 0,
+    lastUsedAt: Date.now()
   };
 
   // Subscribe to the pty stream ONCE for the terminal's whole lifetime, so the
@@ -286,7 +312,30 @@ export function acquireTerminal(ptyId: string, theme?: ThemeMap, fontSize = 14):
   });
 
   pool.set(ptyId, entry);
+  // Bound the pool (#20). Nothing ever did, so a session that churned agents
+  // kept every terminal it had ever opened — each holding its scrollback, its
+  // host element and a live pty subscription. Only detached terminals are
+  // eligible, and never the one we are about to hand back.
+  for (const stale of terminalsToEvict(poolSnapshot(), TERMINAL_POOL_MAX, ptyId)) {
+    disposeTerminal(stale);
+  }
   return entry;
+}
+
+/**
+ * Dispose every pooled terminal whose pty has left the roster, and report what
+ * went. The two paths that drop an agent — the archive broadcast and the
+ * startup reconcile of dead ptys — both left its terminal in the pool forever
+ * (#20); sweeping against the live roster covers both, and any third path.
+ *
+ * Safe against a kill→respawn under the SAME pty id (Restart & Continue,
+ * auto-revive, an account switch): the agent never leaves the roster during
+ * one, so its terminal is never a candidate.
+ */
+export function disposeOrphanedTerminals(livePtyIds: Iterable<string>): string[] {
+  const orphans = orphanedTerminalIds(poolSnapshot(), livePtyIds);
+  for (const id of orphans) disposeTerminal(id);
+  return orphans;
 }
 
 /** Whether queued automation can safely own this terminal's input line. A PTY
