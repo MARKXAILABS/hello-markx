@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Hello MarkX Floor Inspection</title>
+<meta name="description" content="Audit of the Hello MarkX codebase (formerly the munder-difflin fork) at commit 1ad9638: ranked weaknesses with file:line evidence, fixes, and a three-horizon roadmap.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Press+Start+2P&display=swap">
+<style>
+  :root {
+    --paper: #FCFAF0;
+    --paper-2: #F4EFDD;
+    --ink: #1A1320;
+    --ink-2: #3D2E4A;
+    --ink-3: #6B5878;
+    --line: #D9CFE0;
+    --line-strong: #1A1320;
+    --brand: #6E1423;
+    --brand-ink: #FFF8E7;
+    --gold: #F4D35E;
+    --gold-ink: #1A1320;
+    --crit: #B3261E;
+    --high: #D9822B;
+    --med: #DCAB3C;
+    --low: #6D87D6;
+    --good: #5CA97A;
+    --on-dark: #FFFFFF;
+    --on-light: #1A1320;
+    --code-bg: #EFE9D4;
+    --shadow: #1A1320;
+    --link: #6E1423;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #1A1320;
+      --paper-2: #241A2C;
+      --ink: #F4E9C7;
+      --ink-2: #E3D8C4;
+      --ink-3: #B4A6C0;
+      --line: #3D2E4A;
+      --line-strong: #B4A6C0;
+      --brand: #7A1A2C;
+      --brand-ink: #FFF8E7;
+      --gold: #F4D35E;
+      --gold-ink: #1A1320;
+      --crit: #D9453A;
+      --high: #E0903F;
+      --med: #DCAB3C;
+      --low: #7F98E0;
+      --good: #6DBA8B;
+      --code-bg: #2B2135;
+      --shadow: #0D0910;
+      --link: #F0B4BE;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #1A1320;
+    --paper-2: #241A2C;
+    --ink: #F4E9C7;
+    --ink-2: #E3D8C4;
+    --ink-3: #B4A6C0;
+    --line: #3D2E4A;
+    --line-strong: #B4A6C0;
+    --brand: #7A1A2C;
+    --brand-ink: #FFF8E7;
+    --gold: #F4D35E;
+    --gold-ink: #1A1320;
+    --crit: #D9453A;
+    --high: #E0903F;
+    --med: #DCAB3C;
+    --low: #7F98E0;
+    --good: #6DBA8B;
+    --code-bg: #2B2135;
+    --shadow: #0D0910;
+    --link: #F0B4BE;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  code, pre, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+  }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 0; }
+  pre { background: var(--code-bg); padding: 14px 16px; overflow-x: auto; border: 1px solid var(--line); margin: 0; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  .eyebrow {
+    font-family: "Press Start 2P", "IBM Plex Mono", monospace;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    line-height: 1.6;
+    color: var(--brand);
+    margin: 0 0 10px;
+  }
+  h1, h2, h3, h4 { text-wrap: balance; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 28px; line-height: 1.2; margin-bottom: 10px; }
+  h3 { font-size: 18px; line-height: 1.3; }
+  p { margin: 0 0 14px; }
+  .measure { max-width: 68ch; }
+
+  /* Header band */
+  .band {
+    background: var(--brand);
+    color: var(--brand-ink);
+    padding: 56px 24px 44px;
+  }
+  .band .inner { max-width: 1080px; margin: 0 auto; }
+  .band .eyebrow { color: var(--gold); margin-bottom: 18px; }
+  .band h1 { font-size: clamp(30px, 4.2vw, 46px); line-height: 1.1; color: var(--brand-ink); }
+  .band .lede { font-size: 18px; line-height: 1.5; max-width: 62ch; margin: 18px 0 0; opacity: 0.95; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px 96px; }
+
+  /* Meta sheet */
+  .sheet {
+    margin-top: -22px;
+    background: var(--paper-2);
+    border: 2px solid var(--line-strong);
+    box-shadow: 5px 5px 0 var(--shadow);
+    padding: 22px 24px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 18px 28px;
+  }
+  .sheet dt {
+    font-family: "Press Start 2P", monospace;
+    font-size: 8px;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    margin-bottom: 8px;
+  }
+  .sheet dd { margin: 0; font-size: 15px; line-height: 1.45; }
+  .sheet dd .mono { font-size: 13px; }
+
+  section { margin-top: 72px; }
+  section > .lead { font-size: 17px; color: var(--ink-2); }
+
+  /* Contents */
+  .toc { columns: 2; column-gap: 40px; padding: 0; margin: 0; list-style: none; max-width: 760px; }
+  .toc li { break-inside: avoid; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .toc a { text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc .n { display: inline-block; min-width: 2.2em; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+  /* Verdict tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-top: 22px; }
+  .tile {
+    background: var(--paper-2);
+    border: 2px solid var(--line-strong);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 16px 18px 18px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .tile .k { font-family: "Press Start 2P", monospace; font-size: 8px; letter-spacing: 0.08em; color: var(--ink-3); }
+  .tile .v { font-size: 15px; line-height: 1.45; }
+  .tile .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .tile .name { font-weight: 600; font-size: 17px; }
+
+  /* Severity pills */
+  .pill {
+    display: inline-block;
+    font-family: "Press Start 2P", monospace;
+    font-size: 8px;
+    letter-spacing: 0.04em;
+    padding: 5px 7px 4px;
+    line-height: 1;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  .pill.crit { background: var(--crit); color: var(--on-dark); }
+  .pill.high { background: var(--high); color: var(--on-dark); }
+  .pill.med  { background: var(--med);  color: var(--on-light); }
+  .pill.low  { background: var(--low);  color: var(--on-dark); }
+  .pill.good { background: var(--good); color: var(--on-dark); }
+  .pill.mixed { background: var(--gold); color: var(--gold-ink); }
+  .pill.weak  { background: var(--high); color: var(--on-dark); }
+  .pill.strong { background: var(--good); color: var(--on-dark); }
+  .pill.neutral { background: var(--line); color: var(--ink); }
+
+  /* Count strip */
+  .counts { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 18px; align-items: center; }
+  .counts .c { display: inline-flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+  .counts .c b { font-size: 26px; font-weight: 700; line-height: 1; }
+
+  /* Finding cards */
+  .findings { display: flex; flex-direction: column; gap: 20px; margin-top: 22px; }
+  .finding {
+    background: var(--paper-2);
+    border: 2px solid var(--line-strong);
+    box-shadow: 4px 4px 0 var(--shadow);
+    padding: 18px 20px 20px;
+  }
+  .finding .head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 12px; }
+  .finding .id { font-family: "Press Start 2P", monospace; font-size: 9px; color: var(--ink-3); letter-spacing: 0.06em; }
+  .finding h3 { flex: 1 1 320px; }
+  .finding dl { margin: 0; display: grid; grid-template-columns: 108px 1fr; gap: 8px 16px; }
+  .finding dt { font-family: "Press Start 2P", monospace; font-size: 8px; letter-spacing: 0.08em; color: var(--ink-3); padding-top: 5px; }
+  .finding dd { margin: 0; font-size: 15px; line-height: 1.5; }
+  .finding dd p { margin: 0 0 6px; }
+  .finding .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .tag { font-size: 12px; padding: 2px 8px; border: 1px solid var(--line-strong); color: var(--ink-2); }
+  .tag.ok { border-color: var(--good); }
+  @media (max-width: 640px) {
+    .finding dl { grid-template-columns: 1fr; gap: 4px; }
+    .finding dt { padding-top: 8px; }
+    .toc { columns: 1; }
+  }
+
+  /* Tables */
+  .scroll { overflow-x: auto; border: 2px solid var(--line-strong); box-shadow: 4px 4px 0 var(--shadow); background: var(--paper-2); margin-top: 20px; }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 14px; }
+  th {
+    font-family: "Press Start 2P", monospace; font-size: 8px; letter-spacing: 0.08em; text-align: left;
+    color: var(--ink-3); padding: 12px 12px 10px; border-bottom: 2px solid var(--line-strong);
+    background: var(--paper-2); position: sticky; top: 0;
+  }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.45; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td .mono { font-size: 12.5px; }
+  .yes { color: var(--good); font-weight: 600; }
+  .part { color: var(--high); font-weight: 600; }
+  .no { color: var(--crit); font-weight: 600; }
+
+  /* Roadmap */
+  .horizon { margin-top: 34px; }
+  .horizon h3 { font-size: 20px; margin-bottom: 6px; }
+  .horizon .why { color: var(--ink-2); margin-bottom: 14px; }
+  ol.road { list-style: none; counter-reset: road; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+  ol.road > li {
+    counter-increment: road;
+    display: grid; grid-template-columns: 44px 1fr; gap: 0 14px;
+    background: var(--paper-2); border: 2px solid var(--line-strong); box-shadow: 3px 3px 0 var(--shadow);
+    padding: 14px 16px 14px 12px;
+  }
+  ol.road > li::before {
+    content: counter(road);
+    font-family: "Press Start 2P", monospace; font-size: 12px; color: var(--brand);
+    padding-top: 3px; font-variant-numeric: tabular-nums;
+  }
+  ol.road .t { font-weight: 600; font-size: 16px; margin-bottom: 4px; }
+  ol.road .d { font-size: 14.5px; color: var(--ink-2); }
+  ol.road .m { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12.5px; color: var(--ink-3); }
+  ol.road .m .mono { font-size: 12px; }
+
+  /* Good list */
+  ul.good { padding-left: 0; list-style: none; margin: 18px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  ul.good li { border: 1px solid var(--line); padding: 12px 14px; background: var(--paper-2); font-size: 14.5px; line-height: 1.45; }
+  ul.good li b { display: block; margin-bottom: 4px; }
+
+  .note { border-left: 4px solid var(--gold); padding: 10px 16px; background: var(--paper-2); margin: 18px 0; }
+  .foot { margin-top: 72px; padding-top: 18px; border-top: 2px solid var(--line-strong); color: var(--ink-3); font-size: 13px; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  html { scroll-behavior: smooth; }
+</style>
+<style>
+  body { min-height: 100vh; }
+  ::selection { background: var(--gold); color: var(--gold-ink); }
+</style>
+</head>
+<body>
+<header class="band">
+  <div class="inner">
+    <p class="eyebrow">Inspection report · 2026-08-19 · main @ 1ad9638</p>
+    <h1>Munder Difflin Floor Inspection</h1>
+    <p class="lede">What would make this the best office to run a team of agents from, what is weak today, and the smallest correct fix for each weakness. Every Critical and High finding below was re-verified in the source by hand; file and line references point at the exact code.</p>
+    <p class="lede" style="font-size:14px;opacity:.85;margin-top:12px">Note: after this inspection the project was renamed <b>Hello MarkX</b> and moved to <span class="mono">MARKXAILABS/hello-markx</span>. Source paths and line numbers below refer to commit <span class="mono">1ad9638</span> and are unchanged by the rename; the old marketing site, blog and sponsor files mentioned in the docs-drift table no longer exist.</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <dl class="sheet">
+    <div><dt>Repository</dt><dd>MARKXAILABS/munder-difflin (fork of chaitanyagiri) · v0.4.4 + Claude account pool (PR #1, #2)</dd></div>
+    <div><dt>Scope</dt><dd>59,105 lines of TS/TSX in 211 files · Electron 32 · React 18 · node-pty · Pixi.js · xterm.js · 42 test files</dd></div>
+    <div><dt>Method</dt><dd>Six parallel read-only code audits (security · reliability · hive protocol · renderer/UX · tests/CI/release · memory) · every Critical/High re-checked by hand · focused test suite executed</dd></div>
+    <div><dt>Test run (this session)</dt><dd><span class="mono">npm run test:focused</span> → 283 tests · 270 pass · <b>11 fail</b> · 2 skipped — the same 11 known Windows POSIX-path failures as the baseline</dd></div>
+    <div><dt>Upstream signal</dt><dd>Open issues #183 and #151 reproduce in this code; #189, #167, #163, #164, #146, #13 map onto the roadmap below</dd></div>
+    <div><dt>Not run</dt><dd>The app itself, mempalace, a live 429 failover, and performance measurements — every latency/growth claim is read off the call path</dd></div>
+  </dl>
+
+  <section id="contents">
+    <p class="eyebrow">Contents</p>
+    <ul class="toc">
+      <li><a href="#verdict"><span class="n">1</span>Verdict at a glance</a></li>
+      <li><a href="#critical"><span class="n">2</span>Fix first — Critical</a></li>
+      <li><a href="#high"><span class="n">3</span>Fix next — High</a></li>
+      <li><a href="#medium"><span class="n">4</span>Medium and Low, in one table</a></li>
+      <li><a href="#engines"><span class="n">5</span>Engine coverage matrix</a></li>
+      <li><a href="#roadmap"><span class="n">6</span>Upgrade roadmap — the best office</a></li>
+      <li><a href="#good"><span class="n">7</span>What is already excellent</a></li>
+      <li><a href="#docs"><span class="n">8</span>Docs that no longer match the code</a></li>
+      <li><a href="#method"><span class="n">9</span>Evidence, verification, open items</a></li>
+    </ul>
+  </section>
+
+  <!-- 1 VERDICT -->
+  <section id="verdict">
+    <p class="eyebrow">1 · Verdict</p>
+    <h2>The idea is right and several subsystems are genuinely excellent. The office itself is not yet trustworthy to leave running.</h2>
+    <p class="lead measure">Five structural gaps recur across every dimension: the autonomy loop and the human-approval path are not wired the way the docs describe; the app can destroy its own work (force-removed worktrees, non-atomic writes, a supervisor that blocks on git); the inner security boundaries lag the very good ingress code; nothing the test suite proves is enforced in CI; and the hive protocol has no acknowledgement, retry, verification, or merge — and only one of eleven engines gets the whole protocol.</p>
+    <div class="counts">
+      <span class="c"><b>8</b> <span class="pill crit">Critical</span></span>
+      <span class="c"><b>12</b> <span class="pill high">High</span></span>
+      <span class="c"><b>16</b> <span class="pill med">Medium</span></span>
+      <span class="c"><b>11</b> <span class="pill low">Low</span></span>
+      <span class="c"><b>24</b> <span class="pill good">Keep as-is</span></span>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="row"><span class="name">Security</span><span class="pill mixed">Mixed</span></div><div class="v">Ingress is better than most products (hire allowlists, SSRF guard, Slack HMAC, webhook decoys, broker). Inner boundaries are not: PTY input is unsanitised, navigation is unguarded, fs/git root is renderer-chosen, Slack/webhook secrets sit in plaintext, Electron is end-of-life.</div></div>
+      <div class="tile"><div class="row"><span class="name">Reliability</span><span class="pill weak">Weak</span></div><div class="v">Sophisticated recovery where someone was bitten (sleep/wake, PTY identity guard), but an isolated agent's crash force-deletes its work, the registry/config are written non-atomically, and <code>hive.commit()</code> can freeze the whole supervisor.</div></div>
+      <div class="tile"><div class="row"><span class="name">Hive protocol</span><span class="pill mixed">Mixed</span></div><div class="v">Transport is solid (single writer, router, one-gate typing). Semantics are missing: no ack, no retry, no dead-letter, no result verification, no merge primitive, and wake-ups live in the UI process.</div></div>
+      <div class="tile"><div class="row"><span class="name">Renderer / UX</span><span class="pill mixed">Mixed</span></div><div class="v">The terminal pool and the automation-safety gate are excellent. But "an agent needs you" has no surface — approvals are unsubscribed, <code>blockReason</code> is never rendered — and a single throwing panel white-screens the app.</div></div>
+      <div class="tile"><div class="row"><span class="name">Tests · CI · release</span><span class="pill weak">Weak</span></div><div class="v">283 tests exist and zero run in CI; eight test files are not in any script; CONTRIBUTING says there is no suite; no log file, no crash reporter; Windows builds unsigned; the release-link gate that a real outage motivated is not wired in.</div></div>
+      <div class="tile"><div class="row"><span class="name">Memory · KG</span><span class="pill mixed">Mixed</span></div><div class="v">Condensation's <code>verify()</code> is the best "never trust the model" code in the repo. Recall is a cold Python spawn (not "milliseconds"), the semantic index never shrinks, and the condense session runs with permissions bypassed and web tools enabled on agent-authored text.</div></div>
+    </div>
+  </section>
+
+  <!-- 2 CRITICAL -->
+  <section id="critical">
+    <p class="eyebrow">2 · Fix first</p>
+    <h2>Eight Critical findings — most are under ten lines to fix</h2>
+    <p class="lead measure">Ranked by impact per line of change. "Verified" means I read the cited code myself this session, not just the audit summary.</p>
+    <div class="findings">
+
+      <article class="finding">
+        <div class="head"><span class="id">C1</span><span class="pill crit">Critical</span><h3>Any teardown of a git-isolated agent force-deletes its uncommitted work</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/index.ts:449-458</code> (<code>teardownPty</code>) → <code>src/main/git.ts:258</code> <code>git worktree remove --force</code>. The comment literally says "Normal agents keep the immediate force-remove"; only ephemeral workers get the safety gate.</dd>
+          <dt>What happens</dt><dd><code>teardownPty</code> runs on explicit kill, on <em>natural PTY exit</em> (<code>index.ts:568</code>), on breaker stop (<code>index.ts:1132</code>), and on account-failover respawn. An isolated agent works for an hour, its CLI crashes or hits a usage limit → the worktree is removed with <code>--force</code>, untracked files and dirty changes are gone. The failover feature shipped in PR #2 takes this path too for isolated agents.</dd>
+          <dt>Fix</dt><dd>Route the non-worker branch through the existing gate: call <code>worktreeHasUnintegratedWork()</code> (<code>git.ts:269</code>, already tested) and keep the worktree when it returns <code>keep</code> — the same shape as <code>finalizeWorkerWorktree</code>. ~5 lines.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: minutes</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">C2</span><span class="pill crit">Critical</span><h3>Any agent, Slack message or webhook can type raw keystrokes into another agent's terminal</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/renderer/src/hooks/useHive.ts:118</code> wraps multi-line hive text in bracketed paste (<code>ESC[200~ … ESC[201~</code>) with no sanitisation; <code>hive.normalize()</code> (<code>hive.ts:1176-1192</code>) applies no control-character filter; the terminal work-order path (<code>useHive.ts:146-170</code>) is always multi-line.</dd>
+          <dt>What happens</dt><dd>A message body containing the literal bytes <code>ESC[201~</code> closes the paste early; everything after arrives as keystrokes, including <code>\r</code> which submits. Into a coding CLI that is prompt injection framed as if the human typed it; into a custom-command shell it is direct command execution. Reachable from any agent's outbox, from Slack text and from webhook <code>message</code>. It defeats the whole "who may type into a terminal" model in <code>docs/message-queue.md</code>.</dd>
+          <dt>Fix</dt><dd>One guard at the single choke point, before the wrap in <code>submitToPty</code>: remove any <code>\x1b[20[01]~</code> and strip C0 controls except <code>\n</code>/<code>\t</code>. Two <code>.replace()</code> calls.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: minutes</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">C3</span><span class="pill crit">Critical</span><h3>Registry, task ledger, config and account-pool state are written non-atomically — a crash mid-write erases the floor</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/hive.ts:1968</code> <code>writeJson</code> is a bare <code>writeFileSync</code> (the atomic <code>atomicWriteJson</code> sits three lines below and is used only for inbox delivery); it persists <code>registry.json</code> and <code>tasks.json</code>. <code>src/main/config.ts:602</code> <code>persistConfig</code> is the same, and it is rewritten every heartbeat beat and mission tick just to stamp <code>lastFiredAt</code>. <code>src/main/accountPool.ts:128-136</code> likewise.</dd>
+          <dt>What happens</dt><dd>Power loss / OOM-kill during a write → truncated JSON → <code>readJson</code>/<code>readConfig</code> swallow the parse error and return defaults: god id, every agent's cwd/provider/session, the whole kanban, <code>harnessHome</code>, Claude accounts, webhooks and missions are silently gone and the app reboots into onboarding.</dd>
+          <dt>Fix</dt><dd><code>writeJson</code> → call <code>atomicWriteJson</code>; <code>persistConfig</code> and <code>accountPool.save</code> → tmp + <code>renameSync</code> (mirror <code>roster.ts:149-151</code>, which already does it right). Three one-liners. Then stop rewriting config on every beat by moving <code>lastFiredAt</code> into the existing <code>PersistStore.setKv</code>.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: minutes</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">C4</span><span class="pill crit">Critical</span><h3>The human-in-the-loop gate is instruction text, not enforcement: permissions are bypassed by default on every engine</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/config.ts:424</code> <code>autoMode: true</code> → <code>commandForAutoMode</code> appends <code>--permission-mode bypassPermissions</code> (claude/grok), <code>--dangerously-bypass-approvals-and-sandbox</code> (codex), <code>--yolo</code> (qwen/crush), <code>--dangerously-skip-permissions</code> (agy). The per-agent <code>settings.json</code> the hive writes (<code>hive.ts:876-915</code>) has no <code>permissions.deny</code> block. HIVE.md §2.3 and PROTOCOL.md both state "tool-permission prompts are the HITL gate".</dd>
+          <dt>What happens</dt><dd>A worker runs <code>rm -rf</code>, <code>git push --force</code>, or <code>curl | sh</code> with nothing in the way. The only enforcement point, <code>control.toolDecision</code> at <code>PreToolUse</code>, is operator-initiated and default-off. Spend/scope/destructive "escalation" exists only as prose in Michael's prompt.</dd>
+          <dt>Fix</dt><dd>Ship a standing <code>permissions: { deny: [...] }</code> list (destructive git, <code>rm -rf</code>, <code>sudo</code>, credential paths) in the hive-authored per-agent settings — it applies under <code>bypassPermissions</code> and costs one object literal. Make <code>autoMode</code> visible on the agent card and in onboarding rather than silent.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: hours</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">C5</span><span class="pill crit">Critical</span><h3>Autonomy lives in the UI process: the Stop-hook drain was removed, and wake-ups, delivery and account failover all run in the renderer</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/hooks.ts:211-221</code> returns <code>{}</code> on <code>Stop</code> ("never turn unread hive mail into a forced continuation"); <code>hive.drainForStop</code> (<code>hive.ts:1056</code>) is referenced only by comments and one test; <code>cursor.json</code> is created and never written. Wake nudge = <code>useHive.ts:636-659</code> (4 s poll), delivery = effect #4, failover executor = <code>useHive.ts:1146-1230</code> with a closure-local re-entrancy set.</dd>
+          <dt>What happens</dt><dd>Close the window (macOS keeps the app alive), reload the renderer, or crash a panel → no mail moves and a mid-switch failover leaves the agent killed and never respawned ("switching…" forever). This is upstream issue #151. HIVE.md, PROTOCOL.md and the codex/agy preset comments still advertise "Stop→drain works natively".</dd>
+          <dt>Fix</dt><dd>Move the kill→respawn failover and the inbox wake into main (main already owns <code>spawnAgentCore</code> and the idle handshake <code>ptyManager.idleFor()</code>); keep the renderer's draft/picker gate as a veto it reports up. Either restore a <em>guarded</em> Stop-drain (no draft + not <code>stop_hook_active</code>) or delete <code>drainForStop</code>, the cursor and the four doc claims. This is also the prerequisite for a tray/headless mode and remote access (#167).</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: days</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">C6</span><span class="pill crit">Critical</span><h3>Mail to an unknown recipient vanishes and is logged as delivered</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/hive.ts:1197</code> <code>deliver()</code> returns silently when the inbox dir is missing ("logged by caller"); the caller <code>routeMessage</code> (<code>hive.ts:1283</code>) unconditionally appends <code>{kind:'message'}</code> and flies the envelope animation. <code>canReceiveInbox(undefined)</code> falls back to the claude preset → <code>true</code> (<code>agentProvider.ts:546-548</code>), so an unknown id passes every guard.</dd>
+          <dt>What happens</dt><dd>Michael mails <code>oscar-old</code> from a pre-restart transcript; the message evaporates, the log says sent, Michael waits forever. Upstream issue #183.</dd>
+          <dt>Fix</dt><dd><code>deliver()</code> returns a boolean; on <code>false</code> log <code>{kind:'undeliverable', reason:'unknown-agent'}</code> and bounce to god with the full body — the bounce pattern already exists three times in the same function.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: minutes</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">C7</span><span class="pill crit">Critical</span><h3>CI runs zero tests; eight test files are unreachable; CONTRIBUTING tells people the suite does not exist</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>.github/workflows/ci.yml</code> has <code>typecheck</code> (macOS only) and <code>build</code> (<code>continue-on-error: true</code>); no test job. <code>package.json</code> has no <code>test</code> script; <code>test:focused</code> hand-lists 33 of 42 files — <code>breaker</code>, <code>webhook-endpoints</code>, <code>slack</code>, <code>kg-core</code>, <code>agent-provider</code>, <code>transcript-usage</code>, <code>voice-messages</code>, <code>realtime-findcard</code> never run. <code>CONTRIBUTING.md:44-45</code>: "there is no test suite yet".</dd>
+          <dt>What happens</dt><dd>A PR that breaks <code>hive.ts</code>, <code>pty.ts</code>, the breaker or the account pool merges green. Windows-specific paths (the v0.4.4 headline fix) are never compiled on Windows in CI. Two of the never-run tests assert against copy-pasted duplicates of the source (<code>voice-messages</code>, <code>realtime-findcard</code>), so they cannot catch a regression in <code>redactSecrets</code>.</dd>
+          <dt>Fix</dt><dd><code>"test": "node --test test/*.test.cjs"</code> (the glob auto-enrols the orphans) + a <code>test</code> job on an ubuntu/windows/macos matrix; move <code>continue-on-error</code> to the native-rebuild step only; fix CONTRIBUTING. ~15 lines of YAML and JSON.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: an hour</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">C8</span><span class="pill crit">Critical</span><h3>End-of-life Electron rendering agent-authored content, with no navigation guard, <code>sandbox: false</code>, and a window-open handler that opens any URL scheme</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>package.json</code> pins <code>electron ^32.2.0</code> (installed 32.3.3, Chromium 128 — outside Electron's latest-3 support window, no CVE backports). <code>src/main/index.ts:2230-2233</code> <code>setWindowOpenHandler</code> calls <code>shell.openExternal(url)</code> with no scheme check (the sibling <code>app:openExternal</code> at <code>:3886</code> correctly restricts to https). No <code>will-navigate</code> handler anywhere; <code>webPreferences.sandbox: false</code> (<code>:2157</code>) with a ~160-channel preload that includes <code>pty:spawn</code>. <code>MarkdownPreview</code>'s click guard only intercepts <code>click</code>, so a middle-click (<code>auxclick</code>) on an agent-authored link reaches the open handler with the raw href.</dd>
+          <dt>What happens</dt><dd>A renderer compromise via agent-written markdown hands an attacker the full bridge; a crafted <code>file:</code>/<code>ms-msdt:</code>/<code>smb:</code> link is opened by the OS.</dd>
+          <dt>Fix</dt><dd>In <code>createWindow</code>: <code>will-navigate</code> → <code>preventDefault</code> unless same URL; open handler → https-only then <code>deny</code>; flip <code>sandbox: true</code> (the preload imports only <code>electron</code>). ~6 lines now; schedule the Electron bump (38+) with <code>electron-builder@26</code> and a re-rebuild of node-pty/better-sqlite3.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: minutes now · days for the bump</span></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- 3 HIGH -->
+  <section id="high">
+    <p class="eyebrow">3 · Fix next</p>
+    <h2>Twelve High findings</h2>
+    <div class="findings">
+
+      <article class="finding">
+        <div class="head"><span class="id">H1</span><span class="pill high">High</span><h3><code>fs:*</code> and <code>git:*</code> IPC are not sandboxed to an agent's directory — the renderer chooses the root</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/index.ts:3211-3232</code> pass the renderer's <code>root</code> straight to <code>listDir/readFileText/readFileBinary/writeFileText</code>; every <code>git:*</code> handler takes an arbitrary <code>cwd</code>. <code>safeJoin</code> (<code>src/main/fs.ts:14-20</code>) confines <code>rel</code> to whatever root was named and is textual (no <code>realpath</code>, so an in-root symlink escapes). <code>SECURITY.md</code> says these calls are "rooted at an agent's working directory".</dd>
+          <dt>What happens</dt><dd><code>fs:writeFile('/', 'Users/x/.zshrc', payload)</code> is in-contract for any renderer code path. Today that needs a renderer compromise (see C8), which is exactly why the layers should each hold.</dd>
+          <dt>Fix</dt><dd>One shared <code>assertManagedRoot(p)</code> built from <code>registeredRepos</code> + <code>harnessHome</code> + live PTY cwds, used by all ~20 handlers; <code>realpathSync</code> both sides in <code>safeJoin</code>.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: hours</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H2</span><span class="pill high">High</span><h3>Network and secret hygiene: LAN-bound public servers, plaintext Slack/webhook secrets shipped to the renderer, an unauthenticated hook socket, a tunnel that cannot be closed</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/webhook.ts:244</code> and <code>src/main/slack.ts:179</code> <code>server.listen(port)</code> with no host → all interfaces (the sibling broker and reply server correctly pass <code>'127.0.0.1'</code>); <code>tunnelmole</code> has no close handle, so <code>stop()</code> leaves the public tunnel up (comment at <code>slack.ts:166</code>). <code>src/main/config.ts:602</code> writes <code>slackSigningSecret</code>, <code>slackBotToken</code>, <code>webhookSecret</code>, <code>webhookTriggers[].secret</code> to <code>config.json</code> in plaintext with no mode, and <code>ipcMain.handle('config:get')</code> (<code>index.ts:3102</code>) returns them to the renderer unredacted — while <code>integrations.ts</code> already has a <code>safeStorage</code> + <code>0o600</code> store. <code>src/main/hooks.ts:79-116</code> trusts <code>payload.agent_id</code> from any local connection (can hijack <code>--resume</code> ids, poison the cost ledger, clear breaker state). <code>CLAUDE_CODE_OAUTH_TOKEN</code> and broker tokens are in the child env of an LLM-controlled shell (<code>index.ts:2843</code>, <code>:4514</code>), and <code>hive.commit()</code> runs <code>git add -A</code> over the hive root — a token echoed into <code>memory.md</code> is in git history forever. <code>localtunnel</code> is a declared dependency with zero imports.</dd>
+          <dt>Fix</dt><dd>Bind both servers to <code>127.0.0.1</code> (two string args). Move the four secret fields into the <code>safeStorage</code> store and redact them in <code>config:get</code>. Mint a per-session <code>HIVE_SOCK_TOKEN</code>, pass it to <code>cth-hook</code>, reject payloads without it. Add a secret-scrub pass over agent-written files before <code>commit()</code>. Delete <code>localtunnel</code>. Hash-then-<code>timingSafeEqual</code> in the four length-leaking compares.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand (bind, config, hooks, localtunnel)</span><span class="tag">Effort: hours</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H3</span><span class="pill high">High</span><h3><code>hive.commit()</code> blocks the main thread on git, per message — and two growing files are committed into the hive repo</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/hive.ts:2014-2029</code>: <code>spawnSync</code> git with an 8 s timeout (<code>:1978</code>), five attempts, <code>sleepSync</code> = <code>Atomics.wait</code> on the main thread (<code>:190-193</code>); called from <code>send()</code>, the router tick, <code>writeTasks()</code>, <code>ensureAgent()</code>, <code>setArchived()</code>. <code>.gitignore</code> seed (<code>:505</code>) omits <code>log.jsonl</code> (append-only, 14 writers, never rotated) and <code>backups/</code> (a full copy of every <code>memory.md</code> on every condense attempt, <code>reflect.ts:202</code>). <code>clearStaleLock</code> (<code>:2032</code>) deletes any <code>index.lock</code> older than 10 s — less than the 8 s git timeout plus antivirus on Windows.</dd>
+          <dt>What happens</dt><dd>Worst case on a locked repo ≈ 80 s of frozen supervisor: no IPC, no PTY bytes forwarded, hook shims time out, the UI beachballs. Happy path still serialises a <code>git add -A</code> per hive message. The repo-growth pathology is the one <code>untrackCostLedger</code> was written to fix for a sibling file; the fix was not generalised.</dd>
+          <dt>Fix</dt><dd>Debounce commits behind a 5 s trailing timer, make the retry async, timeout 2 s, two attempts; add <code>log.jsonl</code> and <code>backups/</code> to the ignore seed and reuse the <code>git rm --cached</code> pass; rotate <code>log.jsonl</code> at ~8 MB; raise the stale-lock threshold to 60 s and skip while a git child is in flight; <code>logTail</code> reads the last 64 KB instead of the whole file.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: half a day</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H4</span><span class="pill high">High</span><h3>There is no "what needs me" surface: approvals are unwired, blocked workers look idle, a throwing panel white-screens the app, and a failed Michael boot shows "EMPTY FLOOR"</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/preload/index.ts:1057</code> exposes <code>onApprovalRequest</code> — zero renderer subscribers. <code>BlockedBanner.tsx</code> and <code>CommandBar.tsx</code> are imported by nothing. <code>Agent.blockReason</code> is written at <code>usePtyParser.ts:160-167</code> and rendered by no component. <code>useHive.ts:489-492</code> downgrades any non-god agent at a permission prompt to <code>'waiting'</code> — the same status as "parked, nothing to do". No <code>ErrorBoundary</code>/<code>componentDidCatch</code> anywhere in <code>src/renderer</code>. <code>useHive.ts:362</code> sets <code>godStatus:'failed'</code> and discards <code>res.error</code>; <code>App.tsx:365-366</code> branches only on <code>'booting'</code>.</dd>
+          <dt>What happens</dt><dd>An agent stuck on "Do you want to proceed?" is a red "!" on a 16 px avatar and nothing else; the one-click route to ASK ME is an unlabelled 30×22 px cork board on the floor; a user who picked an uninstalled CLI in onboarding sees a friendly empty state with no reason; a bad kanban card once crashed the whole window (<code>TasksKanban.tsx:302-306</code> documents it).</dd>
+          <dt>Fix</dt><dd>Render <code>blockReason</code> in <code>AgentDetailPanel</code> via the existing <code>BlockedBanner</code>; subscribe <code>onApprovalRequest</code> in <code>useHive</code>; keep <code>'blocked'</code> for anyone matching <code>BLOCK_HINTS</code> and use a separate <code>waitingOnGod</code> flag; one 30-line error boundary around the sidebar and one around <code>&lt;OfficeFloor/&gt;</code>; store <code>res.error</code> and render a third boot state pointing at Settings → Prerequisites. Then a title-bar "Needs you" badge that opens one list of blocked agents + ASK ME questions + approvals.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand</span><span class="tag">Effort: a day</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H5</span><span class="pill high">High</span><h3>Production has no logs, no crash reporting, no renderer-crash handling, and no PTY output replay</h3></div>
+        <dl>
+          <dt>Where</dt><dd>157 <code>console.*</code> calls in <code>src/main</code> go to a detached stdout; no <code>electron-log</code>, no <code>crashReporter</code>, no <code>render-process-gone</code>/<code>unresponsive</code> handler; <code>index.ts:103-108</code> catches <code>uncaughtException</code> and keeps running silently. <code>pty.ts:355-361</code> drops chunks when the <code>webContents</code> is gone and keeps no tail buffer. The bug template asks users for "Logs".</dd>
+          <dt>What happens</dt><dd>The most diagnostic message in the codebase — the Windows shim warning "the agent will look healthy without ever receiving the hive protocol" (<code>pty.ts:628-634</code>) — is invisible to every user who hits it. A renderer reload mid-turn loses every byte three agents emitted in the gap.</dd>
+          <dt>Fix</dt><dd>Rotating file sink under <code>app.getPath('logs')</code> wired into a <code>console</code> shim + <code>crashReporter.start()</code> + "Open logs folder" next to the issue link in <code>SettingsHeroCard</code>; <code>render-process-gone</code> → log + reload; a bounded per-session tail (256 KB) in <code>PtySession</code> and a <code>pty:attach</code> IPC that primes xterm on reattach. ~50 lines total.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Spot-checked (grep for logger/crashReporter/boundary)</span><span class="tag">Effort: hours</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H6</span><span class="pill high">High</span><h3>Stale per-agent state survives teardown: a respawned agent is instantly paused, telemetry accumulators grow forever, preserved worktrees leak on quit</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/control.ts</code> has no <code>forget()</code>; <code>teardownPty</code> clears <code>breaker</code> state (<code>index.ts:431</code>) but not <code>control</code> or <code>telemetry</code>. <code>telemetry.ts:149-151</code> session maps are only ever added to and every <code>--resume</code>/restart/failover mints a new session; <code>aggregateLive</code> sums dead sessions into the live sample the breaker diffs. <code>preservedWorktrees</code> (<code>index.ts:406</code>) is an in-memory Map consumed only by <code>gcPreservedWorktrees</code>; nothing persists it.</dd>
+          <dt>What happens</dt><dd>Pause an agent, hit Restart &amp; Continue → every <code>PreToolUse</code> of the fresh session is denied "Paused by operator" with no UI explanation. A week-long floor with hourly restarts carries hundreds of dead sessions in the live aggregate. <code>&lt;harnessHome&gt;/worktrees/worker-*</code> and their registrations in the user's real repo accumulate forever after the work lands.</dd>
+          <dt>Fix</dt><dd>Add <code>forget(id)</code> to <code>ControlRegistry</code> and <code>TelemetryCollector</code>, call both beside <code>breaker.forget</code>; drop session accumulators older than 24 h; persist <code>preservedWorktrees</code> via the already-open <code>PersistStore.setKv</code> and reload it in <code>bootstrapHiveServices</code>. ~20 lines.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand (control.ts)</span><span class="tag">Effort: an hour</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H7</span><span class="pill high">High</span><h3>Release pipeline: Windows/Linux ship unsigned, the release-link gate written after a measured download outage is not wired in, and there is no Node runtime pin</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>.github/workflows/release.yml:74-78</code> gates every signing secret on macOS; <code>electron-builder.yml</code> has no <code>win</code> signing block. <code>tools/check-release-links.cjs:14-21</code> documents that a stale version string 404'd all four download links for v0.3.4–v0.3.7 (mac DMG downloads "fell from 118 and 76 … to single digits"); <code>check:links</code> appears in no workflow. No <code>engines</code>, no <code>.nvmrc</code>; CONTRIBUTING says "Node 18+"; the owner's own notes say system Node 24 breaks <code>better-sqlite3</code> prebuilds and winpty's gyp, and the required VS2019 Spectre/ClangCL components and <code>NoDefaultCurrentDirectoryInExePath</code> pitfall are documented nowhere in the repo. <code>tools/patch-node-pty-conpty.cjs:24</code> exits 0 silently when its byte-exact marker is missing while <code>node-pty</code> is pinned with a caret (1.1.0 already floated). Checksums are generated on the same runner as the artefact (integrity, not provenance).</dd>
+          <dt>What happens</dt><dd>Every Windows user hits SmartScreen on the primary install path and electron-updater's publisher check is inert; the next forgotten version bump repeats the outage silently; first-time Windows contributors fail at <code>npm install</code> with an opaque node-gyp error.</dd>
+          <dt>Fix</dt><dd>Azure Trusted Signing via <code>win.azureSignOptions</code> gated on the Windows runner; <code>- run: npm run check:links</code> before publish and <code>--live</code> after; <code>"engines": {"node": "&gt;=20 &lt;23"}</code> + <code>.nvmrc</code> + a Windows prerequisites block in CONTRIBUTING; make the patch script exit non-zero when unpatched; pin <code>node-pty</code> exactly; add <code>actions/attest-build-provenance</code>.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Spot-checked (ci.yml, release.yml read in full)</span><span class="tag">Effort: a day</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H8</span><span class="pill high">High</span><h3>Memory layer: the semantic index never shrinks, the condense session runs with permissions bypassed and web tools enabled, "READY" does not mean agents can use it, and reflection is Claude-only with no backoff</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>src/main/memory.ts</code> calls exactly <code>mine</code>, <code>search</code>, <code>wake-up</code> — no delete/prune/rebuild, so chunks condensed out of <code>memory.md</code> stay in the shared palace forever. <code>src/main/reflect.ts:284</code> disallows <code>Edit/Write/NotebookEdit/Bash</code> but not <code>WebFetch/WebSearch/Task</code>, and <code>hiddenClaude.ts:117</code> runs it with <code>--permission-mode bypassPermissions</code> over agent-authored (possibly web-scraped) text. The prerequisites check probes <code>~/.local/bin</code>, brew and Python Scripts (<code>memory.ts:100-112</code>) while agents are told to type bare <code>mempalace</code> resolved against the PTY's PATH (<code>hive.ts:1134</code>) — the KG already solved this by baking an absolute path (<code>index.ts:2631</code>). Reflection uses <code>defaultCommand ?? 'claude'</code> with Claude flags (<code>index.ts:319</code>) and retries every 30 min forever on a non-Claude floor; <code>reflectNow</code>/<code>memoryWakeUp</code> are exposed in preload and called from nowhere. <code>mempalace mine</code> ingests the whole agent directory, not just <code>memory.md</code>; <code>memoryStatus</code> re-runs a 3 s login-shell spawn on every MemoryPanel mount/toggle.</dd>
+          <dt>What happens</dt><dd>Superseded decisions keep outranking current ones in recall; a prompt-injected summary can exfiltrate pinned facts; a green "READY" dot next to agents whose <code>mempalace search</code> says "command not found"; a Haiku session burned every half hour on a file that reliably induces a heading.</dd>
+          <dt>Fix</dt><dd>Add the web tools to the disallow list (one line); add <code>backups/</code> to the ignore seed and keep the newest 20; thread <code>memory.bin()</code> into <code>injectedPrompt</code> like <code>kgCliPath</code>; re-mine the wing after a successful condense; exponential backoff per agent and a visible reflection status; gate the reflector on a resolvable <code>claude</code>; cache the binary lookup; mine only <code>memory.md</code>; tests for the six pure exports in <code>reflect.ts</code>.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand (tools list, backups path, verbs, bin cache)</span><span class="tag">Effort: a day</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H9</span><span class="pill high">High</span><h3>The task ledger has three concurrent writers, no revision and no lock</h3></div>
+        <dl>
+          <dt>Where</dt><dd>Michael hand-edits <code>hive/tasks.json</code> with his Write tool; <code>hive.writeTasks()</code> rewrites the whole file (<code>hive.ts:1398-1405</code>); <code>realtimeActions</code> does full-array read-modify-write; the renderer patches per card (<code>hivePatchTask</code>). No <code>rev</code>, no <code>updatedAt</code>, no compare-and-swap; <code>parseTasks</code> (<code>TasksKanban.tsx:77-109</code>) defends against every field being absent. The kanban is read-only in the UI.</dd>
+          <dt>What happens</dt><dd>Michael reads the ledger, composes for 30 s, writes it back — erasing the <code>humanQA</code> answer the human saved in between, or a webhook card. <code>patchTask</code> exists precisely because this already happened, but it protects only the renderer's writes.</dd>
+          <dt>Fix</dt><dd>Add <code>rev</code>; <code>writeTasks</code> rejects a stale rev; ship <code>hive/bin/task.cjs {add|patch|claim|done}</code> and name it in PROTOCOL.md so the god mutates one card at a time instead of rewriting the file.</dd>
+        </dl>
+        <div class="tags"><span class="tag">Agent-reported; call sites spot-checked</span><span class="tag">Effort: half a day</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H10</span><span class="pill high">High</span><h3>The protocol has no acknowledgement, reply deadline, retry, dead-letter, result verification, or merge primitive — and the god's only spawn mechanism is undocumented to it</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>requires_reply</code> is set (<code>hive.ts:1188</code>) and enforced by nothing; the only ACK protocol in the repo is closing-time's; hop-cap overflow drops the message (<code>hive.ts:1210-1215</code>) though HIVE.md promises escalation. <code>act:'done'</code> is terminal by design — no reviewer. <code>git.ts</code> has no merge/rebase path at all while the god prompt says "own branch integration". The <code>spawn-requests/</code> queue (<code>index.ts:4364-4700</code>, the strongest orchestration primitive in the app) appears in no agent-facing doc. <code>enrichTaskPrompt</code> (<code>useHive.ts:137</code>) has no callers, so the prep-assistant role costs money and enriches nothing. The terminal work-order for hookless engines ends "report … in this terminal" — which nothing reads.</dd>
+          <dt>What happens</dt><dd>A worker dies after its nudge was acknowledged → the message sits unread forever and the requester never learns. "Is this actually done?" is always a human question. Parallel worktrees can be created but never merged by the system.</dd>
+          <dt>Fix</dt><dd>A reply-deadline sweep in the heartbeat beat (re-deliver once, then bounce to god as <code>[unanswered]</code>); <code>undeliverable</code> log kind; document spawn-requests in PROTOCOL.md/COMMANDS.md; change the work-order string to "write your reply as JSON into <code>$AGENT_DIR/outbox/</code>"; wire or delete <code>enrichTaskPrompt</code>; a reviewer step on card→done (mail the least-loaded idle non-assignee a <code>query</code>; <code>refuse</code> sends it back to <code>doing</code>); one <code>integrate &lt;agentId&gt;</code> IPC/helper that merges <code>agent/&lt;id&gt;</code> and mails god the conflict list.</dd>
+        </dl>
+        <div class="tags"><span class="tag ok">Verified first-hand (drainForStop, enrichTaskPrompt, merge, spawn-requests)</span><span class="tag">Effort: days</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H11</span><span class="pill high">High</span><h3>Only one of eleven engines gets the whole protocol; five have no cost accounting; the god is never told which engine can do what</h3></div>
+        <dl>
+          <dt>Where</dt><dd>See the matrix in section 5 (sources: <code>agentProvider.ts:165-508</code>, <code>providerAutomation.ts:49-137</code>, <code>hive.ts:679-820</code>, <code>telemetry.ts:199-203</code>). The god contract (<code>hive.ts:1146-1147</code>) never mentions providers. <code>CostSample</code> from the proxy tier reaches the ledger but not the breaker (<code>hooks.ts:170-194</code>). Upstream #189: per-agent token caps count cached context, so they trip on session length, not work.</dd>
+          <dt>What happens</dt><dd>Michael assigns a mail-dependent task to a Kimi or Copilot agent that cannot receive mail; a Codex agent's spend is invisible to every budget; a qwen agent can be one-way only.</dd>
+          <dt>Fix</dt><dd>Inject a one-line capability line per roster entry into the god's orientation; feed <code>CostSample</code> into <code>getAgentUsage</code> so qwen/crush arm the breaker; add a transcript reader for Codex next; measure caps on output + non-cached input.</dd>
+        </dl>
+        <div class="tags"><span class="tag">Agent-reported; matrix sources spot-checked</span><span class="tag">Effort: days</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="head"><span class="id">H12</span><span class="pill high">High</span><h3>Renderer performance: every PTY chunk re-renders the roster, the xterm pool is unbounded with two leak paths, and four pollers read the same file</h3></div>
+        <dl>
+          <dt>Where</dt><dd><code>usePtyParser.ts:124</code> → <code>store.ts:617</code> reallocates <code>agents</code> on every chunk; seven subscriber trees (<code>App</code>, <code>AgentStrip</code>, <code>FullscreenTerminal</code>, <code>CommandCenterPanel</code>×2, <code>AskMeTab</code>, <code>TasksKanban</code>, <code>OfficeFloor</code>) re-render. <code>terminalPool.ts:76,99</code>: unbounded Map, 100k-line scrollback each; <code>useHive.ts:940-942</code> and <code>store.ts:818-842</code> drop agents without <code>disposeTerminal</code>. <code>hiveTasks()</code> is polled independently by four components every 5 s; <code>useHive.ts:637-657</code> fully reads every agent's inbox over IPC every 4 s (main does <code>readdirSync</code> + <code>readFileSync</code> + <code>JSON.parse</code> per file, synchronously). <code>useHive.ts:276</code> documents a set that "never shrinks".</dd>
+          <dt>What happens</dt><dd>With 8+ agents and chatty terminals the UI thread and the main thread both spend their time on redundant work; long sessions leak terminals and IPC subscriptions.</dd>
+          <dt>Fix</dt><dd>Split volatile fields into a <code>runState</code> map (<code>VOLATILE_AGENT_FIELDS</code> already names them); LRU cap in <code>acquireTerminal</code> + dispose on the two paths; one <code>useHiveTasks()</code> store slice; return inbox <em>ids</em> for the nudge check (<code>inboxBacklog</code> already has that shape).</dd>
+        </dl>
+        <div class="tags"><span class="tag">Agent-reported; store/pool call sites spot-checked</span><span class="tag">Effort: a day</span></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- 4 MEDIUM / LOW -->
+  <section id="medium">
+    <p class="eyebrow">4 · Medium and Low</p>
+    <h2>Twenty-seven smaller findings</h2>
+    <p class="lead measure">Real, but none of them alone would stop a floor. Several are one-line fixes worth bundling into the Critical pass.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Sev.</th><th>Finding</th><th>Where</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill med">Med</span></td><td>No modal is a dialog: no <code>role="dialog"</code>, focus trap, focus restore; <code>SettingsModal</code> has no Escape handler; backdrop click silently discards the 11-field Add Agent form</td><td class="mono">SettingsModal.tsx:711, AddAgentModal.tsx:450, TasksKanban.tsx:309, QuitWarningModal.tsx:51</td><td>One <code>&lt;Modal&gt;</code> primitive (DESIGN.md §7.10 specifies it) with dirty-guard; migrate the four call sites</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td><code>setState</code> during render in <code>FullscreenTerminal</code> when the fullscreened agent dies</td><td class="mono">FullscreenTerminal.tsx:242-246</td><td>Move to an effect</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>20+ agents overflow: seats past 16 stack on the entrance tile; wait tiles reuse <code>% 16</code>; the strip is one 4.4k px scroll row with no grouping/search (fullscreen already groups by repo)</td><td class="mono">OfficeFloor.tsx:375-381, 1379-1382; AgentStrip.tsx:80-93</td><td>Lift <code>groupKey</code>/<code>repoKeyOf</code> into a shared hook; spiral overflow seats</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>Dark mode pins <code>color-scheme: light</code> so every native select/checkbox renders light chrome on a near-black app; text-input borders use <code>ink-100</code> (1.4–1.7:1 in dark)</td><td class="mono">design/global.css:8; MessageQueueComposer.tsx:352 etc.</td><td><code>:root[data-cth-theme='dark'] { color-scheme: dark }</code>; use <code>ink-300</code> on inputs</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>Two window-level Cmd/Ctrl+± handlers fire at once (docked + fullscreen); IDE and fullscreen both handle Escape at window level; terminal focus is never taken programmatically on switch</td><td class="mono">PtyTerminalView.tsx:341-350; IdePanel.tsx:319; terminalPool.ts:516-533</td><td>Scope shortcuts to the focused host; <code>term.focus()</code> on attach</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>Accessibility: 27 <code>aria-label</code>s across 128 buttons; 8–12 px text everywhere (DESIGN.md says never below 14); 1 px focus ring on a 3.4:1 colour; <code>role="button"</code> spans nested inside <code>&lt;button&gt;</code></td><td class="mono">AgentCard.tsx:277-293; global.css:66-69; CommandCenterPanel.tsx:1555</td><td>Names on icon buttons; 2 px ring; unnest; raise the floor size for labels</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>Onboarding: "STEP n OF 4" across six screens; macOS-only sleep/battery copy and <code>x-apple.systempreferences:</code> link on a tri-platform build; engines listed as "installed" from a static array with no probe</td><td class="mono">OnboardingWizard.tsx:211-214, 583-654, 396-406</td><td>Fix the counter; per-OS copy; reuse <code>SetupPanel</code>'s detection and block Finish on a missing god engine</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td><code>killByOwner</code> never removes sessions from the map — closed-floor PTYs stay "live" for up to 4 s and feed the quit dialog, keep-awake and closing-time rosters</td><td class="mono">pty.ts:330-341</td><td><code>this.sessions.delete(id)</code> in the loop, mirroring <code>kill()</code></td></tr>
+        <tr><td><span class="pill med">Med</span></td><td><code>PersistStore</code> has no corruption recovery — on <code>SQLITE_NOTADB</code> every kv call becomes a silent no-op forever</td><td class="mono">db.ts:79-89, 116, 124</td><td>Rename to <code>harness.db.corrupt-&lt;ts&gt;</code> and retry once</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>The renderer-side typing gate never consults main's <code>ptyManager.idleFor()</code>; hookless providers read as idle after 4 s of quiet, so a message can land mid-tool-call (unverified live)</td><td class="mono">useHive.ts:729, 599-621; pty.ts:42-46</td><td>Expose <code>idleFor</code> to the drain gate</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>KG: re-ingest duplicates the corpus (new docId every time, no content hash); each query re-reads and re-tokenises the whole <code>index.jsonl</code>; PDF needs poppler on PATH; images are filename-only; it is a TF keyword index, not a graph; default OFF; no UI panel</td><td class="mono">kg-core.cjs:132-150, 174-216, 224-282</td><td>Hash-dedupe + <code>reindex</code>; the SQLite FTS5 step the design doc names</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>Memory: condensation assumes append order (<code>slice(-keepCount)</code> = newest) and never reads the dated headings; no agent isolation in the shared palace and no UI says so; the md-hive-sync skill is POSIX-only on the exact path <code>hive.ts</code> fixed for Windows</td><td class="mono">reflect.ts:194-195; memory.ts:74-77; resources/skills/md-hive-sync/SKILL.md:21-31</td><td>Sort by date when present; state the sharing model in MemoryPanel; Windows variant of the skill</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>Two shutdown lists differ: <code>app:resetAll</code> omits <code>stopWebhookServer</code> and <code>hive.stopAllProxyBridges</code>, so a reset leaves the tunnel and every qwen sidecar running</td><td class="mono">index.ts:3600-3614 vs 3656-3669</td><td>One <code>{name, stop()}</code> registry both iterate</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>No per-task cost attribution or cap: ledger rows carry no task id; caps are per-agent-cumulative or floor-wide</td><td class="mono">hive.ts:1944-1962; breaker.ts:303-314</td><td><code>task_id</code> on rows; <code>budget_tokens</code> on a dispatch becomes that card's cap</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td><code>board.md</code> has no size policy; the god re-reads it every turn; heartbeat digest reads only its first 10 lines</td><td class="mono">index.ts:1003</td><td>Give it the <code>reflect.ts</code> treatment</td></tr>
+        <tr><td><span class="pill med">Med</span></td><td>No dependency automation, no <code>npm audit</code>, no ESLint/Prettier (13 orphaned <code>eslint-disable</code> comments); <code>copy-main-assets.cjs</code> duplicates the vite sidecar plugin; <code>slack.ts</code>/<code>webhook.ts</code> share identical <code>listen()</code>/<code>openTunnel()</code></td><td class="mono">package.json; electron.vite.config.ts:27-50; tools/copy-main-assets.cjs</td><td>dependabot + audit step; adopt ESLint or strip; delete the duplicate script; one tunnel helper</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td><code>verifySecret</code>/<code>checkToken</code> return early on length mismatch (secret-length oracle)</td><td class="mono">webhook.ts:388; slack.ts:499-503; integrationBroker.ts:149</td><td>Hash both sides, then <code>timingSafeEqual</code></td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>Long cwds wrap to four lines in the sidebar; no responsive collapse (DESIGN.md §15.1 promises one at 1024); <code>sidebarWidth</code> only clamped while dragging</td><td class="mono">CommandCenterPanel.tsx:727, 1308; store.ts:854</td><td>Clamp on resize; truncate paths from the left</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>Four renderings of the same agent (card, fullscreen row, CC row, avatar) show four different field sets; none shows cost though <code>useFleetTelemetry</code> has <code>usd</code> per agent</td><td class="mono">AgentCard.tsx; FullscreenTerminal.tsx:611-803; CommandCenterPanel.tsx:699-983</td><td>Add <code>$x.xx</code> + duration to the card line</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td><code>reflect.ts</code> header says "headless <code>claude -p</code>"; it actually spawns an interactive PTY to draw on plan quota — the cost model in the comment is inverted</td><td class="mono">reflect.ts:9; hiddenClaude.ts:17-19</td><td>Fix the comment</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>Bug template is macOS-only and asks for logs that are never written; no ADR/decision log (rationale lives in very long comments)</td><td class="mono">.github/ISSUE_TEMPLATE/bug_report.yml:26-55</td><td>OS dropdown; <code>docs/adr/</code></td></tr>
+        <tr><td><span class="pill low">Low</span></td><td><code>contributor-role.yml</code> is safe (no checkout of PR code, body via env, handle constrained by regex) — only nit: a merged author can name someone else's Discord handle</td><td class="mono">.github/workflows/contributor-role.yml</td><td>No action needed</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>Hook-fired OS notification fires only for <code>idle</code> (the least urgent case) and breaker trips — never for "blocked on a prompt" or "long task finished"</td><td class="mono">main/hooks.ts:275-295; main/index.ts:1059</td><td>Extend the <code>notify()</code> condition; click-to-focus the agent</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>Typed node-pty patch and version floats; <code>typescript</code> floated three minors past its pin (non-reproducible typecheck); <code>@openai/agents-realtime</code> is 0.x with a caret</td><td class="mono">package.json</td><td>Exact pins for the three</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>The fork is 3 commits behind upstream (blog/wall only) and 2 ahead (the account pool) — keep syncing; never push to <code>upstream</code></td><td class="mono">git rev-list main...upstream/main → 2 / 3</td><td>Periodic <code>git merge upstream/main</code></td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>Prompt-cache invariant for the memory/KG booleans is documented and honoured — but the god's capability line (H11) must be added in a cache-safe position (roster path, not content)</td><td class="mono">hive.ts:1097-1106</td><td>Design note for H11</td></tr>
+        <tr><td><span class="pill low">Low</span></td><td>Renderer has no component tests (7 of 123 files touched, all pure helpers); no e2e at all</td><td class="mono">test/</td><td>Start with Playwright smoke on onboarding → first spawn</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- 5 ENGINES -->
+  <section id="engines">
+    <p class="eyebrow">5 · Engine coverage</p>
+    <h2>Which engines actually get the protocol</h2>
+    <p class="lead measure">From <code>agentProvider.ts</code>, <code>providerAutomation.ts</code>, <code>hive.ts</code> and <code>telemetry.ts</code>. The README lists ten engines plus custom; the protocol is complete for one. The pi/opencode/crush/qwen bridges are marked live-unverified in the source itself.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Engine</th><th>Protocol injection</th><th>Lifecycle hooks</th><th>Routed inbox</th><th>Wake nudge</th><th>Token / cost budget</th><th>Compact verb</th></tr></thead>
+      <tbody>
+        <tr><td><b>claude</b></td><td class="yes">append-system-prompt + settings</td><td class="yes">native, 10 events + statusLine</td><td class="yes">direct</td><td class="yes">yes</td><td class="yes">OTel live + transcript</td><td>/compact</td></tr>
+        <tr><td><b>codex</b></td><td class="part">positional first turn</td><td class="yes">bridge (per-agent CODEX_HOME)</td><td class="yes">direct</td><td class="yes">yes</td><td class="no">none</td><td>/compact</td></tr>
+        <tr><td><b>grok</b></td><td class="part">positional</td><td class="yes">bridge (global install)</td><td class="yes">direct</td><td class="yes">yes</td><td class="no">none</td><td>/compact</td></tr>
+        <tr><td><b>antigravity</b></td><td class="part">-i flag</td><td class="yes">bridge, global ~/.gemini hooks</td><td class="yes">direct</td><td class="yes">via PostInvocation</td><td class="no">none</td><td class="no">none</td></tr>
+        <tr><td><b>pi</b></td><td class="part">positional</td><td class="part">extension — live-unverified</td><td class="yes">direct</td><td class="yes">yes</td><td class="no">none</td><td>/compact</td></tr>
+        <tr><td><b>opencode</b></td><td class="part">--prompt</td><td class="part">plugin session.idle — live-unverified</td><td class="yes">direct</td><td class="yes">yes</td><td class="no">none</td><td>/compact</td></tr>
+        <tr><td><b>qwen</b></td><td class="part">-i</td><td class="part">proxy sidecar synthesises events</td><td class="part">terminal work-order only</td><td class="yes">yes</td><td class="part">CostSample → ledger, not breaker</td><td>/compress</td></tr>
+        <tr><td><b>crush</b></td><td class="part">typed after boot</td><td class="part">proxy via CRUSH_GLOBAL_CONFIG</td><td class="part">terminal work-order</td><td class="yes">+ typed seed</td><td class="part">ledger only</td><td class="no">palette only</td></tr>
+        <tr><td><b>kimi</b></td><td class="no">none</td><td class="no">none</td><td class="no">bounces to god</td><td class="no">no</td><td class="no">none</td><td>/compact</td></tr>
+        <tr><td><b>copilot</b></td><td class="part">-p, exits per turn</td><td class="no">none</td><td class="no">bounces to god</td><td class="no">no live prompt</td><td class="no">none</td><td class="no">none</td></tr>
+        <tr><td><b>custom</b></td><td class="no">none</td><td class="no">none</td><td class="no">bounces</td><td class="no">no</td><td class="no">none</td><td class="no">none</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- 6 ROADMAP -->
+  <section id="roadmap">
+    <p class="eyebrow">6 · Upgrade roadmap</p>
+    <h2>What would make it the best office — in the order it should happen</h2>
+    <p class="lead measure">Three horizons. The first is almost entirely sub-ten-line fixes and should land before anything new is built; the second makes the office actually run itself; the third is where it pulls ahead of every other agent harness.</p>
+
+    <div class="horizon">
+      <h3>Horizon 1 — stop the bleeding (days)</h3>
+      <p class="why">Every item here is a Critical or High fix with a known file and a small diff. Ship them as one hardening release.</p>
+      <ol class="road">
+        <li><div><div class="t">Gate worktree removal on unintegrated work for every agent, not only workers</div><div class="d">Stops the app deleting hours of agent work on a crash, restart, breaker stop or account switch.</div><div class="m"><span class="mono">src/main/index.ts:449-458</span><span>· reuse worktreeHasUnintegratedWork</span></div></div></li>
+        <li><div><div class="t">Sanitise everything typed into a PTY at the single choke point</div><div class="d">Strip paste-break sequences and C0 controls in <code>submitToPty</code>; closes the cross-agent injection from any agent, Slack or webhook.</div><div class="m"><span class="mono">src/renderer/src/hooks/useHive.ts:118</span></div></div></li>
+        <li><div><div class="t">Atomic writes for registry, tasks, config, account pool</div><div class="d">Three one-line changes; then stop rewriting config every heartbeat.</div><div class="m"><span class="mono">hive.ts:1968 · config.ts:602 · accountPool.ts:131</span></div></div></li>
+        <li><div><div class="t">Bounce unknown recipients to god; log <code>undeliverable</code></div><div class="d">Fixes upstream #183 in ~8 lines using the bounce pattern already in <code>routeMessage</code>.</div><div class="m"><span class="mono">hive.ts:1195-1288</span></div></div></li>
+        <li><div><div class="t">Electron hardening trio + loopback binds</div><div class="d"><code>will-navigate</code> deny, https-only open handler, <code>sandbox: true</code>; bind webhook/Slack servers to 127.0.0.1; delete <code>localtunnel</code>.</div><div class="m"><span class="mono">index.ts:2136-2233 · webhook.ts:244 · slack.ts:179 · package.json</span></div></div></li>
+        <li><div><div class="t">A standing destructive-op deny list in every agent's settings</div><div class="d">The HITL gate becomes real under <code>bypassPermissions</code>; show auto-mode on the card.</div><div class="m"><span class="mono">hive.ts:876-915 · config.ts:424</span></div></div></li>
+        <li><div><div class="t">Run the tests: <code>npm test</code> glob + CI matrix + fix CONTRIBUTING</div><div class="d">Enrols the eight orphan files; typecheck on all three OSes; build job that can actually fail.</div><div class="m"><span class="mono">package.json · .github/workflows/ci.yml · CONTRIBUTING.md</span></div></div></li>
+        <li><div><div class="t">File logs, crash reporter, <code>render-process-gone</code>, "Open logs folder"</div><div class="d">Without this none of the other fixes can be verified against real user reports.</div><div class="m"><span class="mono">index.ts:103-108 · SettingsHeroCard.tsx:147</span></div></div></li>
+        <li><div><div class="t"><code>forget()</code> for control and telemetry; persist preserved worktrees; condense session loses its web tools; <code>backups/</code> + <code>log.jsonl</code> out of git</div><div class="d">Five small cleanups that each remove a "grows forever" or "sticks forever" defect.</div><div class="m"><span class="mono">control.ts · telemetry.ts · index.ts:406 · reflect.ts:284 · hive.ts:505</span></div></div></li>
+        <li><div><div class="t">Wire <code>check:links</code> into the release workflow; pin Node; document the Windows toolchain</div><div class="d">Prevents the recurring download outage and the #1 first-contributor failure.</div><div class="m"><span class="mono">release.yml · package.json engines · .nvmrc · CONTRIBUTING.md</span></div></div></li>
+      </ol>
+    </div>
+
+    <div class="horizon">
+      <h3>Horizon 2 — make the office run itself (weeks)</h3>
+      <p class="why">These are the changes that turn "a floor you watch" into "a team you delegate to". Most build on primitives that already exist and are simply unwired.</p>
+      <ol class="road">
+        <li><div><div class="t">A "Needs you" inbox + OS notifications + command palette + error boundaries</div><div class="d">One list of blocked agents, approvals and ASK ME questions behind a title-bar badge; a toast when an agent blocks or finishes; Cmd/Ctrl+K over agents, tabs and settings; two boundaries and a real failed-boot state.</div><div class="m"><span class="mono">new NeedsYouPanel.tsx · BlockedBanner.tsx (exists) · main/hooks.ts:275 · new CommandPalette.tsx · new ErrorBoundary.tsx</span></div></div></li>
+        <li><div><div class="t">Move wake-ups, delivery and account failover into main; the renderer becomes a view</div><div class="d">Fixes #151, survives window close/reload, and is the prerequisite for a tray/headless mode and phone access (#167). Restore a guarded Stop-drain or delete the dead path and the doc claims.</div><div class="m"><span class="mono">useHive.ts:636-659, 707-852, 1146-1230 → new main/delivery.ts · hooks.ts:211 · HIVE.md</span></div></div></li>
+        <li><div><div class="t">Hive protocol v2: ack, reply deadline, dead-letter, task revisions, result review</div><div class="d">Sweep unanswered <code>requires_reply</code> in the heartbeat; <code>rev</code> on the ledger + <code>hive/bin/task.cjs</code>; document spawn-requests to the god; reviewer step on card→done; work-order replies via outbox; wire or delete the prep assistant.</div><div class="m"><span class="mono">hive.ts · index.ts (breaker beat, done-notifier) · PROTOCOL_MD · COMMANDS_MD</span></div></div></li>
+        <li><div><div class="t">Fan-out and merge: an <code>integrate &lt;agentId&gt;</code> primitive</div><div class="d">Worktrees exist; a merge path does not. One helper that merges <code>agent/&lt;id&gt;</code> into the base branch and mails god the conflict list — plus an IDE "Integrate" button on the branch compare rail.</div><div class="m"><span class="mono">git.ts · index.ts · ide/GitPanes.tsx</span></div></div></li>
+        <li><div><div class="t">Cost parity across engines and per-task budgets</div><div class="d"><code>CostSample</code> → breaker; a Codex transcript reader; <code>task_id</code> on ledger rows; <code>budget_tokens</code> on a dispatch; caps measured on output + uncached input (#189); a capability line per roster entry in Michael's orientation.</div><div class="m"><span class="mono">hooks.ts:170-194 · usage.ts · breaker.ts:303 · hive.ts:1146</span></div></div></li>
+        <li><div><div class="t">Non-blocking, debounced hive commits and bounded shared files</div><div class="d">5 s trailing commit timer, async retry, 2 s timeout; rotate <code>log.jsonl</code>; give <code>board.md</code> the reflect treatment.</div><div class="m"><span class="mono">hive.ts:1977-2039 → hiveGit.ts · reflect.ts</span></div></div></li>
+        <li><div><div class="t">Memory that earns the README: absolute mempalace path, re-mine after condense, backoff + status, per-project scoping, FTS5 fallback</div><div class="d">The SQLite FTS index HIVE.md promises does not exist; adding it to the already-open <code>PersistStore</code> gives every engine sub-second keyword recall with no external CLI. Then provenance stamps on condensed blocks.</div><div class="m"><span class="mono">memory.ts · reflect.ts · db.ts · hive.ts:1119-1135</span></div></div></li>
+        <li><div><div class="t">Security round two</div><div class="d">Root allowlist for fs/git; secrets to <code>safeStorage</code> and redacted from <code>config:get</code>; hook-socket token; secret scrub before hive commit; Electron 38+; Windows Trusted Signing; provenance attestation; rewrite SECURITY.md to the real surface.</div><div class="m"><span class="mono">index.ts:3211-3322 · config.ts · integrations.ts · hooks.ts · release.yml · SECURITY.md</span></div></div></li>
+        <li><div><div class="t">Split the god-files along the seams</div><div class="d"><code>index.ts</code> (5,024 lines, ~160 handlers, 12 mutable globals) → <code>agentLifecycle.ts</code>, <code>shutdown.ts</code>, <code>scheduler.ts</code>, <code>workers.ts</code>, <code>ipc/*</code>; <code>hive.ts</code> → <code>hiveGit.ts</code> + provider provisioning + templates in <code>resources/</code>. Each extraction unlocks a test that does not exist today.</div><div class="m"><span class="mono">src/main/index.ts · src/main/hive.ts</span></div></div></li>
+        <li><div><div class="t">Renderer performance pass</div><div class="d">Volatile <code>runState</code> slice; LRU-capped terminal pool with disposal on both leak paths; one <code>useHiveTasks()</code>; inbox ids instead of bodies; one <code>&lt;Modal&gt;</code>; dark <code>color-scheme</code>; grouped/searchable agent strip.</div><div class="m"><span class="mono">store.ts · terminalPool.ts · useHive.ts · AgentStrip.tsx · global.css</span></div></div></li>
+      </ol>
+    </div>
+
+    <div class="horizon">
+      <h3>Horizon 3 — the best office (a quarter)</h3>
+      <p class="why">Differentiators. Each one maps to something users already asked for upstream, and each depends on Horizon 2 being done first.</p>
+      <ol class="road">
+        <li><div><div class="t">Headless daemon + web remote</div><div class="d">Run the floor without a window and open it from a phone (#167) — the natural consequence of moving delivery into main; pair it with Telegram/Discord inbound (#13) on the existing webhook/Slack rails.</div></div></li>
+        <li><div><div class="t">Full protocol parity for every engine</div><div class="d">Mailbox + cost + compact for all eleven; verify the pi/opencode/crush/qwen bridges live and remove the "live-unverified" markers.</div></div></li>
+        <li><div><div class="t">Departments and multi-floor workspaces</div><div class="d">Floors per project/team (#164), per-project memory scoping, shared project context file per repo, team templates and bulk hire import (#148).</div></div></li>
+        <li><div><div class="t">First-class MCP</div><div class="d">The catalog/consent scaffold exists (<code>mcpCatalog.ts</code>, <code>McpDefaultsSettings</code>); make servers installable per agent and visible on the card (#163).</div></div></li>
+        <li><div><div class="t">Replayable timeline and a daily stand-up for the human</div><div class="d">Every hive event, envelope and cost already lands in logs; a scrubber over them plus the existing <code>buildHeartbeatDigest</code> on a daily schedule → OS notification / Slack post.</div></div></li>
+        <li><div><div class="t">Agent health at a glance</div><div class="d">Cost, duration, context, account and block state on one card; editable names (#188); Claude Code profiles (#105); Bedrock (#68); WSL2 (#146).</div></div></li>
+        <li><div><div class="t">Trust features that match the pitch</div><div class="d">Per-task spend caps the god can set; reviewer-verified "done"; a durable audit trail that is not a git repo growing without bound; a SECURITY.md that describes the real surface.</div></div></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 7 GOOD -->
+  <section id="good">
+    <p class="eyebrow">7 · Keep as-is</p>
+    <h2>What is already excellent</h2>
+    <p class="lead measure">Several parts of this codebase are better than the equivalent in most commercial agent products. They are worth naming so nobody "cleans them up".</p>
+    <ul class="good">
+      <li><b>The one-gate PTY writer and the automation-safety gate</b> (<code>docs/message-queue.md</code>, <code>terminalPool.ts:327-345</code>) — reads xterm's real buffer to clear a phantom draft, with a deliberately asymmetric failure mode and the reasoning written down.</li>
+      <li><b><code>terminalPool.ts</code> as a whole</b> — one Terminal per PTY, re-parented hosts, WebGL leasing against Chromium's ~16-context cap, DOM fallback and recovery.</li>
+      <li><b>Hire import</b> (<code>shared/hire.ts</code>) — default-deny flag allowlist, cmd.exe-aware model regex, https-only homepage, import that only pre-fills.</li>
+      <li><b>The SSRF guard</b> (<code>main/hire.ts</code>) — <code>BlockList</code> subnet math, v4-in-v6 de-mapping, manual redirects re-validated per hop, streamed byte cap.</li>
+      <li><b>Slack and webhook ingress</b> — HMAC over the raw body before parsing, 5-minute replay window, decoy endpoints so unknown ids and wrong secrets are indistinguishable, auth before body buffering, two-tier rate limits.</li>
+      <li><b>The integration broker</b> — loopback bind, per-worker capability tokens never persisted, header-shadowing protection, manual redirects so credentials cannot follow off-origin.</li>
+      <li><b>Analytics allowlist</b> (<code>main/analytics.ts:44-59</code>) matches TELEMETRY.md line for line, plus <code>DO_NOT_TRACK</code>.</li>
+      <li><b>Realtime voice key handling</b> — the OpenAI key stays in main; the renderer gets only an ephemeral client secret.</li>
+      <li><b><code>reflect.ts verify()</code></b> — backup → LLM → seven structural checks → atomic rename; every failure path leaves the original byte-for-byte; idempotent.</li>
+      <li><b>Transcript reader</b> (<code>transcript.ts:213-338</code>) — incremental parse keyed on size+mtime, newline-boundary offsets, bounded cache, tail-only reads.</li>
+      <li><b>PTY session identity guard</b> (<code>pty.ts:677-706</code>) — kills the kill-then-respawn-same-id race that would spray a dead process's bytes into a fresh TUI.</li>
+      <li><b>The Windows npm-shim decoder</b> (<code>pty.ts:200-302</code>) — pure, testable, three historical shim shapes plus direct-exe, refuses anything not fully understood.</li>
+      <li><b>Worker worktree GC safety</b> (<code>git.ts:269-327</code>) — <code>keep</code> on dirty, ahead, or unanswerable; catches squash merges. (Just not yet applied to normal agents — C1.)</li>
+      <li><b>Sleep/wake recovery</b> (<code>index.ts:4878-4911</code>) — re-arms missions, triggers, beats and the router with fire-once semantics for overdue work.</li>
+      <li><b><code>db.ts</code> migrations</b> — <code>user_version</code> + migration in one transaction, WAL, busy timeout, "never edit a shipped migration".</li>
+      <li><b><code>providerAutomation.ts</code></b> — a total record over every provider with a shipped-binary citation per entry and honest nulls.</li>
+      <li><b>The proxy-bridge tier</b> — synthesising lifecycle events from observed LLM traffic to bring a hookless CLI into the protocol is genuinely novel.</li>
+      <li><b>ASK ME / <code>humanQA</code></b> — the question stays on the card, the answer patches the card and mails god, dismissal preserves history.</li>
+      <li><b>Closing Time</b> — a real ACK-and-wait shutdown protocol with timeout and live progress.</li>
+      <li><b>Ephemeral workers</b> — isolated worktree, per-worker token cap, idle reap, stale-done guard, safe teardown. The strongest orchestration primitive in the app.</li>
+      <li><b>Dark-mode token reasoning</b> (<code>tokens.css:97-171</code>) — identified <code>ink-300</code> as the structural token, measured every ramp step, added <code>--cth-on-accent</code>.</li>
+      <li><b>Roster mirrored to disk</b> because localStorage is origin-partitioned, with "an empty file must never win over populated localStorage".</li>
+      <li><b>The floor's clickable props</b> (calendar → triggers, boards → tasks, ASK ME → human, clock → quit) — a real information-architecture idea.</li>
+      <li><b>Secret redaction at the IPC boundary</b> (<code>hive.ts:243-270</code>) with a lockstep test — it just needs to import the real function.</li>
+    </ul>
+  </section>
+
+  <!-- 8 DOCS -->
+  <section id="docs">
+    <p class="eyebrow">8 · Docs drift</p>
+    <h2>Claims that no longer match the code</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Document says</th><th>Code does</th></tr></thead>
+      <tbody>
+        <tr><td><code>SECURITY.md:6-8</code> "no network listeners beyond a local Unix domain socket … no auth or remote surface"</td><td>Six HTTP servers (<code>hive.ts:2510</code>, <code>integrationBroker.ts:91</code>, <code>slack.ts:176,433</code>, <code>telemetry.ts:242</code>, <code>webhook.ts:241</code>) and an opt-in public tunnel; two bind all interfaces</td></tr>
+        <tr><td><code>SECURITY.md</code> "fs/git IPC … rooted at an agent's working directory"</td><td>The renderer supplies the root (<code>index.ts:3211-3232</code>)</td></tr>
+        <tr><td><code>HIVE.md</code> §5, §7 Phase 1 ✅ "Stop hook … agents drain their inbox automatically"; §8 cursor idempotency</td><td><code>hooks.ts:211-221</code> returns <code>{}</code> on Stop; <code>drainForStop</code> is dead; <code>cursor.json</code> never written</td></tr>
+        <tr><td><code>HIVE.md</code> §2.3 / PROTOCOL.md "tool-permission prompts are the HITL gate"</td><td><code>autoMode: true</code> bypasses permissions on every engine; no deny list</td></tr>
+        <tr><td><code>HIVE.md</code> §2.4 "a SQLite FTS index when keyword recall isn't enough"</td><td>Does not exist; the keyword fallback is a linear <code>indexOf</code> scan capped at 3 hits per file (<code>index.ts:3853-3862</code>)</td></tr>
+        <tr><td><code>README.md</code> "the fastest memory layer in the world … recall in milliseconds"</td><td>Recall = cold spawn of a Python CLI that loads a 90–300 MB embedding model, 120 s timeout (<code>memory.ts:270</code>); no benchmark in the repo</td></tr>
+        <tr><td><code>README.md</code> "condensation so it doesn't grow forever"</td><td><code>memory.md</code> is bounded; the palace, <code>backups/</code> and <code>log.jsonl</code> grow monotonically</td></tr>
+        <tr><td><code>README.md</code> "Enterprise Knowledge Graph"</td><td>Chunk + TF keyword index, no entities or edges, default off, no panel</td></tr>
+        <tr><td><code>README.md</code> "escalates into an approvals queue you act on"</td><td><code>onApprovalRequest</code> has no subscriber; HIVE.md says there is no approval queue</td></tr>
+        <tr><td><code>README.md</code> project tree</td><td>Lists 18 of 44 <code>src/main</code> files; omits <code>accountPool</code>, <code>slack</code>, <code>webhook</code>, <code>skills</code>, <code>updater</code>, all <code>realtime*</code>, and all of <code>src/shared/</code>; says "shipped through v0.4.3" at v0.4.4</td></tr>
+        <tr><td><code>SPEC.md</code> (whole document)</td><td>Describes the original tmux <code>pipe-pane</code>/attach MVP, "macOS-first", "not an agent-to-agent message bus"; the app owns PTYs via node-pty and is a message bus</td></tr>
+        <tr><td><code>CONTRIBUTING.md:16-45</code> "macOS-first, Windows/Linux untested", "Node 18+", "there is no test suite yet"</td><td>Windows is a shipped target with a dedicated conpty patch; Node 24 breaks the native build; 42 test files</td></tr>
+        <tr><td><code>MEMORY_GRAPH_SPEC.md:4</code> "No component code is written yet"</td><td>Phase 2 shipped exactly as specified (<code>MemoryGraphPanel</code>, <code>buildGraph</code>, <code>extractTopics</code>)</td></tr>
+        <tr><td><code>agentProvider.ts:219-223</code> "Stop→drain works natively" for codex</td><td>The server never drains</td></tr>
+        <tr><td><code>reflect.ts:9</code> "headless <code>claude -p</code>"</td><td>Interactive PTY drawing on plan quota</td></tr>
+        <tr><td><code>bug_report.yml</code> asks for logs and a macOS version</td><td>No log file is written; three platforms ship</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- 9 METHOD -->
+  <section id="method">
+    <p class="eyebrow">9 · Evidence</p>
+    <h2>How this was produced, and what is still open</h2>
+    <div class="measure">
+      <p><b>Verified first-hand this session</b> (read in the source, not inferred): C1–C8 in full; H1, H2 (bind hosts, plaintext config + <code>config:get</code>, hook socket, <code>localtunnel</code>), H3, H4, H6 (control.ts), H8 (tools list, backups path, verbs, bin cache), H10 (<code>drainForStop</code>, <code>enrichTaskPrompt</code>, merge path, spawn-requests docs); the CI/release workflows in full; HIVE.md, SECURITY.md, TELEMETRY.md, CHANGELOG, README, docs/message-queue.md; the upstream issue list; the fork/upstream divergence.</p>
+      <p><b>Agent-reported and spot-checked:</b> H5, H7, H9, H11, H12, the Medium/Low table, the engine matrix, the "keep as-is" list, the docs-drift table. Each audit cited file:line; I re-opened the cited lines for every Critical/High and a sample of the rest.</p>
+      <p><b>Measured:</b> <code>npm run test:focused</code> under portable Node 22.23.2 — 283 / 270 pass / 11 fail / 2 skipped in 7.5 s; the 11 failures are the known Windows POSIX-path set (cli-install-ladder, codex-remote sock path, expand-tilde, #140 recents, transcript-project-dir legacy twin). Exit code 1.</p>
+      <p><b>Not verified live</b> (would need the app running): the PTY output-storm stall; the typing race on hookless providers; Windows orphaning of agent trees on a force-killed main process (no Job Object); mempalace internals and actual recall latency; whether the 429 account-failover path parses real reset times — it has never been observed live (the 401 path was), and the operator still owes real <code>claude setup-token</code> tokens for that calibration.</p>
+      <p><b>Severity is my calibration</b>, not the audits' labels verbatim — I downgraded two renderer items and upgraded the worktree, HITL and renderer-owned-autonomy findings after reading the code paths end to end.</p>
+    </div>
+    <div class="note measure"><b>Honest caveat on scope.</b> This is a code audit of one commit on one day. "Critical" here means "can destroy work, execute injected input, or silently lose the floor" — not that anyone has been hurt by it yet. The fixes in Horizon 1 are small enough that the right move is to land them as one release before building anything new.</div>
+  </section>
+
+  <p class="foot">Munder Difflin Floor Inspection · generated 2026-08-19 from <span class="mono">MARKXAILABS/munder-difflin@1ad9638</span> · file:line references are clickable in the repo at that commit.</p>
+</main>
+</body>
+</html>
