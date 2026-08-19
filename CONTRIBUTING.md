@@ -1,8 +1,7 @@
-# Contributing to Munder Difflin
+# Contributing to Hello MarkX
 
-Thanks for your interest! This is an early prototype, so there's a lot of surface
-area and plenty of room to help. This guide covers setup, the gotchas, and the
-conventions that keep the codebase coherent.
+This guide covers setup, the gotchas, and the conventions that keep the codebase
+coherent.
 
 ## Code of Conduct
 
@@ -13,62 +12,60 @@ participating, you agree to uphold it.
 
 ### Prerequisites
 
-- **macOS** — the app is macOS-first. Windows/Linux are untested but PRs that
-  improve cross-platform support are welcome.
-- **Node.js 18+** and npm.
-- A **C/C++ toolchain** to build `node-pty`'s native addon. On macOS:
-  ```bash
-  xcode-select --install
-  ```
-- **[Claude Code](https://claude.com/claude-code)** on your `PATH` if you want
-  agents to actually run `claude` (the default command). Any other command works.
+- **macOS, Windows, or Linux.**
+- **Node.js 20 or 22** and npm. Node 24 is not supported yet: `better-sqlite3`
+  ships no prebuilt binary for it and `node-pty`'s winpty build fails under it.
+- A **C/C++ toolchain** for the native addons (`node-pty`, `better-sqlite3`):
+  - macOS: `xcode-select --install`
+  - Windows: Visual Studio 2019/2022 Build Tools with the **C++ workload**, the
+    **Spectre-mitigated libraries** (winpty needs them) and the **ClangCL toolset**
+    (`better-sqlite3` uses it). If `npm install` fails inside winpty's
+    `GetCommitHash.bat`, make sure the `NoDefaultCurrentDirectoryInExePath`
+    environment variable is **not** set in that shell.
+  - Linux: `build-essential` + `python3`.
+- At least one agent CLI on your `PATH` (Claude Code is the default) if you want
+  agents to actually run.
 
 ### Install & run
 
 ```bash
-git clone <your-fork-url> munder-difflin
-cd munder-difflin
+git clone https://github.com/MARKXAILABS/hello-markx.git
+cd hello-markx
 npm install        # postinstall rebuilds node-pty against Electron's ABI
 npm run dev        # live-reloading Electron build
 ```
 
 > [!IMPORTANT]
-> **The most common setup failure is the native `node-pty` rebuild.** The
-> `postinstall` script runs `electron-rebuild` so `node-pty` matches Electron's
+> **The most common setup failure is the native rebuild.** The `postinstall`
+> script runs `electron-rebuild` so `node-pty` and `better-sqlite3` match Electron's
 > ABI. If you see a "wrong ELF/Mach-O" or "NODE_MODULE_VERSION" error at launch,
-> re-run `npm install` (which re-triggers `postinstall`) after confirming your
-> C/C++ toolchain is installed.
+> re-run `npm install` after confirming your toolchain is installed.
 
 ## Before you open a PR
 
-1. **Keep the type-checker green:** `npm run typecheck` (runs both the node and
-   web TS projects). This is the de-facto CI gate — there is no test suite yet.
-2. **Confirm a production build works:** `npm run build`.
-3. **Match the aesthetic.** Any new UI **must** derive from the design tokens in
+1. **Keep the type-checker green:** `npm run typecheck` (node + web TS projects).
+2. **Run the tests:** `npm run test:focused`. On Windows a small set of POSIX-path
+   tests is known to fail; say so in the PR if you hit them.
+3. **Confirm a production build works:** `npm run build`.
+4. **Match the aesthetic.** Any new UI **must** derive from the design tokens in
    [`DESIGN.md`](./DESIGN.md) / `src/renderer/src/design/tokens.ts` — no ad-hoc
    colors, spacing, or fonts. `tokens.ts` and `tokens.css` are mirrored; if you
    change one, change both.
-4. **For anything visual, include a screenshot or short clip** in the PR.
+5. **For anything visual, include a screenshot or short clip** in the PR.
 
 ## Project layout
 
 | Path | What lives there |
 |---|---|
-| `src/main/` | Electron main process — PTYs (`pty.ts`), fs/git bridges, the hive (`hive.ts`, `hooks.ts`, `memory.ts`), config. |
-| `src/preload/` | Context-bridge IPC surface. |
+| `src/main/` | Electron main process — PTYs (`pty.ts`), fs/git bridges, the hive (`hive.ts`, `hooks.ts`, `memory.ts`), config, updater, triggers. |
+| `src/preload/` | Context-bridge IPC surface (`window.cth`). |
 | `src/renderer/` | React UI, Pixi.js office scene (`scene/office/`), components, design system, stores. |
+| `src/shared/` | Types and pure logic shared by main and renderer. |
+| `test/` | `node:test` unit tests (`*.test.cjs`). |
 | `tools/mapgen/` | Python helpers for building/rendering the Tiled office map. |
 
 See the [Architecture](./README.md#architecture) section of the README for the
-data-flow overview.
-
-## Good first areas
-
-- **Wiring real Claude Code hook events** — avatar behavior is currently driven
-  by a mock event loop (`src/renderer/src/store/mockEvents.ts`). Replacing it
-  with real tool events is the headline next milestone.
-- The add-agent flow and config drawer.
-- Cross-platform smoke-testing (Linux/Windows).
+data-flow overview, and [`HIVE.md`](./HIVE.md) for the multi-agent design.
 
 ## Commit & PR conventions
 
@@ -83,7 +80,3 @@ The bundled pixel art is under the **LimeZu FREE VERSION license
 If you contribute new art, it must be either your own work or compatibly
 licensed, and you must add it to `ATTRIBUTION.md`. Don't add commercial-only or
 unlicensed assets.
-
-## Questions
-
-Open a [discussion or issue](../../issues) — happy to help you get oriented.

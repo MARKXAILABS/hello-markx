@@ -1,6 +1,6 @@
 # Claude accounts — run agents on more than one subscription
 
-Munder Difflin can run each Claude Code agent on a **different Claude subscription**.
+Hello MarkX can run each Claude Code agent on a **different Claude subscription**.
 You register any number of accounts (a label + a long-lived OAuth token), pin any
 agent — Michael included — to one or let the pool pick (**Auto** = least loaded),
 and watch per-account usage + health live in the Command Center. When an account
@@ -13,7 +13,7 @@ you don't pin keep using the machine's normal `/login` account, exactly as befor
 Claude Code resolves credentials in a fixed precedence order, and a per-process
 `CLAUDE_CODE_OAUTH_TOKEN` environment variable outranks the `/login` credential
 stored on the machine (see the [Claude Code IAM docs](https://code.claude.com/docs/en/iam)).
-Munder Difflin uses exactly that: when a pinned agent spawns, the harness injects
+Hello MarkX uses exactly that: when a pinned agent spawns, the harness injects
 the account's token into **that agent's process environment only**. Nothing else
 changes — no wrapper scripts, no per-agent config dirs, and the machine-wide
 `~/.claude/.credentials.json` login file is never touched.

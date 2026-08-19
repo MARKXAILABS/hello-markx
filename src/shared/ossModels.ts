@@ -68,9 +68,3 @@ export function localSlugFor(provider: AgentProvider, tag: string): string {
 export function hasOssQuickPicks(provider: AgentProvider): boolean {
   return provider === 'opencode' || provider === 'crush' || provider === 'pi';
 }
-
-/** Canonical blog URLs the local-setup UI hyperlinks to (ondev-c part-3). */
-export const OSS_BLOG_LINKS = {
-  openModels: 'https://munderdiffl.in/blog/run-munder-difflin-on-open-models/',
-  macMini: 'https://munderdiffl.in/blog/run-munder-difflin-on-a-mac-mini/'
-} as const;

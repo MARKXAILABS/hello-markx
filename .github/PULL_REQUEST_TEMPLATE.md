@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to Munder Difflin! -->
+<!-- Thanks for contributing to Hello MarkX! -->
 
 ## What & why
 
@@ -16,16 +16,10 @@
 
 <!-- REQUIRED for any visual change: a screenshot or short clip (before/after). -->
 
-## Discord (optional)
-
-<!-- If you'd like the `employee of the month` role in our Discord when this merges,
-     put your handle below. Join first so we can find you: https://discord.gg/SEDzP5ZPk5 -->
-
-Discord: 
-
 ## Checklist
 
-- [ ] `npm run typecheck` passes (the de-facto CI gate).
+- [ ] `npm run typecheck` passes.
+- [ ] `npm run test:focused` passes (or the failures are explained).
 - [ ] `npm run build` succeeds.
 - [ ] Any new UI derives from `DESIGN.md` / `tokens.ts` — no ad-hoc colors, spacing, or fonts.
 - [ ] If I added art, it's my own or compatibly licensed, and listed in `ATTRIBUTION.md`.

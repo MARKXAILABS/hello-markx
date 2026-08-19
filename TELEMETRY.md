@@ -1,6 +1,6 @@
 # Telemetry
 
-Munder Difflin collects a small set of **anonymous** usage events so we can
+Hello MarkX collects a small set of **anonymous** usage events so we can
 understand adoption (how many people launch the app, which features get used)
 and make the product better. This document is the complete, authoritative
 contract: **if an event or property is not listed here, the app does not send
@@ -54,12 +54,11 @@ Any one of these fully disables telemetry:
    anonymous usage stats" during onboarding). Takes effect immediately.
 2. Set the standard [`DO_NOT_TRACK`](https://consoledonottrack.com)
    environment variable (any value other than `0`). Respected unconditionally.
-3. **Build from source.** The PostHog key is injected only in official release
-   CI; a local or forked build compiles without one and the analytics module
-   is a no-op — forks never send events anywhere.
+3. **Build without a key.** The PostHog key is read from the `POSTHOG_KEY` build
+   secret in the release workflow; this repository ships no key, so builds from
+   this source — including the official ones — send nothing unless you add one.
 
 ## Self-hosting note
 
-PostHog is open source and self-hostable. Official builds point at PostHog
-Cloud (US); the endpoint is a build-time setting (`POSTHOG_HOST`), so the
+PostHog is open source and self-hostable. The endpoint is a build-time setting (`POSTHOG_HOST`), so the
 project can move to a self-hosted instance without any code change.

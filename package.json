@@ -1,14 +1,14 @@
 {
-  "name": "munder-difflin",
+  "name": "hello-markx",
   "version": "0.4.4",
   "private": true,
-  "description": "Clones for you and your team, working 24/7 — a free, local-first multi-agent harness that turns the CLI coding agent you already run into a clone of you, coordinating an office of agents on your machine.",
+  "description": "Hello MarkX — a local-first multi-agent harness that turns the CLI coding agents you already run into a coordinated office of agents on your own machine.",
   "main": "out/main/index.js",
-  "author": "Chaitanya Giri",
-  "homepage": "https://munderdiffl.in/",
+  "author": "MARKXAILABS",
+  "homepage": "https://github.com/MARKXAILABS/hello-markx",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chaitanyagiri/munder-difflin.git"
+    "url": "https://github.com/MARKXAILABS/hello-markx.git"
   },
   "scripts": {
     "dev": "electron-vite dev",

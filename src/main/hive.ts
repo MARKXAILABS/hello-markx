@@ -321,7 +321,7 @@ export class HiveManager {
     if (!root) return null;
     if (process.platform === 'win32') {
       const id = createHash('sha1').update(root).digest('hex').slice(0, 12);
-      return `\\\\.\\pipe\\munder-difflin-${id}`;
+      return `\\\\.\\pipe\\hello-markx-${id}`;
     }
     return join(root, 'hooks.sock');
   }
@@ -917,7 +917,7 @@ export class HiveManager {
   /**
    * W3 — build the per-agent `mcpServers` map from the default catalog. Includes a
    * server only when it's enabled (catalog ∩ consent), scopes filesystem/git to the
-   * agent cwd (never whole-disk), and namespaces every id `munder-<id>` so a server
+   * agent cwd (never whole-disk), and namespaces every id `hellomarkx-<id>` so a server
    * of the same name in the user's own ~/.claude is never clobbered. A write/secret
    * server is included ONLY on an explicit `enabled:true` consent — never via a
    * default — so a malformed/partial config can't silently arm a keyed server.
@@ -938,7 +938,7 @@ export class HiveManager {
       // Replace the `<cwd>` placeholder (filesystem/git) with the agent cwd at merge
       // time so these stay strictly workspace-scoped.
       const args = e.spec.args.map((a) => (a === '<cwd>' ? cwd : a));
-      out[`munder-${e.id}`] = {
+      out[`hellomarkx-${e.id}`] = {
         command: e.spec.command,
         args,
         ...(e.spec.env ? { env: e.spec.env } : {})
@@ -1552,7 +1552,7 @@ export class HiveManager {
     try { return readdirSync(dir).filter((f) => f.endsWith('.json')).length; } catch { return 0; }
   }
   /** Install the Antigravity (`agy`) lifecycle-hook bridge: write the normalizer
-   *  shim and merge a `munder-hive` hook group into agy's global hooks.json so a
+   *  shim and merge a `hellomarkx-hive` hook group into agy's global hooks.json so a
    *  Gemini worker reports PreToolUse/PostToolUse/Stop/PreInvocation/PostInvocation
    *  to this HookServer (live status + guarded idle delivery), reusing the Claude pipeline.
    *
@@ -1592,7 +1592,9 @@ export class HiveManager {
         if (existsSync(p)) {
           try { existing = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>; } catch { existing = {}; }
         }
-        existing['munder-hive'] = group;
+        // Drop the pre-rename group so an upgraded machine never fires both.
+        delete existing['munder-hive'];
+        existing['hellomarkx-hive'] = group;
         writeFileSync(p, JSON.stringify(existing, null, 2), 'utf8');
       } catch { /* best-effort per file */ }
     }
@@ -1672,7 +1674,7 @@ export class HiveManager {
       if (shim) {
         const events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop',
           'SessionStart', 'UserPromptSubmit', 'PreCompact', 'PostCompact'];
-        config += '\n# --- munder-hive lifecycle hooks (auto-generated; do not edit) ---\n';
+        config += '\n# --- hellomarkx-hive lifecycle hooks (auto-generated; do not edit) ---\n';
         for (const ev of events) {
           config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = '${this.nodeRunUnquoted(shim)}'\ntimeout = 30\n`;
         }
@@ -1704,7 +1706,7 @@ export class HiveManager {
       writeFileSync(join(extDir, 'hive-bridge.js'), PI_EXTENSION, 'utf8');
       // A manifest so Pi auto-loads the extension on start (best-effort; harmless if
       // Pi ignores it). Kept minimal and hive-authored.
-      const manifest = { name: 'munder-hive-bridge', version: '0.3.1', main: 'extensions/hive-bridge.js', auto: true };
+      const manifest = { name: 'hellomarkx-hive-bridge', version: '0.3.1', main: 'extensions/hive-bridge.js', auto: true };
       writeFileSync(join(home, 'extensions.json'), JSON.stringify(manifest, null, 2), 'utf8');
     } catch (e) { console.error('[hive] installPiHooks failed:', e); }
     return home;
@@ -1816,8 +1818,10 @@ export class HiveManager {
       };
       const hookDir = join(homedir(), '.grok', 'hooks');
       mkdirSync(hookDir, { recursive: true });
+      // Remove the pre-rename hook file so an upgraded machine never fires both.
+      try { rmSync(join(hookDir, 'munder-hive.json'), { force: true }); } catch { /* best-effort */ }
       writeFileSync(
-        join(hookDir, 'munder-hive.json'),
+        join(hookDir, 'hellomarkx-hive.json'),
         JSON.stringify({ hooks }, null, 2),
         'utf8'
       );
@@ -2566,7 +2570,7 @@ server.listen(0, '127.0.0.1', function () {
 // payload is camelCase and uses snake_case event values. Normalize the input for
 // HookServer and translate its Claude-style permission denial into Grok's direct
 // decision form. Scoped by AGENT_ID so the trusted global hook is inert outside
-// Munder-spawned workers.
+// harness-spawned workers.
 const GROK_HOOK_SHIM = `#!/usr/bin/env node
 'use strict';
 const net = require('net');

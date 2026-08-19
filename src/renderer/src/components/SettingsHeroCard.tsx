@@ -26,7 +26,7 @@ import { PixelButton } from './PixelButton';
 import { Icon } from './Icon';
 import { DEFAULT_HERO, type HeroPayload } from '@shared/heroPayload';
 
-const GITHUB_REPO_URL = 'https://github.com/chaitanyagiri/munder-difflin';
+const GITHUB_REPO_URL = 'https://github.com/MARKXAILABS/hello-markx';
 
 export function SettingsHeroCard() {
   const [version, setVersion] = useState<string | null>(null);
@@ -69,7 +69,7 @@ export function SettingsHeroCard() {
             <span style={{
               fontFamily: 'var(--cth-font-display)', fontSize: 13, lineHeight: '20px',
               color: 'var(--cth-ink-900)'
-            }}>MUNDER DIFFLIN</span>
+            }}>HELLO MARKX</span>
             {version && (
               <span style={{
                 fontFamily: 'var(--cth-font-mono, monospace)', fontSize: 12,

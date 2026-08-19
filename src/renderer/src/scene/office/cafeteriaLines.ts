@@ -1,6 +1,6 @@
 // Cafeteria small-talk — The Office edition.
 //
-// The cast ARE Dunder Mifflin (see cast.ts), so an agent's coffee break is an
+// The cast are The Office characters (see cast.ts), so an agent's coffee break is an
 // excuse for a one-liner in character. Two kinds of line:
 //   • solo  — one quip shown above a single agent at a break spot
 //   • pair  — a two-beat exchange between two agents at the same table
@@ -96,7 +96,7 @@ export function pickSoloLine(character: OfficeCharacterName, spot: BreakSpot, se
 
 type Exchange = readonly string[];
 
-// Generic banter — works between any two agents (they're all Dunder Mifflin).
+// Generic banter — works between any two agents (they are all the same cast).
 const EXCHANGES: readonly Exchange[] = [
   ['world’s best boss.', 'you are. I had the mug made.', 'and I cherish it.'],
   ['would an idiot do this?', '...if yes, I don’t.', 'that’s my boy.'],

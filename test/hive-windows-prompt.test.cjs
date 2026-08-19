@@ -25,7 +25,7 @@ const loadTs = require('./load-ts.cjs');
 const { HiveManager } = loadTs('src/main/hive.ts');
 const { argsToCommandLine } = require('node-pty/lib/windowsPtyAgent.js');
 
-const KG_CLI = path.join('/Applications', 'Munder Difflin.app', 'Contents', 'Resources', 'kg.cjs');
+const KG_CLI = path.join('/Applications', 'Hello MarkX.app', 'Contents', 'Resources', 'kg.cjs');
 
 async function floor(t, opts = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-winprompt-'));

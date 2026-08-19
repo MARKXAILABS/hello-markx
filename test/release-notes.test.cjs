@@ -93,11 +93,11 @@ test("the 'What's new' section wins over the release template's preamble", () =>
   // taking "the first lines" of the body would digest the boilerplate the user
   // has already read instead of the release's news.
   const body = [
-    '# Munder Difflin v0.4.4',
+    '# Hello MarkX v0.4.4',
     '',
     '**A local hive of agents that run themselves** — the product tagline.',
     '',
-    '### → [**munderdiffl.in**](https://munderdiffl.in/) — see it in action',
+    '### → [**example.com**](https://example.com/) — see it in action',
     '',
     '---',
     '',

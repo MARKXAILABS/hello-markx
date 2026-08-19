@@ -6,7 +6,7 @@
  *
  * WHY THIS EXISTS. RELEASE.md is published verbatim as the GitHub release body,
  * and its download table links to
- * `/releases/latest/download/Munder-Difflin-<version>-<platform>.<ext>`. That URL
+ * `/releases/latest/download/Hello-MarkX-<version>-<platform>.<ext>`. That URL
  * form requires the EXACT filename present in whichever release is currently
  * "latest", and electron-builder bakes ${version} into every artifact name — so a
  * version string left behind in RELEASE.md turns all four download links into
@@ -35,13 +35,13 @@ const releaseMd = fs.readFileSync(path.join(root, 'RELEASE.md'), 'utf8');
 const problems = [];
 
 // — 1. every pinned artifact name must carry the current version —
-const assetRe = /Munder-Difflin-(\d+\.\d+\.\d+)-([^\s`)]+)/g;
+const assetRe = /Hello-MarkX-(\d+\.\d+\.\d+)-([^\s`)]+)/g;
 const assets = new Set();
 for (const m of releaseMd.matchAll(assetRe)) {
   if (m[1] !== version) {
-    problems.push(`RELEASE.md advertises Munder-Difflin-${m[1]}-${m[2]} but package.json says ${version}`);
+    problems.push(`RELEASE.md advertises Hello-MarkX-${m[1]}-${m[2]} but package.json says ${version}`);
   }
-  assets.add(`Munder-Difflin-${m[1]}-${m[2]}`);
+  assets.add(`Hello-MarkX-${m[1]}-${m[2]}`);
 }
 if (assets.size === 0) problems.push('RELEASE.md advertises no download assets at all — did the table move?');
 
@@ -74,7 +74,7 @@ if (fs.existsSync(llms)) {
 }
 
 async function checkLive() {
-  const base = 'https://github.com/chaitanyagiri/munder-difflin/releases/latest/download/';
+  const base = 'https://github.com/MARKXAILABS/hello-markx/releases/latest/download/';
   for (const name of [...assets, 'SHA256SUMS.txt']) {
     let status = 0;
     try {
