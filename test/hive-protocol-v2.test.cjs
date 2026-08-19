@@ -321,6 +321,16 @@ function repo(t) {
     return res;
   };
   git('init', '-q', '-b', 'main');
+  // Write the identity INTO the repo, not just onto this helper's own invocations.
+  // integrateAgentBranch() shells out to `git merge` itself, and a non-fast-forward
+  // merge has to write a commit — which fails with "Please tell me who you are" on
+  // any machine without a global git identity. A developer box always has one; a CI
+  // runner never does, so relying on the `-c` flags above passed locally and failed
+  // on every runner. Configuring the fixture repo makes the test hermetic instead of
+  // quietly borrowing the host's git config.
+  git('config', 'user.name', 'T');
+  git('config', 'user.email', 't@t');
+  git('config', 'commit.gpgsign', 'false');
   fs.writeFileSync(path.join(dir, 'shared.txt'), 'base\n');
   git('add', '-A');
   git('commit', '-qm', 'base');
