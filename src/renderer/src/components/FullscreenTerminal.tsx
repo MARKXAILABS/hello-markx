@@ -239,11 +239,20 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [addAgentOpen, setFullscreen]);
 
-  if (!agent || !agent.ptyId) {
-    // Bail out — no real agent to show
-    setFullscreen(null);
-    return null;
-  }
+  // The fullscreened agent can vanish underneath us — killed, archived, or its
+  // floor closed. Leaving fullscreen is a store write, and this used to happen
+  // straight from the render body (#22): React warns about updating another
+  // component while rendering this one, and under StrictMode / concurrent
+  // rendering the update can be discarded, stranding the overlay on a dead
+  // agent. An effect runs after commit, which is where a write belongs.
+  const gone = !agent || !agent.ptyId;
+  useEffect(() => {
+    if (gone) setFullscreen(null);
+  }, [gone, setFullscreen]);
+
+  // Spelled out rather than `if (gone)` so TypeScript still narrows `agent`
+  // for the whole render below.
+  if (!agent || !agent.ptyId) return null;
 
   // No kill button here on purpose. Killing an agent is a destructive action
   // that belongs with the rest of its lifecycle controls in the docked panel;

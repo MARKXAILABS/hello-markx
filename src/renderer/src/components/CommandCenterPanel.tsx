@@ -11,6 +11,7 @@ import { TriggersTab } from './triggers/TriggersTab';
 import { TriggerHistoryTab } from './triggers/TriggerHistoryTab';
 import { WorkersTab } from './WorkersTab';
 import { SkillsTab } from './SkillsTab';
+import { BlockedBanner } from './BlockedBanner';
 import { acquireTerminal, disposeTerminal, resetTerminal } from './terminalPool';
 import { terminalInstanceKey } from './terminalRecovery';
 import { Icon } from './Icon';
@@ -222,6 +223,21 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
           </PixelButton>
         </div>
       </div>
+
+      {/* #12 — "what needs me", the god's copy. usePtyParser writes blockReason
+          for Michael too, and his is the one that says "waiting on YOU": nobody
+          upstream answers his prompts. AgentDetailPanel hands the god straight
+          to this panel, so wiring the banner only there would have skipped the
+          single most important case. Above the tabs, same reasoning as there. */}
+      {agent.blockReason && (
+        <BlockedBanner
+          reason={agent.blockReason}
+          onAction={(_label, send) => {
+            if (send && agent.ptyId) void window.cth.writePty(agent.ptyId, send);
+            updateAgent(agent.id, { blockReason: undefined });
+          }}
+        />
+      )}
 
       {/* Tab bar — ONE row, tabs at their natural width, scrolling only if the
           panel is genuinely too narrow for all of them.

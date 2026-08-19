@@ -10,6 +10,7 @@ import { AgentDetailPanel } from '@/components/AgentDetailPanel';
 import { AgentStrip } from '@/components/AgentStrip';
 import { AddAgentModal } from '@/components/AddAgentModal';
 import { MichaelBooting } from '@/components/MichaelBooting';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { OnboardingWizard } from '@/components/OnboardingWizard';
 import { HivePicker } from '@/components/HivePicker';
 import { QuitWarningModal, type ClosingTimeState } from '@/components/QuitWarningModal';
@@ -40,6 +41,11 @@ export function App() {
   const addAgentOpen = useStore(s => s.addAgentOpen);
   const setAddAgentOpen = useStore(s => s.setAddAgentOpen);
   const godStatus = useStore(s => s.godStatus);
+  // #12 — why the boot failed, not just that it did. A spawn failure used to be
+  // swallowed (`setGodStatus('failed')`, `res.error` dropped), so someone who
+  // picked a CLI they hadn't installed got a cheerful "EMPTY FLOOR" and no
+  // reason. useHive now passes the message through and the store keeps it.
+  const godError = useStore(s => s.godError);
   const fullscreenAgentId = useStore(s => s.fullscreenAgentId);
   const appThemeNow = useAppTheme();
   const fullscreenFilePath = useStore(s => s.fullscreenFilePath);
@@ -360,10 +366,59 @@ export function App() {
         gap: 0
       }}>
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-          <OfficeFloor />
+          {/* #12 — the floor is a big tree of agent-driven rendering (sprites,
+              stations, task cards) fed by data the agents themselves produce.
+              One bad value in there used to unmount the ENTIRE window; now it
+              takes down the floor and leaves the sidebar, title bar and strip. */}
+          <ErrorBoundary label="The floor">
+            <OfficeFloor />
+          </ErrorBoundary>
           <MemoryPanel />
           {agentCount === 0 && godStatus === 'booting' && <MichaelBooting />}
-          {agentCount === 0 && godStatus !== 'booting' && (
+          {agentCount === 0 && godStatus === 'failed' && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              pointerEvents: 'none'
+            }}>
+              <div style={{ pointerEvents: 'auto', width: 400 }}>
+                <PixelPanel variant="dialog" title="MICHAEL DIDN'T CLOCK IN" noPadding>
+                  <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: '20px' }}>
+                      The floor is empty because the agent CLI never launched — usually
+                      because the engine picked during onboarding isn&rsquo;t installed on
+                      this machine.
+                    </p>
+                    {godError && (
+                      <div style={{
+                        fontFamily: 'var(--cth-font-mono)', fontSize: 12, lineHeight: '18px',
+                        color: 'var(--cth-ink-900)', background: 'var(--cth-coral-light)',
+                        padding: '6px 8px', boxShadow: 'inset 0 0 0 1px var(--cth-coral)',
+                        maxHeight: 120, overflow: 'auto', overflowWrap: 'anywhere'
+                      }}>{godError}</div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <PixelButton
+                        variant="primary"
+                        size="md"
+                        onClick={() => { setSettingsSection('Prerequisites'); setSettingsOpen(true); }}
+                      >
+                        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                          <Icon name="gear" /> check prerequisites
+                        </span>
+                      </PixelButton>
+                      <PixelButton variant="secondary" size="md" onClick={() => setAddAgentOpen(true)}>
+                        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                          <Icon name="plus" /> add agent anyway
+                        </span>
+                      </PixelButton>
+                    </div>
+                  </div>
+                </PixelPanel>
+              </div>
+            </div>
+          )}
+          {agentCount === 0 && godStatus === 'ready' && (
             <div style={{
               position: 'absolute', inset: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -397,6 +452,11 @@ export function App() {
           width: sidebarWidth, flexShrink: 0,
           minHeight: 0, display: 'flex', flexDirection: 'column'
         }}>
+          {/* #12 — the sidebar is the other half worth saving: the detail panel
+              and the command center render ledger cards, git status and trigger
+              history, all of it agent-authored. A throw in there now costs the
+              sidebar, not the window. */}
+          <ErrorBoundary label="This panel">
           {agent ? (
             <AgentDetailPanel agent={agent} />
           ) : godStatus === 'booting' ? (
@@ -435,6 +495,7 @@ export function App() {
               </PixelButton>
             </PixelPanel>
           )}
+          </ErrorBoundary>
         </div>
       </div>
 
