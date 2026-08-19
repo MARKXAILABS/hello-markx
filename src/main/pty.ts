@@ -48,7 +48,21 @@ interface PtySession {
   /** True after the child has emitted at least one frame. Automation waits for
    *  this before typing, so startup prompts cannot outrun the TUI subscription. */
   hasOutput: boolean;
+  /** Bounded ring of this PTY's most recent output, recorded whether or not a
+   *  renderer is listening. `safeSend` DROPS every chunk while the webContents is
+   *  gone, so a renderer reload mid-turn used to lose every byte three agents
+   *  emitted in the gap — the tab came back blank until the agent next printed.
+   *  `outputTail()` hands this back so a reattaching xterm can be primed with it.
+   *  Whole chunks, trimmed from the front: the real ceiling is TAIL_CAP_BYTES +
+   *  one chunk, and a replay can start mid-escape-sequence (xterm shrugs it off,
+   *  and the alternative — slicing bytes — cuts sequences just as often). */
+  tail: string[];
+  tailBytes: number;
 }
+
+/** Per-session output-tail budget. 256 KB is ~2-3 full TUI repaints, enough for
+ *  a reattach to land on a readable screen, ×N live agents of resident cost. */
+const TAIL_CAP_BYTES = 256 * 1024;
 
 export interface SpawnOptions {
   id: string;
@@ -324,9 +338,10 @@ export class PtyManager {
     return n;
   }
 
-  /** Kill every PTY owned by a window (its onExit runs the normal teardown:
-   *  archive + worktree cleanup). Called when a floor window closes so its
-   *  terminals don't linger as orphaned processes writing to a dead webContents. */
+  /** Kill every PTY owned by a window, drop it from the map, and run its normal
+   *  teardown (archive + worktree cleanup). Called when a floor window closes so
+   *  its terminals don't linger as orphaned processes writing to a dead
+   *  webContents. */
   killByOwner(wc: WebContents): void {
     for (const [id, s] of [...this.sessions.entries()]) {
       if (s.owner === wc) {
@@ -335,7 +350,19 @@ export class PtyManager {
           s.proc.kill();
           ensureKilled(pid);
         } catch { /* already gone */ }
-        void id;
+        // Drop the entry like kill() does. Leaving it in the map is a real leak:
+        // when the kill above throws (child already reaped) onExit never fires,
+        // so the dead session lingers forever — countByOwner keeps counting a
+        // phantom terminal and a respawn under the same id is refused with
+        // "pty already exists".
+        this.sessions.delete(id);
+        // ...but unlike kill(), NOBODY else runs teardown for this path (kill()'s
+        // callers all follow it with teardownPty; the window 'closed' handler does
+        // not). The delete above makes onExit's identity guard bail, so fire the
+        // same handler here — otherwise closing a floor would archive nothing and
+        // leak every worktree. teardownPty is idempotent and onExit can no longer
+        // reach it, so this runs exactly once. No exit code: the child was killed.
+        try { this.exitHandler?.(id); } catch { /* teardown must not break the loop */ }
       }
     }
   }
@@ -681,7 +708,9 @@ export class PtyManager {
         command: resolved,
         lastOutputAt: Date.now(),
         hasOutput: false,
-        owner
+        owner,
+        tail: [],
+        tailBytes: 0
       };
       this.sessions.set(opts.id, session);
 
@@ -691,6 +720,13 @@ export class PtyManager {
         if (this.sessions.get(opts.id) !== session) return;
         session.hasOutput = true;
         session.lastOutputAt = Date.now();
+        // Record BEFORE routing — the whole point of the tail is the window where
+        // the renderer is gone (reload / late attach) and safeSend drops the chunk.
+        session.tail.push(data);
+        session.tailBytes += Buffer.byteLength(data);
+        while (session.tailBytes > TAIL_CAP_BYTES && session.tail.length > 1) {
+          session.tailBytes -= Buffer.byteLength(session.tail.shift() as string);
+        }
         // Route to the session's owner window (multi-window owner routing).
         this.safeSend(`pty:data:${opts.id}`, data, session.owner);
       });
@@ -770,6 +806,16 @@ export class PtyManager {
       lastOutputAt: s.lastOutputAt,
       hasOutput: s.hasOutput
     }));
+  }
+
+  /** This PTY's recent output (up to TAIL_CAP_BYTES), oldest→newest, or '' when
+   *  there is no such PTY. Feeds the `pty:attach` IPC: a renderer that reloaded
+   *  or opened a tab mid-turn writes this into its fresh xterm instead of staring
+   *  at a blank grid until the agent's next byte. Read-only — replaying does not
+   *  consume it, so two windows attaching to the same PTY both get the screen. */
+  outputTail(id: string): string {
+    const s = this.sessions.get(id);
+    return s ? s.tail.join('') : '';
   }
 
   /** Epoch ms of this PTY's most recent output, or undefined if no such PTY. */

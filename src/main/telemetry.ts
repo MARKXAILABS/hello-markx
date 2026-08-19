@@ -123,6 +123,12 @@ interface SessionAccum {
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // OTLP batches are small; cap unauth peers.
 const SPAN_RING_CAP = 200; // rich spans retained per agent for the waterfall.
+/** How long a session accumulator may keep feeding an agent's LIVE aggregate.
+ *  Sessions are never closed by the OTel protocol — every `--resume`, restart
+ *  and account failover just mints a new session.id — so on a week-long floor
+ *  `aggregateLive` would sum hundreds of DEAD sessions into the sample the
+ *  breaker (#6) diffs, and its view of "spend since last check" drifts. */
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export interface TelemetryCollectorOptions {
   /** Loopback host to bind. Defaults to 127.0.0.1 (the trust boundary). */
@@ -216,6 +222,17 @@ export class TelemetryCollector {
   onApiError(cb: (agentId: string, info: ApiErrorInfo) => void): () => void {
     this.apiErrorSubs.add(cb);
     return () => this.apiErrorSubs.delete(cb);
+  }
+
+  /** Drop every accumulator for an agent (called from teardownPty, beside
+   *  `breaker.forget`). Both maps are keyed by agent, are only ever added to,
+   *  and ids are reused across a respawn — so without this a fresh agent starts
+   *  life carrying the dead one's cumulative tokens/cost and its stale spans. */
+  forget(id: string): void {
+    const set = this.agentSessions.get(id);
+    if (set) for (const sid of set) this.sessions.delete(sid);
+    this.agentSessions.delete(id);
+    this.spans.delete(id);
   }
 
   /** Recent tool spans for the per-agent waterfall (#7B.2), oldest→newest. */
@@ -396,16 +413,22 @@ export class TelemetryCollector {
   }
 
   /** Sum an agent's live sessions into one cumulative sample (sessionId/model =
-   *  the most recently active session). Null if the agent has no live data. */
+   *  the most recently active session). Null if the agent has no live data.
+   *
+   *  Doubles as the sweeper for the age cap: expired accumulators are dropped
+   *  here rather than on a timer, because this is the exact place their staleness
+   *  does damage (and it runs on every publish/pull, so nothing accretes). */
   private aggregateLive(agentId: string): AgentUsageSample | null {
     const set = this.agentSessions.get(agentId);
     if (!set || set.size === 0) return null;
+    const cutoff = Date.now() - SESSION_MAX_AGE_MS;
     const out: AgentUsageSample = {
       agentId, sessionId: '', ts: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, model: '', usd: 0
     };
     for (const sid of set) {
       const a = this.sessions.get(sid);
-      if (!a) continue;
+      if (!a) { set.delete(sid); continue; }
+      if (a.ts < cutoff) { this.sessions.delete(sid); set.delete(sid); continue; }
       out.input += a.input;
       out.output += a.output;
       out.cacheRead += a.cacheRead;
@@ -418,6 +441,10 @@ export class TelemetryCollector {
         if (a.accountUuid) out.accountUuid = a.accountUuid;
       }
     }
+    // Every session expired (or the set held only ghosts) — no live data left, so
+    // say so instead of publishing an all-zero sample the breaker would read as a
+    // spend RESET. getAgentUsage then falls through to the transcript.
+    if (out.ts === 0) { this.agentSessions.delete(agentId); return null; }
     return out;
   }
 

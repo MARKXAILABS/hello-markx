@@ -79,6 +79,12 @@ export class ControlRegistry {
   clearSteers(id: string): void { const c = this.map.get(id); if (c) c.steerQueue.length = 0; }
   /** Clear pause + halt (lets a paused/halted agent run again). Keeps gates. */
   resume(id: string): void { const c = this.ensure(id); c.paused = false; c.halted = false; }
+  /** Drop ALL control state for an id (called from teardownPty, beside
+   *  `breaker.forget`). Ids are reused: a model change / Restart & Continue does
+   *  kill()+spawn() under the same agent id, and without this the fresh session
+   *  inherits the dead one's pause/halt/gates — every PreToolUse comes back
+   *  "Paused by operator" while the floor UI shows a perfectly healthy agent. */
+  forget(id: string): void { this.map.delete(id); }
 
   // ─── Reads (used by HookServer) ────────────────────────────────────────────
 
