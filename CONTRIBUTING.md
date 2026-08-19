@@ -87,11 +87,18 @@ npm run dev        # live-reloading Electron build
    the thing you gate a PR on: a hand-written file list is how eight test files
    went unrun for months.)
 
-   **Known Windows baseline:** 11 tests fail on Windows today, all of them
-   POSIX-path assumptions in the tests rather than bugs in the source —
-   `cli-install-ladder`, `codex-remote`, `expand-tilde` and
-   `transcript-project-dir`. That is issue #7, not something you broke. CI marks
-   the Windows job non-blocking for exactly those; Linux and macOS are hard gates.
+   **All three platforms are hard gates.** Linux, macOS and Windows must all be
+   green; there is no `continue-on-error` anywhere in the test matrix, and please
+   do not add one. A red Windows job means you broke something.
+
+   There used to be a "known Windows baseline" of 11 failures here, described as
+   POSIX-path assumptions in the tests. That description was wrong. On triage, 7
+   of the 11 were real Windows **source** bugs — `expandTilde()` stamping the
+   process's drive letter onto paths that then got persisted (#58), a `unix://`
+   URI built with `path.join` (#60), and a Node installer whose checksum check
+   never aborted, so `msiexec` ran on an unverified MSI (#57). A permanently
+   yellow job is how all three stayed invisible while Windows shipped as a
+   headline feature. Fix the failure; never exempt the platform.
 3. **Confirm a production build works:** `npm run build`.
 4. **Match the aesthetic.** Any new UI **must** derive from the design tokens in
    [`DESIGN.md`](./DESIGN.md) / `src/renderer/src/design/tokens.ts` — no ad-hoc

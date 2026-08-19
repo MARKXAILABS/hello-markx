@@ -10,13 +10,18 @@ spawn runs with your user's privileges, and with auto mode on (the default — s
 ### Network surface
 
 Everything the app listens on, so a reviewer knows where to look. Nothing here is a
-"no listeners" posture — there are six HTTP servers plus a local socket, and two of
-them can be reachable from the internet when you opt in.
+"no listeners" posture. Precisely: **five HTTP servers run inside Electron main**
+(`webhook.ts`, `telemetry.ts`, `integrationBroker.ts`, and *two* in `slack.ts` —
+`SlackWebhookServer` and `SlackReplyServer`), **one local socket** (`hooks.ts`, which
+is `node:net` over a Unix domain socket or a Windows named pipe — not HTTP), and **one
+HTTP server per running agent** that lives in a *child process*, not in main: the proxy
+sidecar is a template in `hive.ts` written out to `hive-proxy.cjs` and spawned per
+agent. Two of these can be reachable from the internet, and only when you opt in.
 
 | Listener | Where | Bind | Reachable from |
 | --- | --- | --- | --- |
 | Hook server | `hooks.ts` — `HookServer` | Unix domain socket / Windows named pipe | this machine only |
-| Per-agent proxy sidecar | `hive.ts` — `startProxyBridge()` | `127.0.0.1`, ephemeral port | loopback |
+| Per-agent proxy sidecar (**child process**, not main) | `hive.ts` — `PROXY_BRIDGE_SHIM` → `hive-proxy.cjs`, started by `startProxyBridge()` | `127.0.0.1`, ephemeral port | loopback |
 | Integration broker | `integrationBroker.ts` — `IntegrationBroker` | `127.0.0.1` | loopback |
 | Slack reply helper | `slack.ts` — `SlackReplyServer` | `127.0.0.1` | loopback |
 | OTel usage collector | `telemetry.ts` — `TelemetryCollector` | `127.0.0.1` | loopback |
