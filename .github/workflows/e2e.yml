@@ -1,0 +1,71 @@
+name: E2E
+
+# The Electron smoke test (#45): onboarding -> first spawn.
+#
+# DELIBERATELY ITS OWN WORKFLOW. ci.yml's `test` job is the unit gate and has to
+# stay a fast, trustworthy signal; this one boots a real Electron app under a
+# virtual X server and spawns a real PTY, which is a different reliability class.
+# Keeping them separate means a display/GPU flake here can never hold a
+# green-and-correct unit run red, and a red e2e is legible on its own.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Node 22 everywhere, same reason as ci.yml: Node 24 ships no better-sqlite3
+# prebuild and breaks node-pty's winpty gyp build.
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  e2e:
+    # LINUX ONLY, on purpose. Electron needs a display, and `xvfb-run` gives us
+    # one for free on the ubuntu runner; macOS and Windows runners have a real
+    # session but cost 10x/2x the minutes for the same assertions, and the flow
+    # under test (wizard -> config -> PTY spawn) is platform-independent. The
+    # platform-specific spawn paths that ARE risky — the Windows .cmd shim
+    # decode, conpty — already have unit coverage (test/win-cmd-shim.test.cjs).
+    # Add `windows-latest` here the day that stops being true.
+    name: Electron smoke (ubuntu-latest)
+    runs-on: ubuntu-latest
+    # A wedged Electron would otherwise sit on the runner for the 6h default.
+    # The native rebuild is the slow step; the test itself is ~15s.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # node-gyp imports distutils, removed in Python 3.12. Same pin the release
+      # workflow uses — the native rebuild below has to actually succeed here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Provide distutils for node-gyp
+        run: python -m pip install --upgrade setuptools
+
+      # FULL install, scripts and all — unlike ci.yml's `--ignore-scripts` jobs.
+      # The app is launched as Electron, so node-pty and better-sqlite3 must be
+      # built for the ELECTRON ABI (postinstall's electron-rebuild). Both are
+      # imported at module scope in src/main, so a missing binding is not a
+      # degraded run, it is a main process that never boots.
+      #
+      # No `npx playwright install` step, and none is missing: the test drives
+      # the app's OWN Electron through Playwright's `_electron`, so no bundled
+      # browser is ever downloaded or launched. Add that step only if a real
+      # browser test is ever added here.
+      - name: Install dependencies
+        run: npm ci
+
+      # The test drives out/main/index.js — the same bundle a packaged app ships.
+      - name: Compile (electron-vite -> out/)
+        run: npm run build
+
+      # xvfb-run gives Electron a display; --auto-servernum avoids clashing with
+      # any other X server on the runner. Chromium falls back to SwiftShader for
+      # WebGL here, which is what the office floor renders through.
+      - name: Electron smoke test
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1440x900x24" npm run e2e
