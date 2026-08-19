@@ -42,15 +42,21 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    # KNOWN BASELINE (#7): 11 tests fail on Windows only, and every one of them is
-    # a POSIX-path assumption in the TEST rather than a bug in the source —
-    # test/cli-install-ladder.test.cjs, test/codex-remote.test.cjs (socket path),
-    # test/expand-tilde.test.cjs (including the #140 recents cases) and
-    # test/transcript-project-dir.test.cjs (legacy twin). Until those four are
-    # made platform-aware the Windows job reports but does not block.
-    # ubuntu-latest and macos-latest MUST stay hard gates — the whole point of #7
-    # is that a PR which breaks the suite can go red.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    # All three platforms are hard gates. There is no continue-on-error here, and
+    # nothing should re-add one.
+    #
+    # For a long time 11 tests failed on Windows and were waved through as "POSIX
+    # path assumptions in the tests". That description was wrong. On triage, 7 of
+    # the 11 were real Windows SOURCE bugs and only 4 were test bugs:
+    #   - expandTilde() stamped the process's cwd drive letter onto rooted paths,
+    #     and those values are persisted into config          (#58)
+    #   - the Codex remote endpoint was built with path.join, so its unix:// URI
+    #     came out with backslashes                            (#60)
+    #   - the Windows Node installer was a silent no-op, and a checksum mismatch
+    #     did NOT abort — msiexec ran on an unverified MSI      (#57)
+    # A permanently-yellow job is how all three of those stayed invisible while
+    # Windows support shipped as the v0.4.4 headline. Fix the failure; do not
+    # exempt the platform.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
