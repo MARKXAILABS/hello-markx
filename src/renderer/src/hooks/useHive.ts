@@ -348,7 +348,9 @@ export function useHive(config: HarnessConfig | null): void {
         // fresh session. Without this the most important context on the floor —
         // the orchestrator's — was lost on every restart.
         resume: true,
-        hive: { id: GOD_ID, name: 'Michael', provider: godProvider, cwd: config.harnessHome!, isGod: true, role: 'orchestrator (god)' }
+        // `account` pins Michael to a Claude pool account (Settings/Command
+        // Center → godAccount); undefined = the machine's /login account.
+        hive: { id: GOD_ID, name: 'Michael', provider: godProvider, cwd: config.harnessHome!, isGod: true, role: 'orchestrator (god)', account: godProvider === 'claude' ? config.godAccount : undefined }
       });
       if (cancelled) { godSpawning.current = false; return; }
       if (!res.ok) { godSpawning.current = false; useStore.getState().setGodStatus('failed'); return; }
@@ -369,6 +371,7 @@ export function useHive(config: HarnessConfig | null): void {
         command: command.trim(),
         provider: godProvider,
         model: godModel,
+        account: godProvider === 'claude' ? config.godAccount : undefined,
         isGod: true,
         recentTextTs: Date.now()
       };
@@ -1060,11 +1063,14 @@ export function useHive(config: HarnessConfig | null): void {
         // a rebuilt one only if it predates the persisted `command` field.
         const command = (a.command ?? '').trim() || buildSpawnCommand(cfg, a.model, provider);
         const [exe, ...args] = tokenizeCommand(command);
+        // Re-pin the agent's Claude pool account across the revive (god reads the
+        // config pin; workers carry their own on the roster record).
+        const account = provider === 'claude' ? (a.isGod ? cfg.godAccount : a.account) : undefined;
         const hive = a.isGod
-          ? { id: a.id, name: a.name, cwd, provider, isGod: true, role: 'orchestrator (god)' }
+          ? { id: a.id, name: a.name, cwd, provider, isGod: true, role: 'orchestrator (god)', account }
           : a.isAssistant
-          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: "Michael's prep assistant" }
-          : { id: a.id, name: a.name, cwd, provider, role: a.description };
+          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: "Michael's prep assistant", account }
+          : { id: a.id, name: a.name, cwd, provider, role: a.description, account };
         // Spawn at the terminal's real grid so the TUI's absolute cursor moves land
         // in the right cells (a size mismatch scatters the redraw).
         const entry = acquireTerminal(deadId);

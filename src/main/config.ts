@@ -11,6 +11,7 @@ import {
 } from '../shared/agentProvider';
 import { defaultMcpDefaults } from '../shared/mcpCatalog';
 import { expandTilde, normalizeHiveHome } from './fs';
+import type { ClaudeAccount } from '../shared/claudeAccounts';
 import type { IntegrationRecord } from '../shared/integrations';
 import {
   DEFAULT_CONTEXT_TRIGGER,
@@ -299,6 +300,17 @@ export interface HarnessConfig {
    *  `tvShowOffices` is on; otherwise the office theme is used. Unbuilt show
    *  themes fall back to 'office' in the loader. */
   officeTheme?: 'office' | 'friends' | 'brooklyn99' | 'siliconvalley' | 'got' | 'hogwarts';
+  /** Claude account pool (v0.4.5) — NON-SECRET metadata only: {id, label,
+   *  createdAt} per registered subscription account. The setup-token itself is
+   *  stored write-only in the secret broker under `claude-account:<id>`
+   *  (integrations.ts, safeStorage) and materialized MAIN-ONLY at spawn as
+   *  CLAUDE_CODE_OAUTH_TOKEN. Agents reference an account by id
+   *  (AgentMeta.account); unset = the machine's `/login` account. */
+  claudeAccounts?: ClaudeAccount[];
+  /** Which pool account powers the GOD orchestrator ("Michael"). Unset = the
+   *  machine's `/login` account. Mirrors AgentMeta.account for workers — Michael
+   *  is spawned by useHive from config, so his pin lives here. */
+  godAccount?: string;
   /** Per-CLI-provider local/self-hosted base URL (Ollama/LM Studio/vLLM, …) for the
    *  OpenCode/Crush/pi/qwen engines; applied at spawn (config-injection or proxy
    *  upstream). API KEYS are NOT stored here — they live write-only in the secret

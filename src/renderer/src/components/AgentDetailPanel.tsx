@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PixelPanel } from './PixelPanel';
 import { PixelBadge } from './PixelBadge';
 import { PixelButton } from './PixelButton';
@@ -16,6 +16,11 @@ import { GitTab } from './GitTab';
 import { Icon } from './Icon';
 import { useStore, type Agent } from '@/store/store';
 import { usePtyParser } from '@/hooks/usePtyParser';
+import {
+  inferAgentProvider,
+  LOGIN_ACCOUNT_LABEL,
+  type ClaudeAccount
+} from '@/store/config';
 
 export interface AgentDetailPanelProps {
   agent: Agent;
@@ -24,6 +29,17 @@ export interface AgentDetailPanelProps {
 export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
   const [openTerminalState, setOpenTerminalState] = useState<'idle' | 'opening' | 'ok' | 'error'>('idle');
   const [openTerminalError, setOpenTerminalError] = useState<string | undefined>();
+  // Claude account pool — offered only for Claude-engine agents once the
+  // operator has registered accounts. Changing it updates the stored pin;
+  // the running session keeps its current account until the next (re)start.
+  const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  useEffect(() => {
+    let alive = true;
+    window.cth.getConfig()
+      .then((c) => { if (alive) setClaudeAccounts(c.claudeAccounts ?? []); })
+      .catch(() => { /* pool stays hidden */ });
+    return () => { alive = false; };
+  }, []);
   const archiveAgent = useStore(s => s.archiveAgent);
   const updateAgent = useStore(s => s.updateAgent);
   const setFullscreen = useStore(s => s.setFullscreen);
@@ -115,6 +131,26 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
               fontSize: 12, color: 'var(--cth-ink-500)',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
             }}>{agent.project}</span>
+            {/* Claude account pin — stored now, applied on the next (re)start
+                (restart & continue in the Command Center, or an app restart). */}
+            {inferAgentProvider(agent.command, agent.provider) === 'claude' && claudeAccounts.length > 0 && (
+              <select
+                value={agent.account ?? ''}
+                title="Claude account for this agent — takes effect on the next restart (Command Center → restart & continue)"
+                onChange={(e) => updateAgent(agent.id, { account: e.target.value || undefined })}
+                style={{
+                  padding: '1px 4px', background: 'var(--cth-paper-100)', border: 'none',
+                  boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
+                  fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-700)',
+                  cursor: 'pointer', flexShrink: 0, maxWidth: 130
+                }}
+              >
+                <option value="">{LOGIN_ACCOUNT_LABEL}</option>
+                {claudeAccounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>{acc.label}</option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
         {/* v0.3.4: the IDE lives at agent level (replaces the old files tab) —

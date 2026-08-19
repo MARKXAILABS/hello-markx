@@ -17,10 +17,12 @@
  *
  * 🔒 PII: raw OTel records carry `user.email`, `user.account_id/uuid`,
  * `organization.id` and a hashed `user.id`. We read ONLY an allowlist of keys
- * ({agent.id, session.id, model, token type, cost, tool fields}) and never
- * persist a raw record — so everything this module emits is PII-free BY
- * CONSTRUCTION. Downstream durable stores (Lane A's cost-ledger, Lane B's
- * SQLite) inherit that guarantee and must never persist a raw record either.
+ * ({agent.id, session.id, model, token type, cost, tool fields} plus the OPAQUE
+ * `user.account_uuid`/`user.account_id` — the account pool's integrity signal,
+ * an identifier, never the email) and never persist a raw record — so everything
+ * this module emits is PII-free BY CONSTRUCTION. Downstream durable stores
+ * (Lane A's cost-ledger, Lane B's SQLite) inherit that guarantee and must never
+ * persist a raw record either.
  *
  * Transport posture mirrors `slack.ts`: the local handler bound to 127.0.0.1 is
  * the security boundary. Runs in the Electron main process; deliberately free of
@@ -50,6 +52,11 @@ export interface AgentUsageSample {
   /** Normalized model id (`claude-opus-4-8`, no `[1m]` suffix). */
   model: string;
   usd: number;
+  /** Opaque Claude account identifier observed on this agent's telemetry
+   *  (`user.account_uuid`, falling back to `user.account_id`). Drives the account
+   *  pool's per-account rows + "token not applied" integrity flag. Undefined until
+   *  the first export lands / on the transcript fallback. Never the email. */
+  accountUuid?: string;
 }
 
 /** Breaker state, emitted by Lane A's policy on `control:breakerState` and
@@ -100,6 +107,7 @@ interface SessionAccum {
   cacheRead: number;
   cacheCreation: number;
   usd: number;
+  accountUuid?: string;
 }
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // OTLP batches are small; cap unauth peers.
@@ -284,6 +292,9 @@ export class TelemetryCollector {
             const accum = this.session(agentId, sessionId);
             const model = normalizeModel(str(attrs['model']));
             if (model) accum.model = model;
+            const accountUuid = str(attrs['user.account_uuid']) || str(attrs['user.account_id'])
+              || str(resAttrs['user.account_uuid']) || str(resAttrs['user.account_id']);
+            if (accountUuid) accum.accountUuid = accountUuid;
             accum.ts = Date.now();
             const value = pointValue(dp);
             if (metric.name === 'claude_code.token.usage') {
@@ -381,7 +392,12 @@ export class TelemetryCollector {
       out.cacheRead += a.cacheRead;
       out.cacheCreation += a.cacheCreation;
       out.usd += a.usd;
-      if (a.ts >= out.ts) { out.ts = a.ts; out.sessionId = sid; out.model = a.model; }
+      if (a.ts >= out.ts) {
+        out.ts = a.ts;
+        out.sessionId = sid;
+        out.model = a.model;
+        if (a.accountUuid) out.accountUuid = a.accountUuid;
+      }
     }
     return out;
   }
@@ -428,11 +444,15 @@ interface OtelLogRecord { attributes?: OtelKV[]; body?: { stringValue?: string }
 interface ResourceLogs { resource?: { attributes?: OtelKV[] }; scopeLogs?: { logRecords?: OtelLogRecord[] }[] }
 
 /** Allowlist of attribute keys we ever read — anything else (notably the PII:
- *  user.email, user.account_id/uuid, organization.id, user.id) is ignored, so
- *  nothing this module emits can carry identity. */
+ *  user.email, organization.id, user.id) is ignored, so nothing this module
+ *  emits can carry identity. `user.account_uuid`/`user.account_id` ARE allowed
+ *  (v0.4.5 account pool): they are opaque account identifiers — not the email —
+ *  and they are the only signal that can prove a per-agent setup-token actually
+ *  took effect (the integrity flag in the per-account panel). */
 const ATTR_ALLOWLIST = new Set([
   'agent.id', 'agent.name', 'session.id', 'model', 'type',
-  'tool_name', 'success', 'duration_ms', 'decision', 'event.name', 'error', 'message'
+  'tool_name', 'success', 'duration_ms', 'decision', 'event.name', 'error', 'message',
+  'user.account_uuid', 'user.account_id'
 ]);
 
 /** Flatten an OTLP KeyValue[] to a plain object, keeping only allowlisted keys. */

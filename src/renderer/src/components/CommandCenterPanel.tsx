@@ -15,7 +15,7 @@ import { acquireTerminal, disposeTerminal, resetTerminal } from './terminalPool'
 import { terminalInstanceKey } from './terminalRecovery';
 import { Icon } from './Icon';
 import { MemoryGraphPanel } from './MemoryGraphPanel';
-import { useFleetTelemetry } from '@/hooks/useTelemetry';
+import { useFleetTelemetry, type AgentUsageSample } from '@/hooks/useTelemetry';
 import { COMMAND_GROUPS } from '@shared/claudeCommands';
 import { useStore, triggerHistoryVisible, type Agent } from '@/store/store';
 import { usePtyParser } from '@/hooks/usePtyParser';
@@ -29,8 +29,12 @@ import {
   modelsForProvider,
   providerPreset,
   tokenizeCommand,
+  reduceAccountIntegrity,
   AGENT_PROVIDER_PRESETS,
-  type AgentProvider
+  LOGIN_ACCOUNT_KEY,
+  LOGIN_ACCOUNT_LABEL,
+  type AgentProvider,
+  type ClaudeAccount
 } from '@/store/config';
 import { canReceiveInbox } from '@shared/agentProvider';
 
@@ -346,6 +350,9 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
   const [restarting, setRestarting] = useState<string | null>(null);
   const [engineProvider, setEngineProvider] = useState<AgentProvider>('claude');
   const [engineModel, setEngineModel] = useState<string | undefined>(undefined);
+  // Claude account pool: the pool metadata + Michael's pin ('' = /login account).
+  const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  const [engineAccount, setEngineAccount] = useState<string>('');
   const [restartErrors, setRestartErrors] = useState<Record<string, string>>({});
   // The harness's own default model (Settings → default model). Michael and every
   // new agent spawn on this, so the picker marks it — otherwise the only entry
@@ -368,6 +375,8 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       setEngineProvider(c.godProvider ?? 'claude');
       setEngineModel(c.godModel);
       setDefaultModel(c.defaultModel);
+      setClaudeAccounts(c.claudeAccounts ?? []);
+      setEngineAccount(c.godAccount ?? '');
     }).catch(() => { /* noop */ });
   }, []);
 
@@ -469,11 +478,15 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       }
       const command = buildSpawnCommand(cfg, model, provider);
       const [exe, ...args] = tokenizeCommand(command.trim());
+      // Claude account pool: a restart re-pins the agent to its account (which is
+      // exactly when an account CHANGE takes effect). God reads the config pin —
+      // the engine row's apply persists godAccount before calling here.
+      const account = provider === 'claude' ? (a.isGod ? cfg.godAccount : a.account) : undefined;
       const hive = a.isGod
-        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isGod: true, role: 'orchestrator (god)' }
+        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isGod: true, role: 'orchestrator (god)', account }
         : a.isAssistant
-        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isAssistant: true, role: "Michael's prep assistant" }
-        : { id: a.id, name: a.name, cwd: a.cwd, provider, role: a.description };
+        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isAssistant: true, role: "Michael's prep assistant", account }
+        : { id: a.id, name: a.name, cwd: a.cwd, provider, role: a.description, account };
       const res = await window.cth.spawnPty({
         id: a.ptyId,
         cwd: a.cwd,
@@ -504,6 +517,7 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
               command: command.trim(),
               provider,
               model,
+              account,
               status: 'idle' as const,
               action: 'continuing…'
             }
@@ -511,6 +525,7 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
               command: command.trim(),
               provider,
               model,
+              account,
               status: 'idle' as const,
               action: provider === previousProvider ? 'restarting…' : `switching to ${providerPreset(provider).label}…`
             };
@@ -793,6 +808,22 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                   ? 'restarting…'
                   : `${agentPreset.label} model (restarts agent)`}
               </span>
+              {/* Claude account pool — re-pin this worker to another subscription.
+                  Stored on the agent immediately; takes effect on the NEXT
+                  (re)start (restart & continue, revive, or app restart). */}
+              {agentProvider === 'claude' && claudeAccounts.length > 0 && (
+                <Select
+                  value={a.account ?? ''}
+                  disabled={restarting === a.id}
+                  title="Claude account for this agent — takes effect on the next (re)start"
+                  onChange={(v) => updateAgent(a.id, { account: v || undefined })}
+                >
+                  <option value="">{LOGIN_ACCOUNT_LABEL}</option>
+                  {claudeAccounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>{acc.label}</option>
+                  ))}
+                </Select>
+              )}
               {/* Restart & Continue — kill + respawn keeping the SAME model and
                   resuming the prior conversation (--resume). Use this to redraw a
                   garbled TUI (e.g. after dragging the window across displays)
@@ -845,6 +876,20 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                     <option key={m.label} value={m.id ?? ''}>{m.label}</option>
                   ))}
                 </Select>
+                {/* Claude account pool — which subscription Michael runs on.
+                    Applied (like model) via the restart button; '' = /login. */}
+                {engineProvider === 'claude' && claudeAccounts.length > 0 && (
+                  <Select
+                    value={engineAccount}
+                    disabled={restarting === a.id}
+                    onChange={(v) => setEngineAccount(v)}
+                  >
+                    <option value="">{LOGIN_ACCOUNT_LABEL}</option>
+                    {claudeAccounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>{acc.label}</option>
+                    ))}
+                  </Select>
+                )}
                 <PixelButton
                   variant="secondary"
                   size="sm"
@@ -854,7 +899,13 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                     if (engineProvider !== currentProvider) {
                       if (!window.confirm("This restarts Michael; a conversation on a different engine can't be resumed.")) return;
                     }
-                    await window.cth.updateConfig({ godProvider: engineProvider, godModel: engineModel });
+                    await window.cth.updateConfig({
+                      godProvider: engineProvider,
+                      godModel: engineModel,
+                      // '' = back to the /login account. Persisted BEFORE the
+                      // restart so restartWithModel's fresh getConfig reads it.
+                      godAccount: engineProvider === 'claude' && engineAccount ? engineAccount : undefined
+                    });
                     await restartWithModel(a, engineModel, { provider: engineProvider, resume: false });
                   }}
                 >
@@ -894,6 +945,11 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
           </Muted>
         </div>
       </Section>
+
+      {/* Claude account pool — per-account live usage + token-applied integrity.
+          Rendered whenever accounts exist OR any telemetry carries an account
+          uuid (so the /login row shows even with an empty pool). */}
+      <ClaudeAccountsSection agents={agents} samples={samples} claudeAccounts={claudeAccounts} />
 
       <ArchivedSection />
 
@@ -965,6 +1021,101 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
         )}
       </Section>
     </Scroll>
+  );
+}
+
+// ─── Claude account pool — per-account usage + integrity (v0.4.5) ────────────
+
+/** One row per pool account (+ the /login bucket): live members, summed tokens
+ *  and est. USD from the same OTel samples the AGENTS section uses, the OPAQUE
+ *  `user.account_uuid` observed for the account, and an integrity flag when an
+ *  agent's uuid disagrees with its account's reference (first session wins) —
+ *  i.e. the pinned setup-token did NOT take effect for that agent. */
+function ClaudeAccountsSection({ agents, samples, claudeAccounts }: {
+  agents: Agent[];
+  samples: Record<string, AgentUsageSample>;
+  claudeAccounts: ClaudeAccount[];
+}) {
+  // Only Claude-engine agents participate in the pool.
+  const members = agents.filter((a) => !a.archived && inferAgentProvider(a.command, a.provider) === 'claude');
+  // Nothing to say until the pool exists or telemetry carries an account uuid.
+  const anyUuid = members.some((a) => samples[a.id]?.accountUuid);
+  if (claudeAccounts.length === 0 && !anyUuid) return null;
+  // Deterministic observation order — god first, then roster order — so the
+  // "first session wins" reference does not flap between renders.
+  const ordered = [...members].sort((x, y) => Number(!!y.isGod) - Number(!!x.isGod));
+  const integrity = reduceAccountIntegrity(ordered.map((a) => ({
+    agentId: a.id,
+    account: a.account,
+    accountUuid: samples[a.id]?.accountUuid
+  })));
+  const rows: Array<{ key: string; label: string }> = [
+    { key: LOGIN_ACCOUNT_KEY, label: LOGIN_ACCOUNT_LABEL },
+    ...claudeAccounts.map((acc) => ({ key: acc.id, label: acc.label }))
+  ];
+  const short = (uuid: string): string => (uuid.length > 13 ? `${uuid.slice(0, 13)}…` : uuid);
+  return (
+    <Section title="CLAUDE ACCOUNTS">
+      {rows.map((row) => {
+        const rowAgents = members.filter((a) => (a.account ?? LOGIN_ACCOUNT_KEY) === row.key);
+        let input = 0, output = 0, cache = 0, usd = 0;
+        for (const a of rowAgents) {
+          const s = samples[a.id];
+          if (!s) continue;
+          input += s.input;
+          output += s.output;
+          cache += s.cacheRead + s.cacheCreation;
+          usd += s.usd;
+        }
+        const uuid = integrity.reference[row.key];
+        const bad = rowAgents.filter((a) => integrity.mismatches[a.id]);
+        return (
+          <div key={row.key} style={{
+            display: 'flex', flexDirection: 'column', gap: 3,
+            padding: 6, marginBottom: 6,
+            background: bad.length ? 'var(--cth-coral-light)' : 'var(--cth-paper-100)',
+            boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-900)', textTransform: 'uppercase' }}>
+                {row.label}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>
+                {rowAgents.length === 0 ? 'no active agents' : rowAgents.map((a) => a.name).join(', ')}
+              </span>
+              {uuid && (
+                <span
+                  title={`user.account_uuid observed in this account's telemetry: ${uuid}`}
+                  style={{ marginLeft: 'auto', fontFamily: 'var(--cth-font-mono)', fontSize: 10, color: 'var(--cth-ink-500)' }}
+                >{short(uuid)}</span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 12, fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-700)', flexWrap: 'wrap' }}>
+              <span>in {fmtTokens(input)}</span>
+              <span>out {fmtTokens(output)}</span>
+              <span>cache {fmtTokens(cache)}</span>
+              <span style={{ color: 'var(--cth-ink-900)' }}>≈ ${usd.toFixed(2)}</span>
+            </div>
+            {bad.length > 0 && (
+              <div
+                title={bad.map((a) => {
+                  const m = integrity.mismatches[a.id];
+                  return `${a.name}: expected ${m.expected}, observed ${m.observed}`;
+                }).join('\n')}
+                style={{ fontSize: 11, color: 'var(--cth-coral)' }}
+              >
+                ⚠ token not applied / account mismatch: {bad.map((a) => a.name).join(', ')}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <Muted>
+        usage + account uuid live from each agent&apos;s OpenTelemetry · the first session seen for an
+        account sets its reference uuid · a mismatch means that agent&apos;s session is NOT on its
+        assigned account (bad/expired token — replace it in Settings → AI Engines and restart the agent)
+      </Muted>
+    </Section>
   );
 }
 
@@ -1286,13 +1437,14 @@ const textareaStyle: React.CSSProperties = {
   color: 'var(--cth-ink-900)', outline: 'none', boxSizing: 'border-box'
 };
 
-function Select({ value, onChange, disabled, children }: {
-  value: string; onChange: (v: string) => void; disabled?: boolean; children: React.ReactNode;
+function Select({ value, onChange, disabled, title, children }: {
+  value: string; onChange: (v: string) => void; disabled?: boolean; title?: string; children: React.ReactNode;
 }) {
   return (
     <select
       value={value}
       disabled={disabled}
+      title={title}
       onChange={(e) => onChange(e.target.value)}
       style={{
         padding: '3px 6px', background: 'var(--cth-paper-100)',

@@ -67,6 +67,10 @@ export interface Agent {
   /** the model this agent runs on (e.g. 'claude-sonnet-4-6[1m]' or 'gemini-3-pro');
    *  drives the model selector + the --model arg used when (re)spawning the agent */
   model?: string;
+  /** Claude pool-account id this agent is pinned to (HarnessConfig.claudeAccounts);
+   *  unset = the machine's /login account. Durable (persists in the roster) and
+   *  passed as hive.account on every (re)spawn — takes effect on next restart. */
+  account?: string;
   /** the last prompt the user submitted to this agent in Claude Code —
    *  shown on the floor as a card above the seated avatar */
   lastPrompt?: string;

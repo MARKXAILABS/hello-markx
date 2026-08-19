@@ -20,6 +20,7 @@ import {
   type AgentProvider,
   type HarnessConfig,
   AGENT_PROVIDER_PRESETS,
+  LOGIN_ACCOUNT_LABEL,
   buildSpawnCommand,
   tokenizeCommand,
   modelsForProvider,
@@ -207,6 +208,21 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     setCommand(buildSpawnCommand(config, nextModel, id));
   };
   const preset = providerPreset(provider);
+  // Claude account pool — which subscription this agent runs on. '' = the
+  // machine's /login account (today's behaviour, and the only option until
+  // accounts are added in Settings → AI Engines). Claude engine only.
+  // Seeded from the config prop, then refreshed from main on mount: the prop is
+  // App's boot-time snapshot, so an account added in Settings a minute ago
+  // would otherwise be invisible here until the next app restart.
+  const [account, setAccount] = useState<string>('');
+  const [claudeAccounts, setClaudeAccounts] = useState(config.claudeAccounts ?? []);
+  useEffect(() => {
+    let alive = true;
+    window.cth.getConfig()
+      .then((c) => { if (alive) setClaudeAccounts(c.claudeAccounts ?? []); })
+      .catch(() => { /* keep the snapshot */ });
+    return () => { alive = false; };
+  }, []);
   const [goal, setGoal] = useState(pendingHire?.goal ?? '');
   const [isolate, setIsolate] = useState(pendingHire?.isolate ?? false);
   // #2 — optional Claude session id to continue. When set, the spawn seeds that
@@ -350,7 +366,10 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
         cwd,
         role: description.trim() || undefined,
         // A hire manifest may carry validated capability tags (routing hints).
-        capabilities: hireMeta?.capabilities
+        capabilities: hireMeta?.capabilities,
+        // Claude account pool: pin this agent to a subscription account (id
+        // only — the token is injected main-side). undefined = /login account.
+        account: isClaudeProvider(provider) && account ? account : undefined
       }
     });
     if (!spawnRes.ok) {
@@ -386,6 +405,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
       command: command.trim(),
       provider,
       model,
+      account: isClaudeProvider(provider) && account ? account : undefined,
       // Persist the resolved worktree path (set only when isolation provisioned
       // one) so a restart can re-enter this exact worktree — see restoreTeam.
       worktreePath: spawnRes.worktreePath,
@@ -819,6 +839,39 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                         })}
                       </div>
                     </Row>}
+
+                    {/* Claude account pool — pin this agent to one of the operator's
+                        subscription accounts (Settings → AI Engines). Login account
+                        = no pin = exactly today's behaviour. Claude engine only. */}
+                    {isClaudeProvider(provider) && claudeAccounts.length > 0 && (
+                      <Row label="Account">
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {[{ id: '', label: LOGIN_ACCOUNT_LABEL }, ...claudeAccounts].map((a) => {
+                            const active = account === a.id;
+                            return (
+                              <button
+                                key={a.id || 'login'}
+                                onClick={() => setAccount(a.id)}
+                                title={a.id
+                                  ? `Run this agent on the "${a.label}" subscription (its setup-token is injected at spawn)`
+                                  : "Use this machine's /login account (no token injection)"}
+                                style={{
+                                  padding: '3px 8px 1px',
+                                  background: active ? `var(--cth-${accent}-light)` : 'var(--cth-cream-100)',
+                                  boxShadow: active
+                                    ? 'inset 0 0 0 1.5px var(--cth-ink-500)'
+                                    : 'inset 0 0 0 1px var(--cth-ink-100)',
+                                  fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+                                  color: 'var(--cth-ink-900)', cursor: 'pointer', border: 'none'
+                                }}
+                              >
+                                {a.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </Row>
+                    )}
 
                     {/* OSS-model quick-picks (ondev-c) — local + third-party-provider
                         shortlists from the verified catalog. Clicking sets the

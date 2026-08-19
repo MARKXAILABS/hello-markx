@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A pool of Claude accounts** ([docs](docs/claude-accounts.md)) — register any number of
+  Claude subscriptions (label + `claude setup-token` token, stored write-only in the
+  encrypted secret broker) and pin any agent — Michael included — to one. The pinned
+  account's token is injected as `CLAUDE_CODE_OAUTH_TOKEN` into that agent's process only,
+  main-side at spawn; a pinned agent whose token is missing **fails to spawn with a visible
+  error** rather than silently running on the `/login` account. Pins ride the persisted
+  roster + registry, so restore-team / restart-and-continue / post-sleep revive all re-inject
+  automatically. The Command Center gains a **CLAUDE ACCOUNTS** panel: per-account live
+  input/output/cache tokens, estimated USD, the opaque `user.account_uuid` observed in each
+  session's telemetry, and a "token not applied / account mismatch" integrity flag (first
+  session per account sets the reference). Unpinned agents behave exactly as before.
+  Telemetry note: the collector's attribute allowlist now includes `user.account_uuid` /
+  `user.account_id` (opaque identifiers, needed for the integrity check) — `user.email`,
+  `organization.id` and every other identity attribute are still dropped. Failover and
+  pool policy are deliberately not in this release.
+
 ## [0.4.4] — 2026-08-18
 
 **Windows agents can finally talk to each other** — and the first run stops silently failing.

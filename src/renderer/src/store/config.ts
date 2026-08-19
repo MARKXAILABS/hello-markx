@@ -12,6 +12,13 @@ import type {
   OrgTriggerConfig,
   WebhookTrigger
 } from '@shared/triggers';
+import {
+  LOGIN_ACCOUNT_LABEL,
+  newAccountLabelError,
+  reduceAccountIntegrity,
+  LOGIN_ACCOUNT_KEY,
+  type ClaudeAccount
+} from '@shared/claudeAccounts';
 
 export {
   AGENT_PROVIDER_PRESETS,
@@ -19,6 +26,13 @@ export {
   inferAgentProvider,
   isClaudeProvider,
   type AgentProvider
+};
+export {
+  LOGIN_ACCOUNT_KEY,
+  LOGIN_ACCOUNT_LABEL,
+  newAccountLabelError,
+  reduceAccountIntegrity,
+  type ClaudeAccount
 };
 
 /** A recurring auto-dispatched mission (mirrors src/main/config.ts). */
@@ -124,6 +138,11 @@ export interface HarnessConfig {
   providerBaseUrls?: Partial<Record<AgentProvider, string>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** Claude account pool — NON-secret metadata only (mirrors src/main/config.ts).
+   *  Tokens are write-only in the secret broker via the claudeAccount* bridge. */
+  claudeAccounts?: ClaudeAccount[];
+  /** Pool account powering the GOD orchestrator; unset = /login account. */
+  godAccount?: string;
   /** Legacy single-webhook fields (mirrors src/main/config.ts, where they are
    *  deprecated in favour of `webhookTriggers` but still read until the server is
    *  rewired). Declared here so the surfaces that show them can stop widening this

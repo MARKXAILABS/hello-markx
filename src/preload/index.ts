@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import type { AgentProvider } from '../shared/agentProvider';
+import type { ClaudeAccount } from '../shared/claudeAccounts';
+export type { ClaudeAccount } from '../shared/claudeAccounts';
 import type { HireManifest } from '../shared/hire';
 export type { HireManifest } from '../shared/hire';
 import type { IntegrationRecord, IntegrationTemplate } from '../shared/integrations';
@@ -52,6 +54,9 @@ export interface HiveAgentMeta {
   isGod?: boolean;
   /** Michael's prep assistant — send-only; enriches prompts and forwards them. */
   isAssistant?: boolean;
+  /** Claude pool-account id this agent is pinned to; unset = /login account.
+   *  The id only — the token never crosses IPC (injected main-only at spawn). */
+  account?: string;
 }
 
 export interface HiveMessage {
@@ -327,6 +332,11 @@ export interface HarnessConfig {
   providerBaseUrls?: Partial<Record<AgentProvider, string>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** Claude account pool — NON-secret metadata only (mirrors src/main/config.ts).
+   *  Tokens live write-only in the secret broker (`claudeAccount*` IPC). */
+  claudeAccounts?: ClaudeAccount[];
+  /** Pool account powering the GOD orchestrator; unset = /login account. */
+  godAccount?: string;
 }
 
 export interface MemoryStatus {
@@ -448,6 +458,9 @@ export interface AgentUsageSample {
   cacheCreation: number;
   model: string;
   usd: number;
+  /** Opaque Claude account id observed on this agent's telemetry (account pool
+   *  integrity signal). Never the email. */
+  accountUuid?: string;
 }
 
 /** One tool invocation for the per-agent span waterfall (#7B.2). Ephemeral. */
@@ -1247,6 +1260,18 @@ const api = {
     ipcRenderer.invoke('providerKey:has', backend),
   providerKeyClear: (backend: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('providerKey:clear', backend),
+  // Claude account pool — same write-only contract as providerKey: tokens go IN
+  // (add/set), presence comes back as a boolean (has); plaintext never returns.
+  claudeAccountAdd: (req: { label: string; token: string }): Promise<{ ok: boolean; error?: string; account?: ClaudeAccount }> =>
+    ipcRenderer.invoke('claudeAccount:add', req),
+  claudeAccountSet: (req: { id: string; token: string }): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('claudeAccount:set', req),
+  claudeAccountHas: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke('claudeAccount:has', id),
+  claudeAccountClear: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('claudeAccount:clear', id),
+  claudeAccountRemove: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('claudeAccount:remove', { id }),
   // Realtime Michael (voice orchestrator) — MAIN mints a short-lived EPHEMERAL token
   // from the BYOK OpenAI key; the real key NEVER crosses IPC. `realtimeHasOpenAiKey`
   // is a presence boolean only (gates the voice toggle, like providerKeyHas).

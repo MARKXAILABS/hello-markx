@@ -146,7 +146,9 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
             // agent id is preserved across restart, so its registry entry,
             // memory.md and inbox reattach by id. No-op without a recorded session.
             resume: true,
-            hive: { id: a.id, name: a.name, provider, cwd, role: a.description }
+            // `account` re-pins the worker to its Claude pool account across the
+            // restart (rides the persisted roster; undefined = /login account).
+            hive: { id: a.id, name: a.name, provider, cwd, role: a.description, account: a.account }
           });
           if (res.ok) {
             restored++;

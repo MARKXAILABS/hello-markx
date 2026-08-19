@@ -144,6 +144,7 @@ terminal/event plane, and [`DESIGN.md`](./DESIGN.md) for the visual system.
 - **Slack & webhooks** — message a channel or POST a webhook; Michael can spawn an ephemeral worker, reply in-thread, and tear it down.
 - **Shareable hires + Agent Gallery** — import a role from a `munderdifflin://hire` link; import only pre-fills the form, a human still spawns it. Browse roles at the [Agent Gallery](https://munderdiffl.in/hires/).
 - **BYOK keys + local LLMs** — per-provider keys in a write-only secret broker, plus Ollama / LM Studio / vLLM base URLs. Guides: [open models](https://munderdiffl.in/blog/run-munder-difflin-on-open-models/) · [Mac Mini](https://munderdiffl.in/blog/run-munder-difflin-on-a-mac-mini/).
+- **A pool of Claude accounts** — register any number of Claude subscriptions (`claude setup-token`), pin any agent (Michael included) to one, and watch per-account usage + a token-applied integrity check in the Command Center. Unpinned agents keep the machine's `/login` account. [How it works →](docs/claude-accounts.md)
 - **Auto-update** — new releases download in the background; you click restart, and the notes arrive as a designed page rather than a version number.
 - **Prerequisites** — one Settings page showing which supporting tools (uv, git, Node, MemPalace, each agent CLI) you have, what each is for, and a button that asks Michael to install what is missing.
 

@@ -70,6 +70,14 @@ import {
   installInfoForProvider,
   type AgentProvider
 } from '../shared/agentProvider';
+import {
+  claudeAccountSecretRef,
+  decideClaudeAccountEnv,
+  newAccountLabelError,
+  pinnedAgentsForAccount,
+  sanitizeResourceAttr,
+  type ClaudeAccount
+} from '../shared/claudeAccounts';
 import { buildMissingCliScript, chooseInstallRung } from './cliInstall';
 import { detectNodeVersion, nodeIsUsable, resolveNodeInstaller } from './nodeInstall';
 import { toolCatalog, type ToolStatus } from '../shared/toolCatalog';
@@ -1133,7 +1141,12 @@ function writeFleetSnapshot(): void {
           usd: u ? Number(u.usd.toFixed(4)) : 0,
           lastTool: spans.length ? spans[spans.length - 1].tool : null,
           lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
-          inboxBacklog: hive.inboxBacklog(id)
+          inboxBacklog: hive.inboxBacklog(id),
+          // Account pool (v0.4.5): the assigned pool-account id (null = /login
+          // account) + the OPAQUE account uuid observed in telemetry. Ids only —
+          // tokens never reach fleet.json.
+          account: a.account ?? null,
+          accountUuid: u?.accountUuid ?? null
         };
       });
     hive.writeFleetSnapshot({ ts: now, agents });
@@ -2421,6 +2434,36 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   const claudeProvider = isClaudeProvider(provider);
   opts.provider = provider;
   if (opts.hive) opts.hive = { ...opts.hive, provider };
+  // ── Claude account pool (v0.4.5): resolve the pinned account FIRST ──────────
+  // Fail CLOSED before any side effect (installer PTY, worktree, hive dirs): a
+  // pinned agent whose setup-token can't be materialized must never quietly spawn
+  // on whatever account the machine's `/login` happens to be. The token is read
+  // MAIN-ONLY here and merged into the child env right before the PTY spawn —
+  // never logged, never in args, never over IPC.
+  let claudeAccountToken: string | undefined;
+  let claudeAccountAttr: string | undefined;
+  if (opts.hive?.account) {
+    const pinned = opts.hive.account;
+    const account = (readConfig().claudeAccounts ?? []).find((a) => a.id === pinned);
+    const ref = claudeAccountSecretRef(pinned);
+    const decision = decideClaudeAccountEnv({
+      provider,
+      account: pinned,
+      accountKnown: !!account,
+      tokenPresent: integrations.hasSecret(ref),
+      label: account?.label
+    });
+    if (decision.kind === 'fail') return { ok: false, error: decision.error };
+    if (decision.kind === 'inject') {
+      claudeAccountToken = integrations.getSecret(ref);
+      if (!claudeAccountToken) {
+        // Stored but undecryptable (OS keychain changed / corrupt blob) — same
+        // fail-closed posture as a missing token, with an actionable message.
+        return { ok: false, error: `Claude account "${account?.label ?? pinned}" token could not be decrypted — re-save it in Settings → AI Engines.` };
+      }
+      claudeAccountAttr = sanitizeResourceAttr(account!.label);
+    }
+  }
   // ── Missing engine CLI → run its installer visibly (pre-spawn) ───────────────
   // If the agent's engine binary (claude/codex/…) isn't installed, spawning it
   // just dies with "— process exited (code 1) —" and the user has no idea why.
@@ -2550,7 +2593,10 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           theme: readConfig().terminalTheme ?? 'light',
           // W3 — default-MCP consent state + the bundled skills source dir.
           mcpDefaults: readConfig().mcpDefaults,
-          skillsDir: skillsResourceDir()
+          skillsDir: skillsResourceDir(),
+          // Account pool: tag this agent's OTEL resource with its account LABEL
+          // (sanitized; never the token) so usage groups per account.
+          accountAttr: claudeAccountAttr
         }
       );
       opts.args = [...(opts.args ?? []), ...inj.args];
@@ -2747,6 +2793,16 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     }
     opts.env = { ...(opts.env ?? {}), ...extra };
   }
+  // ── Claude account pool: per-agent CLAUDE_CODE_OAUTH_TOKEN (v0.4.5) ─────────
+  // Sits beside the BYOK block above for the same reason: secrets are read
+  // MAIN-ONLY and materialized into the child env at the last moment. A
+  // setup-token outranks the machine's `/login` credential in Claude Code's
+  // auth precedence, so this alone pins the session to the chosen account.
+  // Resolved (and fail-closed) at the top of this function; agents with no
+  // account pin never reach here and spawn exactly as before.
+  if (claudeAccountToken) {
+    opts.env = { ...(opts.env ?? {}), CLAUDE_CODE_OAUTH_TOKEN: claudeAccountToken };
+  }
   // Codex Remote is daemon-based (there is no `/remote-control` slash command).
   // Start/enable the daemon under this agent's isolated CODEX_HOME and connect
   // the TUI to it so the thread is visible in ChatGPT mobile. Best-effort: an
@@ -2882,6 +2938,65 @@ ipcMain.handle('providerKey:clear', (_evt, backend: unknown) => {
   if (typeof backend !== 'string' || !(backend in BACKEND_KEY_ENV)) return { ok: false, error: 'unknown backend' };
   try { integrations.deleteSecret(providerKeyRef(backend)); return { ok: true }; }
   catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+// ─── IPC: Claude account pool (v0.4.5) ───────────────────────────────────────
+// N subscription accounts, each a label + a `claude setup-token` token. Same
+// write-only broker contract as providerKey above: the renderer can ADD/REPLACE
+// a token and ask "is one stored?" — the plaintext never crosses IPC in either
+// direction and is materialized MAIN-ONLY at spawn (spawnAgentCore). Metadata
+// ({id,label,createdAt}) rides HarnessConfig.claudeAccounts.
+ipcMain.handle('claudeAccount:add', (_evt, payload: unknown) => {
+  const p = (payload ?? {}) as { label?: unknown; token?: unknown };
+  if (typeof p.label !== 'string') return { ok: false, error: 'label required' };
+  if (typeof p.token !== 'string' || !p.token.trim()) return { ok: false, error: 'token required' };
+  const accounts = readConfig().claudeAccounts ?? [];
+  const labelError = newAccountLabelError(p.label, accounts);
+  if (labelError) return { ok: false, error: labelError };
+  const account: ClaudeAccount = {
+    id: `acct-${randomBytes(6).toString('hex')}`,
+    label: p.label.trim(),
+    createdAt: Date.now()
+  };
+  // Secret FIRST: if safeStorage refuses (fail-closed broker), no metadata is
+  // written — the pool never lists an account that cannot spawn.
+  const stored = integrations.setSecret(claudeAccountSecretRef(account.id), p.token);
+  if (!stored.ok) return { ok: false, error: stored.error ?? 'could not store the token' };
+  writeConfig({ claudeAccounts: [...accounts, account] });
+  return { ok: true, account };
+});
+ipcMain.handle('claudeAccount:set', (_evt, payload: unknown) => {
+  const p = (payload ?? {}) as { id?: unknown; token?: unknown };
+  if (typeof p.id !== 'string' || !p.id) return { ok: false, error: 'id required' };
+  if (typeof p.token !== 'string' || !p.token.trim()) return { ok: false, error: 'token required' };
+  if (!(readConfig().claudeAccounts ?? []).some((a) => a.id === p.id)) {
+    return { ok: false, error: 'unknown account' };
+  }
+  return integrations.setSecret(claudeAccountSecretRef(p.id), p.token);
+});
+ipcMain.handle('claudeAccount:has', (_evt, id: unknown) =>
+  typeof id === 'string' ? integrations.hasSecret(claudeAccountSecretRef(id)) : false);
+ipcMain.handle('claudeAccount:clear', (_evt, id: unknown) => {
+  if (typeof id !== 'string' || !id) return { ok: false, error: 'id required' };
+  try { integrations.deleteSecret(claudeAccountSecretRef(id)); return { ok: true }; }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+});
+ipcMain.handle('claudeAccount:remove', (_evt, payload: unknown) => {
+  const p = (payload ?? {}) as { id?: unknown };
+  if (typeof p.id !== 'string' || !p.id) return { ok: false, error: 'id required' };
+  const cfg = readConfig();
+  const accounts = cfg.claudeAccounts ?? [];
+  if (!accounts.some((a) => a.id === p.id)) return { ok: false, error: 'unknown account' };
+  // Blocked while any live (non-archived) agent — Michael included via
+  // godAccount — is pinned to it: removing the account out from under a pinned
+  // agent would turn its next restart into a fail-closed spawn error.
+  const reg = hive.registry();
+  const pinned = pinnedAgentsForAccount(p.id, Object.values(reg.agents), cfg.godAccount);
+  if (pinned.length > 0) {
+    return { ok: false, error: `Account is in use by ${pinned.join(', ')} — set ${pinned.length === 1 ? 'that agent' : 'those agents'} to another account first.` };
+  }
+  writeConfig({ claudeAccounts: accounts.filter((a) => a.id !== p.id) });
+  try { integrations.deleteSecret(claudeAccountSecretRef(p.id)); } catch { /* metadata already gone; orphan cipher is unreadable without the ref */ }
+  return { ok: true };
 });
 // Probe an integration's reachability through the broker's own auth path (admin-only;
 // runs in main, so the secret is used but never returned — only the upstream status).

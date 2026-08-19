@@ -136,6 +136,12 @@ export interface AgentMeta {
   /** Michael's prep assistant — enriches prompts and forwards them to Michael.
    *  Send-only: excluded from broadcast fan-out so it never drains an inbox. */
   isAssistant?: boolean;
+  /** Claude account-pool id (HarnessConfig.claudeAccounts) this agent is pinned
+   *  to. Unset = the machine's `/login` account (today's behaviour). The id only
+   *  — the setup-token stays in the secret broker and is injected MAIN-ONLY at
+   *  spawn (never persisted here / in registry.json). Claude-provider only;
+   *  ignored for other engines. */
+  account?: string;
 }
 
 export interface RegistryAgent extends AgentMeta {
@@ -558,6 +564,11 @@ export class HiveManager {
        *  copied into the agent's `.claude/skills/` per spawn; undefined or missing
        *  is a no-op (tolerated until Kevin populates the resource dir). */
       skillsDir?: string;
+      /** SANITIZED (`sanitizeResourceAttr`) label of the agent's pinned Claude
+       *  account, appended to OTEL_RESOURCE_ATTRIBUTES as `claude.account=<v>` so
+       *  the collector/panel can group usage per account. The label only — never
+       *  the token. Undefined = /login account (attr omitted). */
+      accountAttr?: string;
     } = {}
   ): Promise<SpawnInjection> {
     const root = this.root();
@@ -603,6 +614,11 @@ export class HiveManager {
       ...meta,
       capabilities: meta.capabilities ?? [],
       role: meta.role ?? (meta.isGod ? 'orchestrator' : 'agent'),
+      // The spawn meta is authoritative for the account PIN (id only — never a
+      // token): set explicitly rather than relying on the spread, so un-pinning
+      // an agent (meta.account undefined) clears the recorded pin instead of the
+      // stale one surviving via `...prev`. JSON.stringify drops the undefined.
+      account: meta.account,
       status: 'idle',
       cwdValid: cwd.valid,
       // A (re)spawn always means a live terminal — clear any prior archived flag.
@@ -773,7 +789,12 @@ export class HiveManager {
       env.OTEL_EXPORTER_OTLP_ENDPOINT = this._otelEndpoint;
       env.OTEL_METRIC_EXPORT_INTERVAL = '5000'; // 5s — near-live without spamming
       env.OTEL_LOGS_EXPORT_INTERVAL = '2000';
-      env.OTEL_RESOURCE_ATTRIBUTES = `agent.id=${meta.id},agent.name=${meta.name}`;
+      // `claude.account` = the SANITIZED pool-account label (never the token, and
+      // sanitized so a label can't smuggle `,`/`=` into the attr list). Omitted
+      // for /login-account agents so their resource attrs are byte-identical to
+      // pre-pool builds.
+      env.OTEL_RESOURCE_ATTRIBUTES = `agent.id=${meta.id},agent.name=${meta.name}`
+        + (opts.accountAttr ? `,claude.account=${opts.accountAttr}` : '');
     }
     const args: string[] = [];
     if (!claudeProvider) return { args, env };

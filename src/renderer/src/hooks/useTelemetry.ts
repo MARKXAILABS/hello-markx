@@ -23,6 +23,8 @@ export interface AgentUsageSample {
   cacheCreation: number;
   model: string;
   usd: number;
+  /** Opaque Claude account id observed in telemetry (account-pool integrity). */
+  accountUuid?: string;
 }
 
 export interface ToolSpan {

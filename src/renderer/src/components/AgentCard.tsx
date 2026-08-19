@@ -41,6 +41,9 @@ export interface AgentCardProps {
   /** Opens the note editor (the strip owns the editing overlay). When set, the
    *  card shows a small ✎ affordance on its note row. */
   onEditNote?: () => void;
+  /** Claude pool-account LABEL this agent is pinned to (resolved by the strip);
+   *  unset = /login account (no chip — cards look exactly as before the pool). */
+  accountLabel?: string;
 }
 
 const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
@@ -53,7 +56,7 @@ const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
 export function AgentCard({
   name, character, accent, status, ptyId, project, action, progress = 0,
   contextTokens, contextLimit, selected, isGod, onClick,
-  doingCount = 0, onTaskNoteClick, draggable, note, onEditNote
+  doingCount = 0, onTaskNoteClick, draggable, note, onEditNote, accountLabel
 }: AgentCardProps) {
   const [hover, setHover] = useState(false);
   const typing = useHasTerminalDraft(ptyId);
@@ -211,15 +214,31 @@ export function AgentCard({
               <PixelBadge status={typing ? 'typing' : status} style={{ flexShrink: 0 }} />
             </div>
 
-            {/* Context line: action while working, repo while idle. */}
-            <div
-              title={`${project}${action && status !== 'idle' ? ` — ${action}` : ''}`}
-              style={{
-                fontSize: 11, lineHeight: '14px',
-                color: 'var(--cth-ink-500)',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-              }}
-            >{infoLine}</div>
+            {/* Context line: action while working, repo while idle — plus the
+                Claude pool-account chip when this agent is pinned to one. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+              <div
+                title={`${project}${action && status !== 'idle' ? ` — ${action}` : ''}${accountLabel ? ` · account: ${accountLabel}` : ''}`}
+                style={{
+                  flex: 1, minWidth: 0,
+                  fontSize: 11, lineHeight: '14px',
+                  color: 'var(--cth-ink-500)',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                }}
+              >{infoLine}</div>
+              {accountLabel && (
+                <span
+                  title={`Claude account: ${accountLabel}`}
+                  style={{
+                    flexShrink: 0, maxWidth: 76,
+                    fontSize: 9, lineHeight: '13px', padding: '0 4px',
+                    background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
+                    color: 'var(--cth-ink-700)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                  }}
+                >{accountLabel}</span>
+              )}
+            </div>
 
             {/* God: voice on its own compact row. Workers: the private note row.
                 Both sit ABOVE the gauge, so it is never covered. */}
