@@ -144,3 +144,21 @@ test('#140: both entry points agree on the same directory', () => {
   const typed = '~/HarnessAgents';
   assert.equal(expandTilde(typed), normalizeHiveHome(typed).home);
 });
+
+test('#59: the recent list dedups case-insensitively on Windows, and keeps the typed casing', () => {
+  const WIN = process.platform === 'win32';
+  const a = WIN ? path.win32.join('C:\\', 'Users', 'Me', 'Hive') : '/Users/Me/Hive';
+  const b = WIN ? path.win32.join('c:\\', 'users', 'me', 'hive') : '/users/me/hive';
+
+  const { recentHives } = normalizeHiveHome(a, [b]);
+
+  if (WIN) {
+    assert.equal(recentHives.length, 1, 'one directory must not occupy two slots');
+    assert.equal(recentHives[0], a, 'the stored value keeps the casing the user typed');
+  } else {
+    // POSIX paths ARE case-sensitive: these are genuinely two directories, and
+    // collapsing them would be the bug. Asserting this keeps the win32 fold from
+    // ever being applied everywhere.
+    assert.equal(recentHives.length, 2, 'POSIX must not fold case');
+  }
+});
