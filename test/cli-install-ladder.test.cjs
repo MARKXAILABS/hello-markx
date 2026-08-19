@@ -17,6 +17,14 @@ const { installInfoForProvider } = loadTs('src/shared/agentProvider.ts');
 const script = (provider, npmAvailable, platform) =>
   buildMissingCliScript(provider, provider, npmAvailable, platform);
 
+// "One statement" is the SHELL's notion, not POSIX's: unix gets one statement per
+// line ($SHELL -lc), cmd.exe gets one `&`-chained line — it is wrapped verbatim in
+// `cmd /d /s /c "<script>"` (pty.ts), which no newline would survive. Splitting on
+// the separator the DEFAULT platform actually emits keeps "is this an executed
+// statement rather than an echo?" meaning the same thing on both. `^&` (the
+// escaped, literal ampersand the win32 branch echoes) never splits: it is ` ^& `.
+const statements = (out) => (process.platform === 'win32' ? out.split(' & ') : out.split('\n'));
+
 test('with npm present the ladder is unchanged — npm install, for every provider', () => {
   for (const provider of ['claude', 'codex', 'opencode', 'crush', 'copilot']) {
     const info = installInfoForProvider(provider);
@@ -50,7 +58,7 @@ test('the no-node script explains the real problem instead of failing at it', ()
 
   // The npm command may still be SHOWN (as the follow-up step) but must never be
   // an executed line: every executable line here is an `echo`.
-  const executable = out.split('\n').filter((l) => l.trim() && !/^\s*echo\b/.test(l.trim()));
+  const executable = statements(out).filter((l) => l.trim() && !/^\s*echo\b/.test(l.trim()));
   assert.deepEqual(executable, [], `these would run on a machine with no node: ${executable}`);
 });
 
@@ -58,13 +66,13 @@ test('the native rung actually runs, and says why it differs', () => {
   const out = script('claude', false);
   assert.match(out, /no Node needed/);
   const native = installInfoForProvider('claude').nativeCommand;
-  assert.ok(out.split('\n').includes(native), 'the installer must be an executed line, not only echoed');
+  assert.ok(statements(out).includes(native), 'the installer must be an executed statement, not only echoed');
 });
 
 test('with npm present nothing mentions a missing Node', () => {
   const out = script('claude', true);
   assert.doesNotMatch(out, /Node\.js is not installed/);
-  assert.ok(out.split('\n').includes('npm install -g @anthropic-ai/claude-code'));
+  assert.ok(statements(out).includes('npm install -g @anthropic-ai/claude-code'));
 });
 
 test('the Windows script stays a single quote-free cmd.exe line', () => {
@@ -82,8 +90,8 @@ test('the Windows script stays a single quote-free cmd.exe line', () => {
 });
 
 test('a hostile binary name cannot inject a command into the banner', () => {
-  const out = script('claude', true).split('\n');
-  const evil = buildMissingCliScript("x'; rm -rf /; echo '", 'claude', true).split('\n');
+  const out = statements(script('claude', true));
+  const evil = statements(buildMissingCliScript("x'; rm -rf /; echo '", 'claude', true));
   assert.equal(evil.length, out.length, 'no extra statements');
   assert.ok(evil.some((l) => l.includes('xrm-rf')), 'sanitized to a bare identifier');
   assert.ok(!evil.some((l) => /rm -rf \//.test(l)));

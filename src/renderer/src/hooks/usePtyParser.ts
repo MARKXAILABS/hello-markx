@@ -44,8 +44,19 @@ const CONTEXT_LIMIT_RE = /[\d.,]+k\s*\/\s*([\d.]+)([km])\s+tokens/i;
 
 /**
  * Subscribe to a pty stream and update the agent's avatar state based on what
- * scrolls past. This is a stopgap until we wire real Claude Code hooks — it
- * inspects the visible terminal output and infers status / station / carrying.
+ * scrolls past.
+ *
+ * NOTE: it writes `action` and never `description`. `description` is the agent's
+ * DURABLE role ("what is this agent for") — this parser used to overwrite it with
+ * the last tool line, which meant two things: the card subtitle flickered
+ * "read spec.md" / "bash npm test" instead of naming the agent, and every respawn
+ * path that re-registers the agent from its record (auto-revive, Restart &
+ * Continue) wrote that tool line into the hive registry as its ROLE. It was also
+ * a durable-field write per chunk, so it rewrote localStorage and the roster file
+ * on every line of terminal output (#20).
+ *
+ * This is a stopgap until we wire real Claude Code hooks — it inspects the
+ * visible terminal output and infers status / station / carrying.
  *
  * Returns a function suitable for `<PtyTerminalView onStreamData={...} />`.
  */
@@ -63,7 +74,6 @@ export function usePtyParser(agentId: string) {
       updateAgent(agentId, {
         status: 'idle',
         action: 'awaiting',
-        description: 'on standby',
         carrying: undefined,
         currentStation: 'desk'
       });
@@ -124,7 +134,6 @@ export function usePtyParser(agentId: string) {
       updateAgent(agentId, {
         status: 'working',
         action: summary,
-        description: summary,
         currentStation: station,
         carrying
       });
@@ -153,13 +162,19 @@ export function usePtyParser(agentId: string) {
       // stuck on "Do you want to proceed?" looked exactly like a spare one (#12).
       // Only the god escalates to the HUMAN; a sub-agent is parked on Michael,
       // and that difference is `waitingOnGod`, not a weaker status.
-      const isGod = !!useStore.getState().agents.find((a) => a.id === agentId)?.isGod;
+      const self = useStore.getState().agents.find((a) => a.id === agentId);
+      // Already flagged. The prompt stays on screen and repaints, so this branch
+      // fires again for every chunk of that repaint — and re-asserting builds a
+      // FRESH `blockReason` object, which no equality check can see through, so
+      // each one reallocates the roster and re-renders the app (#20). The block
+      // is already up; there is nothing to say.
+      if (self?.status === 'blocked') return;
+      const isGod = !!self?.isGod;
       if (isGod) {
         updateAgent(agentId, {
           status: 'blocked',
           waitingOnGod: false,
           action: 'waiting on you',
-          description: 'waiting on you',
           currentStation: 'mailbox',
           blockReason: {
             summary: 'Waiting for your reply',
@@ -175,7 +190,6 @@ export function usePtyParser(agentId: string) {
           status: 'blocked',
           waitingOnGod: true,
           action: 'waiting on god',
-          description: 'waiting on god',
           currentStation: 'desk',
           blockReason: {
             summary: 'Waiting on Michael',

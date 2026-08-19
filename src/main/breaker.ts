@@ -61,9 +61,24 @@ const rank = (l: BreakerLevel): number => LEVELS.indexOf(l);
 const actionFor = (l: BreakerLevel): BreakerAction =>
   l === 'steering' ? 'steer' : l === 'constrained' ? 'constrain' : l === 'stopped' ? 'stop' : 'none';
 
-/** Total tokens in a cumulative sample (all kinds), 0 when unknown. */
+/** Total tokens in a cumulative sample (all kinds), 0 when unknown. This is the
+ *  FLOOR budget's unit — `config.costCapTokens` documents itself as
+ *  input+output+cacheRead+cacheCreation and the Command Center meter renders the
+ *  same number, so it stays whole-fat. */
 const tokensOf = (s: AgentUsageSample | null): number =>
   s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;
+
+/** Tokens that represent WORK: output plus NON-cached input (upstream #189).
+ *
+ *  The per-agent cap used the all-kinds total, and cacheRead grows with every
+ *  turn of a long session whether or not the agent did anything — a big cached
+ *  context is re-read on each request, so an agent that sat idle answering short
+ *  questions blew a 2M cap on session length alone and got steered for it. Cache
+ *  reads are also ~10× cheaper than fresh input, so counting them at par
+ *  misprices the thing the cap exists to bound. Output + fresh input is what the
+ *  agent actually consumed doing the work. */
+const billableTokensOf = (s: AgentUsageSample | null): number =>
+  s ? s.input + s.output : 0;
 
 const DEFAULTS = {
   enabled: true,
@@ -301,8 +316,9 @@ export class CircuitBreaker {
     }
     // (a) per-agent token limit — this agent's own total over its configured cap
     const perAgentCap = cfg.agentTokenCaps?.[input.agentId];
-    if (typeof perAgentCap === 'number' && perAgentCap > 0 && tokensOf(input.sample) > perAgentCap) {
-      return { tripping: true, reason: `token limit: ${tokensOf(input.sample).toLocaleString()} over the agent cap of ${perAgentCap.toLocaleString()}` };
+    const billable = billableTokensOf(input.sample);
+    if (typeof perAgentCap === 'number' && perAgentCap > 0 && billable > perAgentCap) {
+      return { tripping: true, reason: `token limit: ${billable.toLocaleString()} billable tokens (output + fresh input, cache reads excluded) over the agent cap of ${perAgentCap.toLocaleString()}` };
     }
     // (a) cost cap — floor total over cap, this agent is the biggest spender
     if (isTopSpender && typeof costCapUsd === 'number') {

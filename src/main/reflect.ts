@@ -102,7 +102,9 @@ interface Parsed {
   header: string;            // the `# Memory …` H1 + any preamble before the first `##`
   pinned: string | null;     // body under the pinned heading (no heading line)
   condensed: string | null;  // body under the condensed heading
-  recent: Section[];         // every other `## ` section, in file order (oldest→newest)
+  // every other `## ` section, in FILE order — which is only a proxy for age.
+  // `orderRecent()` turns it into real oldest→newest before anything is evicted.
+  recent: Section[];
 }
 
 /** Outcome of one agent's reflect attempt — surfaced to the manual IPC + tests. */
@@ -245,9 +247,13 @@ export class MemoryReflector {
     const oldBytes = Buffer.byteLength(text, 'utf8');
     const parsed = parseMemory(text);
     // Split recent into KEEP (newest K, verbatim) and EVICT (older — summarized).
+    // Order by the headings' dates first: file order is only a proxy for age, and
+    // a file that was edited out of order would otherwise get its NEWEST sections
+    // summarized away while stale ones were kept verbatim.
+    const ordered = orderRecent(parsed.recent);
     const keepCount = Math.max(1, s.recentKeep);
-    const keep = parsed.recent.slice(-keepCount);
-    const evict = parsed.recent.slice(0, Math.max(0, parsed.recent.length - keepCount));
+    const keep = ordered.slice(-keepCount);
+    const evict = ordered.slice(0, Math.max(0, ordered.length - keepCount));
     if (evict.length === 0) {
       return { id, condensed: false, reason: 'nothing-to-evict', oldBytes };
     }
@@ -400,6 +406,43 @@ export function parseMemory(text: string): Parsed {
     else recent.push(s);
   }
   return { header, pinned, condensed, recent };
+}
+
+/** The ISO date (optionally with a time) a `## ` heading carries, or null.
+ *  Deliberately strict — a real calendar month and day, so a version string or
+ *  an issue number can never be mistaken for a timestamp. ISO only: that is what
+ *  the harness writes and what the protocol asks agents for; a `Jun 1, 2026`
+ *  heading simply has no date as far as this is concerned, and falls back to
+ *  position like any other undated section. */
+export function headingDate(heading: string): string | null {
+  const m = /\b(\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))(?:[T ](\d{2}:\d{2}(?::\d{2})?))?(?!\d)/
+    .exec(heading);
+  if (!m) return null;
+  return m[2] ? `${m[1]}T${m[2]}` : m[1];
+}
+
+/**
+ * Order the `recent` sections oldest→newest so `slice(-K)` really is "the newest
+ * K". Condensation used to take file order on faith: an append-only file is
+ * chronological, but nothing enforces append-only — an agent editing an earlier
+ * section, a merge, or a hand-edit reorders it, and the reflector would then
+ * evict the newest work and keep the stale sections verbatim.
+ *
+ * An undated section inherits the date of the nearest dated section ABOVE it, so
+ * it stays with the entry it was written under, and ties break on the original
+ * position. Two consequences worth stating: a file whose headings carry no dates
+ * at all sorts to exactly the order it already had (zero behaviour change), and
+ * the sort is a real total order — no inconsistent comparator handed to sort().
+ */
+export function orderRecent(recent: Section[]): Section[] {
+  let carried = '';
+  const keyed = recent.map((section, index) => {
+    const date = headingDate(section.heading);
+    if (date) carried = date;
+    return { section, index, key: date ?? carried };
+  });
+  keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index));
+  return keyed.map((k) => k.section);
 }
 
 /** Non-empty, trimmed lines of the pinned block (the set we must never lose). */

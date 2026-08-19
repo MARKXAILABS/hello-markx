@@ -738,9 +738,17 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
               <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--cth-ink-500)' }}>
                 {(toolCounts[a.id] ?? 0)} tool calls
               </span>
+              {/* Same figure, same format as the floor card and the fullscreen
+                  roster — four views of one agent used to agree on nothing. */}
+              {!!sample?.usd && (
+                <span
+                  title={`Estimated spend so far: $${sample.usd.toFixed(2)}`}
+                  style={{ flexShrink: 0, fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-700)' }}
+                >${sample.usd.toFixed(2)}</span>
+              )}
               <TokenLimitEditor value={agentCap} onSet={(t) => setAgentCap(a.id, t)} />
             </div>
-            <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', wordBreak: 'break-all' }}>{a.cwd}</div>
+            <PathLine path={a.cwd} style={{ fontSize: 11, color: 'var(--cth-ink-500)' }} />
             {/* Live telemetry (folded in from the old Fleet tab) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {hasSpark ? (
@@ -1027,10 +1035,11 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
         {repos.length === 0 && <Muted>No registered repos.</Muted>}
         {repos.map((r) => (
           <div key={r} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-            <span style={{ flex: 1, fontSize: 12, color: 'var(--cth-ink-700)', wordBreak: 'break-all' }}>{r}</span>
+            <PathLine path={r} style={{ flex: 1, fontSize: 12, color: 'var(--cth-ink-700)' }} />
             <button
               onClick={() => window.cth.openTerminalAt(r)}
               title="Open in Terminal.app"
+              aria-label={`Open ${r} in a terminal`}
               style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--cth-ink-500)' }}
             ><Icon name="terminal" /></button>
           </div>
@@ -1321,10 +1330,12 @@ function ArchivedSection() {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)' }}>{a.name}</div>
-            <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', wordBreak: 'break-all' }}>{a.cwd}</div>
+            <PathLine path={a.cwd} style={{ fontSize: 11, color: 'var(--cth-ink-500)' }} />
           </div>
           <button
             onClick={() => removeArchivedAgent(a.id)}
+            title={`Forget ${a.name}`}
+            aria-label={`Forget archived agent ${a.name}`}
             style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--cth-ink-500)', flexShrink: 0 }}
           ><Icon name="x" /></button>
         </div>
@@ -1499,7 +1510,7 @@ function TokenLimitEditor({ value, onSet }: { value?: number; onSet: (tokens: nu
         }}
       />
       <button
-        onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save limit"
+        onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save limit" aria-label="Save token limit"
         style={{ flexShrink: 0, padding: '1px 5px', border: 'none', cursor: 'pointer', background: 'var(--cth-mint)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', fontSize: 11, color: 'var(--cth-ink-900)' }}
       >✓</button>
     </span>
@@ -1557,6 +1568,31 @@ function ActivityTab() {
 
 
 // ─── small shared bits ───────────────────────────────────────────────────────
+
+/**
+ * One line of path, truncated at the FRONT.
+ *
+ * These rows used to render a cwd with `wordBreak: 'break-all'`, so an isolated
+ * agent's worktree path (`/Users/me/dev/monorepo/.worktrees/agent-jim-1a2b3c`)
+ * wrapped to four lines in a 360px sidebar and pushed everything under it off
+ * the panel. The front of a path is also the least informative part — every row
+ * shares it — so the tail is what survives. Full path stays in the tooltip.
+ */
+function PathLine({ path, style }: { path: string; style?: React.CSSProperties }) {
+  // Character budget, not pixels: the CSS ellipsis below still handles a sidebar
+  // dragged narrower than this. Together they mean a path can never wrap.
+  const MAX = 46;
+  const shown = path.length > MAX ? `…${path.slice(path.length - (MAX - 1))}` : path;
+  return (
+    <div
+      title={path}
+      style={{
+        minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        ...style
+      }}
+    >{shown}</div>
+  );
+}
 
 function Scroll({ children }: { children: React.ReactNode }) {
   // minWidth:0 + overflowX:hidden keep wide children (native selects, long paths,

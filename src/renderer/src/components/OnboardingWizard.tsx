@@ -6,6 +6,7 @@ import { SpritePortrait } from './SpritePortrait';
 import { ProviderLogo } from './ProviderLogo';
 import { AGENT_PROVIDER_PRESETS, modelsForProvider, type AgentProvider, type HarnessConfig } from '@/store/config';
 import { canReceiveInbox, providerPreset } from '@shared/agentProvider';
+import { IS_MAC, IS_WINDOWS, OS_NAME } from './platform';
 
 export interface OnboardingWizardProps {
   onComplete: (config: HarnessConfig) => void;
@@ -13,6 +14,14 @@ export interface OnboardingWizardProps {
 
 type Audience = 'technical' | 'non-technical';
 type Step = 'persona' | 'welcome' | 'home' | 'orchestrator' | 'repos' | 'permissions' | 'done';
+
+// The screens a user actually walks through, in order. The counter, the dots and
+// next/back all read THIS — the title used to hard-code "STEP n OF 4" while six
+// screens carried a Next button, so the wizard told you it was nearly over on
+// the third of six. 'done' is not in here: finish() closes the wizard, so it is
+// never reached.
+const STEPS: Step[] = ['persona', 'welcome', 'home', 'orchestrator', 'repos', 'permissions'];
+const stepNumber = (s: Step): string => `STEP ${STEPS.indexOf(s) + 1} OF ${STEPS.length}`;
 
 // First-run showcase — the highest-value features a brand-new user should grasp
 // before any setup. Each carries a developer-register `desc` and a plain-language
@@ -124,6 +133,34 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
   const openSettings = (url: string) => { void window.cth.openExternal(url); };
 
+  // Which engine CLIs are ACTUALLY on this machine. The orchestrator step used
+  // to render AGENT_PROVIDER_PRESETS — a static array — under the words "each
+  // option is a CLI engine you have installed", so a fresh machine with nothing
+  // installed showed ten happy rows and the user picked one that cannot spawn.
+  // Same probe SetupPanel uses (window.cth.toolsStatus → toolCatalog), keyed by
+  // the catalog's `engine:<provider>` id. `undefined` = still probing, and no
+  // row claims anything until it resolves.
+  // provider id → found. A provider ABSENT from this map was never probed (the
+  // catalog skips engines with no default command), which is a different thing
+  // from "not installed" and must not be shown as one.
+  const [engineProbe, setEngineProbe] = useState<Record<string, boolean> | undefined>();
+  useEffect(() => {
+    let alive = true;
+    window.cth.toolsStatus()
+      .then((tools) => {
+        if (!alive) return;
+        setEngineProbe(Object.fromEntries(
+          tools.filter((t) => t.kind === 'engine').map((t) => [t.id.replace(/^engine:/, ''), t.found])
+        ));
+      })
+      // A failed probe must not block onboarding — it stays "we don't know",
+      // which reads as no chip and no Finish block.
+      .catch(() => { /* leave it undefined */ });
+    return () => { alive = false; };
+  }, []);
+  /** True only when we probed the clone's engine AND it was absent. */
+  const godEngineMissing = engineProbe?.[godProvider] === false;
+
   // Default-suggest a sensible harness home on first render.
   //
   // This used to read `window.process.env.HOME`, which is ALWAYS undefined here:
@@ -206,12 +243,12 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         <PixelPanel
           variant="dialog"
           title={
-            step === 'persona' ? 'WELCOME TO HELLO MARKX'
-            : step === 'welcome' ? 'MEET YOUR OFFICE'
-            : step === 'home' ? (plain ? 'STEP 1 OF 4 · A HOME FOR THE APP' : 'STEP 1 OF 4 · HARNESS HOME')
-            : step === 'orchestrator' ? (plain ? "STEP 2 OF 4 · YOUR CLONE" : "STEP 2 OF 4 · YOUR CLONE'S ENGINE")
-            : step === 'repos' ? (plain ? 'STEP 3 OF 4 · YOUR PROJECTS' : 'STEP 3 OF 4 · YOUR REPOS')
-            : step === 'permissions' ? 'STEP 4 OF 4 · PERMISSIONS & RELIABILITY'
+            step === 'persona' ? `${stepNumber(step)} · WELCOME TO HELLO MARKX`
+            : step === 'welcome' ? `${stepNumber(step)} · MEET YOUR OFFICE`
+            : step === 'home' ? `${stepNumber(step)} · ${plain ? 'A HOME FOR THE APP' : 'HARNESS HOME'}`
+            : step === 'orchestrator' ? `${stepNumber(step)} · ${plain ? 'YOUR CLONE' : "YOUR CLONE'S ENGINE"}`
+            : step === 'repos' ? `${stepNumber(step)} · ${plain ? 'YOUR PROJECTS' : 'YOUR REPOS'}`
+            : step === 'permissions' ? `${stepNumber(step)} · PERMISSIONS & RELIABILITY`
             : 'ALL SET'
           }
           noPadding
@@ -393,8 +430,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                       one that runs your whole office. We recommend Claude Code on Opus 4.8 (1M).
                       You can add or switch the others later.</>
                     ) : (
-                      <>Each option is a <strong>CLI engine</strong> you have installed (Claude Code,
-                      Codex, Antigravity/Gemini, or a local proxy like Qwen).
+                      <>Each option is a <strong>CLI engine</strong> the app can drive (Claude Code,
+                      Codex, Antigravity/Gemini, or a local proxy like Qwen); the chips say which
+                      are on this machine.
                       <strong> Your clone</strong> (Michael) is the engine that orchestrates the whole
                       hive. Recommended: Claude Code · Opus 4.8 · 1M — other providers can be wired
                       per agent later.</>
@@ -450,6 +488,18 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                             fontFamily: 'var(--cth-font-display)', flexShrink: 0
                           }}>RECOMMENDED</span>
                         )}
+                        {/* What the probe found. No chip while it is still
+                            running, and none for an engine the catalog never
+                            probed — no chip beats a wrong one. */}
+                        {engineProbe?.[p.id] !== undefined && (
+                          <span style={{
+                            fontSize: 10, padding: '1px 5px', lineHeight: '16px',
+                            background: engineProbe[p.id] ? 'var(--cth-mint-light)' : 'var(--cth-cream-200)',
+                            boxShadow: `inset 0 0 0 1px ${engineProbe[p.id] ? 'var(--cth-mint)' : 'var(--cth-ink-300)'}`,
+                            fontFamily: 'var(--cth-font-display)', flexShrink: 0,
+                            color: 'var(--cth-ink-900)'
+                          }}>{engineProbe[p.id] ? 'INSTALLED' : 'NOT FOUND'}</span>
+                        )}
                       </label>
                     );
                   })}
@@ -468,6 +518,20 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
                     This only sets Michael's engine. You can run other providers per agent later.
                   </div>
+                  {godEngineMissing && (
+                    <div style={{
+                      padding: '6px 10px',
+                      background: 'var(--cth-coral-light)',
+                      boxShadow: 'inset 0 0 0 1px var(--cth-coral)',
+                      fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-900)'
+                    }}>
+                      <code style={{ fontFamily: 'var(--cth-font-mono)' }}>
+                        {providerPreset(godProvider).defaultCommand}
+                      </code>{' '}
+                      is not on this machine, so your clone cannot start. Install it (Settings →
+                      Prerequisites lists the exact command), or pick an engine marked INSTALLED.
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -581,13 +645,13 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 <p style={{ margin: 0, lineHeight: '20px', fontSize: 12, color: 'var(--cth-ink-700)' }}>
                   {plain
                     ? 'Your agents keep working on a schedule and in live terminals, even when you step away. These settings keep you in the loop and keep things running.'
-                    : 'Your agents keep working on a schedule and in live terminals. If your Mac fully sleeps those timers pause and catch up the moment you\'re back — nothing is lost, it may just run late.'}
+                    : `Your agents keep working on a schedule and in live terminals. If ${IS_MAC ? 'your Mac' : 'this machine'} fully sleeps those timers pause and catch up the moment you're back — nothing is lost, it may just run late.`}
                 </p>
 
                 <ToggleRow
                   icon="clock"
                   label="KEEP WORKING WHILE AWAY"
-                  desc="Strong keep-alive: stops your Mac from sleeping while an agent is live, so schedules and terminals fire on time even when you step away. Uses more battery — best on power. Off by default."
+                  desc={`Strong keep-alive: stops ${OS_NAME} from sleeping while an agent is live, so schedules and terminals fire on time even when you step away. Uses more battery — best on power. Off by default.`}
                   on={strongKeepalive}
                   tint="var(--cth-mint-light)"
                   edge="var(--cth-mint)"
@@ -597,7 +661,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 <ToggleRow
                   icon="bell"
                   label="DESKTOP NOTIFICATIONS"
-                  desc="Get pinged when an agent needs you or a terminal needs reviving — even while you're away. macOS asks permission the first time one fires."
+                  desc={`Get pinged when an agent needs you or a terminal needs reviving — even while you're away.${IS_MAC ? ' macOS asks permission the first time one fires.' : ''}`}
                   on={notifications}
                   tint="var(--cth-peach-light)"
                   edge="var(--cth-peach)"
@@ -624,7 +688,12 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   onChange={() => setShareStats(!shareStats)}
                 />
 
-                {/* LEVER 4 — instruction-only: macOS won't let the app flip Energy, so we deep-link the pane. */}
+                {/* LEVER 4 — instruction-only: no OS lets an app flip its own sleep
+                    policy, so we say where it lives and deep-link the pane where
+                    there IS one. This used to be macOS copy and an
+                    x-apple.systempreferences: link on all three platforms — a
+                    Windows user was told to open a Battery pane that does not
+                    exist, via a URL their shell cannot resolve. */}
                 <div style={{
                   display: 'flex', gap: 10, alignItems: 'flex-start', padding: 10,
                   background: 'var(--cth-lemon-light)',
@@ -643,19 +712,35 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                         STAY AWAKE ON POWER (MANUAL)
                       </div>
                       <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)' }}>
-                        macOS only lets you set this one yourself. In Battery → Options,
-                        turn on “Prevent automatic sleeping when the display is off” (on
-                        power adapter) so timers keep firing with the display asleep.
-                        Without a sleep-preventing setting the Mac still truly sleeps —
+                        {IS_MAC ? (
+                          <>macOS only lets you set this one yourself. In Battery → Options,
+                          turn on “Prevent automatic sleeping when the display is off” (on
+                          power adapter) so timers keep firing with the display asleep.</>
+                        ) : IS_WINDOWS ? (
+                          <>Windows only lets you set this one yourself. In Power &amp; battery →
+                          Screen and sleep, set “When plugged in, put my device to sleep after”
+                          to Never so timers keep firing with the screen off.</>
+                        ) : (
+                          <>Your desktop only lets you set this one yourself. In your power
+                          settings, disable automatic suspend while on AC power so timers keep
+                          firing with the screen off.</>
+                        )}{' '}
+                        Without a sleep-preventing setting the machine still truly sleeps —
                         work survives and catches up on wake.
                       </div>
                     </div>
-                    <PixelButton variant="secondary" size="sm"
-                      onClick={() => openSettings('x-apple.systempreferences:com.apple.preference.battery')}>
-                      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                        <Icon name="arrow-right" /> open Battery settings
-                      </span>
-                    </PixelButton>
+                    {/* No deep link on Linux: there is no one settings URL across
+                        desktops, and a dead button is worse than no button. */}
+                    {(IS_MAC || IS_WINDOWS) && (
+                      <PixelButton variant="secondary" size="sm"
+                        onClick={() => openSettings(IS_MAC
+                          ? 'x-apple.systempreferences:com.apple.preference.battery'
+                          : 'ms-settings:powersleep')}>
+                        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                          <Icon name="arrow-right" /> open {IS_MAC ? 'Battery' : 'Power & sleep'} settings
+                        </span>
+                      </PixelButton>
+                    )}
                   </div>
                 </div>
               </>
@@ -706,8 +791,17 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   </PixelButton>
                 )}
                 {step === 'permissions' && (
-                  <PixelButton variant="primary" size="md" onClick={finish} disabled={busy}>
-                    {busy ? 'saving...' : 'finish'}
+                  // Finishing with a missing clone engine hands the user an
+                  // office whose orchestrator cannot spawn — the failure lands
+                  // minutes later, on the floor, with no explanation. Send them
+                  // back to the step that can fix it instead.
+                  <PixelButton
+                    variant="primary"
+                    size="md"
+                    onClick={godEngineMissing ? () => setStep('orchestrator') : finish}
+                    disabled={busy}
+                  >
+                    {busy ? 'saving...' : godEngineMissing ? 'pick an installed engine' : 'finish'}
                   </PixelButton>
                 )}
               </div>
@@ -794,10 +888,9 @@ function ToggleRow({ icon, label, desc, on, tint, edge, onChange }: {
 }
 
 function Dots({ step }: { step: Step }) {
-  const order: Step[] = ['persona', 'welcome', 'home', 'orchestrator', 'repos', 'permissions'];
   return (
     <div style={{ display: 'flex', gap: 4 }}>
-      {order.map((s) => (
+      {STEPS.map((s) => (
         <span key={s} style={{
           width: 8, height: 8,
           background: s === step ? 'var(--cth-ink-900)' : 'var(--cth-cream-300)',
@@ -809,20 +902,12 @@ function Dots({ step }: { step: Step }) {
 }
 
 function nextStep(s: Step): Step {
-  return s === 'persona' ? 'welcome'
-    : s === 'welcome' ? 'home'
-    : s === 'home' ? 'orchestrator'
-    : s === 'orchestrator' ? 'repos'
-    : s === 'repos' ? 'permissions'
-    : 'done';
+  const i = STEPS.indexOf(s);
+  return i < 0 || i === STEPS.length - 1 ? 'done' : STEPS[i + 1];
 }
 function prevStep(s: Step): Step {
-  return s === 'permissions' ? 'repos'
-    : s === 'repos' ? 'orchestrator'
-    : s === 'orchestrator' ? 'home'
-    : s === 'home' ? 'welcome'
-    : s === 'welcome' ? 'persona'
-    : 'persona';
+  const i = STEPS.indexOf(s);
+  return i <= 0 ? 'persona' : STEPS[i - 1];
 }
 
 const inputStyle: React.CSSProperties = {

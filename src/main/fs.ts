@@ -1,6 +1,6 @@
 import { readdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, parse, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { imageMimeForPath } from '../shared/imageTypes';
 
@@ -222,7 +222,8 @@ export async function writeFileText(root: string, rel: string, content: string):
  * `pty:spawn`) so the registry only ever stores an ABSOLUTE cwd, with
  * defense-in-depth at the consumers.
  *
- * Non-tilde absolute paths are returned resolved/normalized. Anything that is
+ * Non-tilde absolute paths are returned NORMALIZED — separators canonicalized,
+ * `..` collapsed, trailing separator dropped — and nothing else. Anything that is
  * still RELATIVE after expansion is returned untouched (trimmed) so callers keep
  * their own "not-absolute" errors instead of it being silently resolved against
  * the Electron process cwd. Empty input passes straight through. Windows paths
@@ -236,7 +237,21 @@ export function expandTilde(p: string): string {
   if (t === '~') out = homedir();
   else if (t.startsWith('~/') || t.startsWith('~\\')) out = join(homedir(), t.slice(2));
   if (!isAbsolute(out)) return t;
-  return resolve(out);
+  // normalize(), NOT resolve(). resolve() anchors to `process.cwd()`, and on
+  // WINDOWS a rooted-but-driveless path (`/hive`, `\hive` — `isAbsolute` says
+  // true for both) then silently acquires whatever drive the app happened to
+  // launch from: `/hive` becomes `E:\hive` from E:, `C:\hive` from C:. These
+  // values are PERSISTED (harnessHome, recentHives, an agent's registry cwd), so
+  // that borrowed letter is frozen into config — the same input yields two
+  // different homes across two launches, which also defeats the dedup in
+  // normalizeHiveHome(). It is the identical hazard the relative-path branch
+  // above exists to avoid: this expander never anchors a path to the Electron
+  // process cwd. Anchoring stays where it belongs, at USE time (safeJoin /
+  // isWithinRoots both resolve, and resolve(normalize(x)) === resolve(x)).
+  const n = normalize(out);
+  // normalize() keeps a trailing separator; the stored form never has one —
+  // except on a bare root (`/`, `C:\`, `\\server\share\`), which IS its own root.
+  return n.length > parse(n).root.length ? n.replace(/[\\/]+$/, '') : n;
 }
 
 /**

@@ -153,6 +153,25 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
     // Snap to bottom immediately on re-attach before fit settles
     try { entry.term.scrollToBottom(); } catch { /* not yet open */ }
 
+    // Take the caret. Switching agents, opening fullscreen or flipping a sidebar
+    // tab re-parents the pooled terminal but left focus wherever it was, so the
+    // first keystroke after a switch went into the OLD agent's terminal — the
+    // one thing a user is guaranteed to try immediately.
+    //
+    // Two guards, because taking focus is only ever right when nobody else is
+    // using it. (1) The host must really be on screen — a terminal mounted under
+    // an inactive tab has no size. (2) The user must not be typing somewhere
+    // else: a form field, or anything inside an open dialog. ANOTHER terminal's
+    // textarea is the exception, since that is precisely what we are taking over
+    // from on an agent switch.
+    const active = document.activeElement as HTMLElement | null;
+    const typingElsewhere = !!active
+      && !active.classList.contains('xterm-helper-textarea')
+      && (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) || !!active.closest('[role="dialog"]'));
+    if (!typingElsewhere && container.clientWidth > 0 && container.clientHeight > 0) {
+      try { entry.term.focus(); } catch { /* not yet open */ }
+    }
+
     // `scrollToEnd` is true only for the initial attach (switching agents /
     // toggling fullscreen) so we land on the most recent output. Re-parenting
     // the pooled terminal resets its viewport to the top otherwise. Later
@@ -337,20 +356,23 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
   const zoom = (delta: number) => setTerminalFontSize(getTerminalFontSize() + delta);
   const resetZoom = () => setTerminalFontSize(DEFAULT_FONT_SIZE);
 
-  // Keyboard zoom: Cmd/Ctrl + '=' / '-' / '0'
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === '=' || e.key === '+') { e.preventDefault(); zoom(1); }
-      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoom(-1); }
-      else if (e.key === '0') { e.preventDefault(); resetZoom(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // Keyboard zoom: Cmd/Ctrl + '=' / '-' / '0'.
+  //
+  // Bound to THIS view, not to window. The font size is global (terminalFontSize
+  // is shared so the composer scales with the terminal) and a docked terminal and
+  // a fullscreen one are mounted at the same time — two window listeners meant
+  // one Cmd+= fired twice and jumped two sizes. On the element, only the terminal
+  // the user is actually typing in answers. Same bubble-phase ordering as before,
+  // so xterm still sees the key first.
+  const onZoomKey = (e: React.KeyboardEvent) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.key === '=' || e.key === '+') { e.preventDefault(); zoom(1); }
+    else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoom(-1); }
+    else if (e.key === '0') { e.preventDefault(); resetZoom(); }
+  };
 
   return (
-    <div style={{
+    <div onKeyDown={onZoomKey} style={{
       background: 'var(--cth-paper-100)',
       boxShadow: embedded ? 'none' : 'var(--cth-panel-border-terminal)',
       padding: embedded ? 0 : 8,
@@ -386,23 +408,27 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
             onClick={() => zoom(-1)}
             disabled={fontSize <= MIN_FONT_SIZE}
             title="Zoom out (Cmd -)"
+            aria-label="Zoom terminal out"
             style={zoomBtnStyle}
           >−</button>
           <button
             onClick={resetZoom}
             title="Reset zoom (Cmd 0)"
+            aria-label={`Terminal font size ${fontSize} pixels — reset zoom`}
             style={{ ...zoomBtnStyle, width: 'auto', padding: '0 4px', minWidth: 28 }}
           >{fontSize}px</button>
           <button
             onClick={() => zoom(1)}
             disabled={fontSize >= MAX_FONT_SIZE}
             title="Zoom in (Cmd +)"
+            aria-label="Zoom terminal in"
             style={zoomBtnStyle}
           >+</button>
           {fullscreen && onToggleFullscreen && (
             <button
               onClick={onToggleFullscreen}
               title="Exit fullscreen (Esc)"
+              aria-label="Exit fullscreen"
               style={{ ...zoomBtnStyle, width: 22, height: 22, marginLeft: 4 }}
             >
               <Icon name="minimize" />

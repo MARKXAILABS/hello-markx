@@ -211,6 +211,7 @@ export function CodeEditor({
           <button
             onClick={onToggleFullscreen}
             title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}
+            aria-label={fullscreen ? 'Exit fullscreen' : 'Open editor fullscreen'}
             style={editorBtn}
           >
             <Icon name={fullscreen ? 'minimize' : 'expand'} />

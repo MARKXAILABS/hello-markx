@@ -109,7 +109,7 @@ export function FullscreenFileEditor() {
             </span>
           )}
           <button onClick={openInIde} title="Open this file in the full IDE" style={chip}>open in IDE</button>
-          <button onClick={() => setFullscreenFile(null)} title="Close (Esc)" style={chip}>✕</button>
+          <button onClick={() => setFullscreenFile(null)} title="Close (Esc)" aria-label="Close file" style={chip}>✕</button>
         </span>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: mode === 'preview' ? 'auto' : 'hidden' }}>

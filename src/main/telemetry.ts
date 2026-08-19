@@ -31,6 +31,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readAgentUsage } from './transcript';
+import { readCodexUsage } from './usage';
 import { normalizeModel } from './pricing';
 
 // ─── The locked cross-lane contract (do not change without re-agreeing) ───────
@@ -141,6 +142,11 @@ export interface TelemetryCollectorOptions {
   emit?: (channel: string, payload: unknown) => void;
   /** Resolve an agent's cwd (from the hive registry) for the transcript fallback. */
   resolveCwd?: (agentId: string) => string | null;
+  /** Resolve a CODEX agent's per-agent `CODEX_HOME` (`<hive>/agents/<id>/.codex`),
+   *  or null for every other engine. Codex keeps its rollout transcripts there
+   *  instead of `~/.claude/projects`, so without this its spend is invisible to
+   *  the breaker's caps (#19). Wired in index.ts, next to `resolveCwd`. */
+  resolveCodexHome?: (agentId: string) => string | null;
 }
 
 export class TelemetryCollector {
@@ -150,6 +156,7 @@ export class TelemetryCollector {
   private readonly port: number;
   private readonly emit?: (channel: string, payload: unknown) => void;
   private readonly resolveCwd?: (agentId: string) => string | null;
+  private readonly resolveCodexHome?: (agentId: string) => string | null;
 
   /** sessionId → running accumulation. */
   private readonly sessions = new Map<string, SessionAccum>();
@@ -169,6 +176,7 @@ export class TelemetryCollector {
     this.port = opts.port ?? 0;
     this.emit = opts.emit;
     this.resolveCwd = opts.resolveCwd;
+    this.resolveCodexHome = opts.resolveCodexHome;
   }
 
   /** Bind the loopback OTLP listener. The handler is live the instant this
@@ -222,6 +230,36 @@ export class TelemetryCollector {
   onApiError(cb: (agentId: string, info: ApiErrorInfo) => void): () => void {
     this.apiErrorSubs.add(cb);
     return () => this.apiErrorSubs.delete(cb);
+  }
+
+  /**
+   * Push one cost sample from a PROXY-tier engine (qwen, crush) into the SAME
+   * accumulator the OTel path fills (#19).
+   *
+   * Those CLIs have no telemetry and no hook surface: their sidecar synthesizes a
+   * `CostSample` hook payload per response, which HookServer used to write
+   * straight to the durable ledger — so their spend was archived but never
+   * BUDGETED. `getAgentUsage` (and therefore the breaker's cost/token caps and
+   * velocity arms) only ever saw Claude. Routing the sample through here instead
+   * gives a proxy engine the identical cumulative sample a Claude agent gets, and
+   * the ~30s beat writes its ledger row like everyone else's.
+   *
+   * Sample fields are DELTAS for one response (the OTel `token.usage` metric is
+   * delta too, which is why this can share `session()` verbatim). `usd` is the
+   * caller's fallback estimate — never recomputed here, same as the live path.
+   */
+  recordCostSample(s: AgentUsageSample): void {
+    if (!s?.agentId || !s.sessionId) return; // no accounting key → nothing to attribute
+    const accum = this.session(s.agentId, s.sessionId);
+    const model = normalizeModel(s.model);
+    if (model) accum.model = model;
+    accum.ts = Number.isFinite(s.ts) && s.ts > 0 ? s.ts : Date.now();
+    accum.input += delta(s.input);
+    accum.output += delta(s.output);
+    accum.cacheRead += delta(s.cacheRead);
+    accum.cacheCreation += delta(s.cacheCreation);
+    accum.usd += delta(s.usd);
+    this.publishUsage(s.agentId);
   }
 
   /** Drop every accumulator for an agent (called from teardownPty, beside
@@ -449,9 +487,13 @@ export class TelemetryCollector {
   }
 
   private transcriptFallback(agentId: string): AgentUsageSample | null {
-    const cwd = this.resolveCwd?.(agentId);
-    if (!cwd) return null;
-    const u = readAgentUsage(cwd);
+    // Codex first: its rollouts live under the agent's own CODEX_HOME, and a
+    // codex worker sharing a cwd with a claude worker would otherwise be billed
+    // the NEIGHBOUR's Claude transcripts. Only codex agents resolve a home.
+    const codexHome = this.resolveCodexHome?.(agentId);
+    const cwd = codexHome ? null : this.resolveCwd?.(agentId);
+    const u = codexHome ? readCodexUsage(codexHome) : cwd ? readAgentUsage(cwd) : null;
+    if (!u) return null;
     if (!u.inputTokens && !u.outputTokens && !u.cacheReadTokens && !u.cacheWriteTokens) return null;
     return {
       agentId,
@@ -530,6 +572,12 @@ function str(v: unknown): string {
 function numAttr(v: unknown): number {
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+/** One non-negative delta from an untrusted-ish sidecar payload. A NaN or a
+ *  negative would silently corrupt a cumulative accumulator the breaker diffs
+ *  (a negative reads as spend going backwards = a free beat), so clamp. */
+function delta(v: unknown): number {
+  return Math.max(0, numAttr(v));
 }
 function truthy(v: unknown): boolean {
   return v === true || v === 'true' || v === 1 || v === '1';

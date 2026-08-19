@@ -1,4 +1,4 @@
-import type { AgentProvider } from './agentProvider';
+import { providerPreset, type AgentProvider, type CostTracking } from './agentProvider';
 import { DEFAULT_COMPACTION_FOCUS } from './triggers';
 
 /**
@@ -239,4 +239,51 @@ export function terminalReadyToReceive(
   provider: AgentProvider
 ): boolean {
   return hasOutput !== false && elapsedMs >= terminalReadySettleMs(provider);
+}
+
+// ─── What the god is told each engine can do (#19) ───────────────────────────
+
+/** The three protocol capabilities that actually change how the god should route
+ *  work, collected per engine. Everything else in a preset is spawn mechanics. */
+export interface ProviderCapabilities {
+  provider: AgentProvider;
+  /** The router may deliver hive mail here; false = it bounces back to the god. */
+  mail: boolean;
+  /** Where this engine's spend comes from — 'none' means no cap can see it. */
+  spend: CostTracking;
+  /** The compaction verb we can type, or null when nothing typed reaches it. */
+  compact: string | null;
+}
+
+export function providerCapabilities(provider: AgentProvider): ProviderCapabilities {
+  const preset = providerPreset(provider);
+  return {
+    provider,
+    mail: preset.canReceiveInbox,
+    spend: preset.costTracking,
+    compact: contextCommandsForProvider(provider).compact
+  };
+}
+
+/**
+ * One line telling the god what an engine can actually do — the fix for #19's
+ * real damage: the god assigns mail-dependent work to a Kimi worker that cannot
+ * receive mail, and reads a floor budget that silently omits five engines.
+ *
+ * Written for a model skimming a roster, so the MISSING capabilities shout
+ * (uppercase) and the present ones stay quiet — the gaps are the actionable
+ * half. Kept to one clause per capability: this is injected once per roster
+ * entry, and a paragraph per agent would crowd out the prompt it decorates.
+ *
+ * `hive.ts` owns where this lands (it must go in a cache-safe position — the
+ * roster path, not the content; see #44).
+ */
+export function capabilityLine(provider: AgentProvider): string {
+  const c = providerCapabilities(provider);
+  const bits = [
+    c.mail ? 'mail ok' : 'NO MAIL (bounces to you)',
+    c.spend === 'none' ? 'spend UNTRACKED (invisible to every budget)' : `spend tracked (${c.spend})`,
+    c.compact ? `compacts ${c.compact}` : 'NO COMPACT (context cannot be reclaimed)'
+  ];
+  return `${c.provider}: ${bits.join(', ')}`;
 }

@@ -179,17 +179,25 @@ export function buildNodeInstallScript(installer: NodeInstaller, platform: strin
     // certutil is the only hashing tool guaranteed present; `findstr` does the
     // compare because cmd has no string equality on command output. msiexec's
     // own UAC prompt is the elevation — we never call it silently.
+    //
+    // Aborts are `|| …`, NEVER `if errorlevel 1 …`. These parts are `&`-joined into
+    // ONE cmd.exe line, and an unparenthesized `if` on a single line swallows the
+    // whole `&`-chained REMAINDER of that line as its conditional body — so
+    // `curl … & if errorlevel 1 exit /b 1 & <verify> & <install>` skipped the verify
+    // AND the install on the success path (errorlevel 0 → body not taken), exiting 0
+    // having installed nothing; and `if errorlevel 1 (echo … ^& exit /b 1)` never
+    // aborted at all, because `^&` makes the ampersand literal echo text — a
+    // CHECKSUM MISMATCH printed its warning and then ran msiexec on the unverified
+    // file. `||` binds to the preceding command only, so the following `&` chains at
+    // top level: verified on cmd.exe, both branches.
     const f = `%TEMP%\\${file}`;
     return [
       `echo   Downloading Node.js ${version} ^(official installer^)...`,
-      `curl -fSL ${url} -o ${f}`,
-      `if errorlevel 1 exit /b 1`,
+      `curl -fSL ${url} -o ${f} || exit /b 1`,
       `echo   Verifying checksum...`,
-      `certutil -hashfile ${f} SHA256 | findstr /i /c:${sha256} >nul`,
-      `if errorlevel 1 (echo   [x] CHECKSUM MISMATCH - refusing to install ^& exit /b 1)`,
+      `certutil -hashfile ${f} SHA256 | findstr /i /c:${sha256} >nul || (echo   [x] CHECKSUM MISMATCH - refusing to install & exit /b 1)`,
       `echo   Installing - approve the Windows prompt if it appears...`,
-      `msiexec /i ${f} /passive /norestart`,
-      `if errorlevel 1 exit /b 1`,
+      `msiexec /i ${f} /passive /norestart || exit /b 1`,
       `set PATH=%ProgramFiles%\\nodejs;%PATH%`
     ];
   }

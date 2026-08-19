@@ -17,6 +17,22 @@ const { expandTilde } = loadTs('src/main/fs.ts');
 
 const HOME = os.homedir();
 
+/** The same path, written with THIS platform's separator. `/a/b/c` is a real
+ *  absolute path on win32 too (`path.isAbsolute` agrees) — it is rooted on the
+ *  CURRENT drive — so the only thing that legitimately changes when it crosses
+ *  onto Windows is `/` -> `\`. It must NOT acquire a drive letter: see
+ *  `noInventedDrive` below. */
+const sep = (p) => p.split('/').join(path.sep);
+
+/** A persisted path may never contain a drive letter the user never typed. On
+ *  win32 `path.resolve('/a/b/c')` returns `<cwd drive>:\a\b\c`, so the letter is
+ *  whatever drive the Electron process launched from — an accident that then
+ *  gets written to config. Asserted directly so the regression can't come back
+ *  disguised as "normalizing". No-op on POSIX, where drive letters don't exist. */
+const noInventedDrive = (actual, input) =>
+  assert.ok(!/^[A-Za-z]:/.test(actual),
+    `${input} -> ${actual}: a drive letter was invented from the process cwd`);
+
 test('expands the tilde-home forms', () => {
   assert.equal(expandTilde('~/dev/proj'), path.join(HOME, 'dev/proj'));
   assert.equal(expandTilde('~'), HOME, 'a bare ~ is a valid cwd too');
@@ -25,9 +41,13 @@ test('expands the tilde-home forms', () => {
 });
 
 test('leaves absolute paths alone (beyond normalizing)', () => {
-  assert.equal(expandTilde('/a/b/c'), '/a/b/c');
-  assert.equal(expandTilde('/a/b/c/'), '/a/b/c');
-  assert.equal(expandTilde('/a/b/../c'), '/a/c');
+  assert.equal(expandTilde('/a/b/c'), sep('/a/b/c'));
+  assert.equal(expandTilde('/a/b/c/'), sep('/a/b/c'), 'trailing separator dropped');
+  assert.equal(expandTilde('/a/b/../c'), sep('/a/c'), '.. collapsed');
+  // "beyond normalizing" is the whole contract: separators and `..` are fair
+  // game, RESOLVING against the process cwd is not.
+  noInventedDrive(expandTilde('/a/b/c'), '/a/b/c');
+  assert.equal(path.isAbsolute(expandTilde('/a/b/c')), true, 'still absolute on every platform');
 });
 
 test('does not touch anything that is not a tilde-home path', () => {
@@ -68,14 +88,16 @@ test('#140: the suggested default is expanded, not persisted literally', () => {
 
 test('#140: the new home leads the recent list exactly once', () => {
   const { recentHives } = normalizeHiveHome('~/HarnessAgents', ['/other/hive']);
-  assert.deepEqual(recentHives, [path.join(HOME, 'HarnessAgents'), '/other/hive']);
+  assert.deepEqual(recentHives, [path.join(HOME, 'HarnessAgents'), sep('/other/hive')]);
+  noInventedDrive(recentHives[1], '/other/hive');
 });
 
 test('#140: stale `~` entries already on disk are normalized too', () => {
   // Without this the launch picker could hand a pre-fix `~/…` string straight
   // back and reintroduce the identical mkdir failure.
   const { recentHives } = normalizeHiveHome('/now/here', ['~/HarnessAgents']);
-  assert.deepEqual(recentHives, ['/now/here', path.join(HOME, 'HarnessAgents')]);
+  assert.deepEqual(recentHives, [sep('/now/here'), path.join(HOME, 'HarnessAgents')]);
+  noInventedDrive(recentHives[0], '/now/here');
 });
 
 test('#140: the same home written twice does not duplicate', () => {
@@ -90,7 +112,8 @@ test('#140: the recent list stays capped and skips blanks', () => {
   const prior = Array.from({ length: 20 }, (_, i) => `/hive/${i}`);
   const { recentHives } = normalizeHiveHome('/hive/new', ['', '   ', ...prior]);
   assert.equal(recentHives.length, 8);
-  assert.equal(recentHives[0], '/hive/new');
+  assert.equal(recentHives[0], sep('/hive/new'));
+  noInventedDrive(recentHives[0], '/hive/new');
 });
 
 /* ------------------------------------------------------------------ *

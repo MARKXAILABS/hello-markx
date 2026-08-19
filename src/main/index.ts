@@ -29,6 +29,10 @@ import {
 } from './git';
 import { HiveManager, redactSecrets, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
 import { AccountPoolManager } from './accountPool';
+import {
+  DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
+  type AccountSwitch, type LiveAgentPty
+} from './delivery';
 import { HookServer, hookSockToken } from './hooks';
 import { CircuitBreaker, type BreakerInput } from './breaker';
 import type { UsageProvider } from './usage';
@@ -388,15 +392,81 @@ const accountPool = new AccountPoolManager({
   liveAgents: () => Object.entries(hive.enabled() ? hive.registry().agents : {})
     .filter(([id, a]) => !a.archived && isClaudeProvider(a.provider ?? 'claude') && !!ptyForAgent(id))
     .map(([id, a]) => ({ agentId: id, name: a.name, account: a.account })),
-  emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } },
+  emit: (channel, payload) => {
+    // #5 — MAIN owns the kill→respawn now. The plan used to be shipped to the
+    // renderer, which executed it from a React effect: reload the window between
+    // kill and respawn and the agent stayed dead, pinned at "switching…" forever
+    // (upstream #151). We run it here and tell the renderer what happened on
+    // `hive:failover` instead, so `claudeAccount:failover` is deliberately NOT
+    // forwarded — two executors would respawn the same agent twice.
+    if (channel === 'claudeAccount:failover') {
+      const plan = payload as { reason?: string; switches?: AccountSwitch[] };
+      delivery.failover(plan.switches ?? [], plan.reason ?? 'account failover');
+      return;
+    }
+    try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ }
+  },
   alert: (title, body) => breakerToast(title, body),
   sanitize: redactSecrets
 });
 telemetry.onApiError((agentId, info) => accountPool.handleApiError(agentId, info));
 telemetry.onAgentUsage((sample) => accountPool.recordUsage(sample));
+/**
+ * The floor's autonomy loop (#5): inbox wake, the guarded Stop drain, and the
+ * account-failover executor — all in MAIN, so none of it dies with the window.
+ * Everything Electron/hive/PTY-shaped is injected here; the service itself is
+ * import-free enough for `node --test` (test/delivery-main.test.cjs).
+ */
+const delivery = new DeliveryService({
+  liveAgents: (): LiveAgentPty[] => {
+    if (!hive.enabled()) return [];
+    const ptys = new Map(ptyManager.list().map((p) => [p.id, p]));
+    const out: LiveAgentPty[] = [];
+    for (const [id, a] of Object.entries(hive.registry().agents)) {
+      // The prep assistant is SEND-ONLY — it never drains an inbox, so nudging it
+      // would type at a terminal that has nothing to read.
+      if (a.archived || a.isAssistant) continue;
+      const ptyId = ptyForAgent(id);
+      const p = ptyId ? ptys.get(ptyId) : undefined;
+      if (!ptyId || !p) continue;
+      out.push({
+        agentId: id,
+        ptyId,
+        provider: inferAgentProvider(p.command, a.provider),
+        hasOutput: p.hasOutput,
+        idleMs: Math.max(0, Date.now() - p.lastOutputAt)
+      });
+    }
+    return out;
+  },
+  // `hive.inbox`/`drainForStop` resolve paths under a hive root that may not
+  // exist yet (no harness home): guard both rather than let a TypeError out of a
+  // timer or a hook socket.
+  inbox: (agentId) => (hive.enabled() ? hive.inbox(agentId).map((m) => ({ id: m.id, from: m.from })) : []),
+  write: (ptyId, data) => ptyManager.write(ptyId, data),
+  paused: (agentId) => control.isAutoDeliveryPaused(agentId),
+  drain: (agentId) => {
+    if (!hive.enabled()) return { block: false };
+    // Snapshot what the cursor is about to pass BEFORE draining, so the renderer
+    // can be told exactly which messages moved. `drainForStop` advances the cursor
+    // and returns only the continuation prompt.
+    const before = readDeliveryCursor(agentId);
+    const pending = hive.inbox(agentId).filter((m) => !before || m.id > before);
+    const res = hive.drainForStop(agentId);
+    return { ...res, delivered: res.block ? pending.map((m) => ({ id: m.id, from: m.from })) : [] };
+  },
+  respawn: respawnOnAccount,
+  emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } }
+});
 // HookServer needs BOTH: Oscar's control registry (HITL pause/gate/steer/halt via
-// hook returns) AND Jim's breaker (feed recordToolUse on each PostToolUse).
-const hookServer = new HookServer(hive, () => liveWebContents(), () => readConfig(), control, breaker);
+// hook returns) AND Jim's breaker (feed recordToolUse on each PostToolUse). It also
+// owns the Stop boundary, so it carries the guarded inbox drain (#5) and the
+// click-to-focus notification target (#42).
+const hookServer = new HookServer(
+  hive, () => liveWebContents(), () => readConfig(), control, breaker,
+  (agentId) => delivery.drainAtStop(agentId),
+  (agentId) => focusAgent(agentId)
+);
 const memory = new MemoryManager(
   () => readConfig().harnessHome,
   () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; }
@@ -455,6 +525,19 @@ const worktreeOrigins = new Map<string, string>();
  *  in the meantime, and this is the ref the "is there unintegrated work here?"
  *  gate compares against (#1). */
 const worktreeBases = new Map<string, string>();
+
+/**
+ * ptyId → the EXACT options its last successful spawn came through, plus the
+ * window that owns its output. Recorded at the top of spawnAgentCore, before it
+ * mutates `opts` (cwd → worktree, env += secrets), so what we keep is the
+ * caller's recipe and NEVER a materialized token.
+ *
+ * This is what lets MAIN respawn an agent on its own (issue #5's account
+ * failover). The registry knows an agent's id/cwd/role but not the command, the
+ * model flags, the args or the terminal geometry — which is why the respawn used
+ * to be renderer-owned, and why it died with the window.
+ */
+const spawnRecipes = new Map<string, { opts: AgentSpawnOptions; owner: Electron.WebContents | null }>();
 
 /** A live god-triggered ephemeral worker, tracked from spawn to teardown. */
 interface WorkerRec {
@@ -604,6 +687,10 @@ function teardownPty(id: string): void {
   // A worker whose isolation failed (non-repo cwd) has no worktree to gate above —
   // still clear its tracking entry so the controller stops watching a dead PTY.
   if (liveWorkers.has(id)) liveWorkers.delete(id);
+  // Drop the spawn recipe + the autonomy loop's per-PTY bookkeeping. A failover
+  // reads the recipe BEFORE it kills, so this never races its own respawn.
+  spawnRecipes.delete(id);
+  delivery.forgetPty(id);
   syncKeepAwake();
 }
 
@@ -1155,6 +1242,89 @@ function ptyForAgent(agentId: string): string | undefined {
   return undefined;
 }
 
+/** The agent's durable delivery cursor (`agents/<id>/cursor.json`, advanced by
+ *  `hive.drainForStop`), or null when it has never been advanced. Read-only —
+ *  the drain owns every write to it. */
+function readDeliveryCursor(agentId: string): string | null {
+  const root = hive.root();
+  if (!root) return null;
+  try {
+    const raw = readFileSync(join(root, 'agents', agentId, 'cursor.json'), 'utf8');
+    const cur = JSON.parse(raw) as { lastProcessed?: unknown };
+    return typeof cur.lastProcessed === 'string' ? cur.lastProcessed : null;
+  } catch { return null; }
+}
+
+/** Raise the floor and put an agent in front of the human. Called from a
+ *  notification click (#42): the OS toast is only useful if it lands you on the
+ *  agent that needs you. Main can do the window half by itself; the renderer
+ *  selects the card when it hears `ui:focusAgent`. */
+function focusAgent(agentId: string): void {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    liveWebContents()?.send('ui:focusAgent', { agentId });
+  } catch { /* window gone — the toast is still better than nothing */ }
+}
+
+/**
+ * Kill an agent's PTY and respawn it on `account`, resuming its session (#5).
+ *
+ * This is the renderer's old failover executor, moved into main. It reuses the
+ * SAME pieces the renderer stitched together — kill (→ teardownPty's gated
+ * worktree handling), re-enter the worktree if it survived, then the shared
+ * `spawnAgentCore` with `isolate:false, resume:true` — but it reads the spawn
+ * recipe main already recorded instead of rebuilding it from a store that only
+ * exists inside a live window. Same pty id, same session, new account.
+ */
+async function respawnOnAccount(
+  agentId: string,
+  account: string
+): Promise<{ ok: boolean; error?: string; account?: string }> {
+  const ptyId = ptyForAgent(agentId);
+  if (!ptyId) return { ok: false, error: 'agent has no live PTY' };
+  const rec = spawnRecipes.get(ptyId);
+  if (!rec) return { ok: false, error: 'no spawn recipe recorded for this agent' };
+  // Read the worktree BEFORE the kill — teardownPty clears the map (and may
+  // reclaim the directory) as part of its safety-gated teardown.
+  const worktree = worktreePaths.get(ptyId);
+  try { ptyManager.kill(ptyId); } catch { /* already dead — teardown still runs */ }
+  teardownPty(ptyId);
+  // Killing a git-isolated agent tears its worktree down; give that a beat and
+  // re-probe so we never respawn into a directory that just vanished.
+  if (worktree) {
+    await new Promise((r) => setTimeout(r, 750));
+  }
+  const cwd = worktree && existsSync(worktree) ? worktree : rec.opts.cwd;
+  const opts: AgentSpawnOptions = {
+    ...rec.opts,
+    // Copies, not aliases — spawnAgentCore appends to `args` in place, and the
+    // recipe has to stay pristine for the NEXT failover.
+    ...(rec.opts.args ? { args: [...rec.opts.args] } : {}),
+    ...(rec.opts.env ? { env: { ...rec.opts.env } } : {}),
+    cwd,
+    isolate: false, // the worktree (if any) already exists — re-enter, never re-cut
+    resume: true,   // continue the interrupted session; falls back to fresh when none
+    hive: rec.opts.hive ? { ...rec.opts.hive, cwd, account } : undefined
+  };
+  // Route the respawned PTY's output at a window that still EXISTS: pty.ts drops
+  // every chunk aimed at a destroyed owner, so a failover that happened while the
+  // floor was closed would come back mute even after the user reopens it.
+  const owner = rec.owner && !rec.owner.isDestroyed() ? rec.owner : liveWebContents();
+  const res = await spawnAgentCore(opts, owner);
+  if (!res.ok) return { ok: false, error: res.error };
+  const landed = res.account ?? account;
+  // Michael's pin lives in config — move it with him so the engine row and the
+  // next boot agree with where he actually runs.
+  if (rec.opts.hive?.isGod && landed && landed !== readConfig().godAccount) {
+    try { writeConfig({ godAccount: landed }); } catch { /* best-effort */ }
+  }
+  return { ok: true, account: landed };
+}
+
 /** "Stuck" = some worker's PTY is actively printing (recent output) while its
  *  coordination files have gone stale — working-but-not-coordinating. Tightens
  *  the heartbeat cadence so we notice a wedged agent sooner. */
@@ -1169,6 +1339,79 @@ function looksStuck(windowMs: number): boolean {
     if (idle < 15_000 && now - lastCoordinationAt(id) > windowMs) return true;
   }
   return false;
+}
+
+// ─── board.md size policy (#35) ──────────────────────────────────────────────
+// `board.md` is god's shared plan and god RE-READS IT EVERY TURN, so its size is
+// a per-turn token bill — and nothing ever bounded it. Same treatment as
+// reflect.ts gives memory.md (backup → rewrite → verify-don't-trust → atomic
+// rename), with one deliberate difference: the rewrite here is deterministic
+// section surgery, not an LLM summary, so there is no non-deterministic step to
+// protect against and the backup is taken immediately BEFORE the swap instead of
+// at the top — a rejected pass then costs nothing and leaves no backup litter.
+// The backups land in `hive/backups/<stamp>/`, which reflect.ts's own pruner
+// already trims to the newest generations.
+
+/** Ceiling on board.md. ~32 KB is ~8k tokens re-read on every single god turn —
+ *  generous for a plan, and far past where a human would still call it a plan. */
+const BOARD_BUDGET_BYTES = 32 * 1024;
+/** Don't re-attempt more often than this: a board that can't be condensed (one
+ *  giant section, a rejected verify) must not re-read + re-copy on every beat. */
+const BOARD_CONDENSE_RETRY_MS = 10 * 60_000;
+let lastBoardCondenseAt = 0;
+
+/** Condense board.md when it outgrows its budget. Best-effort and silent on a
+ *  healthy floor: the size check is one statSync per beat. */
+function condenseBoardIfOversized(): void {
+  const root = hive.root();
+  if (!root) return;
+  const board = join(root, 'board.md');
+  let oldBytes = 0;
+  try { oldBytes = statSync(board).size; } catch { return; } // no board yet
+  if (oldBytes <= BOARD_BUDGET_BYTES) return;
+  const now = Date.now();
+  if (now - lastBoardCondenseAt < BOARD_CONDENSE_RETRY_MS) return;
+  lastBoardCondenseAt = now;
+
+  let original: string;
+  try { original = readFileSync(board, 'utf8'); } catch { return; }
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const archiveRef = `backups/${stamp}/board.md`;
+  const rebuilt = condenseBoardText(original, archiveRef);
+  if (!rebuilt) {
+    // Over budget but ≤ K sections — one enormous section, which only god can
+    // split. Say so once per retry window rather than silently doing nothing.
+    console.warn(`[board] ${Math.round(oldBytes / 1024)}KB and over budget, but it has`,
+      `${BOARD_KEEP_SECTIONS} or fewer '## ' sections — nothing to evict.`);
+    return;
+  }
+  const verdict = verifyBoard({ rebuilt, original, keep: BOARD_KEEP_SECTIONS });
+  if (!verdict.ok) {
+    console.error('[board] condense REJECTED by the verify gate:', verdict.reason);
+    try { hive.appendLog({ kind: 'board-condense-abort', reason: verdict.reason, oldBytes }); }
+    catch { /* best-effort */ }
+    return;
+  }
+  const backup = join(root, 'backups', stamp, 'board.md');
+  try {
+    mkdirSync(dirname(backup), { recursive: true });
+    copyFileSync(board, backup);
+  } catch (e) {
+    console.error('[board] backup failed — leaving board.md untouched:', e);
+    return;
+  }
+  try {
+    const tmp = `${board}.tmp-${randomBytes(4).toString('hex')}`;
+    writeFileSync(tmp, rebuilt, 'utf8');
+    renameSync(tmp, board); // atomic swap — god may be mid-read
+  } catch (e) {
+    console.error('[board] atomic swap failed — board.md left as it was:', e);
+    return;
+  }
+  const newBytes = Buffer.byteLength(rebuilt, 'utf8');
+  console.log(`[board] condensed ${Math.round(oldBytes / 1024)}KB → ${Math.round(newBytes / 1024)}KB (backup: ${archiveRef})`);
+  try { hive.appendLog({ kind: 'board-condense', oldBytes, newBytes, backup: archiveRef }); }
+  catch { /* best-effort */ }
 }
 
 /** Bounded digest for god — paths + counts, never full files (reference-passing,
@@ -2651,6 +2894,17 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // returned to the caller so the renderer records the same absolute path.
   opts.cwd = expandTilde(opts.cwd);
   if (opts.hive) opts.hive = { ...opts.hive, cwd: expandTilde(opts.hive.cwd) };
+  // Snapshot the recipe HERE — the caller's options with an absolute cwd, before
+  // the worktree swap and before any secret is merged into `env` below. Stored on
+  // success (bottom of this function) so main can respawn this agent by itself.
+  // args/env are copied, not aliased: spawnAgentCore pushes onto `opts.args` in
+  // place on the resume path, which would otherwise leave a stale `--resume <sid>`
+  // baked into the recipe for every later respawn.
+  const recipe: AgentSpawnOptions = {
+    ...opts,
+    ...(opts.args ? { args: [...opts.args] } : {}),
+    ...(opts.env ? { env: { ...opts.env } } : {})
+  };
   // Which CLI is this? Explicit wins; else inferred from the binary
   // (claude/codex/grok/agy). Non-Claude providers skip every Claude-only spawn step
   // below. Persist the resolved provider onto opts (+ hive meta) so the registry
@@ -3055,7 +3309,13 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     await enableCodexRemoteForSpawn(opts, opts.hive.id);
   }
   const res = ptyManager.spawn(opts, owner);
-  if (res.ok) analytics.track('agent_spawned', { provider });
+  if (res.ok) {
+    analytics.track('agent_spawned', { provider });
+    // Remember how to rebuild this agent (main-owned failover, #5) and hold the
+    // autonomy typers off it while its TUI boots.
+    spawnRecipes.set(opts.id, { opts: recipe, owner });
+    delivery.noteSpawn(opts.id);
+  }
   // A pinned account that was unhealthy at spawn got swapped above — count it
   // on the panel like a runtime failover (only once the process really started).
   if (res.ok && accountSwitchedFrom && opts.hive?.account && opts.hive.id) {
@@ -3084,6 +3344,27 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
 ipcMain.handle('pty:write', (_evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };
   return ptyManager.write(id, data);
+});
+/** Milliseconds an AGENT's PTY has been quiet — the idle handshake main uses to
+ *  decide it is safe to type, exposed so the renderer's own drain gate can ask
+ *  the same question instead of guessing from its xterm.
+ *
+ *  `-1` means "no live PTY for that agent". Deliberately negative, not Infinity:
+ *  every caller compares `idle > threshold`, so an agent with no terminal fails
+ *  that test instead of looking like the quietest agent on the floor. */
+ipcMain.handle('pty:idleFor', (_evt, agentId: string): number => {
+  if (typeof agentId !== 'string' || !agentId) return -1;
+  const ptyId = ptyForAgent(agentId);
+  const idle = ptyId ? ptyManager.idleFor(ptyId) : undefined;
+  return idle === undefined ? -1 : idle;
+});
+/** The renderer's draft/picker gate, reported UP as a veto (#5). Main owns the
+ *  decision to deliver; this only ever says "not into this terminal right now".
+ *  `reason: null` clears it, and a veto expires on its own so a renderer that
+ *  dies mid-draft cannot wedge the floor's autonomy. */
+ipcMain.on('hive:deliveryVeto', (_evt, agentId: string, reason: string | null) => {
+  if (typeof agentId !== 'string' || !agentId) return;
+  delivery.setVeto(agentId, typeof reason === 'string' && reason ? reason : null);
 });
 ipcMain.handle('pty:resize', (_evt, id: string, cols: number, rows: number) => {
   if (typeof id !== 'string' || typeof cols !== 'number' || typeof rows !== 'number') return { ok: false, error: 'invalid args' };
@@ -3390,6 +3671,7 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
   try { stopWebhookServer(); } catch (e) { console.error('[changeHome] webhook.stop:', e); }
   try { memory.stop(); } catch (e) { console.error('[changeHome] memory.stop:', e); }
   try { reflector.stop(); } catch (e) { console.error('[changeHome] reflector.stop:', e); }
+  try { delivery.stop(); } catch (e) { console.error('[changeHome] delivery.stop:', e); }
 
   if (mode === 'move' && oldHome) {
     try {
@@ -3885,6 +4167,7 @@ const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
   { name: 'webhook.stop', stop: () => stopWebhookServer() },
   { name: 'memory.stop', stop: () => memory.stop() },
   { name: 'reflector.stop', stop: () => reflector.stop() },
+  { name: 'delivery.stop', stop: () => delivery.stop() },
   { name: 'stopAllProxyBridges', stop: () => hive.stopAllProxyBridges() },
   { name: 'persist.close', stop: () => persist.close() },
   { name: 'killAll', stop: () => ptyManager.killAll() }
@@ -5103,6 +5386,7 @@ function bootstrapHiveServices(): void {
   });
   memory.start(); // init shared palace + mine loop (no-op without mempalace)
   reflector.start(); // bound oversized memory.md files on a timer (no-op until threshold)
+  delivery.start(); // #5 — the inbox wake + failover executor, in MAIN
 
   armAlwaysOnBeats();
 }
@@ -5122,6 +5406,8 @@ function armAlwaysOnBeats(): void {
     // Account pool beat: lapse cooldowns (→ resume nudges), retry moves whose
     // 10-min rate-limit window passed, refresh the renderer's snapshot.
     try { accountPool.tick(); } catch (e) { console.error('[account-pool beat]', e); }
+    // #35 — keep board.md inside its budget. One statSync when it's healthy.
+    try { condenseBoardIfOversized(); } catch (e) { console.error('[board beat]', e); }
   }, 30_000);
 }
 

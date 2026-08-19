@@ -617,6 +617,13 @@ const api = {
     ipcRenderer.invoke('pty:redraw', id),
   killPty: (id: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('pty:kill', id),
+  /** Milliseconds the AGENT's PTY has been quiet — main's own idle handshake
+   *  (`ptyManager.idleFor`), so a renderer gate and main's delivery loop judge
+   *  "safe to type" from the same number instead of two different guesses.
+   *  `-1` = that agent has no live PTY; every caller tests `idle > threshold`,
+   *  so a negative value fails closed instead of reading as maximally idle. */
+  ptyIdleFor: (agentId: string): Promise<number> =>
+    ipcRenderer.invoke('pty:idleFor', agentId),
   listPtys: (): Promise<Array<{
     id: string;
     cwd: string;
@@ -921,6 +928,53 @@ const api = {
     const listener = (_e: IpcRendererEvent, payload: HiveTerminalHandoffEvent) => cb(payload);
     ipcRenderer.on('hive:terminalHandoff', listener);
     return () => ipcRenderer.removeListener('hive:terminalHandoff', listener);
+  },
+
+  // ─── Autonomy, now owned by MAIN (#5) ─────────────────────────────────────
+  // The inbox wake, the Stop-hook drain and the account-failover respawn all
+  // moved into the main process, because every one of them used to die with the
+  // window: close the floor, reload the renderer or crash a panel and no mail
+  // moved, while a failover caught mid-switch left an agent killed and never
+  // respawned. What crosses this boundary now is a REPORT of what main did —
+  // plus exactly one thing the renderer still gets a say in, below.
+
+  /** Main delivered a hive message to an agent (Stop-drain or inbox wake). */
+  onHiveDelivered: (
+    cb: (e: { to: string; from: string; id: string }) => void
+  ): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { to: string; from: string; id: string }) => cb(payload);
+    ipcRenderer.on('hive:delivered', listener);
+    return () => ipcRenderer.removeListener('hive:delivered', listener);
+  },
+  /** Progress of a main-owned Claude account failover for one agent: `start`
+   *  (killed, respawning), `done` (`account` is where it actually landed), or
+   *  `failed` (`error` says why). The renderer follows along — it no longer
+   *  drives it, so a reload mid-switch can't strand the agent. */
+  onHiveFailover: (
+    cb: (e: { agentId: string; phase: 'start' | 'done' | 'failed'; account?: string; error?: string }) => void
+  ): (() => void) => {
+    const listener = (
+      _e: IpcRendererEvent,
+      payload: { agentId: string; phase: 'start' | 'done' | 'failed'; account?: string; error?: string }
+    ) => cb(payload);
+    ipcRenderer.on('hive:failover', listener);
+    return () => ipcRenderer.removeListener('hive:failover', listener);
+  },
+  /** The renderer's draft/picker gate, reported UP as a VETO. Main owns the
+   *  decision to deliver; this only ever says "not into this terminal right now,
+   *  the human is typing in it". Pass `null` to clear. Fire-and-forget, and
+   *  re-assert while the draft stands — a veto expires on its own so a dead
+   *  renderer can never wedge the floor's autonomy. */
+  hiveDeliveryVeto: (agentId: string, reason: string | null): void => {
+    ipcRenderer.send('hive:deliveryVeto', agentId, reason);
+  },
+  /** Main is putting an agent in front of the human — today from a clicked OS
+   *  notification (#42), which has already raised the window. The renderer only
+   *  has to select the card. */
+  onFocusAgent: (cb: (e: { agentId: string }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { agentId: string }) => cb(payload);
+    ipcRenderer.on('ui:focusAgent', listener);
+    return () => ipcRenderer.removeListener('ui:focusAgent', listener);
   },
 
   // ─── Shareable hires (deep link / file import) ────────────────────────────

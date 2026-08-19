@@ -314,6 +314,7 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
               <button
                 onClick={() => removeAttachment(a.path)}
                 title="Remove attachment"
+                aria-label={`Remove attachment ${a.name}`}
                 style={{
                   flexShrink: 0, border: 'none', background: 'transparent', cursor: 'pointer',
                   color: 'var(--cth-ink-500)', padding: 0,
@@ -514,6 +515,7 @@ function QueuedMessageRow(
       <button
         onClick={onRemove}
         title="Remove from queue"
+        aria-label="Remove this message from the queue"
         style={{
           flexShrink: 0, border: 'none', background: 'transparent',
           cursor: 'pointer',

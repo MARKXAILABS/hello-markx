@@ -8,6 +8,7 @@ import { ImagePreview } from './ImagePreview';
 import { MarkdownPreview } from '@/markdown/MarkdownPreview';
 import { HistoryPane, ComparePane } from './GitPanes';
 import { isImagePath, isSvgPath } from '@shared/imageTypes';
+import { IS_MAC } from '@/components/platform';
 import { ideBarStyle, ideIconBtn as iconBtn, ideTextBtn as textBtn } from './chrome';
 
 // v0.3.4 markdown preview: per-md-tab view mode, defaulted from the last choice.
@@ -316,6 +317,14 @@ export function IdePanel() {
         if (t && t.mode === 'edit') { e.preventDefault(); void save(t.rel); }
         return;
       }
+      // Escape belongs to the TOPMOST overlay, and the IDE is it — App renders
+      // it above the fullscreen terminal, which also listens on window, so one
+      // Escape used to shut the editor AND drop out of fullscreen. The other
+      // half of this fix is FullscreenTerminal's `if (ideOpen) return` guard,
+      // which is where it belongs: this listener stays on the BUBBLE phase on
+      // purpose, so Monaco keeps first refusal on Escape (its find widget,
+      // autocomplete and multi-cursor all consume it and stop propagation).
+      // Moving it to capture would close the IDE instead of dismissing them.
       if (e.key === 'Escape' && !anyDirtyRef.current) { setIdeOpen(false); }
     };
     window.addEventListener('keydown', onKey);
@@ -484,7 +493,7 @@ export function IdePanel() {
               ))}
               <span style={{ flex: 1 }} />
               {railTab === 'changes' && !gitCollapsed && (
-                <button onClick={() => refreshStatus()} title="Refresh" style={iconBtn}>
+                <button onClick={() => refreshStatus()} title="Refresh" aria-label="Refresh git status" style={iconBtn}>
                   <Icon name="web" />
                 </button>
               )}
@@ -588,6 +597,7 @@ export function IdePanel() {
                     <button
                       onClick={(e) => { e.stopPropagation(); closeTab(t.key); }}
                       title="Close tab"
+                      aria-label={`Close ${basename(t.rel)}`}
                       style={{ ...iconBtn, width: 16, height: 16 }}
                     >
                       <Icon name="x" />
@@ -721,7 +731,7 @@ export function IdePanel() {
                         flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         fontFamily: 'var(--cth-font-mono)', textAlign: 'right'
                       }} title={activeTab.rel}>{activeTab.rel}</span>
-                      <button onClick={() => ensureDiff(activeTab.rel, true)} title="Refresh diff" style={iconBtn}>
+                      <button onClick={() => ensureDiff(activeTab.rel, true)} title="Refresh diff" aria-label="Refresh diff" style={iconBtn}>
                         <Icon name="web" />
                       </button>
                     </div>
@@ -842,10 +852,6 @@ function ShortcutHint() {
     </div>
   );
 }
-
-/** Electron reports the host platform in the UA; there is no platform helper in
- *  the renderer, and printing ⌘ to a Linux user would be worse than useless. */
-const IS_MAC = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
 
 /** Monaco's own default bindings — do not invent entries here. */
 const EDITOR_SHORTCUTS: ReadonlyArray<readonly [string, string]> = IS_MAC

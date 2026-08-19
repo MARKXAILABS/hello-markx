@@ -21,11 +21,25 @@ export function SidebarSplitter({
   const startRef = useRef<{ clientX: number; width: number } | null>(null);
   const [active, setActive] = useState(false);
 
+  /** The widest the sidebar may be and still leave the floor 360px. */
+  const clampMax = Math.min(max, Math.max(min, viewportWidth - 360));
+
+  // Re-clamp when the WINDOW changes, not only while dragging.
+  //
+  // The clamp used to live inside the drag handler alone, so a width chosen on a
+  // wide monitor survived into a small window: the persisted 900px sidebar on a
+  // 1280px laptop left the floor 370px and, restored from localStorage at boot,
+  // could put this handle past the right edge — no way to drag it back. The
+  // store still clamps to its own absolute bounds; this is the viewport-relative
+  // half it cannot see.
+  useEffect(() => {
+    if (width > clampMax) onChange(clampMax);
+  }, [width, clampMax, onChange]);
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!startRef.current) return;
       const delta = startRef.current.clientX - e.clientX; // left drag = positive delta → grow sidebar
-      const clampMax = Math.min(max, Math.max(min, viewportWidth - 360));
       const next = Math.min(clampMax, Math.max(min, startRef.current.width + delta));
       onChange(next);
     };
@@ -45,7 +59,7 @@ export function SidebarSplitter({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [active, viewportWidth, min, max, onChange]);
+  }, [active, clampMax, min, onChange]);
 
   return (
     <div
