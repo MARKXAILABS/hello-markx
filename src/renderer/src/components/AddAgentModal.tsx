@@ -21,6 +21,9 @@ import {
   type HarnessConfig,
   AGENT_PROVIDER_PRESETS,
   LOGIN_ACCOUNT_LABEL,
+  AUTO_ACCOUNT_CHOICE,
+  AUTO_ACCOUNT_LABEL,
+  decodeAccountChoice,
   buildSpawnCommand,
   tokenizeCommand,
   modelsForProvider,
@@ -214,8 +217,11 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   // Seeded from the config prop, then refreshed from main on mount: the prop is
   // App's boot-time snapshot, so an account added in Settings a minute ago
   // would otherwise be invisible here until the next app restart.
+  // '' = login · AUTO_ACCOUNT_CHOICE = the pool picks the least-loaded healthy
+  // account at spawn · '<id>' = pinned (see encodeAccountChoice).
   const [account, setAccount] = useState<string>('');
   const [claudeAccounts, setClaudeAccounts] = useState(config.claudeAccounts ?? []);
+  const accountChoice = isClaudeProvider(provider) ? decodeAccountChoice(account) : { account: undefined, accountPolicy: undefined };
   useEffect(() => {
     let alive = true;
     window.cth.getConfig()
@@ -368,8 +374,10 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
         // A hire manifest may carry validated capability tags (routing hints).
         capabilities: hireMeta?.capabilities,
         // Claude account pool: pin this agent to a subscription account (id
-        // only — the token is injected main-side). undefined = /login account.
-        account: isClaudeProvider(provider) && account ? account : undefined
+        // only — the token is injected main-side), or let the pool pick
+        // (`accountPolicy: 'auto'`). Neither = /login account.
+        account: accountChoice.account,
+        accountPolicy: accountChoice.accountPolicy
       }
     });
     if (!spawnRes.ok) {
@@ -405,7 +413,11 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
       command: command.trim(),
       provider,
       model,
-      account: isClaudeProvider(provider) && account ? account : undefined,
+      // The account main actually landed the spawn on (`auto` resolved here;
+      // a cooling pin swapped here). Ids only — never tokens.
+      account: isClaudeProvider(provider) ? spawnRes.account : undefined,
+      accountPolicy: accountChoice.accountPolicy,
+      ...(spawnRes.accountSwitchedFrom && spawnRes.account ? { accountSwitch: { from: spawnRes.accountSwitchedFrom, to: spawnRes.account, ts: Date.now() } } : {}),
       // Persist the resolved worktree path (set only when isolation provisioned
       // one) so a restart can re-enter this exact worktree — see restoreTeam.
       worktreePath: spawnRes.worktreePath,
@@ -846,13 +858,15 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                     {isClaudeProvider(provider) && claudeAccounts.length > 0 && (
                       <Row label="Account">
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                          {[{ id: '', label: LOGIN_ACCOUNT_LABEL }, ...claudeAccounts].map((a) => {
+                          {[{ id: '', label: LOGIN_ACCOUNT_LABEL }, { id: AUTO_ACCOUNT_CHOICE, label: AUTO_ACCOUNT_LABEL }, ...claudeAccounts].map((a) => {
                             const active = account === a.id;
                             return (
                               <button
                                 key={a.id || 'login'}
                                 onClick={() => setAccount(a.id)}
-                                title={a.id
+                                title={a.id === AUTO_ACCOUNT_CHOICE
+                                  ? 'Let the pool pick the least-loaded healthy account at every (re)spawn, and fail over automatically when one hits its limit'
+                                  : a.id
                                   ? `Run this agent on the "${a.label}" subscription (its setup-token is injected at spawn)`
                                   : "Use this machine's /login account (no token injection)"}
                                 style={{

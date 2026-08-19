@@ -350,10 +350,21 @@ export function useHive(config: HarnessConfig | null): void {
         resume: true,
         // `account` pins Michael to a Claude pool account (Settings/Command
         // Center → godAccount); undefined = the machine's /login account.
-        hive: { id: GOD_ID, name: 'Michael', provider: godProvider, cwd: config.harnessHome!, isGod: true, role: 'orchestrator (god)', account: godProvider === 'claude' ? config.godAccount : undefined }
+        // `accountPolicy: 'auto'` lets the pool pick the least-loaded healthy
+        // account instead — main reports the one it landed on in `res.account`.
+        hive: {
+          id: GOD_ID, name: 'Michael', provider: godProvider, cwd: config.harnessHome!, isGod: true, role: 'orchestrator (god)',
+          account: godProvider === 'claude' ? config.godAccount : undefined,
+          accountPolicy: godProvider === 'claude' ? config.godAccountPolicy : undefined
+        }
       });
       if (cancelled) { godSpawning.current = false; return; }
       if (!res.ok) { godSpawning.current = false; useStore.getState().setGodStatus('failed'); return; }
+      // The pool may have resolved `auto` / swapped a cooling pin: keep the
+      // config pin in step so the engine row + the next boot agree with main.
+      if (godProvider === 'claude' && res.account !== config.godAccount) {
+        void window.cth.updateConfig({ godAccount: res.account }).catch(() => { /* best-effort */ });
+      }
       const god: Agent = {
         id: GOD_ID,
         name: 'Michael',
@@ -371,7 +382,9 @@ export function useHive(config: HarnessConfig | null): void {
         command: command.trim(),
         provider: godProvider,
         model: godModel,
-        account: godProvider === 'claude' ? config.godAccount : undefined,
+        account: res.account,
+        accountPolicy: godProvider === 'claude' ? config.godAccountPolicy : undefined,
+        ...(res.accountSwitchedFrom && res.account ? { accountSwitch: { from: res.accountSwitchedFrom, to: res.account, ts: Date.now() } } : {}),
         isGod: true,
         recentTextTs: Date.now()
       };
@@ -1064,13 +1077,15 @@ export function useHive(config: HarnessConfig | null): void {
         const command = (a.command ?? '').trim() || buildSpawnCommand(cfg, a.model, provider);
         const [exe, ...args] = tokenizeCommand(command);
         // Re-pin the agent's Claude pool account across the revive (god reads the
-        // config pin; workers carry their own on the roster record).
+        // config pin; workers carry their own on the roster record). The policy
+        // rides along so an `auto` agent is re-balanced by the pool.
         const account = provider === 'claude' ? (a.isGod ? cfg.godAccount : a.account) : undefined;
+        const accountPolicy = provider === 'claude' ? (a.isGod ? cfg.godAccountPolicy : a.accountPolicy) : undefined;
         const hive = a.isGod
-          ? { id: a.id, name: a.name, cwd, provider, isGod: true, role: 'orchestrator (god)', account }
+          ? { id: a.id, name: a.name, cwd, provider, isGod: true, role: 'orchestrator (god)', account, accountPolicy }
           : a.isAssistant
-          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: "Michael's prep assistant", account }
-          : { id: a.id, name: a.name, cwd, provider, role: a.description, account };
+          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: "Michael's prep assistant", account, accountPolicy }
+          : { id: a.id, name: a.name, cwd, provider, role: a.description, account, accountPolicy };
         // Spawn at the terminal's real grid so the TUI's absolute cursor moves land
         // in the right cells (a size mismatch scatters the redraw).
         const entry = acquireTerminal(deadId);
@@ -1093,7 +1108,15 @@ export function useHive(config: HarnessConfig | null): void {
         });
         if (res.ok) {
           reviving.current[deadId] = Date.now(); // re-stamp so the debounce covers the spawn
-          useStore.getState().updateAgent(a.id, { status: 'idle', action: 'revived after sleep' });
+          useStore.getState().updateAgent(a.id, {
+            status: 'idle', action: 'revived after sleep',
+            // record the account the pool actually landed this revive on
+            ...(provider === 'claude' ? { account: res.account } : {}),
+            ...(res.accountSwitchedFrom && res.account ? { accountSwitch: { from: res.accountSwitchedFrom, to: res.account, ts: Date.now() } } : {})
+          });
+          if (a.isGod && provider === 'claude' && res.account !== cfg.godAccount) {
+            void window.cth.updateConfig({ godAccount: res.account }).catch(() => { /* best-effort */ });
+          }
         } else {
           delete reviving.current[deadId]; // let a later power:resume retry it
           console.error('[autorevive] respawn failed for', a.id, res.error);
@@ -1109,5 +1132,122 @@ export function useHive(config: HarnessConfig | null): void {
       if (!dead.length) return; // healthy wake — nothing wedged, no-op
       for (const id of dead) void revive(id);
     });
+  }, [config?.onboardingComplete]);
+
+  // 8) Claude account failover (PR 2). Main owns the detection (a 429/401 on an
+  //    agent's pool account) and the plan (who moves where, rate-limited); the
+  //    respawn is renderer-owned like every other revive, so it goes through the
+  //    same kill → same pty id → `--resume` flow as effect #7 / Restart & Continue,
+  //    with the NEW account on the hive meta (main injects that account's token),
+  //    then the agent record is re-pinned and it gets exactly ONE nudge. A
+  //    `resumed` push (cooldown lapsed / operator marked an account active)
+  //    only nudges the IDLE agents still on that account — same token, same
+  //    session, nothing to respawn.
+  useEffect(() => {
+    if (!config?.onboardingComplete) return;
+    const switching = new Set<string>();
+    const labelOf = (cfg: HarnessConfig, id: string): string => cfg.claudeAccounts?.find((x) => x.id === id)?.label ?? id;
+
+    const doSwitch = async (sw: { agentId: string; from: string; to: string; fromLabel: string; toLabel: string }, reason: string): Promise<void> => {
+      if (switching.has(sw.agentId)) return; // a re-plan while this one is mid-flight
+      switching.add(sw.agentId);
+      try {
+        const a = useStore.getState().agents.find((x) => x.id === sw.agentId);
+        if (!a?.ptyId) return;
+        const provider = inferAgentProvider(a.command, a.provider);
+        if (provider !== 'claude') return;
+        const cfg = await window.cth.getConfig();
+        let cwd = a.cwd;
+        if (a.worktreePath && (await window.cth.gitIsRepo(a.worktreePath))) cwd = a.worktreePath;
+        const entry = acquireTerminal(a.ptyId);
+        let cols = 100, rows = 30;
+        try { entry.fit.fit(); cols = entry.term.cols; rows = entry.term.rows; } catch { /* host not sized yet */ }
+        useStore.getState().updateAgent(a.id, { status: 'idle', action: `switching ${sw.fromLabel} → ${sw.toLabel}…` });
+        const killed = await window.cth.killPty(a.ptyId);
+        if (!killed.ok && !/^no pty:/.test(killed.error ?? '')) throw new Error(killed.error ?? 'could not stop the current process');
+        // Killing an agent that was git-isolated in THIS app session tears its
+        // worktree down (main's teardownPty — same as Restart & Continue); give
+        // that a beat and re-probe so we never respawn into a vanished dir.
+        if (cwd !== a.cwd) {
+          await new Promise((r) => setTimeout(r, 750));
+          if (!(await window.cth.gitIsRepo(cwd))) cwd = a.cwd;
+        }
+        resetTerminal(a.ptyId);
+        const command = (a.command ?? '').trim() || buildSpawnCommand(cfg, a.model, provider);
+        const [exe, ...args] = tokenizeCommand(command);
+        const accountPolicy = a.isGod ? cfg.godAccountPolicy : a.accountPolicy;
+        const hive = a.isGod
+          ? { id: a.id, name: a.name, cwd, provider, isGod: true, role: 'orchestrator (god)', account: sw.to, accountPolicy }
+          : a.isAssistant
+          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: "Michael's prep assistant", account: sw.to, accountPolicy }
+          : { id: a.id, name: a.name, cwd, provider, role: a.description, account: sw.to, accountPolicy };
+        const res = await window.cth.spawnPty({
+          id: a.ptyId, cwd, command: exe, provider, args, cols, rows,
+          isolate: false, // the worktree (if any) already exists — re-enter it
+          resume: true,   // continue the interrupted session; falls back to fresh when none is recorded
+          hive
+        });
+        if (!res.ok) {
+          useStore.getState().updateAgent(a.id, { action: `account switch failed: ${res.error ?? 'spawn failed'}` });
+          console.error('[account-failover] respawn failed for', a.id, res.error);
+          return;
+        }
+        const landed = res.account ?? sw.to;
+        const toLabel = labelOf(cfg, landed);
+        useStore.getState().updateAgent(a.id, {
+          account: landed,
+          accountSwitch: { from: sw.from, to: landed, ts: Date.now() },
+          status: 'idle',
+          action: `switched ${sw.fromLabel} → ${toLabel}`
+        });
+        // Michael's pin lives in config — move it with him so the engine row
+        // and the next boot agree with where he actually runs.
+        if (a.isGod && landed !== cfg.godAccount) void window.cth.updateConfig({ godAccount: landed }).catch(() => { /* best-effort */ });
+        // The ONE nudge: the turn that was in flight is gone; the resumed
+        // session has the full thread, so "continue" is all it needs. Hold the
+        // inbox-wake / queue-drain typers off this agent meanwhile so nothing
+        // jams onto the same line.
+        bootGraceUntil.current[a.id] = Date.now() + 30_000;
+        try {
+          await submitToPty(
+            a.ptyId,
+            `Your previous turn was interrupted by a Claude account switch (${sw.fromLabel} → ${toLabel}; ${reason}). Continue where you left off.`,
+            provider
+          );
+          // A freshly resumed TUI can swallow the Enter while it is still loading
+          // the transcript (seen live: the text sat in the input box unsent).
+          // While the agent stays idle, press Enter again a few times — on an
+          // empty input box that is a harmless no-op, on the parked text it is
+          // the submit that was lost.
+          for (let attempt = 0; attempt < 4; attempt++) {
+            await new Promise((r) => setTimeout(r, 4000));
+            const cur = useStore.getState().agents.find((x) => x.id === a.id);
+            if (!cur?.ptyId || cur.status !== 'idle') break;
+            await window.cth.writePty(cur.ptyId, '\r');
+          }
+        } catch { /* PTY may have died during startup — the terminal shows why */ }
+        finally { bootGraceUntil.current[a.id] = 0; }
+      } catch (err) {
+        console.error('[account-failover] switch threw for', sw.agentId, err);
+      } finally {
+        switching.delete(sw.agentId);
+      }
+    };
+
+    const offFailover = window.cth.onClaudeAccountFailover((e) => {
+      for (const sw of e?.switches ?? []) void doSwitch(sw, e.reason);
+    });
+    const offResumed = window.cth.onClaudeAccountResumed((e) => {
+      const labels = (e?.accounts ?? []).map((x) => x.label).join(', ');
+      for (const id of e?.agentIds ?? []) {
+        const a = useStore.getState().agents.find((x) => x.id === id);
+        // Only a parked agent needs the kick; one mid-turn is already working.
+        if (!a?.ptyId || a.status === 'working' || a.status === 'thinking' || switching.has(id)) continue;
+        const provider = inferAgentProvider(a.command, a.provider);
+        void submitToPty(a.ptyId, `Claude account ${labels} is usable again (${e.reason}). Continue where you left off.`, provider)
+          .catch(() => { /* dead pty — nothing to wake */ });
+      }
+    });
+    return () => { offFailover(); offResumed(); };
   }, [config?.onboardingComplete]);
 }

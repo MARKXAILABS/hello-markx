@@ -19,6 +19,10 @@ import { usePtyParser } from '@/hooks/usePtyParser';
 import {
   inferAgentProvider,
   LOGIN_ACCOUNT_LABEL,
+  AUTO_ACCOUNT_CHOICE,
+  AUTO_ACCOUNT_LABEL,
+  encodeAccountChoice,
+  decodeAccountChoice,
   type ClaudeAccount
 } from '@/store/config';
 
@@ -33,13 +37,15 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
   // operator has registered accounts. Changing it updates the stored pin;
   // the running session keeps its current account until the next (re)start.
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  // Re-read when the agent lands on another account (a failover can move it to
+  // an account registered after this panel mounted — the select must name it).
   useEffect(() => {
     let alive = true;
     window.cth.getConfig()
       .then((c) => { if (alive) setClaudeAccounts(c.claudeAccounts ?? []); })
       .catch(() => { /* pool stays hidden */ });
     return () => { alive = false; };
-  }, []);
+  }, [agent.account]);
   const archiveAgent = useStore(s => s.archiveAgent);
   const updateAgent = useStore(s => s.updateAgent);
   const setFullscreen = useStore(s => s.setFullscreen);
@@ -135,9 +141,9 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
                 (restart & continue in the Command Center, or an app restart). */}
             {inferAgentProvider(agent.command, agent.provider) === 'claude' && claudeAccounts.length > 0 && (
               <select
-                value={agent.account ?? ''}
-                title="Claude account for this agent — takes effect on the next restart (Command Center → restart & continue)"
-                onChange={(e) => updateAgent(agent.id, { account: e.target.value || undefined })}
+                value={encodeAccountChoice(agent.accountPolicy, agent.account)}
+                title="Claude account for this agent (or Auto = least-loaded healthy account, with automatic failover) — takes effect on the next restart (Command Center → restart & continue)"
+                onChange={(e) => updateAgent(agent.id, decodeAccountChoice(e.target.value))}
                 style={{
                   padding: '1px 4px', background: 'var(--cth-paper-100)', border: 'none',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
@@ -146,6 +152,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
                 }}
               >
                 <option value="">{LOGIN_ACCOUNT_LABEL}</option>
+                <option value={AUTO_ACCOUNT_CHOICE}>{AUTO_ACCOUNT_LABEL}</option>
                 {claudeAccounts.map((acc) => (
                   <option key={acc.id} value={acc.id}>{acc.label}</option>
                 ))}

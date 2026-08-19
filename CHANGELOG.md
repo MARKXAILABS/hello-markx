@@ -21,8 +21,24 @@ All notable changes to this project are documented here. The format is based on
   session per account sets the reference). Unpinned agents behave exactly as before.
   Telemetry note: the collector's attribute allowlist now includes `user.account_uuid` /
   `user.account_id` (opaque identifiers, needed for the integrity check) — `user.email`,
-  `organization.id` and every other identity attribute are still dropped. Failover and
-  pool policy are deliberately not in this release.
+  `organization.id` and every other identity attribute are still dropped.
+- **Account pool policy + automatic failover** ([docs](docs/claude-accounts.md#assignment-policy-pinned-or-auto))
+  — on top of the pool: every Claude agent (Michael included) is either **pinned** to an
+  account or **Auto (least loaded)**, which picks the healthy account with the fewest tokens
+  in the last 5h at each (re)spawn. Each account carries a persisted health state
+  (`active · cooling(until) · dead`) driven by the **status code** of Claude Code's own
+  `api_error` telemetry: a **429** cools the account (reset time parsed from the error when
+  present, else 5h) and **moves its running agents to the next healthy account** — kill,
+  respawn with `--resume`, re-pin, one "continue where you left off" nudge, at most one
+  switch per agent per 10 minutes; a **401** marks it dead (and clears its integrity
+  reference uuid) until a new token is saved. All accounts cooling → agents pause with a
+  countdown to the earliest reset and auto-resume. The CLAUDE ACCOUNTS panel shows state,
+  cooldown, last error, 5h tokens, switch count, **rotate now** / **mark active**; agent
+  rows show `↻ switched A → B hh:mm`. Failover is a pause (the in-flight turn is lost),
+  cannot create quota, and the 429 payload shape is calibrated on the first real hit
+  (logged once, sanitized); the 401 path was verified live. Agents on the login account
+  with no pin are untouched. Telemetry note: the collector now also reads the api_error
+  `status_code` attribute (a number; no new identity fields).
 
 ## [0.4.4] — 2026-08-18
 

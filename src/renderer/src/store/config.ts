@@ -14,11 +14,16 @@ import type {
 } from '@shared/triggers';
 import {
   LOGIN_ACCOUNT_LABEL,
+  AUTO_ACCOUNT_CHOICE,
+  AUTO_ACCOUNT_LABEL,
+  encodeAccountChoice,
+  decodeAccountChoice,
   newAccountLabelError,
   reduceAccountIntegrity,
   LOGIN_ACCOUNT_KEY,
   type ClaudeAccount
 } from '@shared/claudeAccounts';
+import { fmtCountdown, describeHealth, type PoolSnapshot, type AccountHealth } from '@shared/claudeAccountPool';
 
 export {
   AGENT_PROVIDER_PRESETS,
@@ -30,9 +35,17 @@ export {
 export {
   LOGIN_ACCOUNT_KEY,
   LOGIN_ACCOUNT_LABEL,
+  AUTO_ACCOUNT_CHOICE,
+  AUTO_ACCOUNT_LABEL,
+  encodeAccountChoice,
+  decodeAccountChoice,
   newAccountLabelError,
   reduceAccountIntegrity,
-  type ClaudeAccount
+  fmtCountdown,
+  describeHealth,
+  type ClaudeAccount,
+  type PoolSnapshot,
+  type AccountHealth
 };
 
 /** A recurring auto-dispatched mission (mirrors src/main/config.ts). */
@@ -143,6 +156,9 @@ export interface HarnessConfig {
   claudeAccounts?: ClaudeAccount[];
   /** Pool account powering the GOD orchestrator; unset = /login account. */
   godAccount?: string;
+  /** Michael's assignment policy: 'auto' = least-loaded healthy pool account at
+   *  each spawn (godAccount then holds the last resolved one); unset = pinned. */
+  godAccountPolicy?: 'auto';
   /** Legacy single-webhook fields (mirrors src/main/config.ts, where they are
    *  deprecated in favour of `webhookTriggers` but still read until the server is
    *  rewired). Declared here so the surfaces that show them can stop widening this

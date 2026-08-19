@@ -150,10 +150,11 @@ export function AgentStrip({ config }: AgentStripProps) {
             onEditNote={a.isGod ? undefined : () => setNoteEditId(a.id)}
             // Claude pool-account chip — resolve the pinned id to its label; a
             // pin whose account was removed shows the raw id (visible, not
-            // silently hidden). Unpinned agents render exactly as before.
+            // silently hidden). Unpinned agents render exactly as before. An
+            // `auto` agent shows the account the pool resolved (or just "auto").
             accountLabel={a.account
-              ? (config?.claudeAccounts?.find((acc) => acc.id === a.account)?.label ?? a.account)
-              : undefined}
+              ? `${config?.claudeAccounts?.find((acc) => acc.id === a.account)?.label ?? a.account}${a.accountPolicy === 'auto' ? ' · auto' : ''}`
+              : a.accountPolicy === 'auto' ? 'auto' : undefined}
           />
           {/* The note itself lives INSIDE the card (its own row above the gauge).
               This is the transient EDITOR: a fixed popover ABOVE the card —

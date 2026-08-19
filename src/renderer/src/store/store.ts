@@ -69,8 +69,16 @@ export interface Agent {
   model?: string;
   /** Claude pool-account id this agent is pinned to (HarnessConfig.claudeAccounts);
    *  unset = the machine's /login account. Durable (persists in the roster) and
-   *  passed as hive.account on every (re)spawn — takes effect on next restart. */
+   *  passed as hive.account on every (re)spawn — takes effect on next restart.
+   *  Under `accountPolicy: 'auto'` it is the account the pool RESOLVED at the
+   *  last spawn (main reports it back in the spawn result). */
   account?: string;
+  /** 'auto' = the pool picks the least-loaded healthy account at every spawn;
+   *  unset = pinned to `account` (or the login account). */
+  accountPolicy?: 'auto';
+  /** The last account failover this agent went through (ids — labels are
+   *  resolved at render from config.claudeAccounts). Shown as "switched A→B hh:mm". */
+  accountSwitch?: { from: string; to: string; ts: number };
   /** the last prompt the user submitted to this agent in Claude Code —
    *  shown on the floor as a card above the seated avatar */
   lastPrompt?: string;

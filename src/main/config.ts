@@ -311,6 +311,10 @@ export interface HarnessConfig {
    *  machine's `/login` account. Mirrors AgentMeta.account for workers — Michael
    *  is spawned by useHive from config, so his pin lives here. */
   godAccount?: string;
+  /** Michael's assignment policy: `'auto'` = the pool picks the least-loaded
+   *  healthy account at every spawn (godAccount then holds the last resolved
+   *  account); unset = pinned to godAccount / the login account. */
+  godAccountPolicy?: 'auto';
   /** Per-CLI-provider local/self-hosted base URL (Ollama/LM Studio/vLLM, …) for the
    *  OpenCode/Crush/pi/qwen engines; applied at spawn (config-injection or proxy
    *  upstream). API KEYS are NOT stored here — they live write-only in the secret

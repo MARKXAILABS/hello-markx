@@ -147,8 +147,9 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
             // memory.md and inbox reattach by id. No-op without a recorded session.
             resume: true,
             // `account` re-pins the worker to its Claude pool account across the
-            // restart (rides the persisted roster; undefined = /login account).
-            hive: { id: a.id, name: a.name, provider, cwd, role: a.description, account: a.account }
+            // restart (rides the persisted roster; undefined = /login account);
+            // `accountPolicy: 'auto'` lets the pool re-balance it instead.
+            hive: { id: a.id, name: a.name, provider, cwd, role: a.description, account: a.account, accountPolicy: a.accountPolicy }
           });
           if (res.ok) {
             restored++;
@@ -156,6 +157,10 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
                 ...a,
                 provider,
                 ptyId,
+                // The account the pool actually landed this restore on (auto
+                // resolved / a cooling pin swapped — then also noted as a switch).
+                ...(provider === 'claude' ? { account: res.account } : {}),
+                ...(res.accountSwitchedFrom && res.account ? { accountSwitch: { from: res.accountSwitchedFrom, to: res.account, ts: Date.now() } } : {}),
                 archived: false,
                 status: 'idle',
                 // Surface the worktree fallback on the floor card; otherwise normal.

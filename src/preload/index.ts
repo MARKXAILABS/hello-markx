@@ -2,6 +2,24 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import type { AgentProvider } from '../shared/agentProvider';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
 export type { ClaudeAccount } from '../shared/claudeAccounts';
+import type { PoolSnapshot } from '../shared/claudeAccountPool';
+export type { PoolSnapshot, AccountHealth } from '../shared/claudeAccountPool';
+
+/** Main → renderer: respawn these agents on the named account (kill + `--resume`
+ *  + ONE nudge). Ids + labels only. */
+export interface ClaudeAccountFailoverEvent {
+  ts: number;
+  reason: string;
+  switches: Array<{ agentId: string; from: string; to: string; fromLabel: string; toLabel: string }>;
+}
+/** Main → renderer: these accounts are usable again — nudge the idle agents
+ *  still on them to continue (no respawn needed; same token, same session). */
+export interface ClaudeAccountResumedEvent {
+  ts: number;
+  reason: string;
+  accounts: Array<{ id: string; label: string }>;
+  agentIds: string[];
+}
 import type { HireManifest } from '../shared/hire';
 export type { HireManifest } from '../shared/hire';
 import type { IntegrationRecord, IntegrationTemplate } from '../shared/integrations';
@@ -55,8 +73,12 @@ export interface HiveAgentMeta {
   /** Michael's prep assistant — send-only; enriches prompts and forwards them. */
   isAssistant?: boolean;
   /** Claude pool-account id this agent is pinned to; unset = /login account.
-   *  The id only — the token never crosses IPC (injected main-only at spawn). */
+   *  The id only — the token never crosses IPC (injected main-only at spawn).
+   *  Under `accountPolicy: 'auto'` it is the last RESOLVED account (a hint). */
   account?: string;
+  /** `'auto'` = main picks the least-loaded healthy pool account at spawn and
+   *  reports it back in the spawn result's `account`. */
+  accountPolicy?: 'auto';
 }
 
 export interface HiveMessage {
@@ -337,6 +359,9 @@ export interface HarnessConfig {
   claudeAccounts?: ClaudeAccount[];
   /** Pool account powering the GOD orchestrator; unset = /login account. */
   godAccount?: string;
+  /** Michael's assignment policy: 'auto' = least-loaded healthy pool account at
+   *  each spawn (godAccount then holds the last resolved one); unset = pinned. */
+  godAccountPolicy?: 'auto';
 }
 
 export interface MemoryStatus {
@@ -578,8 +603,11 @@ const api = {
 
   // ─── PTY ─────────────────────────────────────────────────────────────────
   /** `cwd` in the result is the TILDE-EXPANDED absolute path main actually spawned
-   *  into — the renderer stores that, not the raw `~/…` the user typed. */
-  spawnPty: (opts: SpawnPtyOptions): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string }> =>
+   *  into — the renderer stores that, not the raw `~/…` the user typed.
+   *  `account` is the Claude pool account the spawn actually landed on (the
+   *  pool resolves `auto`, and swaps a pinned account that is cooling/dead —
+   *  `accountSwitchedFrom` names the one it left); undefined = login account. */
+  spawnPty: (opts: SpawnPtyOptions): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string; account?: string; accountSwitchedFrom?: string }> =>
     ipcRenderer.invoke('pty:spawn', opts),
   writePty: (id: string, data: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('pty:write', id, data),
@@ -1272,6 +1300,31 @@ const api = {
     ipcRenderer.invoke('claudeAccount:clear', id),
   claudeAccountRemove: (id: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('claudeAccount:remove', { id }),
+  // PR 2 — pool health/policy. Read the snapshot (cold start), the two manual
+  // actions, and the three main→renderer pushes: state (every change/tick),
+  // failover (respawn THESE agents on the named account + nudge once), resumed
+  // (a cooldown lapsed — nudge the idle agents still on it). Ids only.
+  claudeAccountPoolState: (): Promise<PoolSnapshot> =>
+    ipcRenderer.invoke('claudeAccount:poolState'),
+  claudeAccountRotate: (id: string): Promise<{ ok: boolean; error?: string; moved?: number; stranded?: number }> =>
+    ipcRenderer.invoke('claudeAccount:rotate', id),
+  claudeAccountMarkActive: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('claudeAccount:markActive', id),
+  onClaudeAccountState: (cb: (s: PoolSnapshot) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: PoolSnapshot) => cb(payload);
+    ipcRenderer.on('claudeAccount:state', listener);
+    return () => ipcRenderer.removeListener('claudeAccount:state', listener);
+  },
+  onClaudeAccountFailover: (cb: (e: ClaudeAccountFailoverEvent) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: ClaudeAccountFailoverEvent) => cb(payload);
+    ipcRenderer.on('claudeAccount:failover', listener);
+    return () => ipcRenderer.removeListener('claudeAccount:failover', listener);
+  },
+  onClaudeAccountResumed: (cb: (e: ClaudeAccountResumedEvent) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: ClaudeAccountResumedEvent) => cb(payload);
+    ipcRenderer.on('claudeAccount:resumed', listener);
+    return () => ipcRenderer.removeListener('claudeAccount:resumed', listener);
+  },
   // Realtime Michael (voice orchestrator) — MAIN mints a short-lived EPHEMERAL token
   // from the BYOK OpenAI key; the real key NEVER crosses IPC. `realtimeHasOpenAiKey`
   // is a presence boolean only (gates the voice toggle, like providerKeyHas).

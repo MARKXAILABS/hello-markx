@@ -9,7 +9,8 @@
  * decision ("inject / skip / fail closed"), the OTEL attribute sanitizer, the
  * remove-guard, and the account_uuid integrity reducer the Command Center renders.
  *
- * PR 1 (account pool). Pool policy / failover is deliberately NOT here (PR 2).
+ * PR 1 (account pool). The PR 2 half — health state machine, `auto` policy,
+ * failover planner, cooldown parsing — lives next door in claudeAccountPool.ts.
  */
 import type { AgentProvider } from './agentProvider';
 
@@ -113,6 +114,25 @@ export function decideClaudeAccountEnv(i: AccountEnvDecisionInput): AccountEnvDe
   return { kind: 'inject' };
 }
 
+/** Sentinel value the account selects use for the `auto` policy ('' = login). */
+export const AUTO_ACCOUNT_CHOICE = 'auto';
+export const AUTO_ACCOUNT_LABEL = 'Auto (least loaded)';
+
+/** One select value for the three assignment modes: '' login · 'auto' ·
+ *  '<accountId>' pinned. */
+export function encodeAccountChoice(policy: 'auto' | undefined, account: string | undefined): string {
+  if (policy === 'auto') return AUTO_ACCOUNT_CHOICE;
+  return account ?? '';
+}
+
+/** Inverse of encodeAccountChoice as a patch for an agent record. `auto` leaves
+ *  `account` out of the patch on purpose — the last concrete assignment stays
+ *  as the chooser's tie-break hint. */
+export function decodeAccountChoice(value: string): { account?: string; accountPolicy?: 'auto' } {
+  if (value === AUTO_ACCOUNT_CHOICE) return { accountPolicy: 'auto' };
+  return { account: value || undefined, accountPolicy: undefined };
+}
+
 /** Names of the live agents (and "Michael" via godAccount) pinned to `accountId` —
  *  a non-empty list blocks removing the account. Archived agents don't count. */
 export function pinnedAgentsForAccount(
@@ -143,9 +163,11 @@ export interface AccountIntegrity {
 }
 
 /** Fold observations IN ORDER (first-seen first). Agents with no uuid yet are
- *  neither references nor mismatches. */
-export function reduceAccountIntegrity(observations: AccountObservation[]): AccountIntegrity {
-  const reference: Record<string, string> = {};
+ *  neither references nor mismatches. `seed` (PR 2) = references the main
+ *  process persisted per account — authoritative where present (it is the copy
+ *  that gets CLEARED on a 401 / token replace), the fold only fills the gaps. */
+export function reduceAccountIntegrity(observations: AccountObservation[], seed: Record<string, string> = {}): AccountIntegrity {
+  const reference: Record<string, string> = { ...seed };
   const mismatches: AccountIntegrity['mismatches'] = {};
   for (const o of observations) {
     if (!o.accountUuid) continue;

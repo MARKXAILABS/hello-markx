@@ -16,6 +16,7 @@ import { terminalInstanceKey } from './terminalRecovery';
 import { Icon } from './Icon';
 import { MemoryGraphPanel } from './MemoryGraphPanel';
 import { useFleetTelemetry, type AgentUsageSample } from '@/hooks/useTelemetry';
+import { useClaudeAccountPool } from '@/hooks/useClaudeAccountPool';
 import { COMMAND_GROUPS } from '@shared/claudeCommands';
 import { useStore, triggerHistoryVisible, type Agent } from '@/store/store';
 import { usePtyParser } from '@/hooks/usePtyParser';
@@ -33,8 +34,14 @@ import {
   AGENT_PROVIDER_PRESETS,
   LOGIN_ACCOUNT_KEY,
   LOGIN_ACCOUNT_LABEL,
+  AUTO_ACCOUNT_CHOICE,
+  AUTO_ACCOUNT_LABEL,
+  encodeAccountChoice,
+  decodeAccountChoice,
+  fmtCountdown,
   type AgentProvider,
-  type ClaudeAccount
+  type ClaudeAccount,
+  type PoolSnapshot
 } from '@/store/config';
 import { canReceiveInbox } from '@shared/agentProvider';
 
@@ -376,9 +383,18 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       setEngineModel(c.godModel);
       setDefaultModel(c.defaultModel);
       setClaudeAccounts(c.claudeAccounts ?? []);
-      setEngineAccount(c.godAccount ?? '');
+      setEngineAccount(encodeAccountChoice(c.godAccountPolicy, c.godAccount));
     }).catch(() => { /* noop */ });
   }, []);
+  // The pool list can grow mid-session (an account added in Settings, then a
+  // failover lands an agent on it): re-read it whenever an agent's account
+  // changes so the selects + rows can name the new account.
+  const accountKey = agents.map((a) => a.account ?? '').join(',');
+  useEffect(() => {
+    window.cth.getConfig().then((c) => setClaudeAccounts(c.claudeAccounts ?? [])).catch(() => { /* noop */ });
+  }, [accountKey]);
+  // Live pool health (PR 2) — per-account state + the failover countdown.
+  const pool = useClaudeAccountPool();
 
   // Seed the dispatch box from a task-card "assign" (keyed on seq so repeat
   // assigns re-prefill). seq === 0 is the untouched initial state — skip it.
@@ -480,13 +496,15 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       const [exe, ...args] = tokenizeCommand(command.trim());
       // Claude account pool: a restart re-pins the agent to its account (which is
       // exactly when an account CHANGE takes effect). God reads the config pin —
-      // the engine row's apply persists godAccount before calling here.
+      // the engine row's apply persists godAccount before calling here. The
+      // policy rides along so an `auto` agent is re-balanced by the pool.
       const account = provider === 'claude' ? (a.isGod ? cfg.godAccount : a.account) : undefined;
+      const accountPolicy = provider === 'claude' ? (a.isGod ? cfg.godAccountPolicy : a.accountPolicy) : undefined;
       const hive = a.isGod
-        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isGod: true, role: 'orchestrator (god)', account }
+        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isGod: true, role: 'orchestrator (god)', account, accountPolicy }
         : a.isAssistant
-        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isAssistant: true, role: "Michael's prep assistant", account }
-        : { id: a.id, name: a.name, cwd: a.cwd, provider, role: a.description, account };
+        ? { id: a.id, name: a.name, cwd: a.cwd, provider, isAssistant: true, role: "Michael's prep assistant", account, accountPolicy }
+        : { id: a.id, name: a.name, cwd: a.cwd, provider, role: a.description, account, accountPolicy };
       const res = await window.cth.spawnPty({
         id: a.ptyId,
         cwd: a.cwd,
@@ -512,12 +530,18 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
         // while the selector and the persisted agent kept the old one, and the
         // next restore relaunched the old command. `command` is rebuilt from the
         // selected model above, so on a genuine no-change restart this is a no-op.
+        // `res.account` is where the pool actually landed the spawn (auto
+        // resolved / a cooling pin swapped) — record THAT, not the request.
+        const landed = provider === 'claude' ? res.account : undefined;
+        const switched = res.accountSwitchedFrom && landed ? { accountSwitch: { from: res.accountSwitchedFrom, to: landed, ts: Date.now() } } : {};
         const patch = resume
           ? {
               command: command.trim(),
               provider,
               model,
-              account,
+              account: landed,
+              accountPolicy,
+              ...switched,
               status: 'idle' as const,
               action: 'continuing…'
             }
@@ -525,11 +549,16 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
               command: command.trim(),
               provider,
               model,
-              account,
+              account: landed,
+              accountPolicy,
+              ...switched,
               status: 'idle' as const,
               action: provider === previousProvider ? 'restarting…' : `switching to ${providerPreset(provider).label}…`
             };
         updateAgent(a.id, patch);
+        if (a.isGod && provider === 'claude' && landed !== cfg.godAccount) {
+          void window.cth.updateConfig({ godAccount: landed }).then(() => setEngineAccount(encodeAccountChoice(accountPolicy, landed))).catch(() => { /* best-effort */ });
+        }
       }
     } catch (error) {
       setRestartErrors((errors) => ({
@@ -813,16 +842,22 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                   (re)start (restart & continue, revive, or app restart). */}
               {agentProvider === 'claude' && claudeAccounts.length > 0 && (
                 <Select
-                  value={a.account ?? ''}
+                  value={encodeAccountChoice(a.accountPolicy, a.account)}
                   disabled={restarting === a.id}
-                  title="Claude account for this agent — takes effect on the next (re)start"
-                  onChange={(v) => updateAgent(a.id, { account: v || undefined })}
+                  title="Claude account for this agent (Auto = least-loaded healthy account, with automatic failover) — takes effect on the next (re)start"
+                  onChange={(v) => updateAgent(a.id, decodeAccountChoice(v))}
                 >
                   <option value="">{LOGIN_ACCOUNT_LABEL}</option>
+                  <option value={AUTO_ACCOUNT_CHOICE}>{AUTO_ACCOUNT_LABEL}</option>
                   {claudeAccounts.map((acc) => (
                     <option key={acc.id} value={acc.id}>{acc.label}</option>
                   ))}
                 </Select>
+              )}
+              {agentProvider === 'claude' && a.accountPolicy === 'auto' && a.account && (
+                <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }} title="The account the pool resolved for this agent at its last spawn">
+                  on {claudeAccounts.find((acc) => acc.id === a.account)?.label ?? a.account}
+                </span>
               )}
               {/* Restart & Continue — kill + respawn keeping the SAME model and
                   resuming the prior conversation (--resume). Use this to redraw a
@@ -846,6 +881,18 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
             {restartErrors[a.id] && (
               <div style={{ fontSize: 11, color: 'var(--cth-coral)' }}>
                 {restartErrors[a.id]}
+              </div>
+            )}
+            {/* Claude account failover trail (PR 2): the last automatic switch
+                this agent went through — "switched A→B hh:mm". */}
+            {a.accountSwitch && (
+              <div
+                style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}
+                title="Automatic Claude account failover — the previous account was cooling (usage limit) or dead (token rejected); the session was resumed on the new one"
+              >
+                ↻ switched {claudeAccounts.find((acc) => acc.id === a.accountSwitch!.from)?.label ?? a.accountSwitch.from}
+                {' → '}{claudeAccounts.find((acc) => acc.id === a.accountSwitch!.to)?.label ?? a.accountSwitch.to}
+                {' '}{new Date(a.accountSwitch.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </div>
             )}
             {a.isGod && (
@@ -882,9 +929,11 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                   <Select
                     value={engineAccount}
                     disabled={restarting === a.id}
+                    title="Claude account for Michael (Auto = least-loaded healthy account, with automatic failover) — applied with the restart"
                     onChange={(v) => setEngineAccount(v)}
                   >
                     <option value="">{LOGIN_ACCOUNT_LABEL}</option>
+                    <option value={AUTO_ACCOUNT_CHOICE}>{AUTO_ACCOUNT_LABEL}</option>
                     {claudeAccounts.map((acc) => (
                       <option key={acc.id} value={acc.id}>{acc.label}</option>
                     ))}
@@ -899,12 +948,16 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                     if (engineProvider !== currentProvider) {
                       if (!window.confirm("This restarts Michael; a conversation on a different engine can't be resumed.")) return;
                     }
+                    // '' = back to the /login account; 'auto' = the pool picks
+                    // (godAccount then just remembers the last resolved one).
+                    // Persisted BEFORE the restart so restartWithModel's fresh
+                    // getConfig reads it.
+                    const choice = engineProvider === 'claude' ? decodeAccountChoice(engineAccount) : { account: undefined, accountPolicy: undefined };
                     await window.cth.updateConfig({
                       godProvider: engineProvider,
                       godModel: engineModel,
-                      // '' = back to the /login account. Persisted BEFORE the
-                      // restart so restartWithModel's fresh getConfig reads it.
-                      godAccount: engineProvider === 'claude' && engineAccount ? engineAccount : undefined
+                      godAccount: choice.accountPolicy === 'auto' ? a.account : choice.account,
+                      godAccountPolicy: choice.accountPolicy
                     });
                     await restartWithModel(a, engineModel, { provider: engineProvider, resume: false });
                   }}
@@ -949,7 +1002,7 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
       {/* Claude account pool — per-account live usage + token-applied integrity.
           Rendered whenever accounts exist OR any telemetry carries an account
           uuid (so the /login row shows even with an empty pool). */}
-      <ClaudeAccountsSection agents={agents} samples={samples} claudeAccounts={claudeAccounts} />
+      <ClaudeAccountsSection agents={agents} samples={samples} claudeAccounts={claudeAccounts} pool={pool} />
 
       <ArchivedSection />
 
@@ -1031,31 +1084,77 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
  *  `user.account_uuid` observed for the account, and an integrity flag when an
  *  agent's uuid disagrees with its account's reference (first session wins) —
  *  i.e. the pinned setup-token did NOT take effect for that agent. */
-function ClaudeAccountsSection({ agents, samples, claudeAccounts }: {
+function ClaudeAccountsSection({ agents, samples, claudeAccounts, pool }: {
   agents: Agent[];
   samples: Record<string, AgentUsageSample>;
   claudeAccounts: ClaudeAccount[];
+  /** Live health from main (PR 2); null until the first snapshot lands. */
+  pool: PoolSnapshot | null;
 }) {
+  // Re-render once a minute so the cooldown countdowns tick without a push.
+  const [, setMinute] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setMinute((m) => m + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const [actionNote, setActionNote] = useState<Record<string, string>>({});
   // Only Claude-engine agents participate in the pool.
   const members = agents.filter((a) => !a.archived && inferAgentProvider(a.command, a.provider) === 'claude');
   // Nothing to say until the pool exists or telemetry carries an account uuid.
   const anyUuid = members.some((a) => samples[a.id]?.accountUuid);
   if (claudeAccounts.length === 0 && !anyUuid) return null;
   // Deterministic observation order — god first, then roster order — so the
-  // "first session wins" reference does not flap between renders.
+  // "first session wins" reference does not flap between renders. Main's
+  // persisted reference (cleared on a 401 / token replace) is authoritative
+  // when it has one; the live fold only fills the gaps (and the login row).
   const ordered = [...members].sort((x, y) => Number(!!y.isGod) - Number(!!x.isGod));
-  const integrity = reduceAccountIntegrity(ordered.map((a) => ({
-    agentId: a.id,
-    account: a.account,
-    accountUuid: samples[a.id]?.accountUuid
-  })));
+  const seed: Record<string, string> = {};
+  for (const [id, rec] of Object.entries(pool?.accounts ?? {})) if (rec.referenceUuid) seed[id] = rec.referenceUuid;
+  // A session on a DEAD account runs on a rejected token — Claude Code then
+  // reports the login account's uuid (seen live), which must neither seed that
+  // account's reference nor count as a mismatch. Leave those observations out.
+  const integrity = reduceAccountIntegrity(ordered
+    .filter((a) => !(a.account && pool?.accounts[a.account]?.health.state === 'dead'))
+    .map((a) => ({
+      agentId: a.id,
+      account: a.account,
+      accountUuid: samples[a.id]?.accountUuid
+    })), seed);
   const rows: Array<{ key: string; label: string }> = [
     { key: LOGIN_ACCOUNT_KEY, label: LOGIN_ACCOUNT_LABEL },
     ...claudeAccounts.map((acc) => ({ key: acc.id, label: acc.label }))
   ];
   const short = (uuid: string): string => (uuid.length > 13 ? `${uuid.slice(0, 13)}…` : uuid);
+  const now = Date.now();
+  const clock = (ts: number): string => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const paused = !!pool && claudeAccounts.length > 0 && pool.healthyCount === 0 && pool.stranded.length > 0;
+  const act = async (id: string, kind: 'rotate' | 'activate') => {
+    try {
+      const r: { ok: boolean; error?: string; moved?: number; stranded?: number } = kind === 'rotate'
+        ? await window.cth.claudeAccountRotate(id)
+        : await window.cth.claudeAccountMarkActive(id);
+      setActionNote((s) => ({
+        ...s,
+        [id]: !r.ok ? (r.error ?? 'failed')
+          : kind === 'rotate' ? `rotating — ${r.moved ?? 0} agent(s) moving${r.stranded ? `, ${r.stranded} waiting (nothing healthy)` : ''}`
+          : 'marked active — its agents were nudged to continue'
+      }));
+    } catch (e) { setActionNote((s) => ({ ...s, [id]: e instanceof Error ? e.message : String(e) })); }
+  };
   return (
     <Section title="CLAUDE ACCOUNTS">
+      {/* All pool accounts cooling/dead → the floor is paused until the earliest reset. */}
+      {paused && (
+        <div style={{
+          padding: 6, marginBottom: 6, fontSize: 11, color: 'var(--cth-ink-900)',
+          background: 'var(--cth-lemon-light)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
+        }}>
+          ⏸ every Claude account is cooling or dead — {pool!.stranded.length} agent(s) paused.{' '}
+          {pool!.earliestReset
+            ? <>auto-resumes in <strong>{fmtCountdown(pool!.earliestReset, now)}</strong> ({clock(pool!.earliestReset)})</>
+            : <>no cooldown pending — replace the dead token(s) in Settings → AI Engines, then mark an account active</>}
+        </div>
+      )}
       {rows.map((row) => {
         const rowAgents = members.filter((a) => (a.account ?? LOGIN_ACCOUNT_KEY) === row.key);
         let input = 0, output = 0, cache = 0, usd = 0;
@@ -1069,17 +1168,37 @@ function ClaudeAccountsSection({ agents, samples, claudeAccounts }: {
         }
         const uuid = integrity.reference[row.key];
         const bad = rowAgents.filter((a) => integrity.mismatches[a.id]);
+        const rec = row.key === LOGIN_ACCOUNT_KEY ? undefined : pool?.accounts[row.key];
+        const health = rec?.health;
+        const unhealthy = !!health && health.state !== 'active';
         return (
           <div key={row.key} style={{
             display: 'flex', flexDirection: 'column', gap: 3,
             padding: 6, marginBottom: 6,
-            background: bad.length ? 'var(--cth-coral-light)' : 'var(--cth-paper-100)',
+            background: bad.length || health?.state === 'dead' ? 'var(--cth-coral-light)' : health?.state === 'cooling' ? 'var(--cth-lemon-light)' : 'var(--cth-paper-100)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-900)', textTransform: 'uppercase' }}>
                 {row.label}
               </span>
+              {/* PR 2 — health badge: active · cooling (countdown) · dead */}
+              {health && (
+                <span
+                  title={health.state === 'cooling'
+                    ? `${health.reason} — until ${clock(health.untilTs)}`
+                    : health.state === 'dead' ? health.reason : 'usable — agents can spawn / fail over here'}
+                  style={{
+                    fontFamily: 'var(--cth-font-mono)', fontSize: 10, padding: '0 4px',
+                    color: health.state === 'active' ? 'var(--cth-mint)' : health.state === 'cooling' ? 'var(--cth-ink-900)' : 'var(--cth-coral)',
+                    boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
+                  }}
+                >
+                  {health.state === 'active' ? 'active'
+                    : health.state === 'cooling' ? `cooling · ${fmtCountdown(health.untilTs, now)} (${clock(health.untilTs)})`
+                    : 'dead · token rejected'}
+                </span>
+              )}
               <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>
                 {rowAgents.length === 0 ? 'no active agents' : rowAgents.map((a) => a.name).join(', ')}
               </span>
@@ -1095,7 +1214,38 @@ function ClaudeAccountsSection({ agents, samples, claudeAccounts }: {
               <span>out {fmtTokens(output)}</span>
               <span>cache {fmtTokens(cache)}</span>
               <span style={{ color: 'var(--cth-ink-900)' }}>≈ ${usd.toFixed(2)}</span>
+              {rec && (
+                <span title="Tokens this account used in the last 5h — what the Auto policy balances on">5h {fmtTokens(rec.windowTokens)}</span>
+              )}
+              {rec && rec.switchCount > 0 && (
+                <span title="Agents automatically moved AWAY from this account (lifetime)">↻ {rec.switchCount} switch{rec.switchCount === 1 ? '' : 'es'}</span>
+              )}
             </div>
+            {/* PR 2 — the api error that last changed this account's state (sanitized in main) */}
+            {rec?.lastError && (
+              <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', wordBreak: 'break-word' }} title={rec.lastError.message}>
+                last error {clock(rec.lastError.ts)}{rec.lastError.statusCode ? ` · HTTP ${rec.lastError.statusCode}` : ''}:{' '}
+                {rec.lastError.message.length > 140 ? `${rec.lastError.message.slice(0, 140)}…` : rec.lastError.message}
+              </div>
+            )}
+            {/* PR 2 — manual actions: drain ("rotate now") / revive ("mark active") */}
+            {rec && (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                {!unhealthy && (
+                  <PixelButton variant="secondary" size="sm" onClick={() => void act(row.key, 'rotate')}>
+                    <span title="Cool this account for 5h and move its agents to the next healthy account now (each resumes its session on the new token)">rotate now</span>
+                  </PixelButton>
+                )}
+                {unhealthy && (
+                  <PixelButton variant="secondary" size="sm" onClick={() => void act(row.key, 'activate')}>
+                    <span title={health?.state === 'dead'
+                      ? 'Mark active again — do this AFTER saving a replacement token in Settings → AI Engines (saving one does it automatically)'
+                      : 'End the cooldown now — the account is handed out again and its parked agents are nudged to continue'}>mark active</span>
+                  </PixelButton>
+                )}
+                {actionNote[row.key] && <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{actionNote[row.key]}</span>}
+              </div>
+            )}
             {bad.length > 0 && (
               <div
                 title={bad.map((a) => {
@@ -1114,6 +1264,8 @@ function ClaudeAccountsSection({ agents, samples, claudeAccounts }: {
         usage + account uuid live from each agent&apos;s OpenTelemetry · the first session seen for an
         account sets its reference uuid · a mismatch means that agent&apos;s session is NOT on its
         assigned account (bad/expired token — replace it in Settings → AI Engines and restart the agent)
+        · a 429 cools the account (reset time from the error, else 5h) and its agents are moved to the
+        next healthy account + resumed; a 401 marks it dead until its token is replaced
       </Muted>
     </Section>
   );

@@ -1,8 +1,9 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import type { ClaudeAccount, HarnessConfig } from '@/store/config';
-import { newAccountLabelError } from '@/store/config';
+import { newAccountLabelError, describeHealth } from '@/store/config';
 import { PixelButton } from './PixelButton';
 import { useStore } from '@/store/store';
+import { useClaudeAccountPool } from '@/hooks/useClaudeAccountPool';
 
 /**
  * ClaudeAccountsSettings — the N-account Claude pool (v0.4.5, PR 1).
@@ -57,6 +58,9 @@ export function ClaudeAccountsSettings({
   const [note, setNote] = useState<Record<string, string>>({});
   // Live roster — used only to warn which agents a removal would strand.
   const agents = useStore((s) => s.agents);
+  // Live health (PR 2) — shown per row so a dead/cooling account is obvious
+  // right where its token gets replaced (saving a token marks it active again).
+  const pool = useClaudeAccountPool();
 
   // Presence booleans (never the values) for the stored ✓ markers.
   useEffect(() => {
@@ -136,7 +140,10 @@ export function ClaudeAccountsSettings({
           browser, and paste the printed token here (needs Pro/Max/Team/Enterprise). Tokens are stored{' '}
           <strong>write-only</strong> (encrypted at rest; never shown again) and injected only into that
           agent&apos;s process at spawn. Agents without an account keep using this machine&apos;s{' '}
-          <code style={mono}>/login</code> account.
+          <code style={mono}>/login</code> account. Pick <strong>Auto</strong> on an agent to let the pool
+          choose the least-loaded healthy account; when an account hits its usage limit (429) its
+          agents are moved to the next healthy one and resumed, and a rejected token (401) marks it
+          dead until you paste a new one here.
         </div>
       </div>
 
@@ -161,6 +168,15 @@ export function ClaudeAccountsSettings({
               <span style={{ fontSize: 11, color: hasToken[a.id] ? 'var(--cth-mint)' : 'var(--cth-coral)' }}>
                 {hasToken[a.id] ? 'token stored ✓' : 'no token — pinned agents cannot spawn'}
               </span>
+              {(() => {
+                const h = pool?.accounts[a.id]?.health;
+                if (!h || h.state === 'active') return null;
+                return (
+                  <span style={{ fontSize: 11, color: h.state === 'dead' ? 'var(--cth-coral)' : 'var(--cth-ink-700)' }}>
+                    · {describeHealth(h, Date.now())}{h.state === 'dead' ? ' — paste a new token below to revive it' : ''}
+                  </span>
+                );
+              })()}
               <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--cth-ink-300)', ...mono }}>{a.id}</span>
             </div>
             {pinnedHere.length > 0 && (

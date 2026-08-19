@@ -48,7 +48,7 @@ export interface BreakerState {
 type TelemetryEvent =
   | { kind: 'usage'; sample: AgentUsageSample }
   | { kind: 'tool_result'; span: ToolSpan }
-  | { kind: 'api_error'; agentId: string; sessionId: string; ts: number; error: string };
+  | { kind: 'api_error'; agentId: string; sessionId: string; ts: number; error: string; statusCode?: number };
 
 /** Total tokens across all kinds — the sparkline/velocity basis. */
 export function totalTokens(s: AgentUsageSample): number {

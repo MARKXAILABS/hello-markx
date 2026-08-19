@@ -17,7 +17,8 @@
  *
  * 🔒 PII: raw OTel records carry `user.email`, `user.account_id/uuid`,
  * `organization.id` and a hashed `user.id`. We read ONLY an allowlist of keys
- * ({agent.id, session.id, model, token type, cost, tool fields} plus the OPAQUE
+ * ({agent.id, session.id, model, token type, cost, tool fields, api_error
+ * status_code} plus the OPAQUE
  * `user.account_uuid`/`user.account_id` — the account pool's integrity signal,
  * an identifier, never the email) and never persist a raw record — so everything
  * this module emits is PII-free BY CONSTRUCTION. Downstream durable stores
@@ -88,7 +89,17 @@ export interface ToolSpan {
 export type TelemetryEvent =
   | { kind: 'usage'; sample: AgentUsageSample }
   | { kind: 'tool_result'; span: ToolSpan }
-  | { kind: 'api_error'; agentId: string; sessionId: string; ts: number; error: string };
+  | { kind: 'api_error'; agentId: string; sessionId: string; ts: number; error: string; statusCode?: number };
+
+/** What an in-process api_error subscriber gets besides the agent id. The
+ *  account pool keys its 429/401 handling on `statusCode` (never on the text). */
+export interface ApiErrorInfo {
+  sessionId: string;
+  ts: number;
+  error: string;
+  /** HTTP status from the event's `status_code` attr; undefined when absent. */
+  statusCode?: number;
+}
 
 /** Cold-start backfill returned by `snapshot()`. */
 export interface TelemetrySnapshot {
@@ -143,8 +154,9 @@ export class TelemetryCollector {
   /** Push subscribers (Lane A breaker + dashboard). */
   private readonly usageSubs = new Set<(s: AgentUsageSample) => void>();
   /** api_error subscribers — feeds Lane A's breaker error-storm trip (#6), which
-   *  has no input source of its own (hook payloads don't expose api errors). */
-  private readonly apiErrorSubs = new Set<(agentId: string) => void>();
+   *  has no input source of its own (hook payloads don't expose api errors), and
+   *  the account pool's 429/401 detection (which reads `info.statusCode`). */
+  private readonly apiErrorSubs = new Set<(agentId: string, info: ApiErrorInfo) => void>();
 
   constructor(opts: TelemetryCollectorOptions = {}) {
     this.host = opts.host ?? '127.0.0.1';
@@ -197,10 +209,11 @@ export class TelemetryCollector {
     return () => this.usageSubs.delete(cb);
   }
 
-  /** In-process api_error feed for Lane A's breaker (#6). At integration:
-   *  `telemetry.onApiError((agentId) => breaker.recordError(agentId))`. Returns
-   *  an unsubscribe fn. */
-  onApiError(cb: (agentId: string) => void): () => void {
+  /** In-process api_error feed for Lane A's breaker (#6) and the account pool.
+   *  `telemetry.onApiError((agentId) => breaker.recordError(agentId))` and
+   *  `telemetry.onApiError((agentId, info) => pool.handleApiError(agentId, info))`.
+   *  Returns an unsubscribe fn. */
+  onApiError(cb: (agentId: string, info: ApiErrorInfo) => void): () => void {
     this.apiErrorSubs.add(cb);
     return () => this.apiErrorSubs.delete(cb);
   }
@@ -347,8 +360,14 @@ export class TelemetryCollector {
             if (ring?.length) ring[ring.length - 1].decision = decision;
           } else if (name === 'api_error' || (name && name.includes('error'))) {
             const error = str(attrs['error']) || str(attrs['message']) || name;
-            for (const cb of this.apiErrorSubs) { try { cb(agentId); } catch { /* subscriber threw */ } }
-            this.emit?.('telemetry:event', { kind: 'api_error', agentId, sessionId, ts: Date.now(), error } satisfies TelemetryEvent);
+            // `status_code` is the one attribute the account pool keys on (429 →
+            // cool, 401 → dead); an absent/zero value stays undefined so nobody
+            // mistakes "unknown" for a real status.
+            const statusCode = numAttr(attrs['status_code']) || undefined;
+            const ts = Date.now();
+            const info: ApiErrorInfo = { sessionId, ts, error, statusCode };
+            for (const cb of this.apiErrorSubs) { try { cb(agentId, info); } catch { /* subscriber threw */ } }
+            this.emit?.('telemetry:event', { kind: 'api_error', agentId, sessionId, ts, error, statusCode } satisfies TelemetryEvent);
           }
         }
       }
@@ -451,7 +470,7 @@ interface ResourceLogs { resource?: { attributes?: OtelKV[] }; scopeLogs?: { log
  *  took effect (the integrity flag in the per-account panel). */
 const ATTR_ALLOWLIST = new Set([
   'agent.id', 'agent.name', 'session.id', 'model', 'type',
-  'tool_name', 'success', 'duration_ms', 'decision', 'event.name', 'error', 'message',
+  'tool_name', 'success', 'duration_ms', 'decision', 'event.name', 'error', 'message', 'status_code',
   'user.account_uuid', 'user.account_id'
 ]);
 

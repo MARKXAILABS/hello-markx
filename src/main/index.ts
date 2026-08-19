@@ -23,7 +23,8 @@ import {
   addWorktree, removeWorktree, worktreeHasUnintegratedWork, worktreeIsGcSafe,
   getLogGraph, getCommitFiles, getFileAtRev, compareRefs, listWorktrees, checkoutRef
 } from './git';
-import { HiveManager, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
+import { HiveManager, redactSecrets, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
+import { AccountPoolManager } from './accountPool';
 import { HookServer } from './hooks';
 import { CircuitBreaker, type BreakerInput } from './breaker';
 import type { UsageProvider } from './usage';
@@ -270,6 +271,26 @@ let breakerBeatTimer: ReturnType<typeof setInterval> | null = null;
 // Feed the breaker's api_error-storm trip from Oscar's OTel api_error spans —
 // Jim's one breaker input with no on-branch source (telemetry.onApiError seam).
 telemetry.onApiError((agentId) => breaker.recordError(agentId));
+// Claude account pool (v0.4.5 PR 2) — health + policy + failover. Pure logic in
+// src/shared/claudeAccountPool.ts; this is the main-process owner: persisted in
+// its own userData JSON (never the secret broker), fed by the collector's
+// api_error (429 → cooling, 401 → dead) + usage pushes, and it tells the
+// renderer which agents to respawn on which account (`claudeAccount:failover`).
+// Only PTY-backed, non-archived Claude agents count as "live" here — an agent
+// on the login account (no pin) is outside the pool and never moved.
+const accountPool = new AccountPoolManager({
+  statePath: () => join(app.getPath('userData'), 'claude-account-pool.json'),
+  accounts: () => readConfig().claudeAccounts ?? [],
+  tokenPresent: (id) => integrations.hasSecret(claudeAccountSecretRef(id)),
+  liveAgents: () => Object.entries(hive.enabled() ? hive.registry().agents : {})
+    .filter(([id, a]) => !a.archived && isClaudeProvider(a.provider ?? 'claude') && !!ptyForAgent(id))
+    .map(([id, a]) => ({ agentId: id, name: a.name, account: a.account })),
+  emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } },
+  alert: (title, body) => breakerToast(title, body),
+  sanitize: redactSecrets
+});
+telemetry.onApiError((agentId, info) => accountPool.handleApiError(agentId, info));
+telemetry.onAgentUsage((sample) => accountPool.recordUsage(sample));
 // HookServer needs BOTH: Oscar's control registry (HITL pause/gate/steer/halt via
 // hook returns) AND Jim's breaker (feed recordToolUse on each PostToolUse).
 const hookServer = new HookServer(hive, () => liveWebContents(), () => readConfig(), control, breaker);
@@ -2415,7 +2436,7 @@ ipcMain.handle('pty:spawn', async (evt, opts: AgentSpawnOptions) => {
  *  it can ALSO be invoked by the god-triggered ephemeral-worker watcher (which has
  *  no renderer `evt`). `owner` is the window that should receive this PTY's output
  *  (null → the primary window). Behavior-identical to the prior inline handler. */
-async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebContents | null): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string }> {
+async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebContents | null): Promise<{ ok: boolean; error?: string; cwd?: string; worktreePath?: string; resumeNotFound?: boolean; resumed?: boolean; seedPrompt?: string; account?: string; accountSwitchedFrom?: string }> {
   // ── cwd INGESTION — expand `~` exactly once, here ───────────────────────────
   // This is the single door every agent spawn comes through (`pty:spawn` IPC and
   // the god-triggered ephemeral-worker watcher), so it is where a user-typed
@@ -2442,6 +2463,24 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // never logged, never in args, never over IPC.
   let claudeAccountToken: string | undefined;
   let claudeAccountAttr: string | undefined;
+  // PR 2 — assignment policy runs FIRST and only decides WHICH account id to
+  // materialize: `auto` → the least-loaded healthy pool account; a pinned
+  // account that is cooling/dead → the next healthy one (`accountSwitchedFrom`
+  // records the swap); nothing healthy → fail closed with the countdown. The
+  // resolved id is written back onto the hive meta (so the registry + renderer
+  // agree on the live assignment) and then goes through the unchanged PR 1
+  // token decision below. No pin + no policy = the login account, untouched.
+  let accountSwitchedFrom: string | undefined;
+  if (opts.hive && claudeProvider && (opts.hive.account || opts.hive.accountPolicy === 'auto')) {
+    const resolution = accountPool.resolveForSpawn({ policy: opts.hive.accountPolicy, account: opts.hive.account });
+    if (resolution.kind === 'fail') return { ok: false, error: resolution.error };
+    if (resolution.kind === 'account') {
+      accountSwitchedFrom = resolution.switchedFrom;
+      opts.hive = { ...opts.hive, account: resolution.account };
+    } else {
+      opts.hive = { ...opts.hive, account: undefined }; // auto with an empty pool → login
+    }
+  }
   if (opts.hive?.account) {
     const pinned = opts.hive.account;
     const account = (readConfig().claudeAccounts ?? []).find((a) => a.id === pinned);
@@ -2812,6 +2851,11 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   }
   const res = ptyManager.spawn(opts, owner);
   if (res.ok) analytics.track('agent_spawned', { provider });
+  // A pinned account that was unhealthy at spawn got swapped above — count it
+  // on the panel like a runtime failover (only once the process really started).
+  if (res.ok && accountSwitchedFrom && opts.hive?.account && opts.hive.id) {
+    accountPool.noteSpawnSwitch(opts.hive.id, accountSwitchedFrom, opts.hive.account);
+  }
   syncKeepAwake(); // arm the power-save blocker while ≥1 agent PTY is alive (#18)
   // Hand the resolved worktree path back to the renderer so it can persist it on
   // the agent (only set when isolation actually provisioned a worktree above).
@@ -2820,7 +2864,17 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   const worktreePath = worktreePaths.get(opts.id);
   // `cwd` echoes back the TILDE-EXPANDED absolute path so the renderer's agent
   // record matches what the registry and the PTY actually used.
-  return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(seedPrompt ? { seedPrompt } : {}) };
+  // `account` = the pool account this spawn actually landed on (login when
+  // undefined), so the renderer records the live assignment — `auto` resolves
+  // here, and a cooling/dead pin is swapped here. Ids only, never tokens.
+  return {
+    ...res, cwd: opts.cwd,
+    ...(worktreePath ? { worktreePath } : {}),
+    ...(resumeNotFound ? { resumeNotFound: true } : {}),
+    ...(didResume ? { resumed: true } : {}),
+    ...(seedPrompt ? { seedPrompt } : {}),
+    ...(opts.hive && claudeProvider ? { account: opts.hive.account, ...(accountSwitchedFrom ? { accountSwitchedFrom } : {}) } : {})
+  };
 }
 ipcMain.handle('pty:write', (_evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };
@@ -2971,7 +3025,12 @@ ipcMain.handle('claudeAccount:set', (_evt, payload: unknown) => {
   if (!(readConfig().claudeAccounts ?? []).some((a) => a.id === p.id)) {
     return { ok: false, error: 'unknown account' };
   }
-  return integrations.setSecret(claudeAccountSecretRef(p.id), p.token);
+  const stored = integrations.setSecret(claudeAccountSecretRef(p.id), p.token);
+  // A fresh token is a clean slate: back to active (a dead 401 account is
+  // exactly what gets its token replaced) and the reference uuid is cleared so
+  // the next good session — not the old bad one — seeds it.
+  if (stored.ok) accountPool.onTokenReplaced(p.id);
+  return stored;
 });
 ipcMain.handle('claudeAccount:has', (_evt, id: unknown) =>
   typeof id === 'string' ? integrations.hasSecret(claudeAccountSecretRef(id)) : false);
@@ -2996,6 +3055,19 @@ ipcMain.handle('claudeAccount:remove', (_evt, payload: unknown) => {
   }
   writeConfig({ claudeAccounts: accounts.filter((a) => a.id !== p.id) });
   try { integrations.deleteSecret(claudeAccountSecretRef(p.id)); } catch { /* metadata already gone; orphan cipher is unreadable without the ref */ }
+  accountPool.onAccountRemoved(p.id);
+  return { ok: true };
+});
+// PR 2 — pool health/policy state (read) + the two manual actions. Ids only.
+ipcMain.handle('claudeAccount:poolState', () => accountPool.snapshot());
+ipcMain.handle('claudeAccount:rotate', (_evt, id: unknown) => {
+  if (typeof id !== 'string' || !(readConfig().claudeAccounts ?? []).some((a) => a.id === id)) return { ok: false, error: 'unknown account' };
+  const plan = accountPool.rotateAccount(id);
+  return { ok: true, moved: plan.switches.length, stranded: plan.stranded.length };
+});
+ipcMain.handle('claudeAccount:markActive', (_evt, id: unknown) => {
+  if (typeof id !== 'string' || !(readConfig().claudeAccounts ?? []).some((a) => a.id === id)) return { ok: false, error: 'unknown account' };
+  accountPool.markActive(id);
   return { ok: true };
 });
 // Probe an integration's reachability through the broker's own auth path (admin-only;
@@ -4748,7 +4820,12 @@ function armAlwaysOnBeats(): void {
   writeFleetSnapshot();
   fleetTimer = setInterval(writeFleetSnapshot, 8_000);
   if (breakerBeatTimer) clearInterval(breakerBeatTimer);
-  breakerBeatTimer = setInterval(() => { try { runBreakerBeat(300_000); } catch (e) { console.error('[breaker beat]', e); } }, 30_000);
+  breakerBeatTimer = setInterval(() => {
+    try { runBreakerBeat(300_000); } catch (e) { console.error('[breaker beat]', e); }
+    // Account pool beat: lapse cooldowns (→ resume nudges), retry moves whose
+    // 10-min rate-limit window passed, refresh the renderer's snapshot.
+    try { accountPool.tick(); } catch (e) { console.error('[account-pool beat]', e); }
+  }, 30_000);
 }
 
 /** Wall-clock instant we last observed the machine suspend or lock, so a resume
@@ -4863,6 +4940,10 @@ app.whenReady().then(() => {
   // Guarded: a DB failure (e.g. a bad native build) must degrade to defaults,
   // never block app startup.
   try { persist.open(); } catch (e) { console.error('[db] open failed:', e); }
+  // Claude account pool health (cooling/dead + switch counts) survives restarts
+  // in its own userData JSON; load it before any agent spawns so a cooling
+  // account is not handed out again at boot. Guarded — unreadable = fresh.
+  try { accountPool.load(); } catch (e) { console.error('[account-pool] load failed:', e); }
   // Auto-update from GitHub releases (packaged builds only; gated on the
   // `autoUpdate` config flag). Download-in-background + restart-to-apply toast;
   // never restarts on its own. Falls back to a notify-only releases/latest

@@ -140,8 +140,13 @@ export interface AgentMeta {
    *  to. Unset = the machine's `/login` account (today's behaviour). The id only
    *  — the setup-token stays in the secret broker and is injected MAIN-ONLY at
    *  spawn (never persisted here / in registry.json). Claude-provider only;
-   *  ignored for other engines. */
+   *  ignored for other engines. With `accountPolicy: 'auto'` this is the account
+   *  the pool RESOLVED at the last spawn (the live assignment), not a pin. */
   account?: string;
+  /** `'auto'` = the pool picks the least-loaded healthy account at every
+   *  spawn; unset = pinned to `account` (or the login account when that is
+   *  unset too). */
+  accountPolicy?: 'auto';
 }
 
 export interface RegistryAgent extends AgentMeta {
@@ -619,6 +624,7 @@ export class HiveManager {
       // an agent (meta.account undefined) clears the recorded pin instead of the
       // stale one surviving via `...prev`. JSON.stringify drops the undefined.
       account: meta.account,
+      accountPolicy: meta.accountPolicy,
       status: 'idle',
       cwdValid: cwd.valid,
       // A (re)spawn always means a live terminal — clear any prior archived flag.
