@@ -17,6 +17,7 @@
  */
 import Database from 'better-sqlite3';
 import { app } from 'electron';
+import { existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** A captured user prompt, as returned to the renderer (camelCase columns). */
@@ -74,18 +75,36 @@ export class PersistStore {
   constructor(private dbPath?: string) {}
 
   /** Open (creating if needed) and migrate the DB. Idempotent — a second call is
-   *  a no-op. Throws if the native module fails to load or the file is unusable;
-   *  callers should guard so a DB failure can't crash app startup. */
+   *  a no-op. A corrupt file is quarantined and re-created once (see below);
+   *  anything else — the native module failing to load, an unwritable dir —
+   *  throws, and callers guard so a DB failure can't crash app startup. */
   open(): void {
     if (this.db) return;
     const path = this.dbPath ?? join(app.getPath('userData'), 'harness.db');
+    try {
+      this.db = this.openOnce(path);
+    } catch (e) {
+      // A file that isn't a database can never heal itself, and every kv/history
+      // call guards on `this.db` — so without this the app would look perfectly
+      // healthy while silently persisting NOTHING, for the life of the install.
+      // Move the bad file aside (never delete: it's still the only copy of the
+      // user's history, and `sqlite3 .recover` can often read it) and open a
+      // fresh one. Exactly one retry — a second failure is not corruption.
+      if (!isCorruptDb(e)) throw e;
+      console.error(`[db] ${path} is not a usable database — quarantining and starting fresh:`, e);
+      quarantine(path);
+      this.db = this.openOnce(path);
+    }
+  }
+
+  private openOnce(path: string): Database.Database {
     const db = new Database(path);
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
     db.pragma('busy_timeout = 5000');
     db.pragma('foreign_keys = ON');
     this.migrate(db);
-    this.db = db;
+    return db;
   }
 
   private migrate(db: Database.Database): void {
@@ -164,6 +183,28 @@ export class PersistStore {
     return this.db.prepare(
       "SELECT id, agent_id AS agentId, cwd, text, ts FROM command_history WHERE text LIKE ? ESCAPE '\\' ORDER BY ts DESC, id DESC LIMIT ?"
     ).all(needle, lim) as CommandHistoryRow[];
+  }
+}
+
+/** Is this the "that file is not a SQLite database" family of failures — a
+ *  truncated write, a half-synced cloud copy, a page-level corruption — as
+ *  opposed to a missing native module or an unwritable directory? Only the
+ *  former is fixable by starting over. */
+function isCorruptDb(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && /^SQLITE_(NOTADB|CORRUPT)/.test(code)) return true;
+  const msg = e instanceof Error ? e.message : String(e);
+  return /not a database|database disk image is malformed|file is encrypted/i.test(msg);
+}
+
+/** Rename `harness.db` (and its WAL siblings — a stale -wal against a new DB is
+ *  its own corruption) to `harness.db.corrupt-<ts>`. Throws if the rename fails,
+ *  because retrying the open on a file we couldn't move would just fail again. */
+function quarantine(path: string): void {
+  const stamp = Date.now();
+  for (const suffix of ['', '-wal', '-shm']) {
+    const from = `${path}${suffix}`;
+    if (existsSync(from)) renameSync(from, `${path}.corrupt-${stamp}${suffix}`);
   }
 }
 

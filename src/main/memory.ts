@@ -21,8 +21,18 @@ import { ensureKilled } from './procKill';
 /** Non-memory files `mempalace mine` must not ingest: the Claude Code hooks
  *  config (a large JSON blob that swamps the wake-up digest), the cursor, and
  *  raw inbox/outbox message JSON. `mempalace mine` honors .gitignore, so we drop
- *  one in each agent dir rather than touch the mine command. */
-const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/'];
+ *  one in each agent dir rather than touch the mine command.
+ *
+ *  The dot-dirs matter as much as the JSON: an agent folder also holds the
+ *  BUNDLED SKILLS copied into `.claude/skills/` plus each engine's own state
+ *  (`.codex/`, `.pi-agent/`, `.opencode/`, crush). Mining those indexes the
+ *  harness's own documentation as if it were the agent's memory, and it then
+ *  outranks the agent's real notes in every recall. Only `memory.md` (and its
+ *  identity header) is memory. */
+const MINE_IGNORE_LINES = [
+  'settings.json', 'cursor.json', 'inbox/', 'outbox/',
+  '.claude/', '.codex/', '.pi-agent/', '.opencode/', '.crush-data/', 'crush.json'
+];
 
 /** Idempotently ensure `<agentDir>/.gitignore` excludes the non-memory files.
  *  Writes only the missing lines (append-only) so it's safe to call every cycle. */
@@ -56,9 +66,77 @@ export interface MemoryStatus {
 
 const MINE_INTERVAL_MS = 180_000; // re-mine changed memories every 3 min
 const MINE_TIMEOUT_MS = 10 * 60_000; // hard cap per mine (first run downloads the embedding model)
+/** Floor between two PATH probes. Resolution costs a 3 s login-shell spawn on
+ *  the MAIN process and the memoryStatus IPC asks for a fresh one on every
+ *  MemoryPanel mount/toggle — a miss must not be re-probed per click. */
+const BIN_RECHECK_MS = 30_000;
+
+// ─── binary resolution (module-level: one probe per process, not per manager) ──
+
+let binCache: string | null | undefined;
+let binProbedAt = 0;
+
+/**
+ * Absolute path to the `mempalace` CLI, or null when it isn't installed.
+ *
+ * Module-level and cached: agents are told to run a BARE `mempalace`, resolved
+ * against the PTY's PATH, which is not the same set of places this probe looks
+ * (uv/brew/pip shims often aren't on a GUI-launched app's PATH, and vice versa).
+ * Baking this absolute path into the injected agent prompt — exactly what the
+ * knowledge graph already does with KG_CLI — is what makes the green READY dot
+ * mean "the command the agent was told to type actually resolves".
+ */
+export function memoryBin(): string | null {
+  if (binCache !== undefined) return binCache;
+  binProbedAt = Date.now();
+  let found: string | null = null;
+  const isWin = process.platform === 'win32';
+  // 1) Ask the shell/PATH resolver. Windows has no POSIX shell + uses `where`
+  //    and a `.exe` suffix; everything else goes through the login shell.
+  try {
+    if (isWin) {
+      const res = spawnSync('where', ['mempalace'], { encoding: 'utf8', timeout: 3000 });
+      const p = res.stdout?.trim().split(/\r?\n/)[0]?.trim();
+      if (p && existsSync(p)) found = p;
+    } else {
+      const res = spawnSync(process.env.SHELL ?? '/bin/zsh', ['-ilc', 'which mempalace'], {
+        encoding: 'utf8', timeout: 3000
+      });
+      const p = res.stdout?.trim().split('\n').pop();
+      if (p && existsSync(p)) found = p;
+    }
+  } catch { /* fall through */ }
+  // 2) Probe common install locations (uv tool / homebrew / pip).
+  if (!found) {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
+    const candidates = isWin
+      ? [
+          join(home, '.local', 'bin', 'mempalace.exe'),
+          join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Python', 'Scripts', 'mempalace.exe')
+        ]
+      : [
+          `${home}/.local/bin/mempalace`,
+          '/opt/homebrew/bin/mempalace',
+          '/usr/local/bin/mempalace'
+        ];
+    for (const c of candidates) if (c && existsSync(c)) { found = c; break; }
+  }
+  binCache = found;
+  return found;
+}
+
+/** Invalidate the resolved path so the next memoryBin() probes again — but only
+ *  when probing can change the answer. A cached path that still exists cannot
+ *  have moved, and a miss is re-probed at most every BIN_RECHECK_MS, so the
+ *  "user just installed mempalace" case still recovers without paying a 3 s
+ *  main-process stall for every panel toggle. */
+export function resetMemoryBin(): void {
+  if (binCache && existsSync(binCache)) return;
+  if (binCache !== undefined && Date.now() - binProbedAt < BIN_RECHECK_MS) return;
+  binCache = undefined;
+}
 
 export class MemoryManager {
-  private binCache: string | null | undefined;
   private mineTimer: NodeJS.Timeout | null = null;
   private initStarted = false;
   /** True while a mineNow() pass is in flight — serializes palace writers. */
@@ -77,45 +155,9 @@ export class MemoryManager {
   }
 
   /** Resolve the mempalace CLI against the user's PATH + common uv/pip spots. */
-  bin(): string | null {
-    if (this.binCache !== undefined) return this.binCache;
-    let found: string | null = null;
-    const isWin = process.platform === 'win32';
-    // 1) Ask the shell/PATH resolver. Windows has no POSIX shell + uses `where`
-    //    and a `.exe` suffix; everything else goes through the login shell.
-    try {
-      if (isWin) {
-        const res = spawnSync('where', ['mempalace'], { encoding: 'utf8', timeout: 3000 });
-        const p = res.stdout.trim().split(/\r?\n/)[0]?.trim();
-        if (p && existsSync(p)) found = p;
-      } else {
-        const res = spawnSync(process.env.SHELL ?? '/bin/zsh', ['-ilc', 'which mempalace'], {
-          encoding: 'utf8', timeout: 3000
-        });
-        const p = res.stdout.trim().split('\n').pop();
-        if (p && existsSync(p)) found = p;
-      }
-    } catch { /* fall through */ }
-    // 2) Probe common install locations (uv tool / homebrew / pip).
-    if (!found) {
-      const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
-      const candidates = isWin
-        ? [
-            join(home, '.local', 'bin', 'mempalace.exe'),
-            join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Python', 'Scripts', 'mempalace.exe')
-          ]
-        : [
-            `${home}/.local/bin/mempalace`,
-            '/opt/homebrew/bin/mempalace',
-            '/usr/local/bin/mempalace'
-          ];
-      for (const c of candidates) if (c && existsSync(c)) { found = c; break; }
-    }
-    this.binCache = found;
-    return found;
-  }
+  bin(): string | null { return memoryBin(); }
   /** Force re-resolution (e.g. after the user installs mempalace). */
-  resetBinCache(): void { this.binCache = undefined; }
+  resetBinCache(): void { resetMemoryBin(); }
 
   available(): boolean { return this.bin() !== null; }
   enabled(): boolean { return this.getSettings().enabled; }
@@ -200,6 +242,31 @@ export class MemoryManager {
         this.lastMined.set(id, mtime);
         await this.mineAgent(agentDir, id); // one writer at a time
       }
+    } finally {
+      this.mining = false;
+    }
+  }
+
+  /** Re-mine ONE agent's wing right now, ignoring the mtime cache.
+   *
+   *  Called after a condense rewrites `memory.md`: everything the reflector
+   *  evicted is still sitting in the palace, so until the wing is mined against
+   *  the NEW file, `mempalace search` keeps returning superseded decisions that
+   *  no longer exist in the memory they came from. The mine loop would get there
+   *  within ~3 min on the mtime change, but a rewrite is exactly the moment the
+   *  index is most wrong, so don't wait for the tick. */
+  async remineAgent(id: string): Promise<void> {
+    const home = this.getHome();
+    if (!this.active() || !home || !id) return;
+    this.lastMined.delete(id); // stale either way — the next tick retries if we bail
+    const agentDir = join(home, 'hive', 'agents', id);
+    const mem = join(agentDir, 'memory.md');
+    if (!existsSync(mem)) return;
+    if (this.mining) return; // single writer — the in-flight pass or next tick covers it
+    this.mining = true;
+    try {
+      try { this.lastMined.set(id, statSync(mem).mtimeMs); } catch { this.lastMined.delete(id); }
+      await this.mineAgent(agentDir, id);
     } finally {
       this.mining = false;
     }

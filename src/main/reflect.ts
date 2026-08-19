@@ -5,8 +5,16 @@
  * but never shrinks it. This service finishes that job: on an in-process timer it
  * finds memory files that crossed a size/section threshold and rewrites them into
  * a bounded 3-region shape — pinned durable facts (never touched), one rolling
- * recursive summary, and the newest K verbatim sections — using a cheap headless
- * `claude -p` (Haiku) summarization of the evicted tail.
+ * recursive summary, and the newest K verbatim sections — by having Haiku
+ * summarize the evicted tail.
+ *
+ * That summarization is NOT headless `claude -p`: runHiddenClaude spawns a full
+ * ephemeral interactive PTY (see hiddenClaude.ts), deliberately, so the call
+ * draws on the user's interactive plan quota instead of metered Agent SDK
+ * credit. The cost model follows from that — the tokens are already paid for,
+ * but each condense pays a whole TUI boot + idle-settle in wall-clock (and one
+ * session slot), which is why the thresholds are conservative and why a
+ * repeatedly-failing file gets backed off rather than retried every interval.
  *
  * Why in-process (Electron main), NOT launchd: launchd-spawned shells are blocked
  * by macOS TCC from `~/Documents`; only this process has the folder grant. So the
@@ -15,24 +23,38 @@
  * Safety is layered so a bad LLM pass can NEVER lose data:
  *   backup-first (lossless cold copy) → verify-don't-trust gate → atomic swap.
  * If any check fails the original file is left byte-for-byte untouched and the
- * only side effect is a `condense-abort` log line. The miner re-indexes the new
- * file automatically on the next tick because its mtime changed (memory.ts).
+ * only side effect is a `condense-abort` log line. On a successful rewrite the
+ * `onCondensed` hook re-mines that agent's wing immediately — the mtime change
+ * would get there on the miner's next tick anyway, but until it does the palace
+ * still serves the text we just evicted (memory.ts).
  *
  * Runs in the Electron main process.
  */
 import {
   existsSync, statSync, readdirSync, readFileSync, writeFileSync,
-  mkdirSync, copyFileSync, renameSync, openSync, fsyncSync, closeSync
+  mkdirSync, copyFileSync, renameSync, openSync, fsyncSync, closeSync, rmSync
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { runHiddenClaude } from './hiddenClaude';
+import { resolveCommand } from './shellEnv';
 
 /** Total memory.md budget — mirrors the janitor's CONTEXT_BUDGET_BYTES (128 KB). */
 const BUDGET_BYTES = 131_072;
 /** Cheap tail-summarizer (DECIDED by god). The verify gate covers quality. */
 const CONDENSE_MODEL = 'claude-haiku-4-5';
-/** Hard cap so a wedged headless run can't stall the reflect loop. */
+/** Hard cap so a wedged hidden run can't stall the reflect loop. */
 const DEFAULT_TIMEOUT_MS = 180_000;
+/** How many `hive/backups/<stamp>/` generations to keep. Every condense ATTEMPT
+ *  writes a full copy of every memory.md it touches (up to 128 KB each) and
+ *  nothing ever removed them, so the directory grew without bound inside the
+ *  hive repo. Twenty is far more history than a condense ever needs to undo. */
+const KEEP_BACKUPS = 20;
+/** First retry delay after a failed condense, doubling per consecutive failure
+ *  up to BACKOFF_MAX_MS. A file that reliably fails — the model keeps answering
+ *  with a heading, the rewrite never verifies — used to burn one whole session
+ *  every interval, forever. */
+const BACKOFF_BASE_MS = 60 * 60_000;
+const BACKOFF_MAX_MS = 24 * 60 * 60_000;
 
 /** The fixed region headings of the bounded memory shape (the stable contract). */
 const PINNED_HEADING = '## 📌 Durable facts (pinned — never condensed)';
@@ -98,6 +120,10 @@ export class MemoryReflector {
   /** True while a reflectNow() pass is in flight — serializes the loop (a slow
    *  LLM pass must not overlap the next interval tick), mirroring MemoryManager. */
   private reflecting = false;
+  /** agentId → consecutive failures + the earliest time to try again. */
+  private backoff = new Map<string, { fails: number; nextAt: number }>();
+  /** One log line per process when the floor has no claude — not one per tick. */
+  private warnedNoClaude = false;
 
   /**
    * @param getHome      Lazily resolve harnessHome so reflection follows config.
@@ -105,13 +131,17 @@ export class MemoryReflector {
    * @param getMemoryEnv Extra env (the shared MemPalace path) merged into the call.
    * @param getSettings  Reflect tunables (interval + thresholds), read each tick.
    * @param appendLog    Sink for `condense`/`condense-abort` events (hive log.jsonl).
+   * @param onCondensed  Optional: fired with the agent id after a file is actually
+   *                     rewritten, so the semantic index can re-mine that wing —
+   *                     the evicted text is still in the palace until it does.
    */
   constructor(
     private getHome: () => string | null,
     private getCommand: () => string,
     private getMemoryEnv: () => Record<string, string>,
     private getSettings: () => ReflectSettings,
-    private appendLog: (event: Record<string, unknown>) => void
+    private appendLog: (event: Record<string, unknown>) => void,
+    private onCondensed?: (id: string) => void
   ) {}
 
   // — lifecycle (mirrors MemoryManager) —
@@ -141,6 +171,17 @@ export class MemoryReflector {
     const home = this.getHome();
     if (!home) return [];
     if (this.reflecting) return [];
+    // Nothing below can work without the Claude CLI — the condense session is
+    // driven with Claude-only flags. Check ONCE per pass, before any file I/O.
+    if (!claudeAvailable(this.getCommand())) {
+      // Warn once: an unexplained "my memory never condenses" is otherwise
+      // invisible, since the loop just keeps ticking over an empty pass.
+      if (!this.warnedNoClaude) {
+        this.warnedNoClaude = true;
+        console.warn(`[reflect] no usable claude CLI for "${this.getCommand()}" — memory condensing is off`);
+      }
+      return onlyId ? [{ id: onlyId, condensed: false, reason: 'no-claude-cli' }] : [];
+    }
     const agentsDir = join(home, 'hive', 'agents');
     if (!existsSync(agentsDir)) return [];
     const settings = this.getSettings();
@@ -152,23 +193,37 @@ export class MemoryReflector {
     const results: ReflectResult[] = [];
     try {
       for (const id of ids) {
+        // A manual call is the user asking — it ignores both the trigger and
+        // the backoff. The autonomous loop honors both.
+        if (!onlyId && (this.backoff.get(id)?.nextAt ?? 0) > Date.now()) continue;
         const mem = join(agentsDir, id, 'memory.md');
         if (!existsSync(mem)) continue;
         let bytes = 0;
         let text = '';
         try {
           bytes = statSync(mem).size;
-          // A manual single-agent call condenses on demand (skips the trigger);
-          // the autonomous loop honors the threshold.
           if (!onlyId && !this.shouldCondense(bytes, mem, settings)) continue;
           text = readFileSync(mem, 'utf8');
         } catch { continue; }
-        results.push(await this.condense(home, id, mem, text, settings));
+        const result = await this.condense(home, id, mem, text, settings);
+        this.noteOutcome(result);
+        results.push(result);
       }
     } finally {
       this.reflecting = false;
     }
     return results;
+  }
+
+  /** Record the attempt against the per-agent backoff. `nothing-to-evict` is a
+   *  free deterministic skip (no session spawned) — everything else that failed
+   *  cost a real attempt, so double the wait before the next one. */
+  private noteOutcome(r: ReflectResult): void {
+    if (r.condensed) { this.backoff.delete(r.id); return; }
+    if (r.reason === 'nothing-to-evict') return;
+    const fails = (this.backoff.get(r.id)?.fails ?? 0) + 1;
+    const wait = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (fails - 1));
+    this.backoff.set(r.id, { fails, nextAt: Date.now() + wait });
   }
 
   /** The dual trigger (DECIDED): bytes > pct% of budget, OR many-section sprawl
@@ -207,6 +262,7 @@ export class MemoryReflector {
       this.logAbort(id, 'backup-failed', String(e));
       return { id, condensed: false, reason: 'backup-failed', oldBytes };
     }
+    pruneBackups(join(home, 'hive', 'backups'));
 
     // 2) SUMMARIZE the (condensed + evicted) tail via headless Haiku.
     let summary: { condensed: string; hoist: string[] };
@@ -247,7 +303,10 @@ export class MemoryReflector {
         evicted: evict.length, kept: keep.length, hoisted: summary.hoist.length, backup
       });
     } catch { /* logging is best-effort */ }
-    // The miner re-indexes within its next cycle — mtime changed, no extra wiring.
+    // Re-index NOW rather than waiting for the miner's mtime tick: until the wing
+    // is re-mined, every chunk we just evicted is still searchable in the palace
+    // and still outranking the summary that replaced it.
+    try { this.onCondensed?.(id); } catch { /* best-effort */ }
     return { id, condensed: true, reason: 'condensed', oldBytes, newBytes };
   }
 
@@ -280,8 +339,13 @@ export class MemoryReflector {
       model: CONDENSE_MODEL,
       cwd: home,
       command: this.getCommand(),
-      // Pure text transform — must never touch the repo or shell out.
-      disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Bash'],
+      // Pure text transform — must never touch the repo, shell out, or reach the
+      // network. The input is one agent's own notes, which may quote web pages it
+      // scraped; the session runs with permissions bypassed, so a prompt injection
+      // hiding in them would otherwise have WebFetch to post the pinned durable
+      // facts it was just handed. (hiddenClaude unions the network tools in too —
+      // they are named here because THIS call is the one holding the secrets.)
+      disallowedTools: ['Edit', 'Write', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch', 'Task'],
       env: this.getMemoryEnv(),
       timeoutMs: DEFAULT_TIMEOUT_MS,
     });
@@ -399,9 +463,11 @@ export function verify(args: {
   return { ok: true };
 }
 
-/** Pull `{condensed, hoist}` out of `claude -p --output-format json` output.
- *  Two layers: the CLI envelope `{result: "<text>"}`, then the model's strict
- *  JSON (tolerating an accidental ```json fence). Returns null on any failure. */
+/** Pull `{condensed, hoist}` out of the hidden session's final assistant text.
+ *  Two layers, because the same helper also parses a `--output-format json` CLI
+ *  envelope `{result: "<text>"}` if one ever shows up: unwrap that if present,
+ *  then the model's strict JSON (tolerating an accidental ```json fence).
+ *  Returns null on any failure. */
 export function parseSummary(stdout: string): { condensed: string; hoist: string[] } | null {
   const raw = stdout.trim();
   if (!raw) return null;
@@ -418,6 +484,38 @@ export function parseSummary(stdout: string): { condensed: string; hoist: string
     const hoist = Array.isArray(obj.hoist) ? obj.hoist.filter((x): x is string => typeof x === 'string') : [];
     return { condensed: obj.condensed, hoist };
   } catch { return null; }
+}
+
+/** Can this floor actually run a condense? The pass drives the CLAUDE CLI
+ *  specifically — `--model claude-haiku-4-5`, `--permission-mode`,
+ *  `--disallowedTools` are its flags, not a shared contract — but the command it
+ *  gets is the floor's `defaultCommand`, which may be codex/gemini/qwen or a
+ *  claude that was never installed. Both cases used to spawn a doomed PTY every
+ *  interval, forever. Cheap enough to re-ask each pass (once per intervalMs), so
+ *  installing claude mid-session starts working on its own. */
+export function claudeAvailable(command: string): boolean {
+  const binary = (command || 'claude').trim().split(/\s+/)[0] || 'claude';
+  // Name check first — it costs nothing and rules out every non-Claude engine
+  // before we pay for a PATH probe.
+  if (!/(^|[\\/])claude(\.[a-z]+)?$/i.test(binary)) return false;
+  // resolveCommand hands back the input unchanged when it can't resolve it, and
+  // every path it DOES return was existsSync-checked, so this one test covers both.
+  return existsSync(resolveCommand(binary));
+}
+
+/** Keep only the newest KEEP_BACKUPS `hive/backups/<stamp>/` generations.
+ *  Stamps are `20260606T110912Z`, so lexicographic sort IS chronological.
+ *  Best-effort: a backup we fail to delete is never worth failing a condense. */
+function pruneBackups(root: string): void {
+  try {
+    const stamps = readdirSync(root, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+    for (const old of stamps.slice(0, Math.max(0, stamps.length - KEEP_BACKUPS))) {
+      try { rmSync(join(root, old), { recursive: true, force: true }); } catch { /* next time */ }
+    }
+  } catch { /* no backups dir yet, or unreadable — nothing to prune */ }
 }
 
 /** `20260606T110912Z` — matches the janitor's backup-dir stamp format. */
