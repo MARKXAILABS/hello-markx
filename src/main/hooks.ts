@@ -5,8 +5,9 @@
  * shim (see HOOK_SHIM in hive.ts) that forwards the hook payload to the Unix
  * domain socket this server listens on. We then:
  *   - drive avatar state from PreToolUse/PostToolUse/Notification/etc., and
- *   - report lifecycle boundaries while renderer-side guarded queues deliver
- *     inbox work only after the session reaches a safe idle prompt.
+ *   - own the Stop boundary: unread hive mail is handed back as a guarded
+ *     block-to-continue (#5, `drainAtStop`), so an agent drains its inbox with no
+ *     renderer attached and without anything typing into its input line.
  *
  * AUTHENTICATED. The socket is a Unix-domain socket / named pipe, so ANY local
  * process could connect and post a payload claiming any `agent_id` — enough to
@@ -85,6 +86,11 @@ function sha256(s: string): Buffer {
  *  unthrottled line per rejection would bury the log it is meant to explain. */
 const REJECT_LOG_INTERVAL_MS = 10_000;
 
+/** How long a turn must run before its Stop is worth a desktop toast (#42).
+ *  Below this the human is almost certainly still watching the terminal, and a
+ *  notification per turn-end is how a floor teaches its operator to mute it. */
+const LONG_TURN_MS = 2 * 60_000;
+
 export class HookServer {
   private server: Server | null = null;
   /** agentId → the live session's transcript file, learned from hook payloads.
@@ -102,6 +108,12 @@ export class HookServer {
   private rejected = 0;
   private lastRejectLog = 0;
 
+  /** agentId → when its current turn started (the last UserPromptSubmit, or the
+   *  last Stop when nothing else marked a boundary). Drives the "long task
+   *  finished" toast (#42): a Stop is only worth interrupting a human for when
+   *  the human has actually been waiting. */
+  private turnStartedAt = new Map<string, number>();
+
   constructor(
     private hive: HiveManager,
     private getWebContents: () => WebContents | null,
@@ -110,7 +122,12 @@ export class HookServer {
     private control?: ControlRegistry,
     /** Circuit breaker (Lane A #6.6b) — fed the hook-derived signals (session id,
      *  repeated identical tool calls). Optional so the server still runs without it. */
-    private breaker?: CircuitBreaker
+    private breaker?: CircuitBreaker,
+    /** #5 — the guarded inbox drain at the Stop boundary (DeliveryService).
+     *  Optional so tests (and a hive-less run) get the old plain Stop. */
+    private drainAtStop?: (agentId: string) => { block: boolean; reason?: string },
+    /** #42 — put an agent in front of the human when they click its toast. */
+    private focus?: (agentId: string) => void
   ) {}
 
   start(): void {
@@ -287,14 +304,44 @@ export class HookServer {
       this.breaker?.recordCompactEnd(agentId);
     }
 
+    // Turn clock for the "long task finished" toast (#42). A prompt submission is
+    // the only unambiguous start-of-turn boundary the hook stream exposes.
+    if (event === 'UserPromptSubmit' && agentId && !this.turnStartedAt.has(agentId)) {
+      this.turnStartedAt.set(agentId, Date.now());
+    }
+
     if ((event === 'Stop' || event === 'SubagentStop') && agentId) {
       // Respect any upstream Stop hook that already re-entered this boundary.
       if (p.stop_hook_active) { this.emit(agentId, event, p); return {}; }
-      // Never turn unread hive mail into a forced continuation at Stop. That old
-      // path bypassed terminal-draft/HITL safety and could spend credits while a
-      // user was answering a question. Inbox files remain durable; the renderer
-      // wakes the agent later through its guarded idle-only delivery path.
-      this.notify(agentId ?? 'Agent', 'finished — idle');
+      // A SubagentStop is a sub-agent finishing INSIDE the parent's turn: the turn
+      // is not over, so neither the inbox drain (whose continuation would land in
+      // the subagent) nor the turn clock applies to it.
+      if (event === 'SubagentStop') { this.emit(agentId, event, p); return {}; }
+      const turnMs = this.closeTurn(agentId);
+      // #5 — the GUARDED inbox drain, restored. Unread hive mail becomes this
+      // turn's continuation instead of rotting until something types a nudge, and
+      // it types NOTHING: the agent's own turn carries the work, so nothing can
+      // land on the human's input line.
+      //
+      // The old unguarded version was removed for a real reason — it bypassed the
+      // terminal-draft/HITL gate and could spend credits while a human was
+      // mid-answer. DeliveryService now holds both guards main can actually check:
+      // the operator's auto-delivery pause, and the renderer's draft/picker veto
+      // (`hive:deliveryVeto`). Neither depends on a window being open, so the
+      // drain keeps working headless — which is the whole point of issue #5.
+      const drain = this.drainAtStop?.(agentId);
+      if (drain?.block && drain.reason) {
+        this.emit(agentId, event, p);
+        // Codex honours the same contract: block + reason = "continue, using
+        // reason as the next prompt" (see installCodexHooks in hive.ts).
+        return { decision: 'block', reason: drain.reason };
+      }
+      // #42 — an idle agent is the LEAST urgent thing that happens on this floor,
+      // and a toast for every turn-end trains the human to ignore all of them.
+      // Only a long task finishing is worth the interruption.
+      if (turnMs >= LONG_TURN_MS) {
+        this.notify(agentId, this.agentName(agentId), `finished after ${Math.round(turnMs / 60_000)} min`);
+      }
       this.emit(agentId, event, p);
       return {};
     }
@@ -347,16 +394,16 @@ export class HookServer {
       };
     }
 
-    // A Notification hook that means "the agent is blocked waiting for the user"
-    // (idle prompt) deserves a desktop toast too — distinct from a permission
-    // request, which surfaces natively in the agent's own Claude Code session
-    // (approvable remotely via /remote-control).
-    if (
-      event === 'Notification' &&
-      (p.notification_type === 'idle' ||
-        (p.message ?? '').toLowerCase().includes('waiting for your input'))
-    ) {
-      this.notify(agentId ?? 'Agent', p.message ?? 'needs your attention');
+    // #42 — EVERY Notification hook is a toast now, not just the idle one.
+    //
+    // This used to fire for `idle` alone and deliberately skipped permission
+    // requests, on the theory that they "surface natively in the agent's own
+    // Claude Code session". They do — in a session nobody is looking at. Blocked
+    // on a prompt is the single case where the floor genuinely cannot proceed
+    // without the human, so it is exactly the one that must reach them; idle is
+    // the case that can wait. Same `notifications` setting gates both.
+    if (event === 'Notification' && agentId) {
+      this.notify(agentId, this.agentName(agentId), p.message ?? 'needs your attention');
     }
 
     // Forward everything else to the renderer so avatars reflect real activity.
@@ -366,13 +413,33 @@ export class HookServer {
 
   /** Fire a native desktop notification — gated on the user's `notifications`
    *  setting. Only the OS toast is gated; the hive:hookEvent emit is always sent
-   *  so avatars/UI stay live regardless. Best-effort: never throw into the hook. */
-  private notify(title: string, body: string): void {
+   *  so avatars/UI stay live regardless. Best-effort: never throw into the hook.
+   *
+   *  CLICK-TO-FOCUS (#42): a toast that only says a name is a puzzle — the human
+   *  still has to find the agent. Clicking raises the floor and selects it. */
+  private notify(agentId: string | undefined, title: string, body: string): void {
     if (!this.getConfig().notifications) return;
     try {
       if (!Notification.isSupported()) return;
-      new Notification({ title, body }).show();
+      const n = new Notification({ title, body });
+      if (agentId) n.on('click', () => { try { this.focus?.(agentId); } catch { /* window gone */ } });
+      n.show();
     } catch { /* notifications unsupported on this platform — ignore */ }
+  }
+
+  /** The agent's display name for a toast title, falling back to its id. */
+  private agentName(agentId: string | undefined): string {
+    if (!agentId) return 'Agent';
+    try { return this.hive.registry().agents[agentId]?.name ?? agentId; }
+    catch { return agentId; }
+  }
+
+  /** Close the current turn and return how long it ran (0 when we never saw it
+   *  start — a first Stop after a restart must not read as an infinite task). */
+  private closeTurn(agentId: string): number {
+    const started = this.turnStartedAt.get(agentId);
+    this.turnStartedAt.delete(agentId);
+    return started ? Date.now() - started : 0;
   }
 
   /** Tell the renderer a tool call was gated/denied (#7C.1) so it can surface it
