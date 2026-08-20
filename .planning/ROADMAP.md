@@ -79,11 +79,16 @@ mean marking Phase 1 green against code that does not do what the criterion says
 **Success Criteria** (what must be TRUE):
   1. **Autonomy survives the window.** With the app window closed, a message composed in the
      UI still reaches its recipient's inbox and is typed into that agent's terminal, and an
-     agent that goes idle mid-queue is still woken. The dead Stop-drain is either live under
-     a guard or deleted along with the doc claims that describe it — `grep` finds no doc
+     agent that goes idle mid-queue is still woken. The Stop-drain is either live under
+     a guard or deleted along with the doc claims that describe it — **corrected 2026-08-20 (D-37):
+     it is NOT dead. `index.ts:467` → `hooks.ts:332` → `delivery.ts:216` is live and guarded, with
+     four passing tests, so this branch is already satisfied; what remains is the queue-drain, the
+     idle-quiesce backstop, and HIVE.md's four stale denials** — `grep` finds no doc
      promising a code path that does not run. — FLOOR-02
   2. **What ships is on a supported runtime and its provenance is checkable.** The app runs on
-     Electron 38+ with `node-pty` and `better-sqlite3` rebuilt, and `npm test` is green on all
+     Electron 43.x — **restated 2026-08-20 (D-02): "38+" is stale, because Electron 38 is itself
+     end-of-life and a literal reading would let this phase ship the exact unsupported-runtime defect
+     FLOOR-03 exists to close. Read it as the latest-3 supported window as of 2026-08** — with `node-pty` and `better-sqlite3` rebuilt, and `npm test` is green on all
      three CI platforms with no `continue-on-error` added. A downloaded release artifact can be
      traced to this repo and this commit via `actions/attest-build-provenance` plus published
      checksums, and the release-link gate runs in the pipeline rather than being a documented
@@ -123,7 +128,30 @@ mean marking Phase 1 green against code that does not do what the criterion says
      is either supported or its limitation is stated in source, docs and UI — never a bare
      `return false`. `gh issue list --state open --label floor-inspection` returns only the
      four epics. — FLOOR-07, FLOOR-08, FLOOR-15, FLOOR-16, FLOOR-17, FLOOR-18, VERDICT-02, VERDICT-03
-**Plans**: TBD
+**Plans**: 21 plans across 9 waves
+
+Plans:
+- [ ] 01-01-PLAN.md — Electron 32 → 43.x runtime bump (gates every other plan) + the load-ts.cjs wave-0 loader fixes
+- [ ] 01-02-PLAN.md — GATE-01 — per-agent hook tokens bound to agent_id server-side; the floor-wide secret deleted
+- [ ] 01-03-PLAN.md — FLOOR-08 / VERDICT-02 / VERDICT-03 — the review obligation set; the refuse→redo hole; canReceiveInbox pinned
+- [ ] 01-04-PLAN.md — FLOOR-06 / FLOOR-17 — Sigstore attestation, the SmartScreen honesty sentence, bug template, two ADRs
+- [ ] 01-05-PLAN.md — FLOOR-11 — adopt the shared hiveTasks poller; pool drop-path audit; create test/repo-claims.test.cjs
+- [ ] 01-06-PLAN.md — RECORD-03 / RECORD-04 / FLOOR-09 — one ledger row semantics, clamped-diff spend over all rows, proxy-tier cost to the breaker
+- [ ] 01-07-PLAN.md — FLOOR-02a — the idle-quiesce backstop into main's delivery tick; HIVE.md's four stale denials deleted
+- [ ] 01-08-PLAN.md — FLOOR-02b — main owns the delivery queue and its drain; producers enqueue over IPC
+- [ ] 01-09-PLAN.md — FLOOR-10 — one budget arm in the existing breaker ladder; hive:tasks widened with the meter
+- [ ] 01-10-PLAN.md — FLOOR-07 / FLOOR-05 — the FTS5 memory index, the scope honesty pass, and the Settings log-folder button
+- [ ] 01-11-PLAN.md — FLOOR-04 — scrub the staged diff with redactSecrets at the single commit choke point
+- [ ] 01-12-PLAN.md — FLOOR-01 / FLOOR-13 — the AUTO chip in three renderings, the model field, the 1024px responsive collapse
+- [ ] 01-13-PLAN.md — FLOOR-18 / FLOOR-14 — declare the Codex-on-Windows limitation; route the non-Claude blocked transition to notify()
+- [ ] 01-14-PLAN.md — FLOOR-12 — the token migration, DESIGN.md §4.1, Rule 1b's two sites, and the four token-coupled files
+- [ ] 01-15-PLAN.md — FLOOR-12 sweep — the settings cluster (5 files, ~128 sites)
+- [ ] 01-16-PLAN.md — FLOOR-12 sweep — onboarding and pickers (5 files, ~100 sites)
+- [ ] 01-17-PLAN.md — FLOOR-12 sweep — command centre, tasks, triggers, IDE (16 files, ~177 sites) + all four NOT-exempt glyph cases
+- [ ] 01-18-PLAN.md — FLOOR-12 sweep — the remaining renderer (31 files, ~160 sites)
+- [ ] 01-19-PLAN.md — FLOOR-16 — ESLint flat config, two named rules, 9 suppressions made live, 4 dead disables deleted, CI gate at zero warnings
+- [ ] 01-20-PLAN.md — FLOOR-15 — renderToStaticMarkup component tests under node --test, zero new dependencies
+- [ ] 01-21-PLAN.md — D-45 / D-46 — the repo-fact accumulator asserted whole, the adversarial re-verify, and the mechanical phase gate
 **UI hint**: yes
 
 ### Phase 2: The Daemon and the Protocol
