@@ -6,9 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-# Node 22 everywhere. Node 24 ships no better-sqlite3 prebuild and breaks
-# node-pty's winpty gyp build on Windows; package.json `engines` and .nvmrc say
-# the same thing, and CONTRIBUTING.md explains the toolchain behind it.
+# Node 22 everywhere. The pin now rests on node-pty's winpty gyp build alone:
+# better-sqlite3 13.x is N-API and ships a prebuild for every platform in the
+# matrix, so it loads under Node 24 and the `test` jobs must never rebuild it -
+# doing so throws the prebuild away and forces a node-gyp compile that only the
+# Linux leg has a pinned Python for. package.json `engines` and .nvmrc agree.
 env:
   NODE_VERSION: "22"
 
