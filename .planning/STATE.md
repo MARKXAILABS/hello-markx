@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: "Phase 1 planned (23 plans/9 waves); red-team rounds 1-3 all NOT CLEAN (16 / ~35 / 40+ findings); 3 iterations exhausted; RED_TEAM_CLEAN=false; execute-phase BLOCKED — re-plan recommended"
+stopped_at: "Phase 1 planned (23 plans/9 waves); red-team rounds 1-3 all NOT CLEAN (16 / ~35 / ~50 findings); 3 iterations exhausted; RED_TEAM_CLEAN=false; execute-phase BLOCKED — re-plan recommended"
 last_updated: "2026-08-20T21:40:00.000Z"
 last_activity: 2026-08-20 — Roadmap extended to 6 phases over 71 v1 requirements; six
 progress:
