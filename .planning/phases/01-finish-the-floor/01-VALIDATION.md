@@ -27,7 +27,7 @@ created: 2026-08-20
 | **E2E** | `npm run e2e` = `playwright test` — Linux/xvfb only, `workers: 1`, `retries: 0` |
 | **Lint (after FLOOR-16)** | `npx eslint . --max-warnings 0` |
 | **Estimated runtime** | Unit suite seconds; e2e ~minutes (Electron boot under xvfb) |
-| **Baseline at plan time** | 55 files, 423 tests — 421 pass / 0 fail / 2 skip, green on ubuntu + windows + macos |
+| **Baseline at plan time** | 56 files, 426 tests — 422 pass / 0 fail / 4 skip (re-measured 2026-08-20 post origin/main merge), green on ubuntu + windows + macos |
 
 **Two shell gotchas that have already cost real time:**
 - `node --test test/` does **not** work. The glob `test/*.test.cjs` is expanded by the shell/Node, not treated as a directory. Always use the exact invocation.

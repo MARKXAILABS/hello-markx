@@ -670,11 +670,11 @@ Six templates live as top-level template literals in `src/main/hive.ts`, each wr
 | Const | Definition | Written at |
 |---|---|---|
 | `HOOK_SHIM` | `hive.ts:3078` | `hive.ts:682` |
-| `AGY_HOOK_SHIM` | `hive.ts:3140` | `hive.ts:2054` |
-| `PI_EXTENSION` | `hive.ts:3199` | `hive.ts:2189` |
-| `OPENCODE_PLUGIN` | `hive.ts:3238` | `hive.ts:2223` |
-| `PROXY_BRIDGE_SHIM` | `hive.ts:3275` | `hive.ts:684` |
-| `GROK_HOOK_SHIM` | `hive.ts:3496` | `hive.ts:2284` |
+| `AGY_HOOK_SHIM` | `hive.ts:3144` | `hive.ts:2054` |
+| `PI_EXTENSION` | `hive.ts:3205` | `hive.ts:2189` |
+| `OPENCODE_PLUGIN` | `hive.ts:3244` | `hive.ts:2223` |
+| `PROXY_BRIDGE_SHIM` | `hive.ts:3281` | `hive.ts:684` |
+| `GROK_HOOK_SHIM` | `hive.ts:3502` | `hive.ts:2284` |
 
 The template shape (`src/main/hive.ts:3074-3090`) — a header comment stating the shim's whole
 contract, then a backtick literal whose inner `\n` are escaped `\\n`:
@@ -813,7 +813,17 @@ export interface BreakerInput {
 
 **⚠ The breaker test is a different animal — read before writing FLOOR-10's test.**
 `test/breaker.test.cjs` does **not** use `node:test`, does **not** use `loadTs`, and **exits the
-process**:
+process**.
+
+**It is one of eight such files, not the only one.** Measured 2026-08-20 with
+`for f in test/*.test.cjs; do grep -qE "require\('node:test'\)" "$f" || echo "$f"; done` — 8 of the
+56 test files are hand-rolled harnesses: `agent-provider`, `breaker`, `kg-core`, `proc-kill`,
+`realtime-findcard`, `slack`, `transcript-usage`, `voice-messages` (all `test/*.test.cjs`). Treating
+breaker as *the* exception is how the phase's first plan set under-counted the fake-coverage surface.
+Seven of the eight exit non-zero when an assertion fails; `test/proc-kill.test.cjs` does not on
+Windows (`:28-32` exits 0 before asserting) — plan 05 task 3 fixes that file and pins the guard.
+
+The shape:
 
 ```js
 const { CircuitBreaker } = require(path.join(out, 'breaker.js'));   // :32 — hand-transpiled to a temp dir

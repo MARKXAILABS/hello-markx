@@ -287,7 +287,7 @@ No specific incompatibility found for any of the three. Reporting that honestly 
 
 ### Finding 7 — the D-08 blind spot, quantified
 
-`npm test` = `node --test test/*.test.cjs`, **55 test files**, 423 tests (TESTING.md, verified against `ls test/*.test.cjs | wc -l` → 55). Every one runs under plain Node with `electron` stubbed by `test/load-ts.cjs`. There is no assertion anywhere in that suite that can fail on an Electron version change — CONTEXT.md D-08 states this and it is correct.
+`npm test` = `node --test test/*.test.cjs`, **56 test files**, 426 tests (verified 2026-08-20 post-merge against `ls test/*.test.cjs | wc -l` → 56). Every one runs under plain Node with `electron` stubbed by `test/load-ts.cjs`. There is no assertion anywhere in that suite that can fail on an Electron version change — CONTEXT.md D-08 states this and it is correct.
 
 The only real-Electron job is `.github/workflows/e2e.yml`, `runs-on: ubuntu-latest`, `xvfb-run`, one spec (`e2e/smoke.spec.ts`), `workers: 1`, `retries: 0`. Windows and macOS get **zero** real-Electron coverage, and the Windows conpty path is exercised by no Electron-launching job on any platform.
 
@@ -984,7 +984,7 @@ And in `applyReviewVerdict` (`hive.ts:1794-1806`), on `refuse`, re-add the id �
 | Framework | Node built-in **`node --test`** (no Jest/Vitest/Mocha) + `node:assert/strict`. Playwright `@playwright/test ^1.62.1` for e2e only. |
 | Config file | **None** for the unit suite (behaviour comes from `package.json` scripts). `playwright.config.ts` for e2e. |
 | Quick run command | `npm run test:focused` — hand-listed ~33 files. **Never a gate** (`CONTRIBUTING.md`: *"a hand-written file list is how eight test files went unrun for months"*, #7). |
-| Full suite command | `npm test` = `node --test test/*.test.cjs` — 55 files, 423 tests (421 pass / 2 skip). **The gate.** |
+| Full suite command | `npm test` = `node --test test/*.test.cjs` — 56 files, 426 tests (422 pass / 0 fail / 4 skip). **The gate.** |
 | Typecheck | `npm run typecheck` = `tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json` |
 | E2E | `npm run e2e` = `playwright test` — Linux/xvfb only, one spec, `workers: 1`, `retries: 0` |
 | Lint (after FLOOR-16) | `npx eslint . --max-warnings 0` |
@@ -1128,7 +1128,7 @@ There is **no `./CLAUDE.md`** at the repo root (verified: `ls` of the root). The
 >
 > | OQ | Question | Resolved by | Form of resolution |
 > |----|----------|-------------|--------------------|
-> | 1 | `exhaustive-deps` finding count | **plan 20, tasks 1 and 4** | **measure-then-escalate** — see below |
+> | 1 | `exhaustive-deps` finding count | **plan 21, tasks 1 and 4** | **measure-then-escalate** — see below |
 > | 2 | `better-sqlite3` rebuild in CI | **plan 01 task 2** (rebuild trialled in wave 1) + **plan 10 task 1** (FTS5 test placement) | decided by measurement |
 > | 3 | How much of FLOOR-02's queue moves to main | **plan 08 task 1** | scoped to "main owns the queue and its drain; producers enqueue over IPC" |
 > | 4 | `capabilityLine` platform arg vs `remote` bit | **plan 13 task 2** | decided: the `remote` bit |
@@ -1137,14 +1137,14 @@ There is **no `./CLAUDE.md`** at the repo root (verified: `ls` of the root). The
 1. **How many `exhaustive-deps` warnings does this codebase actually produce?**
    - What we know: 131 `useEffect`, 45 `useCallback`, 26 `useMemo` across 130 renderer files, never linted. Nine sites already carry an `exhaustive-deps` disable, which is evidence the rule has real findings here.
    - What's unclear: whether the count is 15 or 150. `--max-warnings 0` (D-30) turns every one into phase work — either a genuine dependency fix or a reviewed suppression.
-   - Recommendation: make the **first** FLOOR-16 task `npx eslint . --max-warnings 999 --format compact`, paste the count, and only then decide whether the D-30 gate lands in this phase or whether the plan takes a documented, bounded suppression pass first. Do not commit to `--max-warnings 0` in CI before the number is on the page. This is the single largest unbounded item in the phase.
-   - **RESOLVED — owner: plan 20, task 1 (measure) and task 4 (gate).** The resolution is **measure-then-escalate**, not a number. Task 1 runs the count and pastes it before any gate exists; task 2 works that list; task 4 commits `--max-warnings 0` to CI only after the list is empty. If the count comes back large enough that resolving it would exceed plan 20's context budget, the executor stops and reports rather than weakening the rule set or taking a blanket suppression pass — that escalation is the planned outcome for the bad branch, not a plan failure. The number stays unknown here on purpose: writing a guess into this document would be the same false-claim class the phase exists to remove.
+   - Recommendation: make the **first** FLOOR-16 task an `npx eslint . --max-warnings 999 --format json` run piped through `node -e` for a per-rule tally, paste the count, and only then decide whether the D-30 gate lands in this phase or whether the plan takes a documented, bounded suppression pass first. Do not commit to `--max-warnings 0` in CI before the number is on the page. This is the single largest unbounded item in the phase.
+   - **RESOLVED — owner: plan 21, task 1 (measure) and task 4 (gate).** The resolution is **measure-then-escalate**, not a number. Task 1 runs the count and pastes it before any gate exists; task 2 works that list; task 4 commits `--max-warnings 0` to CI only after the list is empty. If the count comes back large enough that resolving it would exceed plan 21's context budget, the executor stops and reports rather than weakening the rule set or taking a blanket suppression pass — that escalation is the planned outcome for the bad branch, not a plan failure. The number stays unknown here on purpose: writing a guess into this document would be the same false-claim class the phase exists to remove.
 
 2. **Does the FTS5 test need a Node-ABI `better-sqlite3` rebuild in CI, and does that survive the 13.x bump?**
-   - What we know: `ci.yml` already does exactly this for `node-pty` (`npm rebuild node-pty`, with a Python 3.11 pin on Linux) for the same reason. 13.x is N-API, which should make a Node-ABI build *easier*, not harder.
-   - What's unclear: whether adding `npm rebuild better-sqlite3` makes the three `test` jobs materially slower, and whether prebuilds cover all three runners.
-   - Recommendation: try `npm rebuild better-sqlite3` in the `test` job during wave 1 (when the runtime is already being disturbed) rather than discovering it in wave 4. If it is slow, put the FTS5 assertion in the e2e job instead.
-   - **RESOLVED — owner: plan 01 task 2 (trial the rebuild in wave 1 and record the measured delta) and plan 10 task 1 (choose the FTS5 test's job from that recorded delta).** The wave-1/wave-5 split is exactly this recommendation, with the measured number carried forward in `01-01-SUMMARY.md`.
+   - **ANSWERED — no, and adding one is harmful.** Verified 2026-08-20 in a clean directory: `npm i better-sqlite3@13.0.3 --ignore-scripts` installs 8 N-API prebuilds (`prebuilds/{darwin,linux,linuxmusl,win32}-{x64,arm64}.node`) and nothing compiles; a plain-node `new Database(':memory:')` + `CREATE VIRTUAL TABLE … USING fts5(x)` then works (exit 0). The CI `test` jobs install with `npm ci --ignore-scripts`, which is exactly that condition. `npm rebuild better-sqlite3` **discards** the prebuild and synthesises `node-gyp rebuild`, which needs Python on macOS/Windows runners where `setup-python` is Linux-gated. Owners: plan 01 task 2 (asserts `grep -c "npm rebuild better-sqlite3" ci.yml` is `0`) and plan 10 task 2 (asserts the same value, and is barred from touching `ci.yml`).
+   - What we knew before: `ci.yml` already does exactly this for `node-pty` (`npm rebuild node-pty`, with a Python 3.11 pin on Linux) — but node-pty declares a real `install` script that exits 0 where a prebuild exists, so that step is a cheap no-op and better-sqlite3's would not be.
+   - Prebuild coverage, measured rather than assumed: 13.0.3 ships `darwin-{x64,arm64}`, `linux-{x64,arm64}`, `linuxmusl-{x64,arm64}` and `win32-{x64,arm64}` — all three CI runners are covered, and the install is a download, not a compile (`added 2 packages in 2s`).
+   - **RESOLVED — owner: plan 01 task 2 (does NOT add the step, and asserts `0`) and plan 10 task 2 (asserts the same `0` and is barred from touching `ci.yml`).** The earlier recommendation here — "trial `npm rebuild better-sqlite3` in the `test` job during wave 1 and measure the delta" — is **withdrawn**: it was written against 11.10.0, and on 13.x the rebuild is not a slower no-op but an actively destructive step. There is no delta to carry forward in `01-01-SUMMARY.md`; the number that matters is the `0`.
 
 3. **How much of FLOOR-02's queue must actually move to main?**
    - What we know: the loop is ~150 lines in `useHive.ts:819+`, but the **queue** lives in the Zustand store and has five renderer-side producers (composer, Slack ingress, context triggers, terminal work orders, voice bridge).
