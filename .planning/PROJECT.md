@@ -110,6 +110,37 @@ if the office quietly loses an agent's hour of work or stalls without telling yo
 - **Verification honesty**: an agent reporting "fixed" is a claim, not evidence. Every
   substantive change is re-verified by the orchestrator against source and a live test run.
   This rule exists because it has already caught real over-claims.
+- **Zero recurring cost; one-time purchases allowed**: the operator pays for a **Claude Code
+  subscription and nothing else on an ongoing basis**. A one-off fee is acceptable; a
+  subscription, an annual renewal or a metered API on a required path is not. A capability
+  that cannot be built under that rule is either built a different way or shipped with its
+  limitation stated out loud — never quietly reinterpreted into something cheaper.
+
+  **Total one-time cost of the entire roadmap: $0, or $25 if the operator later wants the
+  phone client in the Play Store.** Nothing else is chargeable.
+
+- **Mobile is Android-only**: no iOS. That removes the Apple Developer Program ($99/yr) and
+  notarization from scope entirely — `build/notarize.cjs` and the macOS signing secrets are
+  unused, not aspirational. The phone surface (DAEMON-02) is a **PWA** served by the daemon
+  and added to the Android home screen: $0, no store review, instant updates. A sideloaded
+  self-signed APK is also $0 — Android self-signing is free, unlike Windows. Google Play
+  distribution is the only chargeable route at **$25 one-time, never renewed**, and it gates
+  no engineering: the PWA ships first and Play is an optional later step.
+
+  What this rules out, concretely, and what replaces it:
+
+  | Wanted | Cost | Free path taken instead |
+  |---|---|---|
+  | Windows Authenticode signing | Azure Trusted Signing $9.99/mo; EV cert $400–900/yr | **`actions/attest-build-provenance`** (Sigstore, free on public repos) + published checksums, and README/CONTRIBUTING state plainly that Windows shows SmartScreen |
+  | macOS notarization | Apple Developer $99/yr | Unsigned build; document the right-click-open / `xattr -d com.apple.quarantine` path honestly |
+  | Phone access via a hosted tunnel | varies | Cloudflare Tunnel free tier, Tailscale free tier, or LAN-only with a self-signed cert — operator's choice, all free |
+  | Obsidian as a dependency | free personal, **paid for a 2+ person business** | Never a dependency. `<harnessHome>` is plain markdown with `[[wikilinks]]`; the office parses links itself. Obsidian, Logseq, VS Code or `grep` are all just optional viewers |
+  | Semantic recall via a hosted embeddings API | metered | Local embedding model (today's `mempalace`), or SQLite FTS5 in the already-open `PersistStore` |
+
+  **Non-Claude engines and the voice/Bedrock paths stay optional, never required.** Each of
+  the other ten engines needs its own subscription, so the code supports them but the project
+  never assumes them. This is also the honest reason PARITY-03's four `live-unverified`
+  bridges stay marked: verifying them needs paid accounts this project does not have.
 
 ## Key Decisions
 

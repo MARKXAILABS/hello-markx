@@ -130,6 +130,15 @@ dmg:
 #   AZURE_CERT_PROFILE           the certificate profile inside that account
 #   AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET   (Entra service principal)
 # Until those exist the Windows installers ship unsigned and users hit SmartScreen.
+#
+# And they are NOT expected to exist. This project runs at zero recurring cost — see
+# .planning/PROJECT.md "Constraints" — and every route to Authenticode is paid (Azure
+# Trusted Signing $9.99/mo, EV certificates $400-900/yr, Apple Developer $99/yr for
+# notarization). So the block above is a deliberate OPT-IN left wired for the day someone
+# chooses to pay, not an oversight or a TODO. The free substitute that carries most of the
+# real value is build provenance via actions/attest-build-provenance (Sigstore, free on
+# public repos) plus published checksums: a user can prove an artifact came from this repo
+# and this commit. What that does NOT buy is SmartScreen suppression, and the docs say so.
 win:
   icon: build/icon.ico
   target:

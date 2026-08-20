@@ -23,8 +23,15 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       commits it, so it never reaches git history — #10
 - [ ] **FLOOR-05**: An operator can open the log folder from Settings without knowing where
       Electron puts it — #13
-- [ ] **FLOOR-06**: Releases are signed on Windows and carry build provenance, and the
-      release-link gate runs in the pipeline — #15
+- [ ] **FLOOR-06**: A downloaded release can be proven to come from this repo and this
+      commit, and the release-link gate runs in the pipeline — #15
+      *(**Scope changed deliberately.** #15 asked for Windows code signing. Every route to
+      that is paid — Azure Trusted Signing $9.99/mo, EV certs $400–900/yr, Apple Developer
+      $99/yr — and this project's zero-recurring-cost constraint forbids it. The free path
+      that delivers most of the actual value is `actions/attest-build-provenance` (Sigstore,
+      free on public repos) plus published checksums: a user can verify the artifact came
+      from this commit. What it does **not** buy is SmartScreen suppression, so the docs must
+      say so plainly. Revisit only if the operator chooses to pay.)*
 - [ ] **FLOOR-07**: Memory recall is scoped per agent/project, and the SQLite FTS index the
       docs promise actually exists in the already-open `PersistStore` — #16, #31, #32
 - [ ] **FLOOR-08**: "Done" is verified by someone other than the agent that claimed it, and
@@ -53,8 +60,13 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 - [ ] **DAEMON-01**: The floor runs with no window open — agents spawn, mail moves, failover
       happens, entirely in the main process
-- [ ] **DAEMON-02**: An operator can reach their floor from a phone over an authenticated
-      connection, and see and act on what needs them
+- [ ] **DAEMON-02**: An operator can reach their floor from an **Android** phone over an
+      authenticated connection, and see and act on what needs them. Delivered as a **PWA**
+      served by the daemon — added to the home screen, no app store, no cost. Verification
+      needs a real device on the network (operator-supplied); a localhost-verified auth path
+      is the honest fallback if that is unavailable at plan time.
+      *(iOS is out of scope, which removes Apple's $99/yr entirely. A Play Store build is a
+      $25 one-time option later and gates nothing.)*
 - [ ] **DAEMON-03**: Inbound Telegram/Discord messages route onto the existing webhook/Slack
       rails so an operator can answer an agent from their phone
 - [ ] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
