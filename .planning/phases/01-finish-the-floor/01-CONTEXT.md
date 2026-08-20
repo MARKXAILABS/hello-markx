@@ -557,7 +557,7 @@ step is a re-plan, not a fourth patch round.**
 |---|---|---|
 | 1 | 16 | — |
 | 2 | ~35 (11 BLOCKER) | Yes — 3 found (plans 01/10 contradiction, proc-kill, same-wave handoff) |
-| 3 | 40+ across 5 of 6 lenses (15 BLOCKER) | Yes — at least 5, three traceable to round-2's own edits |
+| 3 | ~50 across all 6 lenses (16 BLOCKER) | Yes — at least 5, three traceable to round-2's own edits |
 
 The defect rate is not converging. Round 3's fix-introduced defects include three from this
 orchestrator's round-2 edits: a forward reference to a "fail-open bullet" that was never written; a
@@ -622,8 +622,23 @@ blocks; no `depends_on` pointing at the same or a later wave and no cycles; **no
 reconciliation exact (566 + 38 = 604 occurrences, 61 files, none orphaned); requirements coverage
 complete; and every cross-wave SUMMARY field a later plan reads is actually required to be written.
 
-**(b) executability was still running when this entry was written.** Its findings are additive, not
-decisive.
+**(b) executability** — plan 23's `rebuild step` "preservation" criterion expects `0` and the live
+value is `1`, because the only hit is the round-2 **prohibition sentence itself**
+(`01-VALIDATION.md:147`). Its own prose says a non-zero result means the fix was reverted and orders
+a STOP, so the wave-9 executor's only path to green is deleting the prohibition. Introduced by the
+fix wave. Also: the `mktemp` fix and seventeen repo-root `> sweep.tap` writes landed in the SAME
+commit — plans 14-20 all redirect to the identical filename, six of them concurrently in wave 7 under
+one shared tree, so a plan can grep a wave-mate's half-written counter block and grade the wrong run;
+and round 2's `$BASE` finding survived its own fix, because `BASE=`/`SHAS=` are bound in `<action>`
+prose while the criteria that consume them are separate shell invocations — unbound, both emit empty
+stdout, which the criteria read as PASS.
+
+Lens (b) also re-ran the entire numeric substrate and found it sound: every `mktemp` TAP form
+captures the exit code correctly and every per-file baseline matches (12/14/16/5/8), full suite
+`426 / 422 / 0 / 4`, M1 `604`, M1d `1`, M1x `0`, `continue-on-error` 4 raw / 2 effective,
+`ipcMain` 157, `setInterval` 20, the `PixelButton` hash exact. Of every "today N" baseline it could
+run across plans 01-22, exactly one was wrong — the `rebuild step` claim above. **The measurements
+this plan set rests on are trustworthy; the criteria built on top of them are not.**
 
 ### Recommendation
 
