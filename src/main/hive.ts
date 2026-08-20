@@ -3086,6 +3086,10 @@ process.stdin.on('end', () => {
   let payload = {};
   try { payload = JSON.parse(data || '{}'); } catch (_) {}
   if (!payload.agent_id) payload.agent_id = process.env.AGENT_ID || null;
+  // The socket authenticates on possession of this value (hooks.ts authorized()).
+  // Without it EVERY hook is rejected and the whole floor goes quiet — no status,
+  // no cost, no idle detection. Set it from the env main puts on the agent PTY.
+  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
   const sock = process.env.HIVE_SOCK;
   if (isStatus) {
     // Status-line mode: Claude Code pipes the session status JSON (incl.
@@ -3154,6 +3158,8 @@ process.stdin.on('end', () => {
   const payload = {
     hook_event_name: event,
     agent_id: agentId,
+    // See HOOK_SHIM: without this the socket rejects every payload.
+    sock_token: process.env.HIVE_SOCK_TOKEN || '',
     session_id: agy.conversationId,
     transcript_path: agy.transcriptPath,
     cwd: Array.isArray(agy.workspacePaths) ? agy.workspacePaths[0] : undefined,
@@ -3524,6 +3530,8 @@ process.stdin.on('end', () => {
   const payload = {
     hook_event_name: names[grok.hookEventName] || grok.hookEventName || 'Unknown',
     agent_id: agentId,
+    // See HOOK_SHIM: without this the socket rejects every payload.
+    sock_token: process.env.HIVE_SOCK_TOKEN || '',
     session_id: grok.sessionId,
     cwd: grok.cwd || grok.workspaceRoot,
     tool_name: grok.toolName,
