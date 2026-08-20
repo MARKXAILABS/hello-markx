@@ -3,7 +3,7 @@ phase: 1
 slug: finish-the-floor
 status: draft
 nyquist_compliant: false
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-08-20
 ---
 
@@ -128,14 +128,32 @@ CI link:**
 
 Test infrastructure that must exist before the requirements depending on it:
 
-- [ ] `test/load-ts.cjs` — **lazy-download fix.** `requireElectron()` calls `require('electron')`
-      (verified, `load-ts.cjs:30`) expecting a throw under `npm ci --ignore-scripts`. Electron 43's
-      `index.js` may download the ~100 MB binary instead. Read `require.cache` directly — which is
-      what the function's own comment says it exists for. **Wave 1, first commit, proven green on
-      the OLD Electron before the version changes.**
-- [ ] `test/load-ts.cjs` — `.tsx` resolution in `resolveTs()` + `ts.JsxEmit.React` (D-25).
-      **Wave 1**, folded into the Electron plan since that plan already owns this file.
-      Blocks FLOOR-01, FLOOR-07 (panel), FLOOR-13, FLOOR-15.
+- [x] `test/load-ts.cjs` — **lazy-download fix. DONE, plan 01-01 task 1** (see 01-01-SUMMARY.md
+      for the commit SHA). `requireElectron()` no longer calls the real loader: it
+      resolves the id with `require.resolve('electron')` and reads `require.cache[id]?.exports`,
+      falling back to the stub. Evidence, on the UNBUMPED Electron 32 tree:
+      `grep -vE "^\s*(//|\*|/\*)" test/load-ts.cjs | grep -c "require('electron')"` → `0`
+      (baseline `1`; raw `grep -c` also `0`, baseline `2`), and a live probe showed an injected
+      `require.cache['electron']` still winning (`probeElectron() -> INJECTED`).
+      `npm test` EXIT=0, TAP `# tests 426 / # pass 422 / # fail 0 / # skipped 4 / # todo 0` on
+      win32; `npm run typecheck` EXIT=0.
+- [x] `test/load-ts.cjs` — `.tsx` resolution in `resolveTs()` + **`ts.JsxEmit.ReactJSX`**
+      (D-25). **DONE, plan 01-01 task 1.** `resolveTs()` now also tries `${base}.tsx` and
+      `path.join(base, 'index.tsx')`, and `compilerOptions` carries `jsx: ts.JsxEmit.ReactJSX`.
+      **The constant was wrong in this document and is corrected here**: `tsconfig.web.json:7` sets
+      `"jsx": "react-jsx"` (automatic runtime) and only 1 of 63 renderer `.tsx` files imports
+      `React`, so `ts.JsxEmit.React` emits `React.createElement(...)` and every component would
+      throw `ReferenceError: React is not defined` at render time. Verified 2026-08-21 by
+      transpiling `export const A = () => <div>hi</div>` both ways —
+      `React` → `React.createElement("div", null, "hi")`;
+      `ReactJSX` → `require("react/jsx-runtime")` + `(0, jsx_runtime_1.jsx)("div", …)`.
+      Evidence: `grep -c "JsxEmit.ReactJSX" test/load-ts.cjs` → `1`,
+      `grep -cE "JsxEmit[.]React([^J]|$)" test/load-ts.cjs` → `0`,
+      `grep -c "tsx" test/load-ts.cjs` → `4`; and a live probe loaded a `.tsx` entry whose
+      `./Widget` (`${base}.tsx`) and `./sub` (`dir/index.tsx`) imports both resolved, rendering
+      `<div class="w">hi markx</div><span>b</span>` through `renderToStaticMarkup` with no
+      `React` binding in scope.
+      Unblocks FLOOR-01, FLOOR-07 (panel), FLOOR-13, FLOOR-15.
 - [ ] `test/repo-claims.test.cjs` — the D-45 repo-fact accumulator, following the existing
       `test/ci-config.test.cjs` / `test/main-hardening.test.cjs` / `test/engine-parity.test.cjs`
       precedent. Accumulated by **plan 05 (wave 2) → plan 07 (wave 3) → plan 10 (wave 5)**, and

@@ -19,25 +19,28 @@ const cache = new Map();
  * do not exist, which is why the three CI platforms used to collect three different test
  * counts (357 / 343 / 287) and "the suite passes" meant something different on each.
  *
- * Order matters: ask for the REAL module first so a test that injects the API into
- * require.cache still wins (test/config-secrets.test.cjs does exactly that, and needs its
- * own userData dir). Only when that yields no usable object do we fall back to the stub
- * below, whose job is to let modules LOAD — not to make them behave. Anything a test needs
- * to assert on should be injected, not reached through the stub.
+ * A test that injects the API into require.cache before calling loadTs must still win
+ * (test/config-secrets.test.cjs does exactly that, and needs its own userData dir). Only
+ * when there is no injection do we fall back to the stub below, whose job is to let modules
+ * LOAD — not to make them behave. Anything a test needs to assert on should be injected,
+ * not reached through the stub.
  */
 function requireElectron() {
+  // Electron 42+ downloads the ~100 MB binary on FIRST REQUIRE rather than in postinstall —
+  // electron/index.js ends `module.exports = getElectronPath()`, and getElectronPath()
+  // spawns install.js whenever path.txt or dist/<exe> is missing. Every CI test job installs
+  // with `npm ci --ignore-scripts`, so calling the real loader here would pull that download
+  // on every runner (or burn the network timeout on an offline one). The only reason this
+  // ever asked for the real module was to let an injected fake win — require.cache answers
+  // that directly, so never touch the loader.
+  let id;
   try {
-    const real = require('electron');
-    // A test that needs real behaviour injects the API into require.cache before calling
-    // loadTs (see test/config-secrets.test.cjs) — that path must win, so we ask for the
-    // real module FIRST and only fall back below. Outside Electron an uninjected
-    // `require('electron')` resolves to the binary's PATH STRING, not the API, which is
-    // useless to a module doing `import { app } from 'electron'` — hence the typeof check.
-    if (real && typeof real === 'object') return real;
+    id = require.resolve('electron');
   } catch {
-    // "Electron failed to install correctly" — the binary was never downloaded, which is
-    // exactly what `npm ci --ignore-scripts` gives every CI runner.
+    return electronStub();
   }
+  const injected = require.cache[id]?.exports;
+  if (injected && typeof injected === 'object') return injected;
   return electronStub();
 }
 
@@ -64,7 +67,15 @@ function resolveTs(fromDir, request) {
   const base = request.startsWith('@shared/')
     ? path.resolve(__dirname, '..', 'src/shared', request.slice('@shared/'.length))
     : path.resolve(fromDir, request);
-  for (const candidate of [base, `${base}.ts`, path.join(base, 'index.ts')]) {
+  // .tsx is load-bearing (D-25): the renderer component suite loads .tsx modules through
+  // this loader, and every relative import inside them resolves back through here too.
+  for (const candidate of [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    path.join(base, 'index.ts'),
+    path.join(base, 'index.tsx')
+  ]) {
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
   }
   return null;
@@ -83,7 +94,14 @@ function loadFile(filename) {
       // builtin (`import path from 'node:path'`) compiles to `path_1.default`,
       // which is undefined at run time — the module loads fine and then explodes
       // on first use. Test harness only; no shipped code compiles through here.
-      esModuleInterop: true
+      esModuleInterop: true,
+      // ReactJSX, and no other JsxEmit constant. tsconfig.web.json sets "jsx": "react-jsx"
+      // (the automatic runtime) and only 1 of 63 renderer .tsx files imports React, so the
+      // classic-runtime constant would emit React.createElement(...) and every component
+      // would throw "React is not defined" at RENDER time — not at compile time, which is
+      // why the wrong one fails silently. ReactJSX emits require("react/jsx-runtime"),
+      // which is self-contained.
+      jsx: ts.JsxEmit.ReactJSX
     },
     fileName: filename,
     reportDiagnostics: true
