@@ -67,6 +67,10 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       is the honest fallback if that is unavailable at plan time.
       *(iOS is out of scope, which removes Apple's $99/yr entirely. A Play Store build is a
       $25 one-time option later and gates nothing.)*
+- [ ] **DAEMON-03**: Inbound Telegram/Discord messages route onto the existing webhook/Slack
+      rails so an operator can answer an agent from their phone
+- [ ] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
+      agent card
 - [ ] **DAEMON-05**: The same PWA is reachable **over the public tunnel**, not only the LAN —
       operator's explicit decision. Because this puts an authenticated door to a floor of
       agents with bypassed permissions on the public internet, it must hold a higher bar than
@@ -78,10 +82,6 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
         the operator seeing it
       - `stop()` genuinely closes it — today it cannot, and `slack.ts` carries a comment
         admitting so. That is a prerequisite, not a nice-to-have.
-- [ ] **DAEMON-03**: Inbound Telegram/Discord messages route onto the existing webhook/Slack
-      rails so an operator can answer an agent from their phone
-- [ ] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
-      agent card
 
 ### PARITY — Every engine a first-class citizen
 
