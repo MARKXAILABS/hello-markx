@@ -334,7 +334,9 @@ Verified by reading each anchor. Requirement IDs in **bold** are the ones that m
 
 Uncontended files (safe filler for any wave): `src/main/breaker.ts`, `src/main/telemetry.ts`, `src/main/delivery.ts`, `src/main/db.ts`, `src/main/memory.ts`, `src/main/pty.ts`, `src/renderer/src/design/tokens.css`, `src/renderer/src/store/*.ts`, `.github/workflows/release.yml`, `.github/ISSUE_TEMPLATE/*`, `docs/adr/*`, `HIVE.md`, `eslint.config.js` (new).
 
-### Recommended wave plan
+#> **[SUPERSEDED — the plan set is 23 plans across 9 waves, not six. This section is kept for its reasoning only; every wave NUMBER in it is wrong. `grep "^wave:" 01-*-PLAN.md` is the authority, and `01-VALIDATION.md` carries the corrected per-wave gates.]**
+
+## Recommended wave plan
 
 Six waves. Every wave respects the token table. Requirement coverage is complete (23/23).
 
@@ -401,7 +403,7 @@ FLOOR-12's aria-label sweep touches nearly every `.tsx` and cannot share T-TSX w
 
 Order matters and is not negotiable:
 1. **FLOOR-12** (aria-label half) — every `<button>` is final by now.
-2. **FLOOR-16** — ESLint lints the final tree. Linting before wave 5 means re-linting after it.
+2. **FLOOR-16** — ESLint lints the final tree. **Wave 8, not wave 6** — plan 21 is what creates `eslint.config.js` and the `lint` script, and running the gate earlier makes `npx` fetch an unpinned ESLint mid-phase. Linting before the sweep means re-linting after it.
 3. **FLOOR-15** — static-render tests assert the final markup of the final components.
 4. **FLOOR-14** (residual non-Claude blocked notification).
 5. The D-45 repo-fact test file, accumulating every negative grep from all 23 requirements.
@@ -1053,7 +1055,7 @@ Test infrastructure that must exist before the requirements that depend on it:
 - [ ] `test/load-ts.cjs` — lazy-download fix (Finding 1). **Wave 1**, first commit, verified green on the **old** Electron before the version bump.
 - [ ] `test/repo-claims.test.cjs` — the D-45 repo-fact file, following the `test/ci-config.test.cjs` / `test/main-hardening.test.cjs` / `test/engine-parity.test.cjs` precedent. Accumulated across waves 2–6, asserted whole in wave 6. Turns the end-of-phase sweep into `npm test` on three platforms plus one `gh` query.
 - [ ] `test/renderer-components.test.cjs` — the `renderToStaticMarkup` harness (D-24). **Wave 6**, after components are final.
-- [ ] `test/db-fts.test.cjs` — needs a **real** SQLite handle; the existing `FakeDatabase` cannot serve it. **Wave 4**, and budget the ABI-rebuild step (see Pitfall 5).
+- [ ] `test/db-fts.test.cjs` — needs a **real** SQLite handle; the existing `FakeDatabase` cannot serve it. **Wave 5** (plan 10), and budget NO ABI-rebuild step (see Pitfall 5).
 - [ ] Verify `test/breaker.test.cjs` exists; if not, create it before FLOOR-10. `evaluate()` is pure and the fake-clock DI style is established.
 - [ ] `test/hooks-notify.test.cjs` — or extend an existing hooks test — with a DI `notify` fake for FLOOR-14.
 - [ ] No framework install needed. No coverage tool exists and none is being added — this repo's confidence comes from the 3-platform matrix plus the "never mock the thing under test" rule, not from a coverage number.

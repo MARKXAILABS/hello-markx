@@ -108,8 +108,14 @@ PWA (Phase 2), and any engine verification that needs a paid account this projec
   a `Map<token, agentId>`, derives the agent id **server-side**, and DISCARDS `payload.agent_id`
   entirely.** This removes the mismatch-check branch rather than adding one, and the same Map handles
   revocation on PTY exit. Identical on Windows/macOS/Linux (env vars have no platform surface), and
-  the six shim templates need **no body change** — they already read
-  `process.env.HIVE_SOCK_TOKEN`; only what main puts in each PTY's `opts.env` changes.
+  **CORRECTED by red-team round 3 (2026-08-21): only THREE of the six shim templates read the
+  token.** Measured — `HOOK_SHIM` 1, `AGY_HOOK_SHIM` 1, `GROK_HOOK_SHIM` 1, `PI_EXTENSION` 0,
+  `OPENCODE_PLUGIN` 0, `PROXY_BRIDGE_SHIM` 0, for both `HIVE_SOCK_TOKEN` and the `sock_token`
+  payload field. So "no body change" is false for three of six, and those three are **already
+  dead-hooked at HEAD** — a pre-existing defect this phase inherits, not one GATE-01 introduces
+  (`hooks.ts:139-157` installs one connection handler and there is no unauthenticated side path).
+  Plan 06 task 4 lands all three shim bodies; plan 23 asserts `1 1 1 1 1 1` after. For the three
+  that DO read it, only what main puts in each PTY's `opts.env` changes.
 - **D-12 — Deleting `process.env.HIVE_SOCK_TOKEN = hookSockToken()` at `src/main/index.ts:5534` is
   MANDATORY, not optional.** Verified present at that exact line. `src/main/pty.ts:665` spreads
   `process.env` into every PTY, so leaving that line makes every other part of D-11 cosmetic — every
@@ -524,7 +530,7 @@ changing something other than what round 1 named, because the fix pass found the
 | (b) executability | HTML-escaped ampersands in three `<automated>` tags | literal `&&` in plans 01, 17, 18 |
 | (b) executability | `npx eslint --format compact` removed in ESLint 9 | built-in `json` formatter; the compact republish fails the plan's own publisher bar |
 | (b) executability | Nine `exhaustive-deps` suppressions vs `--max-warnings 0` unreachable | `--no-inline-config` resolver decides keep/delete per file, mechanically |
-| (a) correctness | `HIVE.md:85-103` stale Stop-drain denials | **nine** stale claims, not three — all gated by plan 07 |
+| (a) correctness | `HIVE.md:85-103` stale Stop-drain denials | **twelve** stale claims, not three — all gated by plan 07 (nine after round 2, a twelfth found in round 3) |
 | (a) correctness | GATE-01's doc surface has no owning plan | **four** surfaces, not three — split across plans 02 and 04 |
 | (a) correctness | `sweepTaskReviews`' `!previous.has(task.id)` | clause deleted by plan 03, with a test that fails against today's source |
 | (f) cross-plan | Plan 21 (w8) shifts `file:line` anchors plan 23 (w9) asserts | allowlist re-keyed to a `{file,text,count}` multiset + mutation proof |
