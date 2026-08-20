@@ -67,6 +67,17 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       is the honest fallback if that is unavailable at plan time.
       *(iOS is out of scope, which removes Apple's $99/yr entirely. A Play Store build is a
       $25 one-time option later and gates nothing.)*
+- [ ] **DAEMON-05**: The same PWA is reachable **over the public tunnel**, not only the LAN —
+      operator's explicit decision. Because this puts an authenticated door to a floor of
+      agents with bypassed permissions on the public internet, it must hold a higher bar than
+      the LAN path:
+      - off by default, and never enabled as a side effect of anything else
+      - a strong **generated** token, never a user-chosen password
+      - rate limiting and lockout on the auth endpoint
+      - the live public URL always visible in the UI, so the tunnel can never be up without
+        the operator seeing it
+      - `stop()` genuinely closes it — today it cannot, and `slack.ts` carries a comment
+        admitting so. That is a prerequisite, not a nice-to-have.
 - [ ] **DAEMON-03**: Inbound Telegram/Discord messages route onto the existing webhook/Slack
       rails so an operator can answer an agent from their phone
 - [ ] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
@@ -151,6 +162,7 @@ goals and success criteria each requirement rolls up into.
 | DAEMON-02 | Phase 2 | Pending |
 | DAEMON-03 | Phase 2 | Pending |
 | DAEMON-04 | Phase 2 | Pending |
+| DAEMON-05 | Phase 2 | Pending |
 | PARITY-01 | Phase 2 | Pending |
 | PARITY-02 | Phase 2 | Pending |
 | PARITY-03 | Phase 2 | Pending |
@@ -163,7 +175,7 @@ goals and success criteria each requirement rolls up into.
 | SCALE-05 | Phase 3 | Pending |
 
 **Coverage:**
-- v1 requirements: 32 total
+- v1 requirements: 33 total
 - Mapped to phases: 32 (Phase 1: 18 · Phase 2: 9 · Phase 3: 5)
 - Unmapped: 0 ✓
 

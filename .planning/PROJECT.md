@@ -116,8 +116,41 @@ if the office quietly loses an agent's hour of work or stalls without telling yo
   that cannot be built under that rule is either built a different way or shipped with its
   limitation stated out loud — never quietly reinterpreted into something cheaper.
 
-  **Total one-time cost of the entire roadmap: $0, or $25 if the operator later wants the
-  phone client in the Play Store.** Nothing else is chargeable.
+  **Total cost of the entire roadmap: $0.** Nothing is chargeable.
+
+- **Personal tool, run locally — not a published product**: one operator, one machine, no
+  distribution. This is a real scope constraint, not a footnote, and it demotes a whole
+  class of work:
+
+  - **Paid code signing and notarization are out**, on cost grounds rather than scope — see
+    the table above. FLOOR-06 delivers free Sigstore provenance and checksums instead.
+  - **Onboarding and the bug template serve one person** who has already onboarded.
+
+  **Operator decisions, taken 2026-08-20 against my recommendation and recorded so nobody
+  re-opens them as oversights:**
+
+  - **FLOOR-06 stays in full.** I proposed dropping the release pipeline as dead weight for a
+    tool nobody downloads. The operator kept it — the pipeline is ready if this is ever
+    published, and `check:links` plus provenance cost little once built.
+  - **The public tunnel stays supported.** I proposed LAN-plus-auth only, since exposing an
+    authenticated door to an agent floor on the public internet buys convenience the LAN path
+    already covers. The operator wants it. It is therefore built to a higher bar than the LAN
+    path, not the same one: **off by default; a strong generated token, never a
+    user-chosen password; rate limiting and lockout on the auth endpoint; the public URL
+    visible in the UI whenever it is live so it can never be up without the operator knowing;
+    and an explicit stop that actually closes it** — the existing `stop()` could not, which
+    was a real audit finding.
+
+  What it makes *more* important, because it is your machine and your repos:
+  reliability, blast-radius containment, cost control, memory that compounds across your own
+  projects, multi-floor isolation between your projects, and the GSD integration that matches
+  how you actually work.
+
+  Accessibility stays in scope regardless — the 8–12px text and missing focus rings are a
+  daily annoyance for the one person using this, not a compliance checkbox.
+
+  **Keep the repo public.** GitHub Actions is unmetered on public repositories and capped on
+  private ones, and CI is load-bearing here. There is nothing secret in it.
 
 - **Mobile is Android-only**: no iOS. That removes the Apple Developer Program ($99/yr) and
   notarization from scope entirely — `build/notarize.cjs` and the macOS signing secrets are
