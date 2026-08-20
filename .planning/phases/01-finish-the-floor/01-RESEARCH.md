@@ -19,7 +19,7 @@ Amendment notes raised by this research (detail in the sections below):
 |----------|----------------------|------|
 | D-06 (`better-sqlite3` bump is a *contingency*) | **Reclassify as near-certain** | better-sqlite3 11.10.0 compiles against **raw V8** (`v8::` in `src/better_sqlite3.cpp`, no N-API). Upstream reports 12.4.1 already failing at Electron 39 on a removed V8 API. 13.0.0 is the first N-API release and explicitly lists Electron 42–43. Plan the bump as work, not as a branch. |
 | D-28 (`eslint-plugin-react-hooks` ONLY, "two rules") | **Amend: needs a TS parser, and v7's preset is not two rules** | ESLint core cannot parse `.ts`/`.tsx` at all without a parser — `@typescript-eslint/parser` is **mandatory**, as a parser only. And `eslint-plugin-react-hooks@7`'s `configs.flat.recommended` now carries the React Compiler rule set (~17 rules), not two. Use an explicit two-rule config, not the preset. |
-| D-38(b) (four stale `HIVE.md` denials) | **Substance confirmed, one anchor off by one** | `:272` should read `:271`. A fourth anchor is `:124-126`, not `:126` alone. All four claims verified false against source. |
+| D-38(b) (stale `HIVE.md` denials) | **Substance confirmed; the SET IS TWELVE, not four** | Original four verified false against source (`:272` should read `:271`; the fourth anchor is `:124-126`, not `:126`). Red-team round 2 found five more in §2 decision 5; round 3 found a twelfth at `:184` (`main answers {} — never a forced continue`), false against `src/main/hooks.ts:332-337`. Plan 07 owns all twelve, freezes each as a whole clause (`grep -cF` — several contain `*` or backticks), and asserts `STALE_STOP_DRAIN_DENIALS.length === 12` so trimming the list to go green fails instead. |
 | D-40 / FLOOR-18 | **Confirmed** | `src/main/index.ts:269` is the bare `return false`, verbatim. |
 | VERDICT-03 | **Already satisfied in source** | `leastLoadedIdle` already filters on `canReceiveInbox` (`src/main/hive.ts:1746`). See "Requirements Already Satisfied". |
 
@@ -530,7 +530,12 @@ D-37 is confirmed (see § Requirements Already Satisfied). D-38's two remaining 
 - **Queue-drain**: `src/renderer/src/hooks/useHive.ts:819` through ~`:968` — roughly 150 lines with `FLUSH_COOLDOWN_MS`, `MAX_SEND_ATTEMPTS`, an `inFlight` Set, a `sendFailures` map, and a `dispatch()` that reads `messageQueues` and `removeQueuedMessage` from the Zustand store. Its own comment (`:806-818`) explains precisely why it stayed in the renderer: *"it holds messages the RENDERER produced (the composer, Slack ingress, the context triggers, terminal work orders, the voice bridge), it lives in renderer state, and main has no view of it."* **Moving the loop therefore requires moving the queue itself** — the store slice, its producers, and the `hive:deliveryVeto` contract that lets the two writers coexist. That is a data-ownership migration, not a code move. The pure policy is already extracted in `src/renderer/src/hooks/queueDelivery.ts` and tested (`test/queue-delivery.test.cjs`), which is the seam to reuse.
 - **Idle-quiesce backstop**: `useHive.ts:704-746` (effect "2e"), a `setInterval` at `QUIESCE_POLL_MS` that calls `window.cth.listPtys()` and flips `working` → `idle` after `QUIESCE_IDLE_MS`. This one is **much easier**: it reads `p.lastOutputAt`, which main already tracks, and consults `breakerLevel` and `bootGraceUntil` — both of which main also has. It is a near-mechanical move into `delivery.ts`'s tick. Land it first as the cheap half.
 
-**(b) Delete `HIVE.md`'s stale denials.** All four verified false against source. **Corrected anchors** (D-38(b)'s `:272` is off by one, and `:126` is the tail of a three-line block):
+**(b) Delete `HIVE.md`'s stale denials.** **The set is TWELVE, not four** — red-team round 2 found five
+more in §2 decision 5 and round 3 a twelfth at `:184` (`main answers {} — never a forced continue`,
+false against `src/main/hooks.ts:332-337`). `01-07-PLAN.md` carries the authoritative twelve-literal
+table with per-section attribution; treat this table as the original four only, and do not use it as
+the completeness bar. All four below verified false against source. **Corrected anchors** (D-38(b)'s
+`:272` is off by one, and `:126` is the tail of a three-line block):
 
 | Anchor | Stale text | Why it is now false |
 |---|---|---|

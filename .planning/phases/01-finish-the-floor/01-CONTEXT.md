@@ -259,7 +259,7 @@ PWA (Phase 2), and any engine verification that needs a paid account this projec
 - **D-38 — What FLOOR-02 actually still needs, therefore, is two things:** (a) move the
   **queue-drain** (`src/renderer/src/hooks/useHive.ts` effect #4, via `queueDelivery.ts`) and the
   **idle-quiesce backstop** into main — that is the requirement's real body and is not optional
-  either way; and (b) delete `HIVE.md`'s four surviving stale denials (`:126` "nothing calls that
+  either way; and (b) delete `HIVE.md`'s stale Stop-drain denials. **[UPDATED by red-team rounds 2-3: the set is TWELVE, not four.](#red-team-log)** Round 2 found five more in §2 decision 5, round 3 a twelfth at `HIVE.md:184` (`main answers {} — never a forced continue`, false against `src/main/hooks.ts:332-337`). Plan 07 owns all twelve and freezes each as a whole clause with `grep -cF`; anchors drift, so re-derive by content. The four originally named were (`:126` "nothing calls that
   today", `:229` the `⚠️ shipped, but not as planned` phase note, `:269` "Moot today", `:272`
   "`cursor.json` is seeded but never advanced"), which now contradict `ARCHITECTURE.md:56,201,307`
   inside the same repo. That contradiction *is* the "doc promising a code path that does not run"
@@ -361,7 +361,7 @@ the planner rather than pre-locked here:
 ### Subsystem docs touched by this phase
 - `DESIGN.md` §706 — states the 14px floor for user-facing text that FLOOR-12 enforces against
   `src/renderer/src/design/tokens.css:61-68`.
-- `HIVE.md` — **carries the four stale denials D-38(b) deletes** (`:126`, `:229`, `:269`, `:272`).
+- `HIVE.md` — **carries TWELVE stale Stop-drain denials that plan 07 deletes** (originally scoped as four: `:126`, `:229`, `:269`, `:272`; rounds 2-3 added five in §2 decision 5 and the §5 diagram line at `:184`). Plan 07's `files_modified` owns the file; plan 02 also edits it in wave 2, scoped to the §5 hook-socket paragraph `:191-194` only — a disjoint region, and plan 07 must preserve it.
 - `.planning/codebase/ARCHITECTURE.md` §§56, 201, 307 — describes the Stop-drain **correctly**; it
   is HIVE.md that contradicts it.
 - `docs/design/knowledge-graph.md` §§45, 191 — names SQLite FTS5 as the documented next step, and
