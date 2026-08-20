@@ -1119,31 +1119,49 @@ There is **no `./CLAUDE.md`** at the repo root (verified: `ls` of the root). The
 | A9 | `test/breaker.test.cjs` may not exist. Not verified by listing. | Validation Architecture | Nil — listed as a Wave 0 check. |
 | A10 | Suggested v26 electron-builder impacts on `mac.notarize: false` are inferred from release-note prose, not from running the tool against this config. | Finding 5 | Low — wave 1 runs the packager on three platforms, which settles it. |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> **Every question below has an owning plan and task in the final Phase 1 plan set.** None is a live
+> unknown at execution time. "Resolved" means *an owner is assigned and the resolution mechanism is
+> planned* — for OQ1 that mechanism is deliberately a measurement plus a decision gate, not a number,
+> because the number is genuinely unknowable until eslint runs for the first time in this repo.
+>
+> | OQ | Question | Resolved by | Form of resolution |
+> |----|----------|-------------|--------------------|
+> | 1 | `exhaustive-deps` finding count | **plan 20, tasks 1 and 4** | **measure-then-escalate** — see below |
+> | 2 | `better-sqlite3` rebuild in CI | **plan 01 task 2** (rebuild trialled in wave 1) + **plan 10 task 1** (FTS5 test placement) | decided by measurement |
+> | 3 | How much of FLOOR-02's queue moves to main | **plan 08 task 1** | scoped to "main owns the queue and its drain; producers enqueue over IPC" |
+> | 4 | `capabilityLine` platform arg vs `remote` bit | **plan 13 task 2** | decided: the `remote` bit |
+> | 5 | `pushFeed` no-op guard | **plan 05 task 1** | audit-then-decide; a guard with no dense subscriber is not added |
 
 1. **How many `exhaustive-deps` warnings does this codebase actually produce?**
    - What we know: 131 `useEffect`, 45 `useCallback`, 26 `useMemo` across 130 renderer files, never linted. Nine sites already carry an `exhaustive-deps` disable, which is evidence the rule has real findings here.
    - What's unclear: whether the count is 15 or 150. `--max-warnings 0` (D-30) turns every one into phase work — either a genuine dependency fix or a reviewed suppression.
    - Recommendation: make the **first** FLOOR-16 task `npx eslint . --max-warnings 999 --format compact`, paste the count, and only then decide whether the D-30 gate lands in this phase or whether the plan takes a documented, bounded suppression pass first. Do not commit to `--max-warnings 0` in CI before the number is on the page. This is the single largest unbounded item in the phase.
+   - **RESOLVED — owner: plan 20, task 1 (measure) and task 4 (gate).** The resolution is **measure-then-escalate**, not a number. Task 1 runs the count and pastes it before any gate exists; task 2 works that list; task 4 commits `--max-warnings 0` to CI only after the list is empty. If the count comes back large enough that resolving it would exceed plan 20's context budget, the executor stops and reports rather than weakening the rule set or taking a blanket suppression pass — that escalation is the planned outcome for the bad branch, not a plan failure. The number stays unknown here on purpose: writing a guess into this document would be the same false-claim class the phase exists to remove.
 
 2. **Does the FTS5 test need a Node-ABI `better-sqlite3` rebuild in CI, and does that survive the 13.x bump?**
    - What we know: `ci.yml` already does exactly this for `node-pty` (`npm rebuild node-pty`, with a Python 3.11 pin on Linux) for the same reason. 13.x is N-API, which should make a Node-ABI build *easier*, not harder.
    - What's unclear: whether adding `npm rebuild better-sqlite3` makes the three `test` jobs materially slower, and whether prebuilds cover all three runners.
    - Recommendation: try `npm rebuild better-sqlite3` in the `test` job during wave 1 (when the runtime is already being disturbed) rather than discovering it in wave 4. If it is slow, put the FTS5 assertion in the e2e job instead.
+   - **RESOLVED — owner: plan 01 task 2 (trial the rebuild in wave 1 and record the measured delta) and plan 10 task 1 (choose the FTS5 test's job from that recorded delta).** The wave-1/wave-5 split is exactly this recommendation, with the measured number carried forward in `01-01-SUMMARY.md`.
 
 3. **How much of FLOOR-02's queue must actually move to main?**
    - What we know: the loop is ~150 lines in `useHive.ts:819+`, but the **queue** lives in the Zustand store and has five renderer-side producers (composer, Slack ingress, context triggers, terminal work orders, voice bridge).
    - What's unclear: whether "moves to main" means moving the queue too (a data-ownership migration) or mirroring it (a sync problem). The requirement's success criterion — *"With the app window closed, a message composed in the UI still reaches its recipient's inbox"* — is satisfiable by a persisted main-side queue that the renderer *appends to*, which is much smaller than moving all five producers.
    - Recommendation: plan FLOOR-02 as **two** plans. (a) The idle-quiesce backstop → main: near-mechanical, main already has every input. (b) The queue-drain: start by defining the minimum that satisfies the criterion, which is very likely "main owns the queue and its drain; the renderer's producers enqueue over IPC". Do not start by porting 150 lines.
+   - **RESOLVED — owner: plan 07 (the quiesce backstop) and plan 08 (the queue drain), exactly the two-plan split recommended.** Plan 08's task 1 fixes the scope to "main owns the queue and its drain; the renderer's producers enqueue over IPC", and the renderer explicitly keeps the human-draft veto — the one job that stays on its side.
 
 4. **`capabilityLine` platform argument vs `remote` bit (D-40, explicitly left to the planner).**
    - What we know: `providerCapabilities`/`capabilityLine` live at `src/shared/providerAutomation.ts:258-289`; `:278` carries the ADR-0002 cache-safe marker; `test/engine-parity.test.cjs` and `test/provider-config.test.cjs` both assert on this surface.
    - Recommendation: **the `remote` bit.** A signature change ripples into two test files and every caller; a new boolean field does not. And it keeps the platform decision in main, which already knows the platform, rather than threading it through a module both processes import.
+   - **RESOLVED — owner: plan 13 task 2, which takes the `remote` bit.** `capabilityLine`'s signature stays stable and the platform decision is made at the call site in main, preserving ADR-0002's cache-safe roster position. D-40 left this to the planner; the planner has decided.
 
 5. **Does `pushFeed` (`store.ts:638`) need the same no-op guard as `updateAgent`?**
    - What we know: it reallocates `feeds` unconditionally, but fires per **tool line**, not per chunk, and is bounded by `FEED_MAX`.
    - What's unclear: whether any component subscribes to `feeds` densely enough for this to matter.
    - Recommendation: check subscribers; if none render `feeds` on the hot path, leave it and say so in the closing comment. A guard added without a subscriber is speculative work.
+   - **RESOLVED — owner: plan 05 task 1's drop-path and re-render audit.** The audit enumerates `feeds` subscribers and records a verdict; a guard is added only if a dense hot-path subscriber exists, and its absence is written into the closing comment rather than left implicit.
 
 ## Sources
 

@@ -128,7 +128,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
      is either supported or its limitation is stated in source, docs and UI — never a bare
      `return false`. `gh issue list --state open --label floor-inspection` returns only the
      four epics. — FLOOR-07, FLOOR-08, FLOOR-15, FLOOR-16, FLOOR-17, FLOOR-18, VERDICT-02, VERDICT-03
-**Plans**: 21 plans across 9 waves
+**Plans**: 22 plans across 9 waves
 
 Plans:
 - [ ] 01-01-PLAN.md — Electron 32 → 43.x runtime bump (gates every other plan) + the load-ts.cjs wave-0 loader fixes
@@ -148,10 +148,11 @@ Plans:
 - [ ] 01-15-PLAN.md — FLOOR-12 sweep — the settings cluster (5 files, ~128 sites)
 - [ ] 01-16-PLAN.md — FLOOR-12 sweep — onboarding and pickers (5 files, ~100 sites)
 - [ ] 01-17-PLAN.md — FLOOR-12 sweep — command centre, tasks, triggers, IDE (16 files, ~177 sites) + all four NOT-exempt glyph cases
-- [ ] 01-18-PLAN.md — FLOOR-12 sweep — the remaining renderer (31 files, ~160 sites)
-- [ ] 01-19-PLAN.md — FLOOR-16 — ESLint flat config, two named rules, 9 suppressions made live, 4 dead disables deleted, CI gate at zero warnings
-- [ ] 01-20-PLAN.md — FLOOR-15 — renderToStaticMarkup component tests under node --test, zero new dependencies
-- [ ] 01-21-PLAN.md — D-45 / D-46 — the repo-fact accumulator asserted whole, the adversarial re-verify, and the mechanical phase gate
+- [ ] 01-18-PLAN.md — FLOOR-12 sweep — the eight densest remaining renderer files (8 files, ~85 sites)
+- [ ] 01-19-PLAN.md — FLOOR-12 sweep — the rest of the renderer (23 files, ~75 sites), incl. the hoisted-object case
+- [ ] 01-20-PLAN.md — FLOOR-16 — ESLint flat config, two named rules, 9 suppressions made live, 4 dead disables deleted, CI gate at zero warnings
+- [ ] 01-21-PLAN.md — FLOOR-15 — renderToStaticMarkup component tests under node --test, zero new dependencies
+- [ ] 01-22-PLAN.md — D-45 / D-46 — the repo-fact accumulator asserted whole, the adversarial re-verify, and the mechanical phase gate
 **UI hint**: yes
 
 ### Phase 2: The Daemon and the Protocol
