@@ -462,3 +462,56 @@ the planner rather than pre-locked here:
 
 *Phase: 1-Finish the Floor*
 *Context gathered: 2026-08-20*
+
+---
+
+## Red-Team Log
+
+**Round 1 — NOT CLEAN — 2026-08-20** — lenses: (a) correctness/cardinal-invariant · (b) executability ·
+(c) security/trust-boundary · (d) scope/context-budget/runtime-gate · (e) test-quality/fake-coverage ·
+(f) cross-plan-contracts/wave-ordering. Six hostile source-grounded lenses, dispatched as parallel
+direct Agent calls.
+
+`RED_TEAM_CLEAN = false`. Auto-advance to execute-phase is **blocked** per the step-11.5 gate.
+
+### Root cause found, and fixed: the whole plan set was measured against a stale branch
+
+Branch `docs/codebase-map` was **19 ahead / 2 behind `origin/main`**. The two missing commits were
+PR #76 (`332ce01` + merge `19dbdfb`) — the fix that makes the six shim templates send
+`payload.sock_token`. Verified at the time: `grep -c "sock_token" src/main/hive.ts` returned **0**,
+while `hooks.ts authorized()` rejects any payload without it — i.e. on this branch the hook socket
+was fail-closed dead, and **D-11's premise ("the six shims already send it — no body change") was
+false here while true on main.**
+
+`origin/main` merged into the branch. Post-merge: `sock_token` in `hive.ts` = 3, test files 55 → 56,
+`npm test` = **426 tests / 422 pass / 0 fail / 4 skipped** (was 423/421/2). D-11's premise now holds.
+
+**Consequence the remaining work must absorb:** every baseline count, line anchor and site total in
+`01-RESEARCH.md`, `01-UI-SPEC.md`, `01-PATTERNS.md`, `01-VALIDATION.md` and all 23 plans was measured
+**pre-merge**. `hive.ts` gained 8 lines at `:3086`, so anchors below that point shift; test-count and
+`sock_token` baselines changed. A re-measure pass is required before execution.
+
+### Open BLOCKER/HIGH findings (must be closed before `RED_TEAM_CLEAN = true`)
+
+| Lens | Finding | Status |
+|---|---|---|
+| (c) security | Shims did not send `sock_token`; GATE-01 premise false on this branch | **FIXED** by the merge |
+| (c) security | D-13's qwen sidecar spawn (`hive.ts:1182`) has no owning plan — plan 02 is banned from `hive.ts` | OPEN |
+| (c) security | Shared shim `<hiveRoot>/bin/cth-hook.cjs` is one file for the whole floor and is not in `DENY_RULES`; agent A can append to it and harvest B's token | OPEN |
+| (b) executability | `&amp;&amp;` (HTML-escaped) in three `<automated>` tags — `01-01:231`, `01-17:245`, `01-18:242` | OPEN |
+| (b) executability | `npx eslint --format compact` removed in ESLint 9; plan 21 declares no `eslint-formatter-compact` | OPEN |
+| (b) executability | Plan 21 requires keeping all nine `exhaustive-deps` suppressions AND `--max-warnings 0` green; `CompletionToast.tsx:80`'s directive is unused → gate unreachable | OPEN |
+| (a) correctness | `HIVE.md:85-103` holds three more stale Stop-drain denials plan 07 is told not to touch; its four frozen literals go green over them | OPEN |
+| (a) correctness | GATE-01's doc surface (`SECURITY.md:34-39`, `ARCHITECTURE.md:469-475`, `INTEGRATIONS.md:116`) has no owning plan | OPEN |
+| (a) correctness | `sweepTaskReviews`' `!previous.has(task.id)` — a card created and finished inside one 60s sweep window is never reviewed; plan 03 preserves it verbatim | OPEN |
+| (f) cross-plan | Plan 21 (wave 8) inserts comment lines that shift `file:line` allowlist entries frozen by wave 7 and asserted literally by plan 23 in wave 9 | OPEN |
+| (f) cross-plan | Plan 21 task 2's real file set is the whole renderer (60 files with `useEffect`); it declares 13 and has no `git diff --stat` containment | OPEN |
+| (d) scope/gate | Plan 01 adds `npm rebuild better-sqlite3` to all three hard-gate CI jobs; 13.0.3 ships N-API prebuilds and no install script, so the step is unnecessary AND forces node-gyp on macOS/Windows, which have no Python pin | OPEN |
+| (d) scope/gate | The npm-10 lockfile rule has no working check — npm 9/10/11 all write `lockfileVersion: 3` | OPEN |
+| (d) scope/gate | Plan 01's stated fallback ("revert to 11.10.0") is the failure mode, not a recovery path | OPEN |
+| (e) fake-coverage | Plan 10's FTS5 test needs a Node-ABI `better-sqlite3`; a `t.skip` fallback would report green — `node --test` exits 0 on an all-skipped file | OPEN |
+| (e) fake-coverage | Plan 08's restart-durability test is satisfiable by an in-memory `Map` — no real file required | OPEN |
+| (e) fake-coverage | 8 of 56 test files are hand-rolled non-`node:test` harnesses, not 1; only `breaker.test.cjs` is flagged | OPEN |
+
+Full lens reports are in the session transcript. Nothing here is a wording nit; each entry either
+lets an executor do wrong work, ships a false claim, or produces coverage that cannot fail.
