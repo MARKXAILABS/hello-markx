@@ -25,7 +25,7 @@ created: 2026-08-20
 | **Full suite command** | `npm test` = `node --test test/*.test.cjs` |
 | **Typecheck** | `npm run typecheck` = `tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json` |
 | **E2E** | `npm run e2e` = `playwright test` — Linux/xvfb only, `workers: 1`, `retries: 0` |
-| **Lint (after FLOOR-16)** | `npx eslint . --max-warnings 0` |
+| **Lint (after FLOOR-16)** | `npm run lint` = `eslint . --max-warnings 0`. Both the script and `eslint.config.js` land in **plan 21, wave 8** — there is no linter in the tree before that (no `eslint.config.js`, no `.eslintrc*`, no `eslint` in `package.json`, verified 2026-08-20). Always the local install via `npm run lint`, **never bare `npx eslint`**, which fetches an unpinned ESLint from the registry. |
 | **Estimated runtime** | Unit suite seconds; e2e ~minutes (Electron boot under xvfb) |
 | **Baseline at plan time** | 56 files, 426 tests — 422 pass / 0 fail / 4 skip (re-measured 2026-08-20 post origin/main merge), green on ubuntu + windows + macos |
 
@@ -38,10 +38,21 @@ created: 2026-08-20
 ## Sampling Rate
 
 - **After every task commit:** `npm run test:focused` for the tight loop, **then** `npm test` before the task counts as done.
-- **After every plan wave:** `npm test` on all three platforms via `ci.yml`, plus `npm run typecheck`. After wave 6, add `npx eslint . --max-warnings 0`.
+- **After every plan wave:** `npm test` on all three platforms via `ci.yml`, plus `npm run typecheck`. After wave 8, add `npm run lint` (`eslint . --max-warnings 0`). **Wave 8, not earlier** — plan 21 is what creates `eslint.config.js` and the `lint` script; running the gate in wave 7 would make `npx` fetch an unpinned ESLint mid-phase and lint an unconfigured tree.
 - **After waves 1 and 4 additionally:** `npm run e2e`. Wave 1 changes the runtime; wave 4 changes the boot-time delivery path.
 - **Before `/gsd:verify-work`:** full suite green on three platforms, e2e green, lint green.
 - **No `continue-on-error` may be added to the matrix anywhere, for any reason.**
+- **Exit 0 is never sufficient evidence — read the counters.** `node --test` counts *skipped* tests in
+  its total and exits `0` when every test in a file is skipped, so a suite whose new tests are all
+  `{skip: '...'}` is indistinguishable from a passing one by exit code alone. Every gate that reports
+  `npm test` must report the TAP counters beside it:
+  `node --test --test-reporter=tap test/*.test.cjs | grep -E "^# (tests|pass|fail|skipped|todo) "`.
+  Name the TAP reporter explicitly — the default (spec) reporter prints `ℹ skipped 0`, so a criterion
+  grepping for `#` against it matches nothing and passes silently.
+  **The frozen skip baseline for this phase is `# skipped 4`** (measured 2026-08-20 post origin/main
+  merge, the same run recorded at `:30`). `# fail 0` and `# skipped` **≤ 4** — not `>=`, never `>=` —
+  are the standing floor. A `>=` skip clause permits skip growth by construction and is the exact
+  shape that lets a phase close green on skipped work.
 
 ---
 
@@ -96,12 +107,12 @@ CI link:**
 | FLOOR-11 | a single `hiveTasks` timer; no PTY-byte roster re-render | repo-fact | `test/repo-claims.test.cjs` | ❌ W0 |
 | FLOOR-11 | terminal pool cap + orphan sweep on every drop path | unit (pure) | `node --test test/terminal-*.test.cjs` | ✅ `terminalPoolPolicy` covered |
 | FLOOR-12 | no text token below 14px | repo-fact (parse `tokens.css`) | `test/repo-claims.test.cjs` | ❌ W0 |
-| FLOOR-12 | every icon `<button>` has an accessible name | repo-fact (ratio assertion) | `test/repo-claims.test.cjs` | ❌ W0 |
+| FLOOR-12 | every icon-only `<button>` has an `aria-label` | repo-fact (icon-only **rule** assertion — never a ratio or a count; `01-UI-SPEC.md:329-343` is binding and states a ratio test *would be wrong*, because adding `aria-label` to a text button overrides its visible label) | `test/repo-claims.test.cjs` | ❌ W0 |
 | FLOOR-13 | the four renderings agree on the field set, cost included | static render | `test/renderer-components.test.cjs` | ❌ W0 |
 | FLOOR-13 | `sidebarWidth` re-clamps on resize | unit (pure clamp fn) | `node --test test/renderer-runstate.test.cjs` | ✅ extend — extract clamp first |
 | FLOOR-14 | a blocked non-Claude agent produces a notify call | unit (DI `notify` fake) | `node --test test/hooks-notify.test.cjs` | ❌ W0 |
 | FLOOR-15 | 3–5 presentational components render to expected markup | static render | `node --test test/renderer-components.test.cjs` | ❌ W0 |
-| FLOOR-16 | lint is a hard gate at zero warnings | repo-fact + live | `test/ci-config.test.cjs` asserts step + flag; `npx eslint . --max-warnings 0` | ✅ extend / live |
+| FLOOR-16 | lint is a hard gate at zero warnings | repo-fact + live | `test/ci-config.test.cjs` asserts step + flag; `npm run lint` (local install — never bare `npx eslint`) | ✅ extend / live |
 | FLOOR-17 | bug template asks only for logs that exist; ADRs present | repo-fact | `test/repo-claims.test.cjs` | ❌ W0 |
 | FLOOR-18 | `capabilityLine` declares the Windows Codex gap | unit | `node --test test/engine-parity.test.cjs` | ✅ extend |
 | GATE-01 | agent A's token carrying `agent_id: 'B'` surfaces as A, or is dropped | integration (**real** socket / named pipe) | `node --test test/net-binding.test.cjs` | ✅ extend (D-16) |
@@ -127,14 +138,20 @@ Test infrastructure that must exist before the requirements depending on it:
       Blocks FLOOR-01, FLOOR-07 (panel), FLOOR-13, FLOOR-15.
 - [ ] `test/repo-claims.test.cjs` — the D-45 repo-fact accumulator, following the existing
       `test/ci-config.test.cjs` / `test/main-hardening.test.cjs` / `test/engine-parity.test.cjs`
-      precedent. Accumulated across waves 2–6, asserted whole in wave 6. This file is what turns
-      the end-of-phase sweep into `npm test` plus one `gh` query.
-- [ ] `test/renderer-components.test.cjs` — the `renderToStaticMarkup` harness (D-24). **Wave 6.**
+      precedent. Accumulated by **plan 05 (wave 2) → plan 07 (wave 3) → plan 10 (wave 5)**, and
+      **asserted whole by plan 23 (wave 9)**. This file is what turns the end-of-phase sweep into
+      `npm test` plus one `gh` query.
+- [ ] `test/renderer-components.test.cjs` — the `renderToStaticMarkup` harness (D-24). **Plan 22, wave 8.**
 - [ ] `test/db-fts.test.cjs` — needs a **real** SQLite handle; `test/config-secrets.test.cjs`'s
-      in-memory `FakeDatabase` has no FTS5 and cannot serve it. **Wave 4**, and budget the
-      Node-ABI `better-sqlite3` rebuild step.
+      in-memory `FakeDatabase` has no FTS5 and cannot serve it. **Plan 10, wave 5.**
+      **No `better-sqlite3` rebuild step is budgeted, and none may be added.** 13.0.3 is N-API,
+      ships eight prebuilds and declares no install script, so `npm ci --ignore-scripts` leaves a
+      loadable binary in place; `npm rebuild better-sqlite3` would *discard* that prebuild and
+      synthesise a `node-gyp rebuild`, which CI can only satisfy on Linux (`setup-python` is pinned
+      there only). Plan 01 task 2 and plan 10 both assert
+      `grep -c "npm rebuild better-sqlite3" .github/workflows/ci.yml` returns `0`.
 - [ ] `test/hooks-notify.test.cjs` — or extend an existing hooks test — with a DI `notify` fake
-      for FLOOR-14.
+      for FLOOR-14. **Plan 13, wave 6.**
 - [x] `test/breaker.test.cjs` — **verified present.** Extend rather than create.
 - [x] No framework install needed. No coverage tool exists and none is being added — confidence
       here comes from the three-platform matrix and the "never mock the thing under test" rule,
@@ -148,7 +165,7 @@ Test infrastructure that must exist before the requirements depending on it:
 |----------|-------------|-----------|-------------------|
 | App runs on Electron 43 with real PTY + real SQLite on Windows | FLOOR-03 | The unit suite stubs `electron`; the only real-Electron job is Linux-only. Structurally unsamplable in CI. | Build the app on the Windows machine, launch it, open a terminal pane, spawn an agent, confirm the PTY is live and a `better-sqlite3` write lands. Record the run as FLOOR-03's closure evidence. |
 | A published release artifact verifies against this repo and commit | FLOOR-06 | Requires a real tagged release and a real GitHub attestation. | After the next tag: `gh attestation verify <artifact> --repo MARKXAILABS/hello-markx`, paste the output. |
-| `exhaustive-deps` finding count across 131 `useEffect` / 45 `useCallback` / 26 `useMemo` | FLOOR-16 | Unmeasured at plan time. With `--max-warnings 0` every finding becomes phase work. | Run `npx eslint .` and paste the count **before** committing the CI gate. If the number is large, that is a planning input, not a surprise. |
+| `exhaustive-deps` finding count across 131 `useEffect` / 45 `useCallback` / 26 `useMemo` | FLOOR-16 | Unmeasured at plan time. With `--max-warnings 0` every finding becomes phase work. | Run `./node_modules/.bin/eslint .` (plan 21 task 1 installs it first; bare `npx eslint` would fetch an unpinned ESLint from the registry) and paste the count **before** committing the CI gate. If the number is large, that is a planning input, not a surprise. |
 | Codex remote control unavailable on Windows | FLOOR-18 | Upstream-blocked (`openai/codex#30372`, daemon lifecycle is Unix-only). Nothing to verify beyond the declaration. | Confirm the limitation appears in source comment, `capabilityLine`, and the docs engine table. |
 
 ---

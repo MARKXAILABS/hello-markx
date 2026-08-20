@@ -521,7 +521,7 @@ changing something other than what round 1 named, because the fix pass found the
 | (c) security | Shims did not send `sock_token`; GATE-01 premise false on this branch | the `origin/main` merge (PR #76) |
 | (c) security | D-13's qwen sidecar spawn has no owning plan | **plan 06 task 4, wave 3** — see D-13 above for why no wave-2 plan can carry it |
 | (c) security | Shared shim `<hiveRoot>/bin/cth-hook.cjs` unprotected | plan 02 task 2's PreToolUse gate (wider than `AGENT_DENY_RULES`, which is Claude-only) |
-| (b) executability | `&amp;&amp;` HTML-escaped in three `<automated>` tags | literal `&&` in plans 01, 17, 18 |
+| (b) executability | HTML-escaped ampersands in three `<automated>` tags | literal `&&` in plans 01, 17, 18 |
 | (b) executability | `npx eslint --format compact` removed in ESLint 9 | built-in `json` formatter; the compact republish fails the plan's own publisher bar |
 | (b) executability | Nine `exhaustive-deps` suppressions vs `--max-warnings 0` unreachable | `--no-inline-config` resolver decides keep/delete per file, mechanically |
 | (a) correctness | `HIVE.md:85-103` stale Stop-drain denials | **nine** stale claims, not three — all gated by plan 07 |
