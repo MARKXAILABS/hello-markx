@@ -1,15 +1,15 @@
-# CodeFlow Snapshot — final
+# CodeFlow Snapshot — baseline
 
-- **Project:** `E:\munder-difflin`
-- **Captured:** 2026-08-20T12:31:28.201Z
+- **Project:** `e:\munder-difflin`
+- **Captured:** 2026-08-20T01:09:39.320Z
 
 ## Health
 
 - **Score:** 63/100 (Grade D)
-- **Files analyzed:** 326 (273 code, 53 other)
-- **Functions:** 1329
+- **Files analyzed:** 325 (272 code, 53 other)
+- **Functions:** 1326
 - **Unused functions:** 15
-- **Connections:** 2302
+- **Connections:** 2288
 
 ## Architecture Issues
 
@@ -21,7 +21,7 @@
 ## Security
 
 - **HIGH:** 32
-- **MEDIUM:** 36
+- **MEDIUM:** 35
 - **LOW / other:** 16
 
 ### HIGH severity findings (top 10)

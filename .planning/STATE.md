@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 1 planned (23 plans/9 waves); red-team round 1 NOT CLEAN — 16 open blockers; auto-advance to execute BLOCKED
-last_updated: "2026-08-20T12:31:00.138Z"
+stopped_at: "Phase 1 planned (23 plans/9 waves); red-team rounds 1-3 all NOT CLEAN (16 / ~35 / 40+ findings); 3 iterations exhausted; RED_TEAM_CLEAN=false; execute-phase BLOCKED — re-plan recommended"
+last_updated: "2026-08-20T21:40:00.000Z"
 last_activity: 2026-08-20 — Roadmap extended to 6 phases over 71 v1 requirements; six
 progress:
   total_phases: 6
@@ -142,7 +142,14 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-08-20T12:31:00.125Z
-Stopped at: Phase 1 planned (23 plans/9 waves); red-team round 1 NOT CLEAN — 16 open blockers; auto-advance to execute BLOCKED
+Stopped at: Phase 1 planned (23 plans/9 waves). Red-team rounds 1, 2 and 3 all returned NOT CLEAN
+(16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
+exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
+rate did not converge and each round's fixes introduced new defects of the same class, so the
+recommendation recorded in 01-CONTEXT.md's Red-Team Log is to RE-PLAN, not to patch a fourth time.
+Decisive finding: GATE-01's qwen-sidecar fix is a no-op — PROXY_BRIDGE_SHIM never reads
+HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and the wave-9 wholeness
+assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
 Resume file: .planning/phases/01-finish-the-floor/01-CONTEXT.md

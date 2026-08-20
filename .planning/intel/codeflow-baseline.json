@@ -1,9 +1,9 @@
 {
-  "label": "final",
-  "projectRoot": "E:\\munder-difflin",
-  "capturedAt": "2026-08-20T12:31:28.201Z",
-  "fileCount": 326,
-  "codeFileCount": 273,
+  "label": "baseline",
+  "projectRoot": "e:\\munder-difflin",
+  "capturedAt": "2026-08-20T01:09:39.320Z",
+  "fileCount": 325,
+  "codeFileCount": 272,
   "skipped": [],
   "degraded": false,
   "data": {
@@ -3134,7 +3134,7 @@
           {
             "name": "post",
             "file": "src/main/hive.ts",
-            "line": 3210,
+            "line": 3204,
             "code": "function post(payload) {\r\n  try {\r\n    if (!SOCK) return;\r\n    payload.agent_id = payload.agent_id || AGENT;\r\n    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\\\n'); } catch (e) {} });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\nfunction register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3142,7 +3142,7 @@
           {
             "name": "register",
             "file": "src/main/hive.ts",
-            "line": 3218,
+            "line": 3212,
             "code": "function register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n    });\r\n    pi.on('tool_result', function (ev) { post({ hook_event_name: 'PostToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)) }); });\r\n    pi.on('agent_end', function () { post({ hook_event_name: 'Stop' }); });\r\n    return true;\r\n  } catch (e) { return false; }\r\n}\r\ntry { if (typeof globalThis !== 'undefined' && globalThis.pi) register(globalThis.pi); } catch (e) {}\r\nmodule.exports = function (pi) { return register(pi); };\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3150,7 +3150,7 @@
           {
             "name": "post",
             "file": "src/main/hive.ts",
-            "line": 3247,
+            "line": 3241,
             "code": "function post(payload) {\r\n  try {\r\n    if (!SOCK) return;\r\n    payload.agent_id = payload.agent_id || AGENT;\r\n    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\\\n'); } catch (e) {} });\r\n    c.on('error', () => {});\r\n  } catch (e) {}\r\n}\r\nexport const HiveBridge = async () => {\r\n  return {\r\n    event: async (input) => {\r\n      try { if (input && input.event && input.event.type === 'session.idle') post({ hook_event_name: 'Stop' }); } catch (e) {}\r\n    },\r\n    'tool.execute.before': async (input) => {\r\n      try { post({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3158,7 +3158,7 @@
           {
             "name": "trimSlash",
             "file": "src/main/hive.ts",
-            "line": 3294,
+            "line": 3288,
             "code": "function trimSlash(s) { while (s.length && s.charAt(s.length - 1) === '/') s = s.slice(0, -1); return s; }\r\n\r\n// Per-model context-window size for the Status gauge; fallback 200k.\r\nfunction ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3166,7 +3166,7 @@
           {
             "name": "ctxSize",
             "file": "src/main/hive.ts",
-            "line": 3297,
+            "line": 3291,
             "code": "function ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3174,7 +3174,7 @@
           {
             "name": "emit",
             "file": "src/main/hive.ts",
-            "line": 3307,
+            "line": 3301,
             "code": "function emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\n\r\nlet stopTimer = null;\r\nfunction armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3182,7 +3182,7 @@
           {
             "name": "armStop",
             "file": "src/main/hive.ts",
-            "line": 3316,
+            "line": 3310,
             "code": "function armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  if (stopTimer.unref) stopTimer.unref();\r\n}\r\nfunction cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3190,7 +3190,7 @@
           {
             "name": "cancelStop",
             "file": "src/main/hive.ts",
-            "line": 3324,
+            "line": 3318,
             "code": "function cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3198,7 +3198,7 @@
           {
             "name": "safeArgs",
             "file": "src/main/hive.ts",
-            "line": 3326,
+            "line": 3320,
             "code": "function safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -3206,19 +3206,19 @@
           {
             "name": "parseAndEmit",
             "file": "src/main/hive.ts",
-            "line": 3333,
+            "line": 3327,
             "code": "function parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n      const data = ln.slice(idx + 5).trim();\r\n      if (!data || data === '[DONE]') continue;\r\n      try { objs.push(JSON.parse(data)); } catch (e) {}\r\n    }\r\n  } else {\r\n    try { objs.push(JSON.parse(bodyStr)); } catch (e) {}\r\n  }\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
           }
         ],
-        "lines": 3571,
+        "lines": 3563,
         "layer": "utils",
         "churn": 0,
         "isCode": true,
         "dependencies": [],
         "complexity": {
-          "score": 1046,
+          "score": 1042,
           "level": "critical"
         },
         "parserProvenance": "heuristic-regex"
@@ -15223,48 +15223,6 @@
         "parserProvenance": "heuristic-regex"
       },
       {
-        "path": "test/hook-auth-roundtrip.test.cjs",
-        "name": "hook-auth-roundtrip.test.cjs",
-        "folder": "test",
-        "content": null,
-        "functions": [
-          {
-            "name": "tmpHome",
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "line": 43,
-            "code": "function tmpHome(t) {\r\n  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-hook-auth-'));\r\n  t.after(() => fs.rmSync(home, { recursive: true, force: true }));\r\n  return home;\r\n}\r\n\r\n/** Run the shim command as a detached child and resolve on exit. Async, never\r\n *  spawnSync: the shim connects back to a socket THIS process serves, so a sync\r\n *  call would block our own event loop and deadlock the handshake. */\r\nfunction runShim(command, env) {\r\n  return new Promise((resolve) => {\r\n    const c = spawn(command, { shell: true, env });\r\n    let stderr = '';\r\n    c.stderr.on('data', (d) => { stderr += d; });\r\n    c.on('close', (code) => resolve({ code, stderr }));\r\n  // ...",
-            "isTopLevel": true,
-            "type": "function"
-          },
-          {
-            "name": "runShim",
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "line": 52,
-            "code": "function runShim(command, env) {\r\n  return new Promise((resolve) => {\r\n    const c = spawn(command, { shell: true, env });\r\n    let stderr = '';\r\n    c.stderr.on('data', (d) => { stderr += d; });\r\n    c.on('close', (code) => resolve({ code, stderr }));\r\n  });\r\n}\r\n\r\nasync function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  // ...",
-            "isTopLevel": true,
-            "type": "function"
-          },
-          {
-            "name": "floorWithHookServer",
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "line": 61,
-            "code": "async function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  server.start();\r\n  t.after(() => server.stop());\r\n\r\n  const settings = JSON.parse(\r\n    fs.readFileSync(path.join(home, 'hive/agents/a1/settings.json'), 'utf8')\r\n  );\r\n  const command = settings.hooks.Stop[0].hooks[0].command;\r\n  const sock = path.join(home, 'hive', 'hooks.sock');\r\n  return { home, hive, server, command, sock };\r\n  // ...",
-            "isTopLevel": false,
-            "type": "method"
-          }
-        ],
-        "lines": 158,
-        "layer": "utils",
-        "churn": 0,
-        "isCode": true,
-        "dependencies": [],
-        "complexity": {
-          "score": 18,
-          "level": "medium"
-        },
-        "parserProvenance": "heuristic-regex"
-      },
-      {
         "path": "test/ide-image.test.cjs",
         "name": "ide-image.test.cjs",
         "folder": "test",
@@ -18816,7 +18774,7 @@
       {
         "name": "post",
         "file": "src/main/hive.ts",
-        "line": 3210,
+        "line": 3204,
         "code": "function post(payload) {\r\n  try {\r\n    if (!SOCK) return;\r\n    payload.agent_id = payload.agent_id || AGENT;\r\n    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\\\n'); } catch (e) {} });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\nfunction register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18826,7 +18784,7 @@
       {
         "name": "register",
         "file": "src/main/hive.ts",
-        "line": 3218,
+        "line": 3212,
         "code": "function register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n    });\r\n    pi.on('tool_result', function (ev) { post({ hook_event_name: 'PostToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)) }); });\r\n    pi.on('agent_end', function () { post({ hook_event_name: 'Stop' }); });\r\n    return true;\r\n  } catch (e) { return false; }\r\n}\r\ntry { if (typeof globalThis !== 'undefined' && globalThis.pi) register(globalThis.pi); } catch (e) {}\r\nmodule.exports = function (pi) { return register(pi); };\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18836,7 +18794,7 @@
       {
         "name": "post",
         "file": "src/main/hive.ts",
-        "line": 3247,
+        "line": 3241,
         "code": "function post(payload) {\r\n  try {\r\n    if (!SOCK) return;\r\n    payload.agent_id = payload.agent_id || AGENT;\r\n    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\\\n'); } catch (e) {} });\r\n    c.on('error', () => {});\r\n  } catch (e) {}\r\n}\r\nexport const HiveBridge = async () => {\r\n  return {\r\n    event: async (input) => {\r\n      try { if (input && input.event && input.event.type === 'session.idle') post({ hook_event_name: 'Stop' }); } catch (e) {}\r\n    },\r\n    'tool.execute.before': async (input) => {\r\n      try { post({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18846,7 +18804,7 @@
       {
         "name": "trimSlash",
         "file": "src/main/hive.ts",
-        "line": 3294,
+        "line": 3288,
         "code": "function trimSlash(s) { while (s.length && s.charAt(s.length - 1) === '/') s = s.slice(0, -1); return s; }\r\n\r\n// Per-model context-window size for the Status gauge; fallback 200k.\r\nfunction ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18856,7 +18814,7 @@
       {
         "name": "ctxSize",
         "file": "src/main/hive.ts",
-        "line": 3297,
+        "line": 3291,
         "code": "function ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18866,7 +18824,7 @@
       {
         "name": "emit",
         "file": "src/main/hive.ts",
-        "line": 3307,
+        "line": 3301,
         "code": "function emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\n\r\nlet stopTimer = null;\r\nfunction armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18876,7 +18834,7 @@
       {
         "name": "armStop",
         "file": "src/main/hive.ts",
-        "line": 3316,
+        "line": 3310,
         "code": "function armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  if (stopTimer.unref) stopTimer.unref();\r\n}\r\nfunction cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18886,7 +18844,7 @@
       {
         "name": "cancelStop",
         "file": "src/main/hive.ts",
-        "line": 3324,
+        "line": 3318,
         "code": "function cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18896,7 +18854,7 @@
       {
         "name": "safeArgs",
         "file": "src/main/hive.ts",
-        "line": 3326,
+        "line": 3320,
         "code": "function safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -18906,7 +18864,7 @@
       {
         "name": "parseAndEmit",
         "file": "src/main/hive.ts",
-        "line": 3333,
+        "line": 3327,
         "code": "function parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n      const data = ln.slice(idx + 5).trim();\r\n      if (!data || data === '[DONE]') continue;\r\n      try { objs.push(JSON.parse(data)); } catch (e) {}\r\n    }\r\n  } else {\r\n    try { objs.push(JSON.parse(bodyStr)); } catch (e) {}\r\n  }\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -29164,36 +29122,6 @@
         "layer": "utils"
       },
       {
-        "name": "tmpHome",
-        "file": "test/hook-auth-roundtrip.test.cjs",
-        "line": 43,
-        "code": "function tmpHome(t) {\r\n  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-hook-auth-'));\r\n  t.after(() => fs.rmSync(home, { recursive: true, force: true }));\r\n  return home;\r\n}\r\n\r\n/** Run the shim command as a detached child and resolve on exit. Async, never\r\n *  spawnSync: the shim connects back to a socket THIS process serves, so a sync\r\n *  call would block our own event loop and deadlock the handshake. */\r\nfunction runShim(command, env) {\r\n  return new Promise((resolve) => {\r\n    const c = spawn(command, { shell: true, env });\r\n    let stderr = '';\r\n    c.stderr.on('data', (d) => { stderr += d; });\r\n    c.on('close', (code) => resolve({ code, stderr }));\r\n  // ...",
-        "isTopLevel": true,
-        "type": "function",
-        "folder": "test",
-        "layer": "utils"
-      },
-      {
-        "name": "runShim",
-        "file": "test/hook-auth-roundtrip.test.cjs",
-        "line": 52,
-        "code": "function runShim(command, env) {\r\n  return new Promise((resolve) => {\r\n    const c = spawn(command, { shell: true, env });\r\n    let stderr = '';\r\n    c.stderr.on('data', (d) => { stderr += d; });\r\n    c.on('close', (code) => resolve({ code, stderr }));\r\n  });\r\n}\r\n\r\nasync function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  // ...",
-        "isTopLevel": true,
-        "type": "function",
-        "folder": "test",
-        "layer": "utils"
-      },
-      {
-        "name": "floorWithHookServer",
-        "file": "test/hook-auth-roundtrip.test.cjs",
-        "line": 61,
-        "code": "async function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  server.start();\r\n  t.after(() => server.stop());\r\n\r\n  const settings = JSON.parse(\r\n    fs.readFileSync(path.join(home, 'hive/agents/a1/settings.json'), 'utf8')\r\n  );\r\n  const command = settings.hooks.Stop[0].hooks[0].command;\r\n  const sock = path.join(home, 'hive', 'hooks.sock');\r\n  return { home, hive, server, command, sock };\r\n  // ...",
-        "isTopLevel": false,
-        "type": "method",
-        "folder": "test",
-        "layer": "utils"
-      },
-      {
         "name": "makeWorkspace",
         "file": "test/ide-image.test.cjs",
         "line": 134,
@@ -31886,12 +31814,6 @@
         "target": "src/main/hive.ts",
         "fn": "engine",
         "count": 2
-      },
-      {
-        "source": "src/main/hooks.ts",
-        "target": "src/main/hive.ts",
-        "fn": "authorized",
-        "count": 1
       },
       {
         "source": "tools/make-logo.cjs",
@@ -41572,84 +41494,6 @@
         "count": 22
       },
       {
-        "source": "src/main/hooks.ts",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "authorized",
-        "count": 3
-      },
-      {
-        "source": "src/main/hooks.ts",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "hookSockToken",
-        "count": 3
-      },
-      {
-        "source": "test/agent-provider.test.cjs",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "test",
-        "count": 3
-      },
-      {
-        "source": "test/load-ts.cjs",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "loadTs",
-        "count": 4
-      },
-      {
-        "source": "test/hive-cwd.test.cjs",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "tmpHome",
-        "count": 2
-      },
-      {
-        "source": "src/main/roster.ts",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "home",
-        "count": 12
-      },
-      {
-        "source": "test/memory-hygiene.test.cjs",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "tmpdir",
-        "count": 1
-      },
-      {
-        "source": "resources/skills/temporal/when.mjs",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "resolve",
-        "count": 2
-      },
-      {
-        "source": "src/main/hive.ts",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "ensureAgent",
-        "count": 1
-      },
-      {
-        "source": "src/main/slack.ts",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "start",
-        "count": 2
-      },
-      {
-        "source": "src/renderer/src/freeflow/recorder.ts",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "stop",
-        "count": 1
-      },
-      {
-        "source": "src/renderer/src/components/AskMeTab.tsx",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "parse",
-        "count": 1
-      },
-      {
-        "source": "src/main/hive.ts",
-        "target": "test/hook-auth-roundtrip.test.cjs",
-        "fn": "ok",
-        "count": 1
-      },
-      {
         "source": "test/agent-provider.test.cjs",
         "target": "test/ide-image.test.cjs",
         "fn": "test",
@@ -44107,7 +43951,7 @@
       },
       "resolve": {
         "internal": 1,
-        "external": 215,
+        "external": 213,
         "callers": [
           {
             "file": "e2e/smoke.spec.ts",
@@ -44255,11 +44099,6 @@
             "count": 1
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 2
-          },
-          {
             "file": "test/load-ts.cjs",
             "name": "load-ts.cjs",
             "count": 3
@@ -44315,7 +44154,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 216
+        "count": 214
       },
       "advance": {
         "internal": 12,
@@ -48463,7 +48302,7 @@
       },
       "ensureAgent": {
         "internal": 3,
-        "external": 19,
+        "external": 18,
         "callers": [
           {
             "file": "src/main/index.ts",
@@ -48501,11 +48340,6 @@
             "count": 1
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 1
-          },
-          {
             "file": "tools/AGENT-ENV.md",
             "name": "AGENT-ENV.md",
             "count": 1
@@ -48521,7 +48355,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 22
+        "count": 21
       },
       "hookSettings": {
         "internal": 2,
@@ -49333,7 +49167,7 @@
       },
       "ok": {
         "internal": 6,
-        "external": 292,
+        "external": 291,
         "callers": [
           {
             "file": "scripts/verify-keepalive-catchup.mjs",
@@ -49466,11 +49300,6 @@
             "count": 22
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 1
-          },
-          {
             "file": "test/ide-image.test.cjs",
             "name": "ide-image.test.cjs",
             "count": 7
@@ -49596,7 +49425,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 298
+        "count": 297
       },
       "read": {
         "internal": 3,
@@ -49959,7 +49788,7 @@
         ],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3210,
+        "line": 3204,
         "code": "function post(payload) {\r\n  try {\r\n    if (!SOCK) return;\r\n    payload.agent_id = payload.agent_id || AGENT;\r\n    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\\\n'); } catch (e) {} });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\nfunction register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -49975,7 +49804,7 @@
         "callers": [],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3218,
+        "line": 3212,
         "code": "function register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n    });\r\n    pi.on('tool_result', function (ev) { post({ hook_event_name: 'PostToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)) }); });\r\n    pi.on('agent_end', function () { post({ hook_event_name: 'Stop' }); });\r\n    return true;\r\n  } catch (e) { return false; }\r\n}\r\ntry { if (typeof globalThis !== 'undefined' && globalThis.pi) register(globalThis.pi); } catch (e) {}\r\nmodule.exports = function (pi) { return register(pi); };\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -49991,7 +49820,7 @@
         "callers": [],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3294,
+        "line": 3288,
         "code": "function trimSlash(s) { while (s.length && s.charAt(s.length - 1) === '/') s = s.slice(0, -1); return s; }\r\n\r\n// Per-model context-window size for the Status gauge; fallback 200k.\r\nfunction ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -50007,7 +49836,7 @@
         "callers": [],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3297,
+        "line": 3291,
         "code": "function ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -50069,7 +49898,7 @@
         ],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3307,
+        "line": 3301,
         "code": "function emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\n\r\nlet stopTimer = null;\r\nfunction armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -50085,7 +49914,7 @@
         "callers": [],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3316,
+        "line": 3310,
         "code": "function armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  if (stopTimer.unref) stopTimer.unref();\r\n}\r\nfunction cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -50101,7 +49930,7 @@
         "callers": [],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3324,
+        "line": 3318,
         "code": "function cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -50117,7 +49946,7 @@
         "callers": [],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3326,
+        "line": 3320,
         "code": "function safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -50133,7 +49962,7 @@
         "callers": [],
         "file": "src/main/hive.ts",
         "folder": "src/main",
-        "line": 3333,
+        "line": 3327,
         "code": "function parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n      const data = ln.slice(idx + 5).trim();\r\n      if (!data || data === '[DONE]') continue;\r\n      try { objs.push(JSON.parse(data)); } catch (e) {}\r\n    }\r\n  } else {\r\n    try { objs.push(JSON.parse(bodyStr)); } catch (e) {}\r\n  }\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -50145,7 +49974,7 @@
       },
       "hookSockToken": {
         "internal": 2,
-        "external": 15,
+        "external": 12,
         "callers": [
           {
             "file": "HIVE.md",
@@ -50163,11 +49992,6 @@
             "count": 4
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 3
-          },
-          {
             "file": "test/net-binding.test.cjs",
             "name": "net-binding.test.cjs",
             "count": 6
@@ -50183,7 +50007,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 17
+        "count": 14
       },
       "sha256": {
         "internal": 2,
@@ -50224,19 +50048,8 @@
       },
       "authorized": {
         "internal": 2,
-        "external": 4,
-        "callers": [
-          {
-            "file": "src/main/hive.ts",
-            "name": "hive.ts",
-            "count": 1
-          },
-          {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 3
-          }
-        ],
+        "external": 0,
+        "callers": [],
         "file": "src/main/hooks.ts",
         "folder": "src/main",
         "line": 194,
@@ -50247,7 +50060,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 6
+        "count": 2
       },
       "handle": {
         "internal": 2,
@@ -55498,7 +55311,7 @@
       },
       "home": {
         "internal": 14,
-        "external": 204,
+        "external": 192,
         "callers": [
           {
             "file": "e2e/smoke.spec.ts",
@@ -55611,11 +55424,6 @@
             "count": 5
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 12
-          },
-          {
             "file": "test/main-hardening.test.cjs",
             "name": "main-hardening.test.cjs",
             "count": 2
@@ -55641,7 +55449,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 218
+        "count": 206
       },
       "backup": {
         "internal": 4,
@@ -56015,7 +55823,7 @@
       },
       "start": {
         "internal": 2,
-        "external": 84,
+        "external": 82,
         "callers": [
           {
             "file": "resources/skills/last30Days/SKILL.md",
@@ -56238,11 +56046,6 @@
             "count": 1
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 2
-          },
-          {
             "file": "test/net-binding.test.cjs",
             "name": "net-binding.test.cjs",
             "count": 4
@@ -56268,7 +56071,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 86
+        "count": 84
       },
       "listen": {
         "internal": 4,
@@ -58341,7 +58144,7 @@
       },
       "parse": {
         "internal": 1,
-        "external": 98,
+        "external": 97,
         "callers": [
           {
             "file": "electron.vite.config.ts",
@@ -58559,11 +58362,6 @@
             "count": 3
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 1
-          },
-          {
             "file": "test/kg-core.test.cjs",
             "name": "kg-core.test.cjs",
             "count": 1
@@ -58599,7 +58397,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 99
+        "count": 98
       },
       "dependentsTree": {
         "internal": 3,
@@ -64459,7 +64257,7 @@
       },
       "stop": {
         "internal": 6,
-        "external": 60,
+        "external": 59,
         "callers": [
           {
             "file": "CHANGELOG.md",
@@ -64557,11 +64355,6 @@
             "count": 3
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 1
-          },
-          {
             "file": "test/net-binding.test.cjs",
             "name": "net-binding.test.cjs",
             "count": 9
@@ -64577,7 +64370,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 66
+        "count": 65
       },
       "toggle": {
         "internal": 1,
@@ -72066,7 +71859,7 @@
       },
       "test": {
         "internal": 6,
-        "external": 654,
+        "external": 651,
         "callers": [
           {
             "file": ".github/workflows/e2e.yml",
@@ -72399,11 +72192,6 @@
             "count": 8
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 3
-          },
-          {
             "file": "test/ide-image.test.cjs",
             "name": "ide-image.test.cjs",
             "count": 19
@@ -72574,7 +72362,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 660
+        "count": 657
       },
       "makeBreaker": {
         "internal": 32,
@@ -73029,7 +72817,7 @@
       },
       "tmpHome": {
         "internal": 3,
-        "external": 22,
+        "external": 20,
         "callers": [
           {
             "file": "test/hive-hook-node.test.cjs",
@@ -73039,11 +72827,6 @@
           {
             "file": "test/hive-roster-injection.test.cjs",
             "name": "hive-roster-injection.test.cjs",
-            "count": 2
-          },
-          {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
             "count": 2
           },
           {
@@ -73062,7 +72845,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 25
+        "count": 23
       },
       "registryOf": {
         "internal": 2,
@@ -73678,38 +73461,6 @@
         "className": null,
         "count": 6
       },
-      "runShim": {
-        "internal": 2,
-        "external": 0,
-        "callers": [],
-        "file": "test/hook-auth-roundtrip.test.cjs",
-        "folder": "test",
-        "line": 52,
-        "code": "function runShim(command, env) {\r\n  return new Promise((resolve) => {\r\n    const c = spawn(command, { shell: true, env });\r\n    let stderr = '';\r\n    c.stderr.on('data', (d) => { stderr += d; });\r\n    c.on('close', (code) => resolve({ code, stderr }));\r\n  });\r\n}\r\n\r\nasync function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  // ...",
-        "isTopLevel": true,
-        "isExported": false,
-        "isClassMethod": false,
-        "type": "function",
-        "decorators": null,
-        "className": null,
-        "count": 2
-      },
-      "floorWithHookServer": {
-        "internal": 2,
-        "external": 0,
-        "callers": [],
-        "file": "test/hook-auth-roundtrip.test.cjs",
-        "folder": "test",
-        "line": 61,
-        "code": "async function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  server.start();\r\n  t.after(() => server.stop());\r\n\r\n  const settings = JSON.parse(\r\n    fs.readFileSync(path.join(home, 'hive/agents/a1/settings.json'), 'utf8')\r\n  );\r\n  const command = settings.hooks.Stop[0].hooks[0].command;\r\n  const sock = path.join(home, 'hive', 'hooks.sock');\r\n  return { home, hive, server, command, sock };\r\n  // ...",
-        "isTopLevel": false,
-        "isExported": false,
-        "isClassMethod": false,
-        "type": "method",
-        "decorators": null,
-        "className": null,
-        "count": 2
-      },
       "makeWorkspace": {
         "internal": 14,
         "external": 0,
@@ -73841,7 +73592,7 @@
       },
       "loadTs": {
         "internal": 1,
-        "external": 106,
+        "external": 102,
         "callers": [
           {
             "file": ".github/workflows/ci.yml",
@@ -73947,11 +73698,6 @@
             "file": "test/hive-windows-prompt.test.cjs",
             "name": "hive-windows-prompt.test.cjs",
             "count": 1
-          },
-          {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 4
           },
           {
             "file": "test/ide-image.test.cjs",
@@ -74079,7 +73825,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 107
+        "count": 103
       },
       "tempDir": {
         "internal": 5,
@@ -74115,7 +73861,7 @@
       },
       "tmpdir": {
         "internal": 4,
-        "external": 47,
+        "external": 46,
         "callers": [
           {
             "file": "e2e/smoke.spec.ts",
@@ -74198,11 +73944,6 @@
             "count": 1
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "name": "hook-auth-roundtrip.test.cjs",
-            "count": 1
-          },
-          {
             "file": "test/ide-image.test.cjs",
             "name": "ide-image.test.cjs",
             "count": 1
@@ -74268,7 +74009,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 51
+        "count": 50
       },
       "sockPath": {
         "internal": 1,
@@ -78302,7 +78043,7 @@
                     {
                       "name": "post",
                       "file": "src/main/hive.ts",
-                      "line": 3210,
+                      "line": 3204,
                       "code": "function post(payload) {\r\n  try {\r\n    if (!SOCK) return;\r\n    payload.agent_id = payload.agent_id || AGENT;\r\n    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\\\n'); } catch (e) {} });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\nfunction register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78310,7 +78051,7 @@
                     {
                       "name": "register",
                       "file": "src/main/hive.ts",
-                      "line": 3218,
+                      "line": 3212,
                       "code": "function register(pi) {\r\n  if (!pi || typeof pi.on !== 'function') return false;\r\n  try {\r\n    pi.on('tool_call', function (ev) {\r\n      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });\r\n      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }\r\n      return undefined;\r\n    });\r\n    pi.on('tool_result', function (ev) { post({ hook_event_name: 'PostToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)) }); });\r\n    pi.on('agent_end', function () { post({ hook_event_name: 'Stop' }); });\r\n    return true;\r\n  } catch (e) { return false; }\r\n}\r\ntry { if (typeof globalThis !== 'undefined' && globalThis.pi) register(globalThis.pi); } catch (e) {}\r\nmodule.exports = function (pi) { return register(pi); };\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78318,7 +78059,7 @@
                     {
                       "name": "post",
                       "file": "src/main/hive.ts",
-                      "line": 3247,
+                      "line": 3241,
                       "code": "function post(payload) {\r\n  try {\r\n    if (!SOCK) return;\r\n    payload.agent_id = payload.agent_id || AGENT;\r\n    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\\\n'); } catch (e) {} });\r\n    c.on('error', () => {});\r\n  } catch (e) {}\r\n}\r\nexport const HiveBridge = async () => {\r\n  return {\r\n    event: async (input) => {\r\n      try { if (input && input.event && input.event.type === 'session.idle') post({ hook_event_name: 'Stop' }); } catch (e) {}\r\n    },\r\n    'tool.execute.before': async (input) => {\r\n      try { post({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78326,7 +78067,7 @@
                     {
                       "name": "trimSlash",
                       "file": "src/main/hive.ts",
-                      "line": 3294,
+                      "line": 3288,
                       "code": "function trimSlash(s) { while (s.length && s.charAt(s.length - 1) === '/') s = s.slice(0, -1); return s; }\r\n\r\n// Per-model context-window size for the Status gauge; fallback 200k.\r\nfunction ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78334,7 +78075,7 @@
                     {
                       "name": "ctxSize",
                       "file": "src/main/hive.ts",
-                      "line": 3297,
+                      "line": 3291,
                       "code": "function ctxSize(model) {\r\n  const m = String(model || '').toLowerCase();\r\n  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;\r\n  if (m.indexOf('claude') !== -1) return 200000;\r\n  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;\r\n  if (m.indexOf('qwen') !== -1) return 262144;\r\n  return 200000;\r\n}\r\n\r\n// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.\r\nfunction emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78342,7 +78083,7 @@
                     {
                       "name": "emit",
                       "file": "src/main/hive.ts",
-                      "line": 3307,
+                      "line": 3301,
                       "code": "function emit(payload) {\r\n  if (!SOCK) return;\r\n  try {\r\n    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\\\n'); });\r\n    c.on('error', function () {});\r\n  } catch (e) {}\r\n}\r\n\r\nlet stopTimer = null;\r\nfunction armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78350,7 +78091,7 @@
                     {
                       "name": "armStop",
                       "file": "src/main/hive.ts",
-                      "line": 3316,
+                      "line": 3310,
                       "code": "function armStop() {\r\n  if (stopTimer) clearTimeout(stopTimer);\r\n  stopTimer = setTimeout(function () {\r\n    stopTimer = null;\r\n    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });\r\n  }, 800);\r\n  if (stopTimer.unref) stopTimer.unref();\r\n}\r\nfunction cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78358,7 +78099,7 @@
                     {
                       "name": "cancelStop",
                       "file": "src/main/hive.ts",
-                      "line": 3324,
+                      "line": 3318,
                       "code": "function cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }\r\n\r\nfunction safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78366,7 +78107,7 @@
                     {
                       "name": "safeArgs",
                       "file": "src/main/hive.ts",
-                      "line": 3326,
+                      "line": 3320,
                       "code": "function safeArgs(s) {\r\n  if (s == null) return {};\r\n  if (typeof s === 'object') return s;\r\n  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }\r\n}\r\n\r\n// Parse a completed response (single JSON or an SSE stream) and synthesize events.\r\nfunction parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -78374,19 +78115,19 @@
                     {
                       "name": "parseAndEmit",
                       "file": "src/main/hive.ts",
-                      "line": 3333,
+                      "line": 3327,
                       "code": "function parseAndEmit(bodyStr, isSse) {\r\n  const objs = [];\r\n  if (isSse) {\r\n    const lines = bodyStr.split('\\\\n');\r\n    for (let i = 0; i < lines.length; i++) {\r\n      const ln = lines[i];\r\n      const idx = ln.indexOf('data:');\r\n      if (idx === -1) continue;\r\n      const data = ln.slice(idx + 5).trim();\r\n      if (!data || data === '[DONE]') continue;\r\n      try { objs.push(JSON.parse(data)); } catch (e) {}\r\n    }\r\n  } else {\r\n    try { objs.push(JSON.parse(bodyStr)); } catch (e) {}\r\n  }\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
                     }
                   ],
-                  "lines": 3571,
+                  "lines": 3563,
                   "layer": "utils",
                   "churn": 0,
                   "isCode": true,
                   "dependencies": [],
                   "complexity": {
-                    "score": 1046,
+                    "score": 1042,
                     "level": "critical"
                   },
                   "parserProvenance": "heuristic-regex"
@@ -90521,48 +90262,6 @@
               "parserProvenance": "heuristic-regex"
             },
             {
-              "path": "test/hook-auth-roundtrip.test.cjs",
-              "name": "hook-auth-roundtrip.test.cjs",
-              "folder": "test",
-              "content": null,
-              "functions": [
-                {
-                  "name": "tmpHome",
-                  "file": "test/hook-auth-roundtrip.test.cjs",
-                  "line": 43,
-                  "code": "function tmpHome(t) {\r\n  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-hook-auth-'));\r\n  t.after(() => fs.rmSync(home, { recursive: true, force: true }));\r\n  return home;\r\n}\r\n\r\n/** Run the shim command as a detached child and resolve on exit. Async, never\r\n *  spawnSync: the shim connects back to a socket THIS process serves, so a sync\r\n *  call would block our own event loop and deadlock the handshake. */\r\nfunction runShim(command, env) {\r\n  return new Promise((resolve) => {\r\n    const c = spawn(command, { shell: true, env });\r\n    let stderr = '';\r\n    c.stderr.on('data', (d) => { stderr += d; });\r\n    c.on('close', (code) => resolve({ code, stderr }));\r\n  // ...",
-                  "isTopLevel": true,
-                  "type": "function"
-                },
-                {
-                  "name": "runShim",
-                  "file": "test/hook-auth-roundtrip.test.cjs",
-                  "line": 52,
-                  "code": "function runShim(command, env) {\r\n  return new Promise((resolve) => {\r\n    const c = spawn(command, { shell: true, env });\r\n    let stderr = '';\r\n    c.stderr.on('data', (d) => { stderr += d; });\r\n    c.on('close', (code) => resolve({ code, stderr }));\r\n  });\r\n}\r\n\r\nasync function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  // ...",
-                  "isTopLevel": true,
-                  "type": "function"
-                },
-                {
-                  "name": "floorWithHookServer",
-                  "file": "test/hook-auth-roundtrip.test.cjs",
-                  "line": 61,
-                  "code": "async function floorWithHookServer(t) {\r\n  const home = tmpHome(t);\r\n  const hive = new HiveManager(() => home);\r\n  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });\r\n\r\n  const server = new HookServer(hive, () => null, () => ({}));\r\n  server.start();\r\n  t.after(() => server.stop());\r\n\r\n  const settings = JSON.parse(\r\n    fs.readFileSync(path.join(home, 'hive/agents/a1/settings.json'), 'utf8')\r\n  );\r\n  const command = settings.hooks.Stop[0].hooks[0].command;\r\n  const sock = path.join(home, 'hive', 'hooks.sock');\r\n  return { home, hive, server, command, sock };\r\n  // ...",
-                  "isTopLevel": false,
-                  "type": "method"
-                }
-              ],
-              "lines": 158,
-              "layer": "utils",
-              "churn": 0,
-              "isCode": true,
-              "dependencies": [],
-              "complexity": {
-                "score": 18,
-                "level": "medium"
-              },
-              "parserProvenance": "heuristic-regex"
-            },
-            {
               "path": "test/ide-image.test.cjs",
               "name": "ide-image.test.cjs",
               "folder": "test",
@@ -92708,7 +92407,7 @@
             "name": "hive.ts (76 fns)",
             "file": "src/main/hive.ts",
             "fns": 76,
-            "lines": 3571
+            "lines": 3563
           },
           {
             "name": "index.ts (110 fns)",
@@ -92786,7 +92485,7 @@
       },
       {
         "type": "warning",
-        "title": "91 Highly Coupled",
+        "title": "90 Highly Coupled",
         "desc": "Files imported by 8+ others",
         "items": [
           {
@@ -92800,9 +92499,9 @@
             "imports": 55
           },
           {
-            "name": "hive.ts (49 imports)",
+            "name": "hive.ts (48 imports)",
             "file": "src/main/hive.ts",
-            "imports": 49
+            "imports": 48
           },
           {
             "name": "App.tsx (41 imports)",
@@ -93035,11 +92734,6 @@
             "imports": 13
           },
           {
-            "name": "hook-auth-roundtrip.test.cjs (13 imports)",
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "imports": 13
-          },
-          {
             "name": "node-install.test.cjs (13 imports)",
             "file": "test/node-install.test.cjs",
             "imports": 13
@@ -93248,7 +92942,7 @@
       },
       {
         "type": "critical",
-        "title": "79 Circular Dependencies",
+        "title": "78 Circular Dependencies",
         "desc": "Files that import each other",
         "items": [
           {
@@ -93522,13 +93216,6 @@
             "files": [
               "src/main/hive.ts",
               "src/main/index.ts"
-            ]
-          },
-          {
-            "name": "hive.ts ↔ hooks.ts",
-            "files": [
-              "src/main/hive.ts",
-              "src/main/hooks.ts"
             ]
           },
           {
@@ -93919,8 +93606,8 @@
             "count": 3
           },
           {
-            "name": "tmpHome (5 files)",
-            "suggestion": "Function \"tmpHome\" appears in 5 files with 54% similarity - consider consolidating",
+            "name": "tmpHome (4 files)",
+            "suggestion": "Function \"tmpHome\" appears in 4 files with 54% similarity - consider consolidating",
             "files": [
               {
                 "file": "test/hive-cwd.test.cjs",
@@ -93935,15 +93622,11 @@
                 "line": 35
               },
               {
-                "file": "test/hook-auth-roundtrip.test.cjs",
-                "line": 43
-              },
-              {
                 "file": "test/roster.test.cjs",
                 "line": 12
               }
             ],
-            "count": 5
+            "count": 4
           },
           {
             "name": "floor (5 files)",
@@ -95868,10 +95551,10 @@
             "lines": 5621
           },
           {
-            "name": "hive.ts (1046)",
+            "name": "hive.ts (1042)",
             "file": "src/main/hive.ts",
-            "score": 1046,
-            "lines": 3571
+            "score": 1042,
+            "lines": 3563
           },
           {
             "name": "OfficeFloor.tsx (583)",
@@ -96734,10 +96417,6 @@
             "path": "test/hive-task-mutation.test.cjs"
           },
           {
-            "name": "hook-auth-roundtrip.test.cjs",
-            "path": "test/hook-auth-roundtrip.test.cjs"
-          },
-          {
             "name": "load-ts.cjs",
             "path": "test/load-ts.cjs"
           },
@@ -96767,7 +96446,7 @@
           }
         ],
         "metrics": {
-          "factories": 42
+          "factories": 41
         }
       },
       {
@@ -97013,10 +96692,6 @@
             "path": "test/hive-hook-node.test.cjs"
           },
           {
-            "name": "hook-auth-roundtrip.test.cjs",
-            "path": "test/hook-auth-roundtrip.test.cjs"
-          },
-          {
             "name": "net-binding.test.cjs",
             "path": "test/net-binding.test.cjs"
           },
@@ -97030,7 +96705,7 @@
           }
         ],
         "metrics": {
-          "emitters": 63
+          "emitters": 62
         }
       },
       {
@@ -97375,7 +97050,7 @@
           {
             "name": "hive.ts",
             "path": "src/main/hive.ts",
-            "lines": 3571
+            "lines": 3563
           },
           {
             "name": "index.ts",
@@ -97541,7 +97216,7 @@
             "name": "hive.ts",
             "path": "src/main/hive.ts",
             "fns": 76,
-            "lines": 3571
+            "lines": 3563
           },
           {
             "name": "index.ts",
@@ -98081,14 +97756,6 @@
       {
         "severity": "medium",
         "title": "Command Execution",
-        "file": "hook-auth-roundtrip.test.cjs",
-        "path": "test/hook-auth-roundtrip.test.cjs",
-        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
-        "code": ""
-      },
-      {
-        "severity": "medium",
-        "title": "Command Execution",
         "file": "kg-core.test.cjs",
         "path": "test/kg-core.test.cjs",
         "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
@@ -98400,7 +98067,7 @@
       {
         "type": "name",
         "name": "tmpHome",
-        "count": 5,
+        "count": 4,
         "files": [
           {
             "file": "test/hive-cwd.test.cjs",
@@ -98415,16 +98082,12 @@
             "line": 35
           },
           {
-            "file": "test/hook-auth-roundtrip.test.cjs",
-            "line": 43
-          },
-          {
             "file": "test/roster.test.cjs",
             "line": 12
           }
         ],
         "similarity": 54,
-        "suggestion": "Function \"tmpHome\" appears in 5 files with 54% similarity - consider consolidating"
+        "suggestion": "Function \"tmpHome\" appears in 4 files with 54% similarity - consider consolidating"
       },
       {
         "type": "name",
@@ -100729,19 +100392,19 @@
     ],
     "excludePatterns": [],
     "stats": {
-      "files": 326,
-      "functions": 1329,
-      "connections": 2302,
+      "files": 325,
+      "functions": 1326,
+      "connections": 2288,
       "dead": 15,
       "patterns": 7,
       "security": 32,
       "duplicates": 10,
       "violations": 255,
-      "loc": 81235,
+      "loc": 81069,
       "languages": [
         {
           "ext": "ts",
-          "lines": 41180,
+          "lines": 41172,
           "pct": 51
         },
         {
@@ -100751,7 +100414,7 @@
         },
         {
           "ext": "cjs",
-          "lines": 11253,
+          "lines": 11095,
           "pct": 14
         },
         {
@@ -100808,7 +100471,7 @@
       "parserModes": [
         {
           "mode": "heuristic-regex",
-          "files": 274
+          "files": 273
         },
         {
           "mode": "markdown-link-parser",

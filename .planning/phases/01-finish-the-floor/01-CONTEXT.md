@@ -542,3 +542,95 @@ is green-forever on Windows; and the GATE-01 sidecar fix cannot compile in wave 
 
 Full lens reports are in the session transcript. Nothing here is a wording nit; each entry either
 lets an executor do wrong work, ships a false claim, or produces coverage that cannot fail.
+
+**Round 3 — NOT CLEAN — 2026-08-20** — lenses: (a) correctness · (b) executability · (c) security ·
+(d) scope/gates · (e) test-quality · (f) cross-plan contracts. Six hostile source-grounded lenses,
+parallel direct Agent calls, each pointed specifically at whether round-2's fixes were real.
+
+`RED_TEAM_CLEAN = false`. **Three red-team iterations are exhausted with open BLOCKER/HIGH findings.
+Per step 11.5 the phase STOPS here: auto-advance to execute-phase is blocked, and the correct next
+step is a re-plan, not a fourth patch round.**
+
+### Why this is a stop and not another fix round
+
+| Round | Findings | Fixes introduced new defects of the same class? |
+|---|---|---|
+| 1 | 16 | — |
+| 2 | ~35 (11 BLOCKER) | Yes — 3 found (plans 01/10 contradiction, proc-kill, same-wave handoff) |
+| 3 | 40+ across 5 of 6 lenses (15 BLOCKER) | Yes — at least 5, three traceable to round-2's own edits |
+
+The defect rate is not converging. Round 3's fix-introduced defects include three from this
+orchestrator's round-2 edits: a forward reference to a "fail-open bullet" that was never written; a
+`gh pr checks` row named `E2E` that can never exist (`E2E` is the *workflow* name at `e2e.yml:1`; the
+job is `Electron smoke (ubuntu-latest)` at `:30`); and a `# skipped` **exactly 4** criterion that a
+correct ubuntu/macOS run fails, because all four skips are `{ skip: !POSIX }`.
+
+### The finding that settles it
+
+**GATE-01's qwen sidecar fix is a no-op.** Measured this session:
+
+```
+HOOK_SHIM 1 · AGY_HOOK_SHIM 1 · GROK_HOOK_SHIM 1
+PI_EXTENSION 0 · OPENCODE_PLUGIN 0 · PROXY_BRIDGE_SHIM 0     (HIVE_SOCK_TOKEN reads per template)
+```
+
+Plan 02 states the six templates "already read `process.env.HIVE_SOCK_TOKEN` — they need NO body
+change". False for three of six. `PROXY_BRIDGE_SHIM` is the qwen sidecar's own shim, so plan 06 task
+4 — adding `HIVE_SOCK_TOKEN: cfg.token` to the spawn env — changes nothing the shim reads. Its
+criterion passes, plan 23's wholeness criterion passes, the SUMMARY records the hole closed, and the
+qwen/crush tier is dead-hooked permanently. A success criterion satisfiable by code that does nothing,
+inside the requirement that defines the app's one local trust boundary.
+
+### Open BLOCKERs by lens (14; HIGH not listed here — see the session transcript)
+
+**(a) correctness** — the sidecar no-op above; plan 03's mandated startup rebuild of `owesReview`
+re-opens the boot review-storm the source comment at `hive.ts:1730-1735` promises cannot happen, and
+neither named guard test fires; plan 03's new mint rule still drops an intra-window
+`done → doing → done` re-completion; plan 06 still names plan 07 in seven places after the retarget,
+including `must_haves.truths`; plan 09's `<verification>` and `npm test` criterion still encode the
+pre-retarget arrangement and license closing wave 4 red; a twelfth false Stop-drain claim survives at
+`HIVE.md:184` matching none of the eleven frozen literals; `src/renderer/index.html:27` ships the
+boot-splash title at 13px, unowned and invisible to M1/M1d/M1x.
+
+**(c) security** — the fail-open direction was never fixed (the referenced bullet does not exist;
+`hooks.ts:159` listens once and nothing re-listens); socket **rebind** is a state worse than
+dead-hooked and gives full MITM of every agent's token; round-2's gate widening is prose-only, with
+zero acceptance criteria naming `.git`, the socket, agent dirs or `realpath`, so a `bin/`-only
+implementation passes every gate; `test/hook-auth-roundtrip.test.cjs` is undeclared by all 23 plans
+and plan 02 inverts its assertion while requiring `npm test` exit 0.
+
+**(d) scope/gates** — the `E2E` check-run name does not exist, and six criteria across three plans
+fail the phase on a fully green PR.
+
+**(e) test-quality** — plan 06's `# pass` floor of 14 sits below the guaranteed baseline of 16, so it
+is satisfied by adding zero tests; plan 22 creates a new test file with no TAP counters, no floor and
+no bypass grep — the one plan the bulk conversion missed.
+
+**(f) cross-plan contracts** — plan 13's frozen `ipcMain` expectation of `158` is arithmetically
+wrong: plan 08 (w4) adds one handler and plan 10 (w5) removes two, so at wave 6 the correct value is
+`157`, and the plan explicitly tells the agent to trust the written literal — correct work fails, or
+the agent adds a spurious handler to reach the number. Also: plan 10's "same commit" enforcement
+(`git show --name-only HEAD`) is not enforceable in a shared tree, because `HEAD` is global and
+wave-5 mates commit concurrently; and seven residual "plan 07" references survive the FLOOR-09
+retarget, including `must_haves.truths` and the file header, which is what a fresh-context agent
+reads first.
+
+Lens (f) also verified a large amount as genuinely clean, which is worth recording because it says
+where the plan set IS sound: no same-wave file collisions across declared sets or task `<files>`
+blocks; no `depends_on` pointing at the same or a later wave and no cycles; **no contradictory
+`grep -c` expectations anywhere across ~150 enumerated criteria**; the wave-7 → wave-9 fontSize unit
+reconciliation exact (566 + 38 = 604 occurrences, 61 files, none orphaned); requirements coverage
+complete; and every cross-wave SUMMARY field a later plan reads is actually required to be written.
+
+**(b) executability was still running when this entry was written.** Its findings are additive, not
+decisive.
+
+### Recommendation
+
+Re-plan rather than patch. Three specific structural causes, each of which produced findings in every
+round: (1) security controls encoded as narrative with no enforcing criteria; (2) `src/main/index.ts`
+is single-owner-per-wave and claimed in waves 3-6, so two requirements can only be delivered by
+cross-wave handoffs that no round has yet got right; (3) shared documents (`01-RESEARCH.md`,
+`01-PATTERNS.md`, `01-VALIDATION.md`, `01-CONTEXT.md`) are read by nearly every plan and were not
+updated with the plan-level fixes, so each round's corrections were contradicted by the documents
+underneath them.
