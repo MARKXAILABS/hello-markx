@@ -288,8 +288,12 @@ No un-injection dance is needed — just do not inject.
 
 **Still needed:** the real `better-sqlite3` under plain Node is built for the **Electron** ABI
 (`config-secrets:45-46` states this, and `ci.yml` already does exactly this dance for `node-pty`).
-Budget `npm rebuild better-sqlite3` in the `test` job, or move the assertion to e2e (RESEARCH Open
-Question 2).
+~~Budget `npm rebuild better-sqlite3` in the `test` job~~ — **SUPERSEDED by red-team round 2.**
+Wave 1 bumps `better-sqlite3` to 13.x, which is N-API and ships eight prebuilds with no install
+script, so the CI `test` jobs' `npm ci --ignore-scripts` already leaves a Node-loadable binary.
+`npm rebuild better-sqlite3` **discards** that prebuild and synthesises `node-gyp rebuild`, which
+needs Python on the macOS and Windows runners where `setup-python` is Linux-gated — it breaks two
+hard-gate jobs. Plans 01 and 10 both assert `grep -c "npm rebuild better-sqlite3" ci.yml` is `0`.
 
 **Analog B: the real-tempdir floor harness** (`test/hive-protocol-v2.test.cjs:31-37`) — the shape
 for a self-cleaning store under test:
@@ -1170,7 +1174,11 @@ CONTEXT.md's and RESEARCH.md's "four". Use UI-SPEC's table.
         run: npm run typecheck
 ```
 
-**The one `continue-on-error` that exists here and must not be joined** (`.github/workflows/ci.yml:30-35`):
+**The `continue-on-error` declarations that exist here and must not be joined** — there are **two**
+effective ones, not one: `ci.yml:35` (the npm-audit step below) and `ci.yml:117` (`electron-rebuild`
+in the `build` job). Measured 2026-08-20: `grep -cE "^[^#]*continue-on-error: *true" .github/workflows/ci.yml`
+→ `2`; the raw `grep -c "continue-on-error"` → `4`, because `:45` and `:113` are comment prose. Plans
+01, 04, 21 and 23 all gate on the **effective** count of `2`. The npm-audit one (`ci.yml:30-35`):
 
 ```yaml
       - name: npm audit (high and above)

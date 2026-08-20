@@ -347,7 +347,7 @@ Why fold D-25 in: wave 1 already owns `test/load-ts.cjs` for the lazy-download f
 
 Ordering inside the wave, so a failure is diagnosable:
 1. `test/load-ts.cjs` — lazy-download fix + `.tsx`/JsxEmit. Run `npm test` on the **old** Electron first; it must stay green. This isolates the loader change from the version change.
-2. `electron ^43.4.1`, `electron-builder ^26.15.3`, `@electron/rebuild ^4.2.0`, `better-sqlite3 ^13.0.3` + `@types/better-sqlite3`. Wipe `node_modules`; regenerate `package-lock.json` with **npm 10** on a clean tree (D-07).
+2. `electron ^43.4.1`, `electron-builder ^26.15.3`, `@electron/rebuild ^4.2.0`, `better-sqlite3 ^13.0.3` + `@types/better-sqlite3`. Wipe `node_modules`; regenerate `package-lock.json` on a clean tree (D-07). **The "with npm 10" clause is WITHDRAWN** — npm 9, 10 and 11 all write `lockfileVersion: 3`, so it had no discriminating check, and this host is node v24.13.0 / npm 11.6.2 with no Node 22. Plan 01 is the authority.
 3. `electron-builder.yml` read-through — start with `mac.notarize: false`.
 4. D-10's version assertion in `e2e/smoke.spec.ts`.
 5. Three-platform CI, then D-09's live Windows operator run.
@@ -567,7 +567,7 @@ Honesty half, all anchors verified:
 - `src/main/config.ts:497` — `knowledgeGraph: { enabled: false }`, with a comment that itself records a previous default/doc mismatch. D-34 keeps it false.
 - `src/preload/index.ts:838` — the *"Enterprise Knowledge Graph (multimodal context for agents)"* section header D-35 renames.
 
-**Test-infrastructure trap (already flagged in CONTEXT.md, restated because it is easy to lose):** `test/config-secrets.test.cjs` fakes `better-sqlite3` with an in-memory `FakeDatabase` class via `require.cache` injection. That fake has **no FTS5** — indeed no SQL at all. The FTS5 migration therefore cannot be tested through the existing fake and needs a real SQLite handle in its own test, or it ships unverified. Under plain Node the real `better-sqlite3` is built for the **Electron** ABI and will not load, so the test must either `npm rebuild better-sqlite3` for the Node ABI (as `ci.yml` already does for `node-pty`) or run under the e2e job. This is a genuine, non-obvious cost and belongs in the plan as its own task.
+**Test-infrastructure trap (already flagged in CONTEXT.md, restated because it is easy to lose):** `test/config-secrets.test.cjs` fakes `better-sqlite3` with an in-memory `FakeDatabase` class via `require.cache` injection. That fake has **no FTS5** — indeed no SQL at all. The FTS5 migration therefore cannot be tested through the existing fake and needs a real SQLite handle in its own test, or it ships unverified. Under plain Node the real `better-sqlite3` is built for the **Electron** ABI and will not load, so a Node-loadable build is required. **[SUPERSEDED by red-team round 2/3 — see this file's Open Questions, and plans 01/10/21 which are the authority.]** Wave 1 bumps `better-sqlite3` to 13.x, which is N-API and ships prebuilds, so the CI `test` jobs' `npm ci --ignore-scripts` already leaves a working binary — **do NOT add `npm rebuild better-sqlite3`; it discards the prebuild and forces node-gyp where Python is pinned on Linux only.** This is a genuine, non-obvious cost and belongs in the plan as its own task.
 
 ### FLOOR-11 — adoption, not construction
 
@@ -794,7 +794,7 @@ Zero recurring cost: confirmed. Sigstore public-good + GitHub attestations are f
 
 **What goes wrong:** `test/config-secrets.test.cjs`'s `FakeDatabase` has no SQL at all, so a test written against the existing fake asserts nothing about the migration.
 **Why:** the real `better-sqlite3` is built for the Electron ABI and cannot load under plain `node --test`.
-**Avoid:** budget a task for either `npm rebuild better-sqlite3` for the Node ABI in CI (mirroring what `ci.yml` already does for `node-pty`, with the same Python 3.11 pin on Linux) or an e2e-level assertion.
+**Avoid:** ~~budget a task for `npm rebuild better-sqlite3` in CI~~. **[SUPERSEDED by red-team round 2/3 — see this file's Open Questions, and plans 01/10/21 which are the authority.]** On 13.x that step is harmful, not merely redundant. Budget nothing: the N-API prebuild loads under `npm ci --ignore-scripts`.
 **Warning sign:** an FTS5 test that passes without ever executing `CREATE VIRTUAL TABLE`.
 
 ### Pitfall 6 — Escalating the breaker one level and expecting `constrained`
@@ -808,7 +808,7 @@ Zero recurring cost: confirmed. Sigstore public-good + GitHub attestations are f
 
 **What goes wrong:** the Electron 43 dep tree re-resolves broadly. A lockfile written by npm 11, or over a `node_modules` still holding Electron-32-ABI `.node` files with `-f` in play, produces the classic works-locally / red-on-CI split.
 **Why:** lockfile format drift plus stale native artifacts.
-**Avoid:** D-07 exactly — wipe `node_modules`, install with **npm 10** on a clean tree, never hand-edit the lockfile.
+**Avoid:** D-07 exactly — wipe `node_modules`, install on a clean tree, never hand-edit the lockfile. (The "npm 10" clause is withdrawn; record the writer's `node --version && npm --version` instead.)
 **Warning sign:** a lockfile diff with `"lockfileVersion"` changed, or a local `npm test` green while CI's `npm ci` is red.
 
 ### Pitfall 8 — Claiming a capability the platform will not deliver
@@ -905,7 +905,7 @@ CI step (`.github/workflows/ci.yml`, into the existing `typecheck` job — it al
 
 ```yaml
       - name: Lint
-        run: npx eslint . --max-warnings 0
+        run: npm run lint          # NOT bare `npx eslint` — plan 21 adds the script and asserts this exact form
 ```
 
 ### 5. `sweepTaskReviews` — the obligation set (VERDICT-02)
@@ -959,8 +959,8 @@ And in `applyReviewVerdict` (`hive.ts:1794-1806`), on `refuse`, re-add the id �
 
 | Dependency | Required by | Available | Version | Fallback |
 |---|---|---|---|---|
-| Node.js (host) | everything | ✓ | System is **v24** per operator memory; `.nvmrc` pins 22 | **Mismatch.** Wave 1's `package-lock.json` regeneration requires npm 10 / Node 22 (D-07). Use a Node 22 install (nvm/portable) for the lockfile step. Node 24 also breaks the `node-pty` winpty gyp build on Windows per `ci.yml`. |
-| npm 10 | D-07 lockfile regeneration | ⚠ | Bundled with Node 22 | Node 24 ships npm 11 — wrong lockfile writer. Same fix as above. |
+| Node.js (host) | everything | ✓ | System is **v24** per operator memory; `.nvmrc` pins 22 | **No longer a mismatch for the lockfile.** The npm-10/Node-22 writer rule is withdrawn (npm 9/10/11 all write `lockfileVersion: 3`); do NOT install a second Node to satisfy it. Node 24 also breaks the `node-pty` winpty gyp build on Windows per `ci.yml`. |
+| npm 10 | ~~D-07 lockfile regeneration~~ | n/a | — | **Rule withdrawn.** npm 9/10/11 all write `lockfileVersion: 3`; the writer's version is recorded, not gated. |
 | `git` | commits, `hive.ts` git paths, tests | ✓ | — | — |
 | `gh` CLI | D-46 phase gate, D-43/44 issue closing, `src/main/github.ts` | ✓ | Authenticated — `gh issue list` returned 24 issues this session | — |
 | Visual Studio 2019 Spectre / ClangCL | `node-pty` native build on Windows | ✓ per operator memory | — | Required for `node-pty`'s `SpectreMitigation: Spectre` in `binding.gyp`. |
@@ -987,7 +987,7 @@ And in `applyReviewVerdict` (`hive.ts:1794-1806`), on `refuse`, re-add the id �
 | Full suite command | `npm test` = `node --test test/*.test.cjs` — 56 files, 426 tests (422 pass / 0 fail / 4 skip). **The gate.** |
 | Typecheck | `npm run typecheck` = `tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json` |
 | E2E | `npm run e2e` = `playwright test` — Linux/xvfb only, one spec, `workers: 1`, `retries: 0` |
-| Lint (after FLOOR-16) | `npx eslint . --max-warnings 0` |
+| Lint (after FLOOR-16, wave 8) | `npm run lint` (the local install — never bare `npx eslint`) |
 | Shell gotcha | `node --test test/` does **not** work — the glob `test/*.test.cjs` is expanded by Node itself. Always use the exact invocation. |
 
 ### Phase Requirements → Test Map
@@ -1019,7 +1019,7 @@ Command column is the automated proof. "Live" means an operator/CI action that n
 | FLOOR-13 | `sidebarWidth` re-clamps on resize | unit (pure clamp fn) | `node --test test/renderer-runstate.test.cjs` | ✅ extend — extract the clamp first |
 | FLOOR-14 | a blocked non-Claude agent produces a notify call | unit (DI `notify` fake) | `node --test test/hooks-notify.test.cjs` | ❌ Wave 6 |
 | FLOOR-15 | 3–5 presentational components render to expected markup | static render | `node --test test/renderer-components.test.cjs` | ❌ Wave 6 |
-| FLOOR-16 | lint is a hard gate at zero warnings | repo-fact + live | `test/ci-config.test.cjs` asserts the step + flag; `npx eslint . --max-warnings 0` | ✅ extend / live |
+| FLOOR-16 | lint is a hard gate at zero warnings | repo-fact + live | `test/ci-config.test.cjs` asserts the step + flag; `npm run lint` | ✅ extend / live |
 | FLOOR-17 | bug template asks only for logs that exist; ADRs present | repo-fact | `test/repo-claims.test.cjs` | ❌ Wave 6 |
 | FLOOR-18 | `capabilityLine` declares the Windows Codex gap | unit | `node --test test/engine-parity.test.cjs` | ✅ extend |
 | GATE-01 | agent A's token carrying `agent_id: 'B'` surfaces as A (or is dropped) | integration (**real** socket / named pipe) | `node --test test/net-binding.test.cjs` | ✅ extend (D-16) |
@@ -1032,7 +1032,7 @@ Command column is the automated proof. "Live" means an operator/CI action that n
 ### Sampling Rate
 
 - **Per task commit:** `npm run test:focused` for the tight loop, **then** `npm test` before the commit is considered done. `test:focused` alone is explicitly not a gate.
-- **Per wave merge:** `npm test` on all three platforms via `ci.yml` + `npm run typecheck` + (after wave 6) `npx eslint . --max-warnings 0`. No `continue-on-error` may be added anywhere.
+- **Per wave merge:** `npm test` and `npm run typecheck`, with the three-platform evidence taken from **the phase's draft PR** (`gh pr checks` — rows `Typecheck`, `Test (ubuntu-latest|windows-latest|macos-latest)`, `Electron smoke (ubuntu-latest)`), because both workflows trigger on `branches: [main]` only and a phase-branch push produces **no run at all**. Plus, **after wave 8** (not wave 6 — ESLint does not exist until plan 21), `npm run lint` — never bare `npx eslint`, which fetches an unpinned ESLint from the registry. No `continue-on-error` may be added anywhere.
 - **Per wave merge, waves 1 and 4:** `npm run e2e` additionally — wave 1 changes the runtime, wave 4 changes the boot-time delivery path.
 - **Phase gate:** full suite green on three platforms; e2e green; lint green; D-09's live Windows run recorded; D-46's mechanical `gh` query returning `0`.
 
@@ -1079,7 +1079,7 @@ Test infrastructure that must exist before the requirements that depend on it:
 | Timing attack on the token compare | **Spoofing** | `timingSafeEqual`, pinned by a source-grep regression test | Already landed; do not regress. `test/net-binding.test.cjs` greps four files for the length-comparison pattern. |
 | Cost-ledger poisoning via forged hook payloads | **Tampering / Repudiation** | Same token gate; FLOOR-09's rewiring must not open a second unauthenticated path | **FLOOR-09** — route through `recordCostSample`, keep the `authorized()` gate ahead of it. |
 | Supply-chain: a tampered release binary | **Tampering** | Sigstore build provenance + published SHA256SUMS | **FLOOR-06**. Note honestly: this does **not** suppress SmartScreen. |
-| Dependency-confusion / malicious transitive dep | **Tampering** | `npm ci` from a committed lockfile, dependabot, `npm audit --audit-level=high` | Existing. Wave 1's lockfile regeneration is the moment of maximum exposure — regenerate on a clean tree with npm 10 and review the diff. |
+| Dependency-confusion / malicious transitive dep | **Tampering** | `npm ci` from a committed lockfile, dependabot, `npm audit --audit-level=high` | Existing. Wave 1's lockfile regeneration is the moment of maximum exposure — regenerate on a clean tree and review the diff (the npm-10 writer clause is withdrawn). |
 | Path traversal via IPC file arguments | **Tampering** | `safeJoin`/`isWithinRoots`, root-confinement checks | Existing; no new file-taking IPC is planned. Copy `skills:reveal`'s shape if one appears. |
 | Unbounded resource growth (feeds, pools, ledgers) | **Denial of service** | `FEED_MAX`, `TERMINAL_POOL_MAX`, `LOG_ROTATE_BYTES`, ledger tail | Mostly landed. **RECORD-03 deliberately removes one bound** (the 1 MB `taskSpend` tail) — D-20's in-memory `Map<taskId, tokens>` is what replaces it, and it must be bounded by card lifetime, not grow forever. Flag this in the plan. |
 
@@ -1098,7 +1098,7 @@ There is **no `./CLAUDE.md`** at the repo root (verified: `ls` of the root). The
 7. **No `continue-on-error` may be added to `ci.yml`.** The existing two (the advisory `npm audit`, and the flaky native-rebuild step in the `build` job) are pre-existing and deliberate; both are documented inline. Do not add a third.
 8. **`node-pty` stays exact-pinned at `1.1.0`** — `tools/patch-node-pty-conpty.cjs` does a byte-exact string match and `process.exit(1)`s loudly on mismatch. Read its failure as *"node-pty version changed"*, never *"Electron version changed"* (D-05).
 9. **`typescript` stays exact-pinned at `5.9.3`** for typecheck reproducibility.
-10. **`package-lock.json` is regenerated by npm 10 on a clean tree, never hand-edited** (D-07).
+10. **`package-lock.json` is regenerated on a clean tree, never hand-edited** (D-07 — the "by npm 10" clause is withdrawn; `lockfileVersion: 3` plus `npm ci --ignore-scripts && git diff --exit-code package-lock.json` are the checks that discriminate).
 11. **ADR-0002 (prompt-cache invariant)** constrains anything that changes roster-prompt text — directly binding on FLOOR-18 (D-40) and on FLOOR-09's "god is told per-engine capabilities in a prompt-cache-safe position".
 12. **ADR-0001 (one gate for PTY writes)** governs anything that types into a terminal — binding on FLOOR-02's queue-drain move.
 13. **ADR-0004 (single-committer git)** governs the commit path — binding on FLOOR-04.

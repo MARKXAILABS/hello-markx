@@ -38,9 +38,9 @@ created: 2026-08-20
 ## Sampling Rate
 
 - **After every task commit:** `npm run test:focused` for the tight loop, **then** `npm test` before the task counts as done.
-- **After every plan wave:** `npm test` on all three platforms via `ci.yml`, plus `npm run typecheck`. After wave 8, add `npm run lint` (`eslint . --max-warnings 0`). **Wave 8, not earlier** — plan 21 is what creates `eslint.config.js` and the `lint` script; running the gate in wave 7 would make `npx` fetch an unpinned ESLint mid-phase and lint an unconfigured tree.
+- **After every plan wave:** `npm test` and `npm run typecheck`, with the three-platform evidence read from **the phase's draft PR** via `gh pr checks` — rows `Typecheck`, `Test (ubuntu-latest)`, `Test (windows-latest)`, `Test (macos-latest)`, `Electron smoke (ubuntu-latest)`. Both workflows trigger on `branches: [main]` only (`ci.yml:4-7`, `e2e.yml:11-14`), so a push to the phase branch produces **no run at all** — plan 01 task 3 opens the draft PR that makes these checks exist. Note the E2E **job** is `Electron smoke (ubuntu-latest)`; `E2E` is only the workflow name, and `gh pr checks` lists jobs. After wave 8, add `npm run lint` (`eslint . --max-warnings 0`). **Wave 8, not earlier** — plan 21 is what creates `eslint.config.js` and the `lint` script; running the gate in wave 7 would make `npx` fetch an unpinned ESLint mid-phase and lint an unconfigured tree.
 - **After waves 1 and 4 additionally:** `npm run e2e`. Wave 1 changes the runtime; wave 4 changes the boot-time delivery path.
-- **Before `/gsd:verify-work`:** full suite green on three platforms, e2e green, lint green.
+- **Before `/gsd:verify-work`:** full suite green on all three `Test (os)` rows of the draft PR, `Electron smoke (ubuntu-latest)` green, lint green. An empty `gh pr checks` table is a FAIL, not a pass — it means nothing triggered.
 - **No `continue-on-error` may be added to the matrix anywhere, for any reason.**
 - **Exit 0 is never sufficient evidence — read the counters.** `node --test` counts *skipped* tests in
   its total and exits `0` when every test in a file is skipped, so a suite whose new tests are all
@@ -92,7 +92,7 @@ CI link:**
 | FLOOR-01 | `autoMode` renders on the agent card | static render | `node --test test/renderer-components.test.cjs` | ❌ W0 — needs W1 loader |
 | FLOOR-02 | queue-drain + quiesce run in main with no window | unit (DI harness) | `node --test test/delivery-main.test.cjs` | ✅ extend |
 | FLOOR-02 | no doc promises a dead code path | repo-fact | `node --test test/repo-claims.test.cjs` | ❌ W0 |
-| FLOOR-03 | 3-platform suite green on Electron 43 | full suite | `npm test` ×3 platforms | ✅ `ci.yml` |
+| FLOOR-03 | 3-platform suite green on Electron 43 | full suite | the draft PR's three `Test (os)` rows via `gh pr checks` | ✅ `ci.yml` via the PR (a branch push triggers nothing) |
 | FLOOR-03 | the launched app really is Electron ≥43 | e2e | `npm run e2e` (D-10) | ✅ extend `e2e/smoke.spec.ts` |
 | FLOOR-03 | real PTY spawns; real `better-sqlite3` write lands on Windows | **live (D-09)** | operator run of the built app | — |
 | FLOOR-04 | a secret in an agent file never reaches `git log -p` | integration (real temp git repo) | `node --test test/hive-durability.test.cjs` | ✅ extend — already drives real `git` |
