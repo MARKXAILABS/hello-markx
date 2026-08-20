@@ -463,7 +463,9 @@ grep -rnP ">\s*([^A-Za-z0-9\s<>{}/]|\{[a-zA-Z]+ \? '[^A-Za-z0-9]' : '[^A-Za-z0-9
 > real elements**. `/` is dropped from the glyph vocabulary entirely.
 
 **The 30 candidates.** Vocabulary: `✕`×9 · `•`×3 · `·`×3 · `✎`×2 · `{open ? '▾' : '▸'}`×2 ·
-`✓` `⚠` `└` `−` `⇄` `—` `?` `.` `%` `{gitCollapsed ? '▸' : '▾'}` ×1 each.
+`✓` `⚠` `└` `−` `⇄` `—` `?` `.` `%` `+` `{gitCollapsed ? '▸' : '▾'}` ×1 each.
+(`+` is `PtyTerminalView.tsx:426`, verified — its omission made the vocabulary counts sum to 29
+against the file table's correct 30.)
 
 | File | Glyph |
 |------|-------|
@@ -604,9 +606,15 @@ while `:706` in the same file says *"never go below 14 px for any user-facing te
 contradicts itself, and the phase's premise is that every claim the project makes about itself is
 true. `:706` is the clause the roadmap grades against, so it wins.
 
-Required edits to `DESIGN.md` §4.1: set `:128` `display-md` to 14/20 and delete the `:129`
-`display-sm` row. `:132` `body-sm` and `:134` `mono-sm` already read 14/18 — `tokens.css` had
+Required edits to `DESIGN.md` §4.1: set `:128` `display-md` to 14/20, delete the `:129`
+`display-sm` row, **and amend `:119`** — it reads *"NES-iconic, headings only, 8/12/16 px"*, so
+editing `:128`/`:129` without it would leave the doc naming two sizes that no longer exist.
+Set it to `14/16 px`. `:132` `body-sm` and `:134` `mono-sm` already read 14/18 — `tokens.css` had
 drifted below the doc, not above it. No other §4.1 row changes.
+
+Amending `:119` is not optional housekeeping: success criterion 1 bans a doc that promises what
+the code does not do, and this phase would otherwise *create* such a contradiction while closing
+another one.
 
 ---
 
@@ -685,7 +693,9 @@ PTY byte does not re-render the roster"* landing in the same phase. The graded c
 criterion 4 is *"agree on what they show, cost included"* — cost, not duration. Do not build it.
 
 **Agent-name casing stays as-is.** `AgentCard.tsx:220` renders `{name.toUpperCase()}`. Rule 1b moves
-that site from Press Start 2P to Inter, and `DESIGN.md:140-141` reserves ALL-CAPS for display fonts.
+that site from Press Start 2P to Inter. Note the doc is violated either way — `DESIGN.md:140` reads
+*"Display fonts: **TITLE CASE**, never ALL CAPS"*, so ALL CAPS was already non-compliant on the
+display face, and `:141` mandates sentence case on the UI face it moves to.
 The `.toUpperCase()` **stays**: casing is not one of the six requirements, changing it is a visual
 change nothing asks for, and the card's identity line reads as a nameplate. `DESIGN.md:140-141`
 joins the known-drift list rather than driving a code change.
@@ -823,7 +833,9 @@ because they directly contradict `:706`, which criterion 4 grades against.
 | `:119-121` | UI face is Pixelify Sans, mono is VT323 | `tokens.css:56-57` — Inter and JetBrains Mono since v0.3.4 |
 | `:131` | `body-md` is 16px | `tokens.css:65` — `--cth-text-body-md: 14px` |
 | `:137` | *"All fonts ship in a single weight. Never bold."* | 24 `fontWeight` declarations, incl. 13× `600`, 4× `'bold'`, 2× `700` |
-| `:140-141` | ALL-CAPS reserved for display fonts; UI fonts sentence case | `AgentCard.tsx:220` `.toUpperCase()` on a site Rule 1b moves to Inter |
+| `:140-141` | *"Display fonts: **TITLE CASE**, never ALL CAPS"*; UI fonts sentence case | `AgentCard.tsx:220` `.toUpperCase()` — ALL CAPS, which `:140` bans on **either** face. Rule 1b then moves that site to Inter, where `:141` mandates sentence case. The doc is violated before and after; `.toUpperCase()` stays regardless (see Rule 1b). |
+| `:130` | `body-lg` is 18 / `Pixelify Sans` | `tokens.css:64` — `--cth-text-body-lg: 16px`, and the face is Inter |
+| `:133` | `mono-md` is 16 / `VT323` | `tokens.css:67` — `--cth-text-mono-md: 14px`, and the face is JetBrains Mono |
 | `:674` | Agent strip is 80px tall | `AgentStrip.tsx:257-258` — `height: 112`; `AgentCard.tsx:111` — card is 78 |
 
 ---
