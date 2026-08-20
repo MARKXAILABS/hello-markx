@@ -73,9 +73,18 @@ PWA (Phase 2), and any engine verification that needs a paid account this projec
   compiles clean, leave it.
 - **D-07 — Host Node stays 22.** Electron's bundled Node 24 is internal to the Electron binary and
   does not relax the host pin. `engines: ">=20 <23"`, `.nvmrc`, and `NODE_VERSION` in all three
-  workflows stay on 22. `package-lock.json` regenerated with **npm 10** on a clean tree, never
-  hand-edited — the Electron 43 dep tree re-resolves broadly, so this rule gets *more* load-bearing
-  here, not less. Wipe `node_modules` before the first install: a stale `.node` plus `-f` is the
+  workflows stay on 22. `package-lock.json` regenerated on a clean tree, never hand-edited — the
+  Electron 43 dep tree re-resolves broadly, so this rule gets *more* load-bearing here, not less.
+  **Amended by red-team round 2 (2026-08-20): the "regenerated with npm 10" clause is withdrawn.**
+  npm 9, 10 and 11 all write `lockfileVersion: 3`, so the rule had no check that could tell them
+  apart, and this host is node v24.13.0 / npm 11.6.2 with **no Node 22 installed** — the instruction
+  was unfollowable here. What replaces it is checks that actually discriminate: `lockfileVersion` is
+  3 (ruling out a v1/v2 downgrade), `npm ci --ignore-scripts && git diff --exit-code
+  package-lock.json` proves the lock matches `package.json`, the locked `better-sqlite3` entry has no
+  install script, and the writer's `node --version && npm --version` is recorded in the SUMMARY. CI's
+  `setup-node` Node 22 *consuming* this lockfile is the direction that matters, and that is the
+  enforcing gate. Plan 01 owns this; no other plan may re-order regeneration "the way plan 01 did it
+  with npm 10" — plan 01 did not. Wipe `node_modules` before the first install: a stale `.node` plus `-f` is the
   classic works-locally/red-on-CI split.
 
 ### Verification — the Electron blind spot
@@ -107,9 +116,20 @@ PWA (Phase 2), and any engine verification that needs a paid account this projec
   PTY would still inherit the old floor-wide master key.
 - **D-13 — The qwen proxy sidecar's own spawn site must pass the per-agent token explicitly**, since
   it is spawned with `...process.env` and would otherwise be dead-hooked by D-12.
+  **Ownership set by red-team round 2 (2026-08-20):** the edit is in `src/main/hive.ts`, which plan 02
+  may not touch (plan 03 owns it in wave 2) and which cannot compile against plan 02's mint until the
+  wave after. It is carried by **plan 06 task 4, wave 3**, and asserted whole by plan 23 in wave 9.
+  The qwen/crush tier is dead-hooked for that one wave — accepted deliberately, because the
+  alternative is keeping the floor-wide secret alive through wave 3, which is the vulnerability
+  GATE-01 exists to remove. A dead hook is inert; a live shared secret is exploitable.
 - **D-14 — Document the honest ceiling in the `hooks.ts` header.** An agent's own shell can always
-  read whatever its own shim can read. The achievable, testable property is **impersonation
-  resistance** ("A cannot authenticate as B"), not secrecy. Do not let docs or UI claim more.
+  read whatever its own shim can read, so the property is not secrecy.
+  **Narrowed by red-team round 2 (2026-08-20):** it is not "A cannot authenticate as B" either. The
+  token lives in B's process environment (`src/main/pty.ts:664-693`); on Linux a same-uid sibling
+  reads `/proc/<B-pid>/environ`, `AGENT_DENY_RULES` covers no `/proc` path, and B's pid is one
+  `pgrep -f` away. The achievable, testable properties are exactly two: **there is no floor-wide
+  key**, and **`payload.agent_id` is no longer trusted** for identity. Docs, UI and the `hooks.ts`
+  header state those two and name the same-uid limitation. Do not let anything claim more.
 - **D-15 — Rejected, with reasons recorded:** a perms-restricted token *file* buys nothing against a
   same-uid shell and `chmod 0o600` is effectively a no-op on NTFS (false assurance);
   HMAC/nonce rotation adds freshness but not impersonation resistance, and `PI_EXTENSION` /
@@ -491,27 +511,34 @@ false here while true on main.**
 **pre-merge**. `hive.ts` gained 8 lines at `:3086`, so anchors below that point shift; test-count and
 `sock_token` baselines changed. A re-measure pass is required before execution.
 
-### Open BLOCKER/HIGH findings (must be closed before `RED_TEAM_CLEAN = true`)
+### Round 1 findings — ALL CLOSED in commit `2fc9ef1` (2026-08-20)
 
-| Lens | Finding | Status |
+Every row below was closed against live source, not against a report. Three of them were closed by
+changing something other than what round 1 named, because the fix pass found the real cause:
+
+| Lens | Finding | Closed by |
 |---|---|---|
-| (c) security | Shims did not send `sock_token`; GATE-01 premise false on this branch | **FIXED** by the merge |
-| (c) security | D-13's qwen sidecar spawn (`hive.ts:1182`) has no owning plan — plan 02 is banned from `hive.ts` | OPEN |
-| (c) security | Shared shim `<hiveRoot>/bin/cth-hook.cjs` is one file for the whole floor and is not in `DENY_RULES`; agent A can append to it and harvest B's token | OPEN |
-| (b) executability | `&amp;&amp;` (HTML-escaped) in three `<automated>` tags — `01-01:231`, `01-17:245`, `01-18:242` | OPEN |
-| (b) executability | `npx eslint --format compact` removed in ESLint 9; plan 21 declares no `eslint-formatter-compact` | OPEN |
-| (b) executability | Plan 21 requires keeping all nine `exhaustive-deps` suppressions AND `--max-warnings 0` green; `CompletionToast.tsx:80`'s directive is unused → gate unreachable | OPEN |
-| (a) correctness | `HIVE.md:85-103` holds three more stale Stop-drain denials plan 07 is told not to touch; its four frozen literals go green over them | OPEN |
-| (a) correctness | GATE-01's doc surface (`SECURITY.md:34-39`, `ARCHITECTURE.md:469-475`, `INTEGRATIONS.md:116`) has no owning plan | OPEN |
-| (a) correctness | `sweepTaskReviews`' `!previous.has(task.id)` — a card created and finished inside one 60s sweep window is never reviewed; plan 03 preserves it verbatim | OPEN |
-| (f) cross-plan | Plan 21 (wave 8) inserts comment lines that shift `file:line` allowlist entries frozen by wave 7 and asserted literally by plan 23 in wave 9 | OPEN |
-| (f) cross-plan | Plan 21 task 2's real file set is the whole renderer (60 files with `useEffect`); it declares 13 and has no `git diff --stat` containment | OPEN |
-| (d) scope/gate | Plan 01 adds `npm rebuild better-sqlite3` to all three hard-gate CI jobs; 13.0.3 ships N-API prebuilds and no install script, so the step is unnecessary AND forces node-gyp on macOS/Windows, which have no Python pin | OPEN |
-| (d) scope/gate | The npm-10 lockfile rule has no working check — npm 9/10/11 all write `lockfileVersion: 3` | OPEN |
-| (d) scope/gate | Plan 01's stated fallback ("revert to 11.10.0") is the failure mode, not a recovery path | OPEN |
-| (e) fake-coverage | Plan 10's FTS5 test needs a Node-ABI `better-sqlite3`; a `t.skip` fallback would report green — `node --test` exits 0 on an all-skipped file | OPEN |
-| (e) fake-coverage | Plan 08's restart-durability test is satisfiable by an in-memory `Map` — no real file required | OPEN |
-| (e) fake-coverage | 8 of 56 test files are hand-rolled non-`node:test` harnesses, not 1; only `breaker.test.cjs` is flagged | OPEN |
+| (c) security | Shims did not send `sock_token`; GATE-01 premise false on this branch | the `origin/main` merge (PR #76) |
+| (c) security | D-13's qwen sidecar spawn has no owning plan | **plan 06 task 4, wave 3** — see D-13 above for why no wave-2 plan can carry it |
+| (c) security | Shared shim `<hiveRoot>/bin/cth-hook.cjs` unprotected | plan 02 task 2's PreToolUse gate (wider than `AGENT_DENY_RULES`, which is Claude-only) |
+| (b) executability | `&amp;&amp;` HTML-escaped in three `<automated>` tags | literal `&&` in plans 01, 17, 18 |
+| (b) executability | `npx eslint --format compact` removed in ESLint 9 | built-in `json` formatter; the compact republish fails the plan's own publisher bar |
+| (b) executability | Nine `exhaustive-deps` suppressions vs `--max-warnings 0` unreachable | `--no-inline-config` resolver decides keep/delete per file, mechanically |
+| (a) correctness | `HIVE.md:85-103` stale Stop-drain denials | **nine** stale claims, not three — all gated by plan 07 |
+| (a) correctness | GATE-01's doc surface has no owning plan | **four** surfaces, not three — split across plans 02 and 04 |
+| (a) correctness | `sweepTaskReviews`' `!previous.has(task.id)` | clause deleted by plan 03, with a test that fails against today's source |
+| (f) cross-plan | Plan 21 (w8) shifts `file:line` anchors plan 23 (w9) asserts | allowlist re-keyed to a `{file,text,count}` multiset + mutation proof |
+| (f) cross-plan | Plan 21 task 2's real file set is 60, not 13 | whole-renderer glob declared + `git diff --name-only` containment |
+| (d) scope/gate | `npm rebuild better-sqlite3` in three hard-gate CI jobs | removed — 13.0.3 is N-API, ships 8 prebuilds, no install script (verified in a clean dir) |
+| (d) scope/gate | npm-10 lockfile rule has no working check | rule deleted; replaced with checks that discriminate |
+| (d) scope/gate | "Revert to 11.10.0" is the failure mode, not a recovery | real §Recovery block that ends honestly in "phase blocked" |
+| (e) fake-coverage | Plan 10's FTS5 test could skip-as-green | no skip constructs, TAP `# skipped 0`, load at column 0 outside any `try` |
+| (e) fake-coverage | Plan 08's restart test satisfiable by a `Map` | real `spawnSync` process boundary + a negative control |
+| (e) fake-coverage | 8 of 56 test files are hand-rolled, only 1 flagged | all eight enumerated; also caught `proc-kill` exiting 0 on win32 before asserting |
+
+**Three defects the fix pass found that round 1 had not:** plans 01 and 10 asserted opposite values
+for the same `ci.yml` grep (wave 5 would have broken wave 1's gate); `test/proc-kill.test.cjs:28-32`
+is green-forever on Windows; and the GATE-01 sidecar fix cannot compile in wave 2 at all.
 
 Full lens reports are in the session transcript. Nothing here is a wording nit; each entry either
 lets an executor do wrong work, ships a false claim, or produces coverage that cannot fail.
