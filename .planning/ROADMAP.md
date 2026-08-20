@@ -98,7 +98,7 @@ lines) are placed in this phase rather than in one of their own, for three concr
 **Depends on**: Phase 1 — specifically FLOOR-02 (the rest of the autonomy move must be in
 main before headless boot means anything) and FLOOR-03 (do not build the daemon boot path
 twice against two Electron majors).
-**Requirements**: DAEMON-01, DAEMON-02, DAEMON-03, DAEMON-04, PARITY-01, PARITY-02, PARITY-03, STRUCT-01, STRUCT-02
+**Requirements**: DAEMON-01, DAEMON-02, DAEMON-03, DAEMON-04, DAEMON-05, PARITY-01, PARITY-02, PARITY-03, STRUCT-01, STRUCT-02
 **Success Criteria** (what must be TRUE):
   1. **The floor runs with no window.** Started headless — or with the window quit — agents
      still spawn, mail still routes between them, and an account failover still completes end

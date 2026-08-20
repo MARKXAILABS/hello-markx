@@ -176,7 +176,7 @@ goals and success criteria each requirement rolls up into.
 
 **Coverage:**
 - v1 requirements: 33 total
-- Mapped to phases: 32 (Phase 1: 18 · Phase 2: 9 · Phase 3: 5)
+- Mapped to phases: 33 (Phase 1: 18 · Phase 2: 10 · Phase 3: 5)
 - Unmapped: 0 ✓
 
 ---
