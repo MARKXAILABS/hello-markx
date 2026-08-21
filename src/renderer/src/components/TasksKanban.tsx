@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { Icon } from './Icon';
 import { useStore } from '@/store/store';
+import { useHiveTasks, refreshHiveTasks } from '@/hooks/useHiveTasks';
 
 /** A card on the task kanban. Mirrors HiveTask in the main/preload process —
  *  re-declared locally so the renderer doesn't reach into the preload package
@@ -58,8 +59,6 @@ const COLUMNS: { key: Status; label: string; accent: string }[] = [
   { key: 'done',    label: 'DONE',    accent: 'var(--cth-mint)' }
 ];
 
-const POLL_MS = 5000;
-
 /** Deterministic fallback id derived from a task's content (djb2 → base36).
  *  Used for tasks lacking a valid string id so re-parsing tasks.json on every
  *  5s poll yields the SAME id — no React key churn / card remount. Unlike
@@ -109,7 +108,9 @@ export function parseTasks(raw: unknown): HiveTask[] {
 }
 
 /**
- * Task kanban over hive/tasks.json — a READ surface. Polls every 5s; cards
+ * Task kanban over hive/tasks.json — a READ surface. Rides the renderer's ONE
+ * 5s task poll (hooks/useHiveTasks) rather than running its own against the
+ * same file (#20); cards
  * carry just the title and open the app-wide detail overlay on click. The god
  * is the ledger's writer: new work enters via the dispatch box (mailed to the
  * god), never by the human inserting cards the orchestrator never heard about.
@@ -122,11 +123,14 @@ export function TasksKanban() {
   // TaskDetailOverlay) — the content grows (contracts, deps, human Q&A), so it
   // gets the big stage instead of the narrow side panel.
   const openTaskDetail = useStore((s) => s.openTaskDetail);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const refresh = useCallback(async () => {
-    try { setTasks(parseTasks(await window.cth.hiveTasks())); } catch { /* keep last good */ }
-  }, []);
+  // `tasks` stays LOCAL state rather than being derived straight off the shared
+  // payload: dismissTask writes to it optimistically, so a derived value would
+  // leave the dismissed card on the board until the next tick.
+  const rawTasks = useHiveTasks();
+  useEffect(() => {
+    try { setTasks(parseTasks(rawTasks)); } catch { /* keep last good */ }
+  }, [rawTasks]);
 
   // Dismiss a card off the board (human-initiated). The kanban is otherwise the
   // god's to write, but a person can clear a card they no longer want tracked.
@@ -135,16 +139,13 @@ export function TasksKanban() {
   const dismissTask = useCallback(async (id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id)); // optimistic
     try {
-      const result = await window.cth.hiveDeleteTask(id);
-      if (!result.ok) void refresh();
+      await window.cth.hiveDeleteTask(id);
+      // Force the shared poller to re-read NOW instead of waiting out its 5s
+      // tick: confirms the removal, and resurrects the card from disk if main
+      // refused the delete — the job this view's own `refresh()` used to do.
+      refreshHiveTasks();
     } catch { /* keep last good; the next poll re-syncs from disk */ }
-  }, [refresh]);
-
-  useEffect(() => {
-    refresh();
-    timer.current = setInterval(refresh, POLL_MS);
-    return () => { if (timer.current) clearInterval(timer.current); };
-  }, [refresh]);
+  }, []);
 
   const restorableAgents = useStore((s) => s.restorableAgents);
   /** Resolve an assignee id to a display name — falls back to the restorable

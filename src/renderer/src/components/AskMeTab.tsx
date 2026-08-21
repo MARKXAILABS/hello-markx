@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { useStore } from '@/store/store';
+import { useHiveTasks } from '@/hooks/useHiveTasks';
 import { type HiveTask, openQuestion, waitsOnHuman } from './TasksKanban';
 
 /**
@@ -21,8 +22,6 @@ import { type HiveTask, openQuestion, waitsOnHuman } from './TasksKanban';
  *   2. mails the god so it picks the answer up, unblocks the card, and the
  *      work continues — no separate HumanQuestion.md side-channel anymore.
  */
-
-const POLL_MS = 5000;
 
 function parse(raw: unknown): HiveTask[] {
   const list = (raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks))
@@ -49,17 +48,17 @@ export function AskMeTab() {
   const setAnswerDraft = useStore((s) => s.setAnswerDraft);
   const openTaskDetail = useStore((s) => s.openTaskDetail);
   const [sending, setSending] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const refresh = useCallback(async () => {
-    try { setTasks(parse(await window.cth.hiveTasks())); } catch { /* keep last good */ }
-  }, []);
-
+  // The renderer's ONE task poll (hooks/useHiveTasks) replaces this view's own
+  // 5s timer against the same file (#20). `tasks` stays LOCAL state rather than
+  // being derived straight off the payload: sendAnswer and dismiss both write
+  // to it optimistically (`setTasks(next)` before the disk round trip, and the
+  // restore-on-failure below), so a derived value would drop the immediate
+  // feedback and leave the card sitting there until the next tick.
+  const rawTasks = useHiveTasks();
   useEffect(() => {
-    refresh();
-    timer.current = setInterval(refresh, POLL_MS);
-    return () => { if (timer.current) clearInterval(timer.current); };
-  }, [refresh]);
+    try { setTasks(parse(rawTasks)); } catch { /* keep last good */ }
+  }, [rawTasks]);
 
   const nameFor = (id?: string): string | undefined =>
     id ? (agents.find((a) => a.id === id)?.name ?? restorable.find((a) => a.id === id)?.name ?? id) : undefined;

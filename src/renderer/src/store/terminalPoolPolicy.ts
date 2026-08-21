@@ -15,6 +15,7 @@
  * Both refuse to touch a terminal that is currently attached to a view. A
  * detached terminal can always be rebuilt on its next attach; disposing an
  * attached one blanks a pane the user is looking at.
+ * Why a sweep and not a dispose per call site: docs/adr/0006-terminal-pool-lifetime.md
  */
 
 /** How many terminals the pool may hold. Generous on purpose: the sweep below

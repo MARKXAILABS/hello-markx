@@ -3,6 +3,7 @@ import { Application, Container, Graphics, Ticker, Texture } from 'pixi.js';
 // PixiJS uses new Function() internally, blocked by Electron CSP — this patches it.
 import 'pixi.js/unsafe-eval';
 import { useStore, type Agent } from '@/store/store';
+import { useHiveTasks } from '@/hooks/useHiveTasks';
 import { TiledMapRenderer } from './TiledMapRenderer';
 import { Camera } from './Camera';
 import { Character, paintCup } from './Character';
@@ -200,6 +201,22 @@ export function OfficeFloor() {
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
+  // The renderer's ONE task poll (hooks/useHiveTasks). The floor used to run its
+  // own 5s `hiveTasks()` timer against the same file (#20). The scene is
+  // imperative and outlives any single payload, so the value is fanned IN: the
+  // effect below hands each new payload to the applier the scene installs, and
+  // the ref carries the latest one to a scene that mounts mid-stream.
+  const hiveTasks = useHiveTasks();
+  // Seeded from the first render, so a scene whose init() finishes before any
+  // effect has run still cold-starts on the payload the shared poller already had.
+  const hiveTasksRef = useRef<unknown>(hiveTasks);
+  useEffect(() => {
+    hiveTasksRef.current = hiveTasks;
+    // undefined while init() is still in flight — the cold start inside init()
+    // picks the payload up from the ref instead.
+    (appRef.current as any)?.__applyTaskBoard?.(hiveTasks);
+  }, [hiveTasks]);
+
   const paused = !!fullscreenAgentId || !!fullscreenFilePath || docHidden;
   // Read inside init(), which finishes asynchronously and would otherwise start a
   // ticker the effect below had already been asked to stop.
@@ -1357,9 +1374,13 @@ export function OfficeFloor() {
 
       let lastLedger: LedgerTask[] = [];
       let firstPoll = true;
-      const pollTaskBoard = async (): Promise<void> => {
+      /** Apply ONE ledger payload to the floor. The read itself belongs to the
+       *  renderer's single shared poller (hooks/useHiveTasks) — this scene used
+       *  to run its own 5s `hiveTasks()` timer against the same file (#20). The
+       *  effect below feeds each payload in through `__applyTaskBoard`. */
+      const applyTaskBoard = (payload: unknown): void => {
         try {
-          const raw = await window.cth.hiveTasks() as { tasks?: Array<{ id?: string; status?: string; assignee?: string; humanQA?: Array<{ q?: string; a?: string }> }> } | null;
+          const raw = payload as { tasks?: Array<{ id?: string; status?: string; assignee?: string; humanQA?: Array<{ q?: string; a?: string }> }> } | null;
           const arr = (raw && Array.isArray(raw.tasks)) ? raw.tasks : [];
           const ledger: LedgerTask[] = arr.map((t, i) => ({
             id: typeof t?.id === 'string' && t.id ? t.id : `idx-${i}`,
@@ -1421,9 +1442,13 @@ export function OfficeFloor() {
           lastLedger = ledger;
         } catch { /* keep the last drawing */ }
       };
-      void pollTaskBoard();
-      const taskBoardPoll = setInterval(() => { void pollTaskBoard(); }, 5000);
-      (app as any).__taskBoardPoll = taskBoardPoll;
+      (app as any).__applyTaskBoard = applyTaskBoard;
+      // Cold start: the shared poller may already hold a payload from before this
+      // scene mounted (a theme switch, a WebGL recovery). Apply it now so the
+      // board is drawn immediately rather than after the next tick — but only if
+      // there IS one, because feeding `null` in would consume `firstPoll` on an
+      // empty ledger and make every real card animate as a fresh pin.
+      if (hiveTasksRef.current != null) applyTaskBoard(hiveTasksRef.current);
 
       const addCharacter = async (agent: Agent) => {
         const charName = theme.cast.byName[agent.character] ? agent.character : theme.cast.defaultCharacter;
@@ -1784,7 +1809,7 @@ export function OfficeFloor() {
         (a as any).__resize?.disconnect?.();
         try { (a as any).__unsub?.(); } catch { /* noop */ }
         try { (a as any).__offMessage?.(); } catch { /* noop */ }
-        try { clearInterval((a as any).__taskBoardPoll); } catch { /* noop */ }
+        (a as any).__applyTaskBoard = undefined;
         safeDestroy(a);
       }
       appRef.current = null;

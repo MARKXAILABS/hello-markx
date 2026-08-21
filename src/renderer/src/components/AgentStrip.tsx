@@ -6,6 +6,7 @@ import { useStore, type Agent } from '@/store/store';
 import { type HarnessConfig } from '@/store/config';
 import { useRestoreTeam } from '@/hooks/useRestoreTeam';
 import { useFleetTelemetry } from '@/hooks/useTelemetry';
+import { useHiveTasks } from '@/hooks/useHiveTasks';
 import { groupKey, matchesAgentQuery, useAgentGroups } from './agentGroups';
 
 /** Above this many agents the strip stops being scannable, so it grows a filter
@@ -71,28 +72,24 @@ export function AgentStrip({ config }: AgentStripProps) {
   // strip clips overflow and the compact cards have no room for an inline box.
   const [noteEditId, setNoteEditId] = useState<string | null>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  // Each worker's actively-DOING ledger tasks, polled from hive/tasks.json —
+  // Each worker's actively-DOING ledger tasks, read from hive/tasks.json —
   // rendered as a sticky note on the avatar card (click → task detail).
-  const [doingByAgent, setDoingByAgent] = useState<Record<string, string[]>>({});
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const raw = await window.cth.hiveTasks() as { tasks?: Array<{ id?: string; status?: string; assignee?: string }> } | null;
-        if (cancelled) return;
-        const map: Record<string, string[]> = {};
-        for (const t of (raw && Array.isArray(raw.tasks)) ? raw.tasks : []) {
-          if (t?.status === 'doing' && typeof t.assignee === 'string' && t.assignee && typeof t.id === 'string') {
-            (map[t.assignee] = map[t.assignee] ?? []).push(t.id);
-          }
-        }
-        setDoingByAgent(map);
-      } catch { /* keep last good */ }
-    };
-    void poll();
-    const iv = setInterval(() => { void poll(); }, 5000);
-    return () => { cancelled = true; clearInterval(iv); };
-  }, []);
+  //
+  // Shares the renderer's ONE task poll (hooks/useHiveTasks) rather than running
+  // a sixth 5s timer against the same file (#20). Nothing here mutates the
+  // ledger, so this is pure derivation — no local copy of the state to keep in
+  // step, and the parser below is the same one the timer used.
+  const rawTasks = useHiveTasks();
+  const doingByAgent = useMemo<Record<string, string[]>>(() => {
+    const raw = rawTasks as { tasks?: Array<{ id?: string; status?: string; assignee?: string }> } | null;
+    const map: Record<string, string[]> = {};
+    for (const t of (raw && Array.isArray(raw.tasks)) ? raw.tasks : []) {
+      if (t?.status === 'doing' && typeof t.assignee === 'string' && t.assignee && typeof t.id === 'string') {
+        (map[t.assignee] = map[t.assignee] ?? []).push(t.id);
+      }
+    }
+    return map;
+  }, [rawTasks]);
   // One roster card + its drag wrapper + its note-editor popover. Pulled out
   // of the render so gods and each repo group can call it without three copies
   // of the same eighty lines.
