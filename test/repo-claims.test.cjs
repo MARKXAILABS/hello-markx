@@ -29,6 +29,16 @@
  *   • #32 (FLOOR-07) — the FTS5 index the docs promised and the schema lacked
  *   • #32 (FLOOR-07) — the FTS5 test, bypassed into a permanently green gate
  *   • #32 (FLOOR-07) — the prebuilt N-API driver that test needs in order to load
+ *   • #26 (FLOOR-12) — clause 1: a token layer that can represent a sub-14px size
+ *   • #26 (FLOOR-12) — clause 2: the frozen content-keyed sub-14px allowlist
+ *   • #26 (FLOOR-12) — clause 3: an allowlisted glyph that is not aria-hidden
+ *   • #26 (FLOOR-12) — clause 4: the three non-literal sizes
+ *   • #26 (FLOOR-12) — a sub-14px size hiding in a decimal or a quoted string
+ *   • #26 (FLOOR-12) — an expression-valued size with no floor of its own
+ *   • #26 (FLOOR-12) — an icon-only control with no accessible name
+ *   • #26 (FLOOR-12) — PixelButton's {children} body, which that rule rests on
+ *   • #26 (FLOOR-12) — the two deliberate <div role="button"> and their names
+ *   • #19/#34 (FLOOR-09/10) — two composition-root seams minted and never fed
  *
  * Everything here greps COMMENT-STRIPPED source. That is mandatory, not
  * tidiness: several Phase 1 fixes deliberately add a comment quoting the very
@@ -459,4 +469,441 @@ function migrationsBody(dbSource) {
     + 'the file instead of the array.'
   );
   return rest.slice(0, end);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Wave 9 (plan 01-23) — the accumulator asserted whole.
+//
+// Everything below is a negative grep this phase relied on that would otherwise
+// have lived only in a SUMMARY. D-45: a grep that lives in a report rots; a
+// grep that lives here runs on three platforms on every future PR.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * M1, pinned. Do NOT re-derive with a different regex — the repo-wide count
+ * moves by ±6 with regex shape, and the whole FLOOR-12 completeness bar is a
+ * multiset equality against it. This is character-identical to the shell form
+ * `grep -rhoE "fontSize *[:=] *\{?(1[0-3]|[1-9])($|[^0-9.])"`, which counts
+ * OCCURRENCES (`-o`), not lines. The unit matters: a `grep -c` form under-counts
+ * any line carrying two hits.
+ */
+const M1 = /fontSize *[:=] *\{?(1[0-3]|[1-9])($|[^0-9.])/g;
+
+/**
+ * The frozen FLOOR-12 allowlist, keyed on CONTENT and never on a line number.
+ *
+ * The line-anchor contract (01-23-PLAN `<interfaces>`), in two halves:
+ *   • half 1 — plan 01-21 (wave 8) changed no line matching M1, so the TEXT of
+ *     every site below is stable even though its line number is not. 81 M1 sites
+ *     sat below a plan-21 edit, and 44 of the 61 M1 files contain a React hook,
+ *     so a line-keyed array would be off by at least one line and would fail for
+ *     a reason that has nothing to do with FLOOR-12.
+ *   • half 2 — THIS array. Each entry is `{ file, text, count }` where `text` is
+ *     the trimmed source line and `count` is how many M1 hits that exact trimmed
+ *     text produces in that file. The assertion compares two multisets for exact
+ *     equality, so a NEW sub-14px site either introduces an unlisted
+ *     `(file, text)` key or bumps a count — either way the suite fails — while a
+ *     line inserted above an existing site is a non-event.
+ *
+ * Assembled from the seven wave-7 sweep SUMMARYs (01-14 … 01-20) and re-derived
+ * against the tree at wave 9. Attribution, per 01-20-SUMMARY: 01-14 five,
+ * 01-17 four, 01-18 three, 01-20 three, 01-19 one, 01-15/01-16 zero — which
+ * reconciles with 01-14's handoff arithmetic (567 handed out + 5 kept = 572;
+ * wave 7 kept 11; 5 + 11 = 16).
+ *
+ * Every entry is a decorative glyph inside a `<span aria-hidden="true">` with
+ * its own local fontSize override — UI-SPEC Rule 0's exempt shape. That is not
+ * a convention here, it is asserted below, clause by clause.
+ */
+const FLOOR12_ALLOWLIST = [
+  { file: 'src/renderer/src/components/AgentCard.tsx', text: '<span aria-hidden="true" style={{ fontSize: 10 }}>✎</span>', count: 1 },
+  { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/AskMeTab.tsx', text: '<span aria-hidden="true" style={{ fontSize: 13 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: "{armed && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}", count: 1 },
+  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✓</span>', count: 1 },
+  { file: 'src/renderer/src/components/FullscreenFileEditor.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/FullscreenTerminal.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/FullscreenTerminal.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✎</span>', count: 1 },
+  { file: 'src/renderer/src/components/PtyTerminalView.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>−</span>', count: 1 },
+  { file: 'src/renderer/src/components/PtyTerminalView.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>+</span>', count: 1 },
+  { file: 'src/renderer/src/components/TasksKanban.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/triggers/ui.tsx', text: "<span aria-hidden=\"true\" style={{ flexShrink: 0, width: 8, fontSize: 11, color: 'var(--cth-ink-500)' }}>{open ? '▾' : '▸'}</span>", count: 1 },
+  { file: 'src/renderer/src/ide/GitPanes.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/ide/GitPanes.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>⇄</span>', count: 1 },
+  { file: 'src/renderer/src/ide/IdePanel.tsx', text: "<span aria-hidden=\"true\" style={{ fontSize: 10, lineHeight: '14px' }}>{gitCollapsed ? '▸' : '▾'}</span>", count: 1 },
+];
+
+/** Every renderer `.ts`/`.tsx`, comment-stripped, keyed by repo-relative path. */
+function rendererSources() {
+  const out = new Map();
+  for (const rel of sourceFiles(rendererRoot)) out.set(rel, readStripped(rel));
+  return out;
+}
+
+/** The `(file, trimmed-line-text) -> occurrence count` multiset M1 produces. */
+function m1Multiset() {
+  const found = new Map();
+  for (const [rel, src] of rendererSources()) {
+    for (const line of src.split('\n')) {
+      const hits = line.match(M1);
+      if (!hits) continue;
+      const key = `${rel}\u0000${line.trim()}`;
+      found.set(key, (found.get(key) ?? 0) + hits.length);
+    }
+  }
+  return found;
+}
+
+test('FLOOR-12 clause 1 — tokens.css declares no text size below the 14px floor (#26)', () => {
+  const css = fs.readFileSync(path.join(rendererRoot, 'design', 'tokens.css'), 'utf8');
+
+  // Parsed, not matched against a literal: a whitespace change inside the
+  // declaration must not be able to make this pass or fail.
+  const decls = [...css.matchAll(/--cth-text-([a-z-]+)\s*:\s*([0-9.]+)px/g)]
+    .map((m) => ({ name: `--cth-text-${m[1]}`, px: Number(m[2]) }));
+  assert.ok(decls.length >= 5, `tokens.css declared ${decls.length} --cth-text-* sizes; the parse is wrong`);
+
+  const under = decls.filter((d) => d.px < 14);
+  assert.deepEqual(
+    under, [],
+    'DESIGN.md:706 states no user-facing text sits below 14px, and the token layer is where a '
+    + 'sub-floor value becomes representable at all. These declarations are below it: '
+    + `${under.map((d) => `${d.name}: ${d.px}px`).join(', ')} (#26, FLOOR-12).`
+  );
+
+  // display-sm was DELETED rather than raised (01-14): a token whose whole job
+  // is "the smallest" cannot sit AT the floor without inviting the next
+  // sub-floor value to be written into it. Deleting it makes the regression
+  // unrepresentable rather than merely wrong.
+  for (const dead of ['--cth-text-display-sm', '--cth-lh-display-sm']) {
+    assert.equal(
+      new RegExp(`${dead}\\s*:`).test(css), false,
+      `${dead} is back in tokens.css. It was deleted, not raised, so that "the smallest text `
+      + 'token" cannot exist as a place to put a sub-14px value (#26, FLOOR-12).'
+    );
+  }
+});
+
+test('FLOOR-12 clause 2 — every sub-14px site left in the renderer is on the frozen allowlist (#26)', () => {
+  const found = m1Multiset();
+  const allowed = new Map();
+  for (const e of FLOOR12_ALLOWLIST) {
+    const key = `${e.file}\u0000${e.text}`;
+    allowed.set(key, (allowed.get(key) ?? 0) + e.count);
+  }
+
+  const show = (k, n) => `  ${k.split('\u0000')[0]}  ×${n}\n      ${k.split('\u0000')[1]}`;
+  const extra = [];
+  const missing = [];
+  for (const [k, n] of found) if ((allowed.get(k) ?? 0) !== n) extra.push(show(k, n));
+  for (const [k, n] of allowed) if ((found.get(k) ?? 0) !== n) missing.push(show(k, n));
+
+  assert.ok(
+    extra.length === 0 && missing.length === 0,
+    'The FLOOR-12 allowlist and the tree disagree (#26).\n\n'
+    + 'PRESENT IN SOURCE BUT NOT ALLOWLISTED — a new sub-14px site, or an existing one whose\n'
+    + 'count grew. Fix the site; do NOT widen this list:\n'
+    + (extra.join('\n') || '  (none)')
+    + '\n\nALLOWLISTED BUT ABSENT FROM SOURCE — a stale entry, or half 1 of the line-anchor\n'
+    + 'contract broke and a site\'s TEXT changed. If the text no longer exists anywhere in its\n'
+    + 'file, report it against the plan that moved it rather than editing this list:\n'
+    + (missing.join('\n') || '  (none)')
+  );
+
+  const total = [...found.values()].reduce((a, b) => a + b, 0);
+  assert.equal(
+    total, FLOOR12_ALLOWLIST.reduce((a, e) => a + e.count, 0),
+    'the repo-wide M1 occurrence count no longer equals the summed allowlist size'
+  );
+});
+
+test('FLOOR-12 clause 3 — every allowlisted site is a decorative glyph hidden from the a11y tree (#26)', () => {
+  const sources = rendererSources();
+  for (const entry of FLOOR12_ALLOWLIST) {
+    const src = sources.get(entry.file);
+    assert.ok(src, `${entry.file} is on the FLOOR-12 allowlist and no longer exists`);
+
+    // Located by CONTENT, never by a line number: find the site's text, then walk back to
+    // the opening tag of the element that owns the fontSize.
+    const at = src.indexOf(entry.text);
+    assert.ok(at >= 0, `the allowlisted text is gone from ${entry.file}: ${entry.text}`);
+    const sizeAt = src.slice(at).search(M1) + at;
+    const tagStart = src.lastIndexOf('<', sizeAt);
+    const tagEnd = src.indexOf('>', sizeAt);
+    const openTag = src.slice(tagStart, tagEnd + 1);
+
+    assert.match(
+      openTag, /aria-hidden=("true"|\{true\})/,
+      `${entry.file} keeps a sub-14px size on an element that is NOT hidden from the accessibility `
+      + 'tree. UI-SPEC Rule 0 exempts a decorative glyph only because a screen reader never '
+      + `announces it. Without aria-hidden it is user-facing text below the floor:\n  ${openTag}\n`
+      + '(#26, FLOOR-12).'
+    );
+  }
+});
+
+test('FLOOR-12 clause 4 — the three non-literal sizes are at or above the floor (#26)', () => {
+  // Located by IDENTIFIER, not by line — `ThoughtBubble.ts:22` and
+  // `ToolBubble.ts:29` both read `const FONT_SIZE = 12;` before wave 7, so this
+  // is a real gate on that work rather than a formality.
+  for (const rel of ['src/renderer/src/scene/office/ThoughtBubble.ts', 'src/renderer/src/scene/office/ToolBubble.ts']) {
+    const m = readStripped(rel).match(/const FONT_SIZE\s*=\s*([0-9.]+)/);
+    assert.ok(m, `${rel} no longer declares FONT_SIZE — re-derive this anchor`);
+    assert.ok(
+      Number(m[1]) >= 14,
+      `${rel} renders its Pixi label at ${m[1]}px, below DESIGN.md's 14px floor (#26, FLOOR-12). `
+      + 'NOTE the caveat 01-14 filed and did not claim away: both classes draw inside a container '
+      + 'held at RENDER_SCALE = 0.5, so the DESIGNED on-screen size is half this number. Raising '
+      + 'FONT_SIZE is necessary and not sufficient; the geometry is UI-SPEC containment step 3.'
+    );
+  }
+
+  const ft = readStripped('src/renderer/src/components/FullscreenTerminal.tsx');
+  const floor = ft.match(/fontSize:\s*Math\.max\(\s*([0-9.]+)\s*,/);
+  assert.ok(floor, 'FullscreenTerminal.tsx no longer floors a fontSize with Math.max — re-derive this anchor');
+  assert.ok(
+    Number(floor[1]) >= 14,
+    `FullscreenTerminal.tsx floors an expression-valued fontSize at ${floor[1]}px (#26, FLOOR-12).`
+  );
+});
+
+test('FLOOR-12 — no sub-14px size hides in a decimal or quoted literal, where M1 cannot see it (#26)', () => {
+  // M1's regex requires a bare digit right after `fontSize:`, so `fontSize: 12.5`
+  // and `fontSize: '13px'` are both invisible to it. Red-team round 2 found
+  // twelve real sub-14px sites in exactly those forms, so asserting M1 alone
+  // would sign FLOOR-12 off with `fontSize: 12.5` re-introduced.
+  //
+  // M1d matches ONLY the two forms M1 is blind to — a decimal, or a quoted
+  // string — so it can never overlap the allowlist above, every entry of which
+  // is a bare integer. `< 14` is the bar, not `> 0`: `fontSize: '16px'` is a real
+  // hit of this shape and is correctly above the floor.
+  const M1d = /fontSize *[:=] *\{?(?:'[0-9.]+(?:px)?'|"[0-9.]+(?:px)?"|[0-9]+\.[0-9]+)/g;
+  const seen = [];
+  const under = [];
+  for (const [rel, src] of rendererSources()) {
+    for (const m of src.matchAll(M1d)) {
+      const px = Number(m[0].replace(/[^0-9.]/g, '').replace(/\.$/, ''));
+      seen.push(`${rel}: ${m[0].trim()} (${px})`);
+      if (px < 14) under.push(`${rel}: ${m[0].trim()}`);
+    }
+  }
+  assert.ok(
+    seen.length > 0,
+    'M1d matched nothing at all in the renderer. It is a NEGATIVE scan, so an empty result is '
+    + 'indistinguishable from a broken regex — and a broken regex here signs FLOOR-12 off with '
+    + '`fontSize: 12.5` re-introduced. Re-derive the pattern before trusting a zero.'
+  );
+  assert.deepEqual(
+    under, [],
+    'These sizes are below the 14px floor and are INVISIBLE to M1, because M1 requires a bare '
+    + 'digit straight after `fontSize:` and cannot see a decimal or a quoted string. They are '
+    + 'not eligible for the Rule 0 allowlist — that list is literal-only (#26, FLOOR-12):\n'
+    + under.join('\n')
+  );
+});
+
+test('FLOOR-12 — every expression-valued size carries its own 14px floor (#26)', () => {
+  // M1x hits SURVIVE the sweep by construction: the sweeps fix them by raising
+  // the expression's minimum, not by deleting the expression. So the rule is
+  // per-hit, never a count. The terminal's OWN font is the carve-out
+  // (`term.options.fontSize` — UI-SPEC: terminal sizing is user-controlled, and
+  // MIN_TERMINAL_FONT_SIZE stays 8 for exactly that reason). CHROME that merely
+  // READS the zoom is not exempt and must carry its own floor, which is why the
+  // composer is floored on its consumer rather than on the shared constant.
+  const floors = [
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /name:\s*clamp\([^,]+,\s*([0-9.]+)\s*,/, 'rosterScale().name'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /group:\s*clamp\([^,]+,\s*([0-9.]+)\s*,/, 'rosterScale().group'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /note:\s*clamp\([^,]+,\s*([0-9.]+)\s*,/, 'rosterScale().note'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /noteFontSize\s*=\s*Math\.min\([0-9.]+,\s*Math\.max\(\s*([0-9.]+)/, 'noteFontSize'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /noteLabelSize\s*=\s*Math\.max\(\s*([0-9.]+)/, 'noteLabelSize'],
+    ['src/renderer/src/components/MessageQueueComposer.tsx', /composerFontSize\s*=\s*Math\.max\(\s*([0-9.]+)/, 'composerFontSize'],
+  ];
+  for (const [rel, re, name] of floors) {
+    const m = readStripped(rel).match(re);
+    assert.ok(m, `${rel} no longer floors ${name} — re-derive this anchor by content, not by line`);
+    assert.ok(
+      Number(m[1]) >= 14,
+      `${name} floors at ${m[1]}px in ${rel}. It reads the terminal zoom, whose own minimum is `
+      + 'MIN_TERMINAL_FONT_SIZE = 8, so without its own floor it renders chrome text at 8px the '
+      + 'moment the operator zooms out. Raising the shared constant instead would take two zoom '
+      + 'steps away from xterm, which is what the terminal carve-out exists to protect '
+      + '(#26, FLOOR-12).'
+    );
+  }
+});
+
+test('FLOOR-12 — an icon-only button carries an accessible name; a text button is left alone (#26)', () => {
+  // THE RULE, NOT A RATIO. 49 `aria-label` against 133 `<button>` is not a bar,
+  // and a ratio test would be actively wrong: a <button> with visible text
+  // already HAS an accessible name, and adding `aria-label` to it OVERRIDES the
+  // visible label and breaks voice control ("click Save" stops working). So this
+  // asserts a per-element rule and never a count.
+  //
+  // Name sources accepted: aria-label, aria-labelledby, and `title` — on the
+  // control or on a non-hidden element inside it. `title` is not a stylistic
+  // choice here, it is the ONLY name source `PixelButton`'s closed prop set
+  // exposes, and 01-16/01-20 measured it live on Chromium's AX tree
+  // (`Accessibility.getFullAXTree` reported "Remove <path>", not ""). Excluding
+  // it would fail this test against code that is demonstrably named.
+  //
+  // PIXELBUTTON'S CLASSIFICATION IS EXPLICIT, per 01-23-PLAN task 1: the
+  // predicate below classifies a `{children}` body as TEXT-BEARING, so
+  // `PixelButton.tsx`'s own <button> is never reported as icon-only and needs no
+  // exclusion by name. That is the general rule and not a carve-out — a
+  // ReactNode prop's accessible name is supplied by the CALLER, so it is not
+  // statically knowable here, and demanding `aria-label` on the primitive would
+  // override every caller's visible text. The pin below keeps that reasoning
+  // from silently outliving itself.
+  const glyphOnly = (body) => {
+    const text = body.replace(/<[^>]*>/g, '').trim();
+    return text.length > 0 || body.includes('<') ? !/[A-Za-z0-9]/.test(text) : false;
+  };
+  const named = (openTag, body) => {
+    if (/(aria-label|aria-labelledby|title)\s*=/.test(openTag)) return true;
+    for (const tag of body.match(/<[^>]*>/g) ?? []) {
+      if (/aria-hidden/.test(tag)) continue;
+      if (/(aria-label|aria-labelledby|title)\s*=/.test(tag)) return true;
+    }
+    return false;
+  };
+
+  const unnamed = [];
+  let iconOnly = 0;
+  for (const [rel, src] of rendererSources()) {
+    if (!rel.endsWith('.tsx')) continue;
+    for (const tag of ['button', 'PixelButton']) {
+      for (const el of jsxElements(src, tag)) {
+        if (!glyphOnly(el.body)) continue;
+        iconOnly++;
+        if (!named(el.openTag, el.body)) {
+          unnamed.push(`${rel}\n      ${el.openTag.replace(/\s+/g, ' ').slice(0, 160)}`);
+        }
+      }
+    }
+  }
+
+  assert.ok(iconOnly > 20, `the icon-only predicate found ${iconOnly} controls; it has stopped matching`);
+  assert.deepEqual(
+    unnamed, [],
+    'These controls render nothing but a glyph and have no accessible name, so a screen reader '
+    + 'announces them as "button" and nothing else (#26, FLOOR-12):\n' + unnamed.join('\n')
+  );
+});
+
+test('FLOOR-12 — PixelButton still renders {children}, so its text-bearing classification holds (#26)', () => {
+  // The exclusion above rests entirely on this: PixelButton's <button> renders a
+  // ReactNode PROP, whose accessible name comes from the caller. If it ever
+  // rendered a glyph literal instead, that reasoning would be dead and the
+  // predicate would have to demand a name here.
+  const src = readStripped('src/renderer/src/components/PixelButton.tsx');
+  const el = jsxElements(src, 'button')[0];
+  assert.ok(el, 'PixelButton.tsx no longer renders a <button>');
+  assert.match(
+    el.body, /\{\s*children\s*\}/,
+    "PixelButton's <button> no longer renders {children}. The FLOOR-12 accessible-name test "
+    + 'classifies it as text-bearing precisely BECAUSE its content is a caller-supplied '
+    + 'ReactNode. If it now renders a glyph, that classification is wrong and the test above '
+    + 'is silently exempting a real unnamed control (#26, FLOOR-12).'
+  );
+});
+
+test('the two deliberate <div role="button"> keep their accessible names (#26)', () => {
+  // `.planning/codebase/CONCERNS.md` records these as RESOLVED history: a native
+  // <button> cannot legally contain the other buttons these rows carry, so the
+  // row is a div with an explicit role. A future "accessibility cleanup" that
+  // converts them back to <button> would regress a documented decision and
+  // reintroduce nested-interactive markup.
+  //
+  // Located by ATTRIBUTE, never by the line numbers :145 and :604 —
+  // FullscreenTerminal.tsx has useEffect at :142 and :168, both ABOVE both
+  // anchors, so plan 01-21's dependency fixes can legitimately shift them.
+  for (const rel of [
+    'src/renderer/src/components/AgentCard.tsx',
+    'src/renderer/src/components/FullscreenTerminal.tsx',
+  ]) {
+    const src = readStripped(rel);
+    // The BRACE-AWARE scanner, not `indexOf('>')`: both of these divs carry an
+    // `onKeyDown={(e) => …}` arrow, so a naive scan for the next `>` ends the
+    // open tag inside the arrow's fat arrow and reports "no aria-label" against
+    // a div that plainly has one. That failure looks exactly like the real
+    // regression this test exists to catch, which makes it worse than no test.
+    const el = jsxElements(src, 'div').find((d) => /role="button"/.test(d.openTag));
+    assert.ok(
+      el,
+      `${rel} no longer carries a <div role="button">. CONCERNS.md records it as the resolved `
+      + 'form of the nested-interactive defect in #26: the row holds its own buttons, so it '
+      + 'cannot be a native <button>. Converting it back regresses that decision.'
+    );
+    assert.match(
+      el.openTag, /aria-label\s*=/,
+      `${rel}'s <div role="button"> has no aria-label. A div has no implicit accessible name, so `
+      + 'without one this control announces as "button" and nothing else (#26, FLOOR-12).'
+    );
+  }
+});
+
+test('both composition-root seams are still fed — FLOOR-09 and FLOOR-10 are not dead code (#19, #34)', () => {
+  // `src/main/index.ts` is single-owner-per-wave, so two requirements crossed a
+  // wave boundary as named handoffs: plan 06 minted `recordCostSample` in wave 3
+  // and plan 08 injected it in wave 4; plan 09 minted `budgetForAgent` in wave 4
+  // and plan 10 fed the breaker beat in wave 5. A handoff that is written but
+  // never applied leaves a requirement closed on paper with dead code beneath it,
+  // and BOTH greps read 0 when this plan was written.
+  const index = readStripped('src/main/index.ts');
+
+  assert.ok(
+    index.includes('recordCostSample'),
+    'src/main/index.ts never calls recordCostSample. The HookServer sink exists and is unit-tested, '
+    + 'but nothing in production feeds it: proxy-tier spend stops reaching getAgentUsage and the '
+    + 'budget cap becomes a false cap (#19, FLOOR-09).'
+  );
+  assert.ok(
+    index.includes('budgetForAgent'),
+    'src/main/index.ts never calls hive.budgetForAgent. The accessor exists and is unit-tested, '
+    + 'but the breaker beat is never handed a budget: BreakerInput.budget becomes an optional '
+    + 'field nothing ever sets, and the FLOOR-10 arm is dead code behind a green suite (#34).'
+  );
+});
+
+/**
+ * JSX elements of one tag name, as `{ openTag, body }`, nesting-aware and
+ * quote-aware. Written by hand rather than pulled in as a parser dependency:
+ * this file must keep loading under a plain `node --test` with no build step,
+ * on all three CI platforms, exactly as every other clause here does.
+ */
+function jsxElements(src, tag) {
+  const out = [];
+  const open = `<${tag}`;
+  const close = `</${tag}>`;
+  const re = new RegExp(`<${tag}\\b`, 'g');
+  let m;
+  while ((m = re.exec(src))) {
+    let i = m.index + open.length;
+    let quote = null;
+    let brace = 0;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === quote && src[i - 1] !== '\\') quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+      if (c === '{') brace++;
+      else if (c === '}') brace--;
+      else if (c === '>' && brace === 0) break;
+    }
+    const openTag = src.slice(m.index, i + 1);
+    if (/\/>$/.test(openTag)) { out.push({ openTag, body: '' }); continue; }
+    let j = i + 1;
+    let depth = 1;
+    while (j < src.length && depth > 0) {
+      const nested = src.indexOf(open, j);
+      const closing = src.indexOf(close, j);
+      if (closing < 0) break;
+      if (nested >= 0 && nested < closing) { depth++; j = nested + open.length; } else { depth--; j = closing + close.length; }
+    }
+    out.push({ openTag, body: src.slice(i + 1, j - close.length) });
+  }
+  return out;
 }
