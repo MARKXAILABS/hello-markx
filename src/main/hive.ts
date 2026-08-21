@@ -236,12 +236,15 @@ const REPLY_DEADLINE_MS = 15 * 60_000;
 /** How often the router tick actually runs the deadline + review sweeps. The
  *  router itself ticks every 1.5 s; these are minute-scale concerns. */
 const SWEEP_INTERVAL_MS = 60_000;
-/** Tail window for cost-ledger reads (taskSpend). Same bounded-read discipline as
- *  logTail: an append-only file must never be slurped whole to answer one query.
- *  ponytail: a card whose spend predates this window under-reports; widen it (or
- *  move to Kevin's cost_ledger table, whose row shape this already matches) if
- *  that ever matters. */
-const COST_TAIL_BYTES = 1024 * 1024;
+// RECORD-03 (#34): the 1 MB `COST_TAIL_BYTES` window that `taskSpend()` used to
+// read through is DELETED, not widened. Its own comment already named the defect
+// ("a card whose spend predates this window under-reports"), and an under-report
+// is exactly the case where `over` reads false while the card is over its cap —
+// the number FLOOR-10 enforces against. The bounded-read discipline it borrowed
+// from `logTail` is right for a log tail and wrong for an accounting total: a
+// total that silently drops its oldest rows is not a total. What replaces the
+// bound is `costByTask` below — an in-memory accumulator built by ONE scan and
+// then kept current incrementally, so the file is never re-slurped per query.
 
 // ─── git + log budgets ──────────────────────────────────────────────────────
 // Every number here used to be an order of magnitude larger and paid for on the
@@ -2625,6 +2628,114 @@ export class HiveManager {
       usd: sample.usd
     };
     try { appendFileSync(join(root, 'cost-ledger.jsonl'), JSON.stringify(row) + '\n', 'utf8'); } catch { /* noop */ }
+    // Keep the per-card accumulator current without re-reading the file. Only
+    // when it has already been built — otherwise the first taskSpend() call
+    // scans the whole ledger and would double-count anything applied here first.
+    if (this.costByTask) this.applyCostRow(this.costByTask, this.costCumulative, row);
+  }
+
+  // ─── RECORD-03 / RECORD-04 — what one card has actually cost ────────────────
+  //
+  // THE ARITHMETIC, because getting it wrong is invisible until a budget is
+  // enforced against it (#34, FLOOR-10):
+  //
+  // A ledger row is a CUMULATIVE snapshot of one (agent, session) at one beat —
+  // `src/main/db.ts:44` and `src/main/telemetry.ts` both say so, and since
+  // RECORD-04 there is exactly one appender, so it is now true of every row.
+  // Spend "since the last beat" is therefore the DIFFERENCE between consecutive
+  // snapshots of the same series, never the sum of the snapshots themselves
+  // (summing over-counts roughly quadratically — that was the defect).
+  //
+  //   series key   = agent_id + session_id. A new session starts its own
+  //                  accumulator at zero, so it starts a new series rather than
+  //                  diffing against the previous session's much larger total.
+  //   first row    = its OWN value. It has no predecessor and the series began
+  //                  at zero, so the whole of it was spent after that zero. The
+  //                  alternative (treat it as zero) silently loses every card
+  //                  that starts and finishes inside one ~30 s beat window,
+  //                  which is the same class of under-report RECORD-03 removes.
+  //   later rows   = max(0, now - previous). CLAMPED, because
+  //                  `telemetry.forget()` on a respawn resets the collector, so
+  //                  the next snapshot can legitimately be SMALLER than the last
+  //                  one; an unclamped diff would go negative and hand the card
+  //                  a refund it never earned.
+  //   attribution  = the delta lands on the CURRENT row's `task_id`. Rows with a
+  //                  null task_id (idle chatter, the god) still advance the
+  //                  series baseline — they must, or the next carded row would
+  //                  bill their spend to the card — but they credit no card.
+  //
+  // Worked example, one agent, one session, card `t-1`:
+  //   row 1 {input 10, output 5}  → no predecessor → t-1 += 15   (t-1 = 15)
+  //   row 2 {input 14, output 6}  → 20 - 15 = 5    → t-1 += 5    (t-1 = 20)
+  //   row 3 {input  1, output 0}  → 1 - 20 = -19   → clamped 0   (t-1 = 20)
+  // The old code read 15 + 20 + 1 = 36 for the same three rows, through a 1 MB
+  // tail that would have dropped row 1 entirely on a long card.
+
+  /** taskId → spend so far, or null until the first full ledger scan builds it.
+   *  This is what replaces RECORD-03's deleted 1 MB read window: one scan at
+   *  first use (which, after a restart, is the rescan that stops a card in
+   *  flight from silently resetting to zero), then incremental updates from
+   *  `appendCostLedger`. Bounded by CARD LIFETIME — `pruneCostByTask` drops
+   *  entries for cards that have left the board, since removing the tail
+   *  removed the only bound this map now stands in for. */
+  private costByTask: Map<string, { tokens: number; usd: number }> | null = null;
+  /** The last cumulative snapshot seen per series (agent id + session id), which
+   *  is what the next row is diffed against. */
+  private costCumulative = new Map<string, { tokens: number; usd: number }>();
+
+  /** Fold one ledger row into the accumulators. Shared by the startup scan and
+   *  the incremental append so the two can never disagree. */
+  private applyCostRow(
+    byTask: Map<string, { tokens: number; usd: number }>,
+    cumulative: Map<string, { tokens: number; usd: number }>,
+    row: { agent_id?: string | null; session_id?: string | null; task_id?: string | null; input?: number; output?: number; usd?: number }
+  ): void {
+    const key = `${row.agent_id ?? ''} ${row.session_id ?? ''}`;
+    const now = { tokens: (row.input ?? 0) + (row.output ?? 0), usd: row.usd ?? 0 };
+    const previous = cumulative.get(key);
+    const delta = previous
+      ? { tokens: Math.max(0, now.tokens - previous.tokens), usd: Math.max(0, now.usd - previous.usd) }
+      : now;
+    cumulative.set(key, now);
+    const taskId = row.task_id;
+    if (!taskId) return; // advanced the baseline, credits no card
+    const acc = byTask.get(taskId) ?? { tokens: 0, usd: 0 };
+    acc.tokens += delta.tokens;
+    acc.usd += delta.usd;
+    byTask.set(taskId, acc);
+  }
+
+  /** Rebuild both accumulators from the WHOLE ledger. Runs once per process, on
+   *  the first `taskSpend()` — which after an app restart is what stops a card
+   *  still in flight from reporting zero spend (T-P06-03). One scan of one
+   *  append-only file at boot; if that ever measurably costs, `PersistStore`'s
+   *  `cost_ledger` table answers it in one `SUM(...) GROUP BY task_id`. */
+  private rescanCostLedger(): Map<string, { tokens: number; usd: number }> {
+    const byTask = new Map<string, { tokens: number; usd: number }>();
+    const cumulative = new Map<string, { tokens: number; usd: number }>();
+    const root = this.root();
+    if (root) {
+      let raw = '';
+      try { raw = readFileSync(join(root, 'cost-ledger.jsonl'), 'utf8'); } catch { raw = ''; }
+      for (const line of raw.split('\n')) {
+        if (!line) continue;
+        try { this.applyCostRow(byTask, cumulative, JSON.parse(line)); } catch { /* skip a torn line */ }
+      }
+    }
+    this.costCumulative = cumulative;
+    this.costByTask = byTask;
+    this.pruneCostByTask();
+    return byTask;
+  }
+
+  /** Drop accumulator entries for cards that are no longer on the board. The
+   *  map has no other bound now that the tail read is gone, and an archived or
+   *  deleted card's entry would otherwise live as long as the process. */
+  private pruneCostByTask(): void {
+    const byTask = this.costByTask;
+    if (!byTask) return;
+    const live = new Set(this.ledger().tasks.map((t) => t.id));
+    for (const id of [...byTask.keys()]) if (!live.has(id)) byTask.delete(id);
   }
 
   /** assignee → their in-flight card id, rebuilt at most once a beat.
@@ -2642,6 +2753,9 @@ export class HiveManager {
         if (t?.status === 'doing' && t.assignee && !map.has(t.assignee)) map.set(t.assignee, t.id);
       }
       this.activeTaskCache = { at: now, map };
+      // Cheapest honest place for the accumulator's lifetime bound: this rebuild
+      // already reads the board, and it only runs while cost is actually flowing.
+      this.pruneCostByTask();
     }
     return this.activeTaskCache.map.get(agentId) ?? null;
   }
@@ -2651,23 +2765,15 @@ export class HiveManager {
    *
    * This is the read side of the per-task cap: `task_id` on the ledger rows makes
    * the spend attributable, `budgetTokens` on the card is the cap, and breaker.ts
-   * (the engine-cost cluster's file) owns the enforcement decision. Reads only the
-   * ledger's tail — see COST_TAIL_BYTES for that ceiling.
+   * (the engine-cost cluster's file) owns the enforcement decision.
+   *
+   * RECORD-03/RECORD-04: reads the per-card accumulator described above — every
+   * row of the ledger, never a tail window, and clamped consecutive DIFFERENCES
+   * between cumulative snapshots, never their sum.
    */
   taskSpend(taskId: string): { tokens: number; usd: number; budgetTokens: number | null; over: boolean } {
-    const root = this.root();
-    let tokens = 0;
-    let usd = 0;
-    if (root) {
-      for (const line of this.tailLines(join(root, 'cost-ledger.jsonl'), COST_TAIL_BYTES)) {
-        try {
-          const row = JSON.parse(line) as { task_id?: string; input?: number; output?: number; usd?: number };
-          if (row.task_id !== taskId) continue;
-          tokens += (row.input ?? 0) + (row.output ?? 0);
-          usd += row.usd ?? 0;
-        } catch { /* skip a torn line */ }
-      }
-    }
+    const byTask = this.costByTask ?? this.rescanCostLedger();
+    const { tokens, usd } = byTask.get(taskId) ?? { tokens: 0, usd: 0 };
     const cap = this.ledger().tasks.find((t) => t.id === taskId)?.budgetTokens;
     const budgetTokens = typeof cap === 'number' && cap > 0 ? cap : null;
     return { tokens, usd, budgetTokens, over: budgetTokens !== null && tokens > budgetTokens };
