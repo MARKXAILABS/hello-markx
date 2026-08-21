@@ -195,3 +195,133 @@ The probe harnesses that waves 5–7 wrote should `app.quit()` (and the driver s
 on both the success and the failure path) so this cannot happen again. Cost here was one broken
 `node_modules` and a re-install; on a machine without a portable Node 22 to re-install with it would
 have been worse.
+
+---
+
+## Plan 01-23 (wave 9) — carried forward out of Phase 1
+
+Each of these was found or inherited during the phase close-out, is real, and is deliberately
+**not** fixed here. Every one names its owner. Nothing below is a "nice to have"; they are the
+exact list that makes Phase 01 PARTIAL rather than COMPLETE.
+
+### 1. Phase 1 is not on `main` — 152 commits behind draft PR #77
+
+`main` is at `19dbdfb` and still pins `"electron": "^32.2.0"`. Every commit of this phase lives on
+`gsd/v1.0-milestone`. PR #77 is `MERGEABLE` / `mergeStateStatus: CLEAN` with all seven checks
+green. **Until it merges, no floor-inspection issue can honestly be closed** — closing one records
+"fixed" against a default branch that still carries the defect, which is the same class of false
+record this phase was created to remove. **Owner: operator — merge PR #77.**
+
+### 2. `PixelButton` still cannot be given an `aria-label` by any caller
+
+Its props are a closed set and React drops unknown props, so every `<PixelButton><Icon/></PixelButton>`
+must be named via `title` — which works (measured live on Chromium's AX tree, `unnamedButtons` is 0
+across 27 scans) but is the weaker mechanism. The root-cause fix is two lines: add `'aria-label'?: string`
+to `PixelButtonProps` and forward it onto the `<button>`.
+
+**Not taken here, deliberately, and the reason is a contract not a preference.** Plan 01-23's own
+acceptance criteria pin `git hash-object src/renderer/src/components/PixelButton.tsx` at
+`bd286ebf5654a2647c93546dc135f608aeb5d0f0` with `git log --oneline 1947cf0..HEAD -- <file>` empty,
+and plan 01-12's native-`<button>` decision plus every wave-7 `title`-based naming call rests on
+that pin. Breaking it in the last plan of the phase would invalidate three plans' recorded reasoning
+with no operator present to approve it. Both greps were re-run at wave 9 and both still hold.
+FLOOR-12's accessible-name clause is **satisfied** today; this is an ergonomics upgrade, not a gap.
+**Owner: any Phase 2+ plan that legitimately holds `PixelButton.tsx`.**
+
+### 3. Two residual layout clips at the 14px floor — both need `store.ts`
+
+Reported by 01-19 and 01-20 as UI-SPEC containment step 3 and left unfixed for the same reason:
+the only container integer is `sidebarWidth` in `src/renderer/src/store/store.ts`, outside every
+wave-7 plan's declared file set.
+
+- **SkillsTab catalog row** (`SkillsTab.tsx:319-336`) — the two `flexShrink: 0` catalog chips are
+  sized by unbounded catalog content and at 14px exceed the 368px column on their own
+  (170 + 242 + 16 = 428), so the row spills up to 61px and the name box collapses to 0. Raising a
+  container integer cannot close a class whose width is content-driven. One-line evaluation for the
+  owner: give SkillsTab's `Chip` the same truncation contract as `AgentCard.tsx:223-224`, or cap the
+  rendered category/owner.
+- **SidebarTabs** — the 98px spill is fixed at source, but TERMINAL and MESSAGES now **clip** by 17px
+  each at the default 420 rail (TRACES −3, GIT fits). No container integer fixes it at every width
+  the splitter permits (320..1200).
+
+**Owner: a Phase 2+ plan holding `src/renderer/src/store/store.ts`.**
+
+### 4. The Pixi bubbles take `FONT_SIZE = 14` and render at 7px
+
+`ThoughtBubble.ts` and `ToolBubble.ts` both draw their `Text` inside a container held at
+`RENDER_SCALE = 0.5`, and every on-screen dimension is `bgW * RENDER_SCALE`. A true 14px needs
+`FONT_SIZE / RENDER_SCALE = 28` in inner space, which at `WRAP_WIDTH` 288 drops the cloud from ~40 to
+~17 characters per line and turns `MAX_CHARS = 160` into a ten-line balloon over an 18×28 sprite —
+re-geometrying `MAX_WIDTH`, `MAX_CHARS` and the overlap pass. That is UI-SPEC containment step 3 and
+a redesign the phase contract forbids. `test/repo-claims.test.cjs`'s FLOOR-12 clause 4 asserts the
+constant and carries this caveat in its own failure message so it cannot be read as more than it is.
+Note also that `ToolBubble`'s class has **zero consumers** and is tree-shaken out of the shipped
+bundle, so its sweep is correct-but-inert. **Owner: a plan that owns the office scene's geometry.**
+
+### 5. `"Enterprise Knowledge Graph"` survives at seven source sites
+
+`INTEGRATIONS.md` states the store is **not a graph** — it is term-frequency keyword scoring over
+text chunks. Seven places still call it one, and one of them is agent-facing:
+
+```
+resources/skills/capabilities/SKILL.md:96      ← agent-facing, highest value
+src/main/config.ts:159, :275, :493
+src/main/hive.ts:1455
+src/renderer/src/store/config.ts:74, :142
+```
+
+(`docs/floor-inspection.html:710` is deliberately excluded — it is the audit record *quoting* the
+defect.) 01-10 renamed the preload and `index.ts` sites and filed the rest; none of those files falls
+inside plan 01-23's six declared doc-sweep surfaces, so they are named rather than swept. This is
+what keeps FLOOR-07 open. **Owner: a plan holding `config.ts` / `hive.ts` / `store/config.ts`.**
+
+### 6. `#10` defect 2's "surface" half — `tunnelStillOpen` has four hits and no consumer
+
+`SlackServer.stop()` and `WebhookServer.stop()` both return `{ tunnelStillOpen: string | null }` and
+`console.warn` it. The Fix clause is *"capture the handle, **or** document + **surface** that stop is
+not complete"* — capturing is genuinely impossible (`tunnelmole()` resolves with a URL string, no
+disposer), documenting is done at length, and **surfacing is not**: `grep -rn tunnelStillOpen src/`
+returns four hits, all four inside the two `stop()` methods. An operator who pasted a Request URL
+into Slack is still not told it stays resolvable until the app quits. **Owner: a plan that gives the
+return value a consumer in the UI.** This is the single clause holding `#10` open.
+
+### 7. `#18` (three clauses) and `#36` (one clause)
+
+- **#18** — `spawn-requests` is documented in no agent-facing doc (`PROTOCOL.md` and `COMMANDS.md` do
+  not exist); `enrichTaskPrompt` (`src/renderer/src/hooks/useHive.ts:205`) still has **zero callers**,
+  neither wired nor deleted; the hookless-engine work-order string's audit anchor has drifted and
+  cannot be adjudicated from source without its own pass. None of these is a FLOOR-08 clause —
+  FLOOR-08 closes — but they keep the issue open.
+- **#36** — `slack.ts:191/210` and `webhook.ts:257/276` still each carry a private `listen()` and
+  `openTunnel()` plus a duplicated `ERR_REQUIRE_ESM` note. Fix: lift both into one
+  `src/main/tunnel.ts` helper taking `{ port, server }`. Not a FLOOR-16 clause — FLOOR-16 closes.
+
+**Owner: a Phase 2+ plan, or the issues stay open with their per-clause evidence comments.**
+
+### 8. ESLint is pinned to a deprecated 9.x line
+
+Forced by `package.json` `engines: ">=20 <23"`, which ESLint 10 (`^20.19.0 || ^22.13.0 || >=24`)
+refuses to run on. A gate a contributor cannot run locally is the defect FLOOR-16 exists to close, so
+9.x is correct today. Unblocking is a package-wide change: widen `engines.node`, re-check the
+`">=X <Y"` parser in `test/ci-config.test.cjs`, then `npm i -D eslint@10`.
+
+### 9. The eight operator observations Phase 1 could not automate
+
+Listed once, here, because eight of the thirteen open requirements are blocked on exactly this and
+scattering them across eight SUMMARYs is how they get lost. Each needs a human in front of the
+running app:
+
+| # | What a human must do | Blocks |
+|---|---|---|
+| 1 | Launch `dist\win-unpacked\Hello MarkX.exe`; confirm a real PTY echo, a persisted setting surviving a relaunch, and a clean visual pass. **This is D-09, and it also owes plan 01-01 its missing SUMMARY.** | FLOOR-03 |
+| 2 | `npm run dev`, **close the window (do not quit)**, watch an idle agent still get woken | FLOOR-02 |
+| 3 | Settings → General → Log folder → `open logs`; confirm the OS file manager opens it | FLOOR-05 |
+| 4 | Open the Tasks board, the detail overlay and the kanban with a live ledger; confirm data still updates and looks identical | FLOOR-11 |
+| 5 | Spawn a Claude agent with auto mode on, toggle it off without restarting, spawn a custom-provider agent, tab at the chip, drag the window under 1024px | FLOOR-01, FLOOR-13 |
+| 6 | Block a real non-Claude agent on an approval prompt; see exactly one Windows toast; click it and confirm the agent is focused | FLOOR-14 |
+| 7 | Look at the swept surfaces at the 14px floor — the strip and cards, the Settings tabs, onboarding, the command centre, the git/IDE chrome, skills, memory, the composer, the cost HUD | FLOOR-12 |
+| 8 | Drop a fake key into a live agent's workspace, wait out `COMMIT_DEBOUNCE_MS`, confirm `git log -p` in the real hive lacks it while the hive log records the scrub *(optional clause)* | FLOOR-04 |
+
+Plus two that are not operator-blocked but cannot run here: `gh attestation verify` after the next
+`v*` tag (FLOOR-06), and a live Codex spawn on Windows, which needs a subscription this machine does
+not have (FLOOR-18).
