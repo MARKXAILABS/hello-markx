@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). CI green on PR #77 at e6f9669, all six jobs. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag."
-last_updated: "2026-08-21T02:18:56.408Z"
+stopped_at: "Completed 01-05-PLAN.md (FLOOR-11: five hiveTasks pollers collapsed onto useHiveTasks; the roster-re-render and bounded-pool clauses verified already-shipped and audited, not rebuilt; test/repo-claims.test.cjs created with 3 RED-proven clauses; proc-kill's win32 silent pass closed). CI green on PR #77 at 0579387, all six jobs. B-repo-claims = 3. FLOOR-11's 'looks identical' half is NOT operator-verified — see Blockers."
+last_updated: "2026-08-21T02:42:24.735Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 4 of 23
+Plan: 5 of 23
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [█░░░░░░░░░] 13%
+Progress: [██░░░░░░░░] 17%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 01 P02 | 2h10m | 4 tasks | 10 files |
 | Phase 01 P03 | 1h05m | 3 tasks | 3 files |
 | Phase 01 P04 | 1h50m | 4 tasks | 13 files |
+| Phase 01 P05 | 55m | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,8 @@ Recent decisions affecting current work:
 - [Phase 01-04]: SECURITY.md names the sidecar/pi/opencode token gap out loud rather than omitting it — plan 02's PTY half is verified landed at HEAD, D-13's hive.ts half is verified OPEN (0 hits for HIVE_SOCK_TOKEN in startProxyBridge, shims still 1 1 0 0 0 1), and a doc that runs ahead of the code is the same defect as one that lags it
 - [Phase 01-04]: the hook-token ceiling is stated as D-14's two properties ONLY — no floor-wide key, payload.agent_id untrusted. 'Agent A cannot authenticate as agent B' is deliberately NOT claimed: B's token lives in B's process environment and a same-uid Linux sibling reads /proc/<B-pid>/environ
 - [Phase 01-04]: FLOOR-06's live 'gh attestation verify' sample is OUTSTANDING, not claimed — the publish job is gated on refs/tags/v*, no tag has been pushed since, so provenance is verified structurally (parsed test over step/input/permissions/ordering) and NOT end-to-end. Plan 23 must not tick FLOOR-06 on structural evidence alone
+- [Phase 01-05]: the hook header's 'delete the local useState' was followed in 1 of 5 files, not 5 — AskMeTab/TaskDetailOverlay/TasksKanban each write to local tasks optimistically before the disk round trip (dismiss, sendAnswer, move), so deriving straight off the shared payload would leave a dismissed card on the board for up to 5s. That is a rendered-output change and UI-SPEC's FLOOR-11 contract calls it a regression. Timers deleted, state kept. AgentStrip has no local mutation, so there the header was followed literally
+- [Phase 01-05]: the durable FLOOR-11 guard in test/repo-claims.test.cjs is NOT the literal 'setInterval in the same effect as hiveTasks()' check the plan specifies — a textual same-effect test would have missed 3 of the 5 real sites, because AskMeTab/TaskDetailOverlay/TasksKanban each defined refresh in a useCallback OUTSIDE the effect and passed the identifier in. Implemented instead as a per-file rule with one reasoned allowlist entry (hooks/useHive.ts) whose hiveTasks() call-site COUNT is pinned. Proven by driving it RED against two of those exact three files
 
 ### Pending Todos
 
@@ -149,6 +152,9 @@ Recent decisions affecting current work:
 - #18 IS NOT CLOSED and plan 23 must not treat it as closed. Plan 01-03 closed its reviewer clause only. Three Fix clauses remain unmet at b09fd74: (a) spawn-requests is documented in no agent-facing doc — PROTOCOL.md and COMMANDS.md do not exist; (b) the hookless-engine work-order string's audit anchor (useHive.ts:137) has drifted and the clause cannot be adjudicated from source without its own pass; (c) enrichTaskPrompt (src/renderer/src/hooks/useHive.ts:241) still has zero callers, neither wired nor deleted. D-46's phase gate (open floor-inspection issues excluding epics == 0) cannot pass until these land. Per-clause evidence: https://github.com/MARKXAILABS/hello-markx/issues/18#issuecomment-5364189116
 - FLOOR-06's live sample is OUTSTANDING: 'gh attestation verify <artifact> --repo MARKXAILABS/hello-markx' has never been run, because release.yml's publish job is gated on refs/tags/v* and no tag has been pushed since 01-04 landed the step. Provenance is verified STRUCTURALLY only (parsed assertions over the step, subject-checksums, the three job permissions and merge<attest<upload ordering). Plan 23 must not tick FLOOR-06 on that evidence alone — run it against a published artifact after the next v* tag and paste the output.
 - ADR-0006 exists (docs/adr/0006-terminal-pool-lifetime.md) but its TWO source pointers are NOT added: terminalPool.ts and terminalPoolPolicy.ts are plan 01-05's files in this same wave. Until 01-05 adds them, neither source comment links to the record, so FLOOR-17's 'source comments linked rather than deleted' clause is only half true. The ADR-0005 pair (db.ts, telemetry.ts) IS added by 01-04 — plans 06 and 10 own those files in later waves and must not revert the one-line comments.
+- FLOOR-11's 'no visual change' clause is verified by SOURCE REASONING plus a green E2E Electron smoke (which mounts AgentStrip and asserts the MICHAEL card renders) — NOT by watching the app. Nobody opened the Tasks board, the detail overlay or the kanban with a live ledger. Plan 23 must not tick FLOOR-11 on that alone: run 'npm run dev', open the Tasks board and the office floor, and confirm task data still updates and looks identical. Owner: operator, before plan 23.
+- ADR-0006 pointer blocker filed by 01-04 is CLOSED: both source comments landed in 01-05 (terminalPool.ts header, terminalPoolPolicy.ts header). terminalPoolPolicy.ts received EXACTLY one line and nothing else. Later owners of these two files must not revert either comment.
+- FLOOR-11 deliberately left PENDING in REQUIREMENTS.md, not Complete — matching 01-02 (GATE-01) and 01-04 (FLOOR-06/17): plan 23 owns the checkboxes. All three of its clauses have real evidence (roster-re-render and bounded-pool verified already-shipped + audited + pinned by test/renderer-runstate.test.cjs; the N-pollers clause closed by adoption and pinned by test/repo-claims.test.cjs, green on three platforms at 0579387). The one thing NOT observed is the 'no visual change' contract on the migration. Tick it after the operator run named in the blocker above.
 
 ## Deferred Items
 
@@ -160,8 +166,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T02:18:56.386Z
-Stopped at: Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). CI green on PR #77 at e6f9669, all six jobs. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag.
+Last session: 2026-08-21T02:41:27.218Z
+Stopped at: Completed 01-05-PLAN.md (FLOOR-11: five hiveTasks pollers collapsed onto useHiveTasks; the roster-re-render and bounded-pool clauses verified already-shipped and audited, not rebuilt; test/repo-claims.test.cjs created with 3 RED-proven clauses; proc-kill's win32 silent pass closed). CI green on PR #77 at 0579387, all six jobs. B-repo-claims = 3. FLOOR-11's 'looks identical' half is NOT operator-verified — see Blockers.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
