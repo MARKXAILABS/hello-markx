@@ -33,7 +33,7 @@ import {
   DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
   type AccountSwitch, type LiveAgentPty
 } from './delivery';
-import { HookServer, hookSockToken } from './hooks';
+import { HookServer } from './hooks';
 import { CircuitBreaker, type BreakerInput } from './breaker';
 import type { UsageProvider } from './usage';
 import { MemoryManager } from './memory';
@@ -466,6 +466,17 @@ const hookServer = new HookServer(
   hive, () => liveWebContents(), () => readConfig(), control, breaker,
   (agentId) => delivery.drainAtStop(agentId),
   (agentId) => focusAgent(agentId)
+);
+// GATE-01 — the hook token is minted PER SPAWN and lives in exactly one PTY's
+// env, replacing the single floor-wide secret every PTY used to inherit. Wired
+// at the PtyManager rather than at each `ptyManager.spawn(…)` call site on
+// purpose: pty.ts:664 is the one place every agent PTY is actually created, so a
+// spawn site added later gets a token automatically instead of going silently
+// dead-hooked, and pty.ts already owns the session teardown where the matching
+// revoke belongs. Injected as callbacks so pty.ts keeps no dependency on hooks.ts.
+ptyManager.setHookTokenSource(
+  (agentId) => hookServer.mintToken(agentId),
+  (token) => hookServer.revokeToken(token)
 );
 const memory = new MemoryManager(
   () => readConfig().harnessHome,
@@ -5523,15 +5534,23 @@ app.whenReady().then(() => {
   // server is running; the FILE only exists while it is, so the helper degrades
   // to "endpoint not running" cleanly. NO secret is in the env — only the path.
   process.env.MD_SLACK_REPLY_CONFIG = slackReplyConfigPath();
-  // The hook socket's shared secret, by the same inheritance route. HookServer
-  // rejects every payload whose `sock_token` doesn't equal hookSockToken(), and
-  // the hook shims read this value out of the env they inherit — as PTY
-  // descendants (pty.ts merges process.env) AND, for the qwen proxy bridge, as a
-  // sidecar main spawns with `...process.env`. Setting it here rather than at
-  // each spawn site is what makes BOTH of those work. Get this wrong and every
-  // hook in the app goes dead at once; hooks.ts's rejection log names this exact
-  // variable for that reason.
-  process.env.HIVE_SOCK_TOKEN = hookSockToken();
+  // The former floor-wide `HIVE_SOCK_TOKEN` env assignment was removed here — see
+  // GATE-01. It put ONE secret on this process's environment, and `pty.ts`
+  // spreads that environment into every PTY, so every LLM-controlled shell on the
+  // floor could read the key that authenticated every other agent. Against a
+  // prompt-injected agent the check bought nothing.
+  //
+  // The token is now minted PER SPAWN by `hookServer.mintToken(agentId)` and put
+  // in that one PTY's `opts.env` (see the wiring beside the HookServer
+  // construction above, and `PtyManager.setHookTokenSource`). Reading agent A's
+  // env yields A's identity and nothing else.
+  //
+  // Two consequences, both deliberate: anything that relied on INHERITING the
+  // value now gets nothing — `hiddenClaude.ts` and `memory.ts` spawn children
+  // with `...process.env` and neither installs a hook, so losing it is a leak
+  // closed rather than a feature lost; and the qwen proxy sidecar
+  // (`hive.ts` startProxyBridge) is dead-hooked until 01-06 threads its agent's
+  // token through that spawn site.
   // Open the durable store first — createWindow() reads the saved window bounds.
   // Guarded: a DB failure (e.g. a bad native build) must degrade to defaults,
   // never block app startup.

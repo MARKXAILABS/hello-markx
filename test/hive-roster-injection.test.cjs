@@ -47,7 +47,10 @@ async function floor(t, { steer } = {}) {
     ? { takeSteer: (id) => (id === 'god-1' ? steer : null), shouldHalt: () => false, toolDecision: () => ({ deny: false }) }
     : undefined;
   const server = new HookServer(hive, () => null, () => CONFIG, control, undefined);
-  const fire = (agent_id, hook_event_name) => server.handle({ agent_id, hook_event_name, session_id: 's1' });
+  // GATE-01: the agent id is DERIVED from the payload's per-agent token at the
+  // socket and passed into handle() — it is no longer read off the payload. The
+  // fixture hands it the same way, so it keeps modelling the real call.
+  const fire = (agentId, hook_event_name) => server.handle({ hook_event_name, session_id: 's1' }, agentId);
   return { home, hive, server, fire };
 }
 

@@ -9,19 +9,64 @@
  *     block-to-continue (#5, `drainAtStop`), so an agent drains its inbox with no
  *     renderer attached and without anything typing into its input line.
  *
- * AUTHENTICATED. The socket is a Unix-domain socket / named pipe, so ANY local
- * process could connect and post a payload claiming any `agent_id` — enough to
- * hijack another agent's --resume session id, poison the cost ledger, or clear
- * breaker state. Every payload must therefore carry `sock_token` equal to this
- * process's `hookSockToken()`; main puts that value in the agent PTY's child
- * environment as HIVE_SOCK_TOKEN, and the shims (which run as PTY descendants)
- * echo it back. Payloads without it are dropped, LOUDLY (see `authorized`).
+ * AUTHENTICATED, PER AGENT (GATE-01). The socket is a Unix-domain socket / named
+ * pipe, so ANY local process can connect and post a payload claiming any
+ * `agent_id` — enough to hijack another agent's --resume session id, poison the
+ * cost ledger, or clear breaker state. So `payload.agent_id` is NOT trusted and
+ * is never read: every payload must carry a `sock_token` that main minted for
+ * ONE agent at ONE PTY spawn (`mintToken`, injected as HIVE_SOCK_TOKEN into that
+ * PTY's env only), and this server DERIVES the identity from that token via
+ * `Map<token, agentId>`. Tokens are revoked when the PTY exits. Payloads whose
+ * token is unknown are dropped, LOUDLY (see `authorized`).
+ *
+ * THE HONEST CEILING (D-14) — exactly two properties, and no more:
+ *   1. There is no floor-wide key. Reading one agent's HIVE_SOCK_TOKEN buys that
+ *      agent's identity, not the floor's.
+ *   2. `payload.agent_id` is no longer trusted for identity.
+ * It is NOT secrecy: an agent's own shell reads whatever its own shim reads.
+ * It is NOT "agent A cannot authenticate as agent B" — that sentence is false on
+ * Linux. B's token lives in B's process environment (pty.ts spreads it into the
+ * PTY), so a same-uid sibling reads /proc/<B-pid>/environ; AGENT_DENY_RULES
+ * covers no /proc path and B's pid is one `pgrep -f` away. Any same-uid process
+ * that can read another agent's environment defeats this mechanism. Claim those
+ * two properties and nothing beyond them.
+ *
+ * REJECTED ALTERNATIVES, recorded so they are not re-litigated (D-15): a
+ * permission-restricted token FILE (a no-op against a same-uid shell, and chmod
+ * 0o600 is effectively meaningless on NTFS — false assurance); HMAC/nonce
+ * rotation (adds freshness, not impersonation resistance, and PI_EXTENSION /
+ * OPENCODE_PLUGIN are fire-and-forget so they cannot do challenge-response);
+ * socket peer-credential binding (no supported Node API for the socket fd or
+ * pipe handle — nodejs/node#7627 — so it means authoring and ABI-rebuilding a
+ * native addon on three CI gates).
+ *
+ * FAIL-OPEN AT THE SHIM, deliberately, and bounded rather than removed. A shim
+ * that cannot connect exits 0, and for Claude Code a PreToolUse hook that exits
+ * 0 with no stdout is *allow* — so deleting the socket file disables the gate
+ * for everyone. Making the shim fail CLOSED would break every agent whenever the
+ * app is legitimately not running (an agent PTY outlives a quit), which is a
+ * normal state. So the shim keeps exiting 0 and `armSocketWatchdog` re-listens
+ * on a missing or replaced socket instead: the outage is bounded by the watchdog
+ * interval rather than by the next app restart, and it is never silent. Re-taking
+ * a rebound path is a race we can lose; what is guaranteed is detection + a loud
+ * log, not exclusion.
+ *
+ * WHAT THE PreToolUse GATE DOES NOT REACH (see `protectedPathDenial`): the
+ * user-global engine seeds — `~/.codex/config.toml` (copied into every codex
+ * agent's config at spawn, hive.ts:2107/:2160-2162), `~/.gemini/…/hooks.json`
+ * (hive.ts:2070) and `~/.grok/hooks/` (hive.ts:2302) — sit outside the hive root
+ * entirely, so an agent appending one `[[hooks.PreToolUse]]` block to a seed has
+ * it executed inside another agent's hook process with that agent's env. Nor does
+ * it reach an engine with NO PreToolUse hook at all (pi, opencode, the qwen proxy
+ * tier): for those, `ensureHive` rewriting the shim from its constant on every
+ * bootstrap is a repair, not a gate.
  *
  * Runs in the Electron main process.
  */
 import { createServer, type Server } from 'node:net';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Notification, type WebContents } from 'electron';
 import type { HiveManager } from './hive';
 import type { HarnessConfig } from './config';
@@ -31,9 +76,13 @@ import { estimateCostUsd } from './pricing';
 
 interface HookPayload {
   hook_event_name?: string;
+  /** IGNORED (GATE-01). The shims still send it and the field is kept so the
+   *  wire shape is documented — but nothing in this file reads it for identity:
+   *  a payload's own claim about who sent it is worth nothing on a socket any
+   *  local process can reach. The agent id comes from `sock_token` instead. */
   agent_id?: string | null;
-  /** Per-process shared secret proving the sender is one of OUR shims (see
-   *  `hookSockToken`). Checked at the socket boundary, never used past it. */
+  /** The PER-AGENT token main minted for one PTY spawn (`mintToken`). This is
+   *  the ONLY identity input: the server looks it up to derive `agentId`. */
   sock_token?: string;
   session_id?: string;
   transcript_path?: string;
@@ -59,26 +108,37 @@ interface HookPayload {
 }
 
 /**
- * Per-process token every hook payload must carry, minted once at module load.
+ * Resolve `p` to a real path, following symlinks, for a target that usually does
+ * not exist yet.
  *
- * The hook socket has no OS-level peer authentication we can lean on (a UDS
- * under the hive root, a `\\.\pipe\` name on Windows — both reachable by any
- * local process), so possession of this value IS the authentication. Main passes
- * it to spawned agents as `HIVE_SOCK_TOKEN`; the shims read it out of their
- * inherited env and put it in the payload as `sock_token`.
+ * `path.resolve` normalizes `..` and makes a path absolute; it does NOT
+ * dereference links. So `ln -s "$HIVE_ROOT/bin" /tmp/b` then writing
+ * `/tmp/b/cth-hook.cjs` walks straight past a resolve+startsWith gate. We
+ * realpath the deepest EXISTING ancestor and re-join the remainder, which is the
+ * only shape that works for a file about to be created.
  */
-const SOCK_TOKEN = randomBytes(32).toString('hex');
-
-/** The token the hook shims must echo back. Main puts this in the agent PTY's
- *  child environment as `HIVE_SOCK_TOKEN`. */
-export function hookSockToken(): string {
-  return SOCK_TOKEN;
+function realResolve(p: string): string {
+  const abs = resolve(p);
+  let cur = abs;
+  const rest: string[] = [];
+  for (;;) {
+    try { return join(realpathSync(cur), ...[...rest].reverse()); }
+    catch { /* this ancestor does not exist yet — climb */ }
+    const parent = dirname(cur);
+    if (parent === cur) return abs; // hit the filesystem root, nothing resolved
+    rest.push(basename(cur));
+    cur = parent;
+  }
 }
 
-/** Fixed-width digest, so the constant-time compare below never has to branch on
- *  (and therefore leak) the token's length. */
-function sha256(s: string): Buffer {
-  return createHash('sha256').update(s, 'utf8').digest();
+/** Is `target` `base`, or inside it? Separator-safe and case-insensitive on
+ *  win32 (NTFS is), never a bare `includes` — which would also match a sibling
+ *  like `/tmp/hive-bin-notes`. */
+function within(base: string, target: string): boolean {
+  const fold = (s: string): string => (process.platform === 'win32' ? s.toLowerCase() : s);
+  const rel = relative(fold(base), fold(target));
+  if (rel === '') return true; // the base itself
+  return !rel.startsWith('..' + sep) && rel !== '..' && !isAbsolute(rel);
 }
 
 /** Throttle for the rejection log. A BROKEN env wiring rejects every payload —
@@ -108,6 +168,24 @@ export class HookServer {
   private rejected = 0;
   private lastRejectLog = 0;
 
+  /**
+   * GATE-01 — token → agentId. THE identity source for everything past the
+   * socket. One entry per live PTY spawn: `mintToken` adds, PTY exit removes.
+   * A token is meaningless on its own — it only ever names the one agent main
+   * minted it for, so reading agent A's env yields A's identity and nothing
+   * else. This replaced a single floor-wide secret that `pty.ts` spread into
+   * every PTY, where reading ANY agent's env yielded the whole floor.
+   */
+  private tokens = new Map<string, string>();
+
+  /** Socket watchdog (see `armSocketWatchdog`) — POSIX only. */
+  private watchdog: ReturnType<typeof setInterval> | null = null;
+  private sockIno: number | null = null;
+  /** Watchdog period. Public so a test can shorten it to ~50ms: this is a repair
+   *  loop, not a hot path, and a test that sleeps 10s gets deleted by the next
+   *  person who has to wait for it. */
+  socketWatchdogMs = 10_000;
+
   /** agentId → when its current turn started (the last UserPromptSubmit, or the
    *  last Stop when nothing else marked a boundary). Drives the "long task
    *  finished" toast (#42): a Stop is only worth interrupting a human for when
@@ -135,8 +213,13 @@ export class HookServer {
     if (!sock || this.server) return;
     // Clear a stale socket file left by a previous run.
     try { if (existsSync(sock)) rmSync(sock); } catch { /* noop */ }
+    this.listenOn(sock);
+  }
 
-    this.server = createServer((conn) => {
+  /** Build the connection handler and take the path. Split out of `start()` so
+   *  the watchdog can re-take a socket that went missing or was replaced. */
+  private listenOn(sock: string): void {
+    const server = createServer((conn) => {
       let buf = '';
       conn.on('data', (d) => {
         buf += d.toString();
@@ -144,26 +227,110 @@ export class HookServer {
         if (nl === -1) return; // wait for the full line
         let payload: HookPayload = {};
         try { payload = JSON.parse(buf.slice(0, nl)); } catch { /* ignore */ }
-        // THE trust boundary. Anything past this line is believed — including
-        // `agent_id`, which decides whose session/ledger/breaker gets written.
+        // THE trust boundary. `authorized` DERIVES the sender's identity from
+        // its per-agent token; the payload's own `agent_id` claim is discarded.
         // Answer an unauthenticated peer with the same empty object a real hook
         // gets, so the socket is not also a probe for whether it guessed right.
-        if (!this.authorized(payload)) { conn.end('{}'); return; }
+        const agentId = this.authorized(payload);
+        if (!agentId) { conn.end('{}'); return; }
         let res: unknown = {};
-        try { res = this.handle(payload); } catch { res = {}; }
+        try { res = this.handle(payload, agentId); } catch { res = {}; }
         conn.end(JSON.stringify(res ?? {}));
       });
       conn.on('error', () => { /* shim hung up — ignore */ });
     });
-    this.server.on('error', (e) => console.error('[hive] hook server error:', e));
-    this.server.listen(sock);
+    server.on('error', (e) => console.error('[hive] hook server error:', e));
+    this.server = server;
+    server.listen(sock, () => this.armSocketWatchdog(sock));
+  }
+
+  /**
+   * Re-listen when the socket file goes missing or is replaced (T-P02-12/13).
+   *
+   * Before this, `listen()` ran exactly once and nothing re-listened, so one
+   * `rm "$HIVE_ROOT/hooks.sock"` took the PreToolUse gate down for EVERY agent
+   * until the app restarted — the shims exit 0 on a connect error and exit 0
+   * with no stdout is *allow*. Worse, an agent that then BOUND that fixed path
+   * would collect every other agent's token and answer `allow` to the floor.
+   *
+   * POSIX only: `sockPath()` is a `\\.\pipe\` NAME on win32 with no filesystem
+   * entry, so there is nothing to stat, nothing to `rm`, and a watchdog that
+   * threw every 10s there would be a worse bug than the one it fixes.
+   */
+  private armSocketWatchdog(sock: string): void {
+    if (process.platform === 'win32') return;
+    try { this.sockIno = statSync(sock).ino; } catch { this.sockIno = null; }
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = setInterval(() => this.checkSocket(sock), this.socketWatchdogMs);
+    this.watchdog.unref?.();
+  }
+
+  private checkSocket(sock: string): void {
+    if (!this.server) return;
+    let ino: number | null = null;
+    try { ino = statSync(sock).ino; } catch { ino = null; }
+    if (ino !== null && ino === this.sockIno) return;
+    if (ino === null) {
+      // The accident, or a deliberate fail-open: the gate was DOWN for everyone
+      // until now. Loud, because nothing else reports it.
+      console.error(
+        `[hive] hook socket GONE (${sock}) — the PreToolUse gate was open for every `
+        + 'agent on this floor until this re-listen. Something deleted it.'
+      );
+    } else {
+      // A different inode on OUR path is someone else listening on it: every
+      // shim would hand THEM its per-agent token and take THEIR allow/deny.
+      console.error(
+        `[hive] hook socket REPLACED (${sock}) — a DIFFERENT socket is bound to the `
+        + 'hive hook path. This is what an agent rebinding HIVE_SOCK looks like: it '
+        + 'harvests every other agent\'s token and answers every PreToolUse. Re-taking '
+        + 'the path now — re-taking is a race we can lose, so check the floor.'
+      );
+      try { rmSync(sock); } catch { /* it may be gone again already */ }
+    }
+    try { this.server.close(); } catch { /* noop */ }
+    this.server = null;
+    this.listenOn(sock);
   }
 
   stop(): void {
+    // Before anything else: an uncleared interval outlives the server, and a
+    // leaked one per HookServer construction is its own flake in a test file
+    // that builds ~20 of them.
+    if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
+    this.sockIno = null;
     try { this.server?.close(); } catch { /* noop */ }
     this.server = null;
     const sock = this.hive.sockPath();
     try { if (sock && existsSync(sock)) rmSync(sock); } catch { /* noop */ }
+  }
+
+  /**
+   * Mint the hook token for ONE agent's PTY spawn (GATE-01, D-11).
+   *
+   * `randomBytes` — never a hand-rolled or time-derived value. Called by
+   * `pty.ts` at every spawn that carries an AGENT_ID, and the result goes into
+   * that ONE PTY's env as HIVE_SOCK_TOKEN. A fresh token per spawn means a
+   * restart invalidates the old one for free.
+   */
+  mintToken(agentId: string): string {
+    const token = randomBytes(32).toString('hex');
+    this.tokens.set(token, agentId);
+    return token;
+  }
+
+  /** Drop ONE token — the PTY-exit path. Token-exact rather than by agent on
+   *  purpose: a restart is kill()+spawn() under the same id, and the dying
+   *  PTY's exit can land AFTER the replacement has already minted, so revoking
+   *  by agent there would dead-hook the live agent. */
+  revokeToken(token: string): void {
+    this.tokens.delete(token);
+  }
+
+  /** Drop EVERY token an agent holds — for a teardown where the agent itself is
+   *  going away and no replacement is coming. */
+  revokeAgent(agentId: string): void {
+    for (const [token, id] of this.tokens) if (id === agentId) this.tokens.delete(token);
   }
 
   /** The transcript file of an agent's CURRENT session, if any hook has fired. */
@@ -178,38 +345,154 @@ export class HookServer {
   }
 
   /**
-   * Does this payload carry our per-process socket token?
+   * WHO sent this payload — derived, never claimed. Returns the agent id bound
+   * to the payload's token at mint time, or null if there is no such token.
    *
    * Deliberately enforced HERE, at the socket, and not inside `handle` — the
    * socket is the trust boundary, and main-side callers that build payloads
    * themselves are already inside it.
    *
+   * A plain `Map.get` and no compare: the lookup is a hash of the provided
+   * string, so there is no per-byte comparison to leak a prefix and nothing for
+   * a `.length` shortcut to bail on. The constant-time compare this file used to
+   * run is therefore gone along with the single floor-wide constant it compared
+   * against — deleted rather than kept as a dead import, and deliberately not
+   * named here, because a later plan greps this file raw for its symbols.
+   *
    * FAIL-CLOSED, but never silently: if the PTY env ever stops carrying
-   * HIVE_SOCK_TOKEN, every hook in the app goes dead at once — avatars freeze,
-   * Stop never fires, the cost ledger stops filling — and a silent version of
-   * that is far harder to diagnose than the hijack it prevents. So each
-   * rejection says WHY, with the agent and event, throttled to one line per
-   * REJECT_LOG_INTERVAL_MS plus a running count.
+   * HIVE_SOCK_TOKEN, every hook for that agent goes dead at once — its avatar
+   * freezes, Stop never fires, its cost rows stop landing — and a silent version
+   * of that is far harder to diagnose than the hijack it prevents. So each
+   * rejection says WHY, with the event, throttled to one line per
+   * REJECT_LOG_INTERVAL_MS plus a running count. The payload's OWN `agent_id` is
+   * deliberately not logged: it is the unauthenticated claim this gate exists to
+   * disbelieve, and printing it invites a reader to trust it.
    */
-  private authorized(p: HookPayload): boolean {
+  private authorized(p: HookPayload): string | null {
     const provided = typeof p.sock_token === 'string' ? p.sock_token : '';
-    if (timingSafeEqual(sha256(provided), sha256(SOCK_TOKEN))) return true;
+    const agentId = provided ? this.tokens.get(provided) : undefined;
+    if (agentId) return agentId;
     this.rejected += 1;
     const now = Date.now();
     if (now - this.lastRejectLog >= REJECT_LOG_INTERVAL_MS) {
       this.lastRejectLog = now;
       console.error(
-        `[hive] hook payload REJECTED (${provided ? 'wrong' : 'missing'} sock_token) — `
-        + `agent=${p.agent_id ?? '?'} event=${p.hook_event_name ?? '?'}, `
-        + `${this.rejected} rejected so far. If this is every hook, the agent PTY env `
-        + 'is missing HIVE_SOCK_TOKEN (see hookSockToken() in hooks.ts).'
+        `[hive] hook payload REJECTED (${provided ? 'unknown' : 'missing'} sock_token) — `
+        + `event=${p.hook_event_name ?? '?'}, ${this.rejected} rejected so far. If this is `
+        + 'every hook, the agent PTY env is missing HIVE_SOCK_TOKEN (minted per spawn by '
+        + 'mintToken() in hooks.ts); if it is one engine, that engine\'s shim is not '
+        + 'sending sock_token at all.'
       );
     }
-    return false;
+    return null;
   }
 
-  private handle(p: HookPayload): unknown {
-    const agentId = p.agent_id ?? undefined;
+  /**
+   * Deny a PreToolUse whose target lands in the hive's own protected set
+   * (T-P02-09/12/13). Returns the operator-legible reason, or null to allow.
+   *
+   * WHY HERE and not in `AGENT_DENY_RULES`: that list is written only into
+   * Claude's per-session `settings.json` (hive.ts:1072), so it does not exist
+   * for the agy/codex/grok engines that reuse this very shim, and its `Bash(…)`
+   * rules are prefix matches on the command string. This gate is strictly wider
+   * on both axes and lives at the choke point every hook-bridged engine already
+   * routes through. Per-agent shim COPIES were considered and rejected: the
+   * token rides in each PTY's env, not in the shim, so a second copy adds a file
+   * without adding a boundary — the copy is exactly as writable as the original.
+   *
+   * THE CEILING, so this reads as a control and not a claim: it stops the
+   * confident accident, the documented `$HIVE_ROOT` convention and the symlink
+   * hop. It does NOT stop a model that assembles the path at runtime
+   * (`p=$HIVE_ROOT; p=$p/bin; cat >> $p/cth-hook.cjs`) — the gate sees a command
+   * string, not a shell — and it does not exist at all for an engine with no
+   * PreToolUse hook (T-P02-11).
+   */
+  private protectedPathDenial(agentId: string, p: HookPayload): string | null {
+    const root = this.hive.root();
+    if (!root) return null;
+    const ti = (p.tool_input && typeof p.tool_input === 'object')
+      ? p.tool_input as Record<string, unknown>
+      : {};
+    const targets: string[] = [];
+    for (const key of ['file_path', 'path', 'notebook_path']) {
+      const v = ti[key];
+      if (typeof v === 'string' && v) targets.push(v);
+    }
+    if (p.tool_name === 'Bash' && typeof ti.command === 'string') {
+      // The app puts HIVE_ROOT in every agent's env (hive.ts:828) AND names it in
+      // the injected prompt (hive.ts:1366), so `cat >> "$HIVE_ROOT/bin/…"` is the
+      // DOCUMENTED calling convention, not obfuscation — a prefix test on the
+      // unexpanded string never matches it. Expand the spellings this app itself
+      // hands out, then treat the shell words as candidate paths. Splitting on
+      // shell separators (not a bare substring scan) is what keeps `>>`, quotes
+      // and `;`-chains from hiding a target.
+      const expanded = this.expandHiveVars(agentId, ti.command);
+      for (const word of expanded.split(/[\s;&|<>()"']+/)) if (word) targets.push(word);
+    }
+    for (const target of targets) {
+      const reason = this.denyReason(agentId, root, target);
+      if (reason) return reason;
+    }
+    return null;
+  }
+
+  /** Expand the shell spellings of the env vars this app hands every agent, so a
+   *  command written the way the injected prompt teaches is still resolvable. */
+  private expandHiveVars(agentId: string, cmd: string): string {
+    const root = this.hive.root();
+    const vars: Record<string, string | null> = {
+      HIVE_ROOT: root,
+      HIVE_SOCK: this.hive.sockPath(),
+      AGENT_DIR: root ? join(root, 'agents', agentId) : null
+    };
+    let out = cmd;
+    for (const [name, value] of Object.entries(vars)) {
+      if (!value) continue;
+      out = out.split(`\${${name}}`).join(value)
+        .split(`$${name}`).join(value)
+        .split(`%${name}%`).join(value);
+    }
+    return out;
+  }
+
+  /** One protected path per branch, each with its OWN reason so the operator can
+   *  see WHICH gate fired. */
+  private denyReason(agentId: string, root: string, target: string): string | null {
+    const hiveRoot = realResolve(root);
+    const t = realResolve(target);
+    if (within(join(hiveRoot, 'bin'), t)) {
+      return 'Denied: <hive>/bin holds the ONE hook shim every agent on this floor '
+        + 'executes. Writing it runs your code inside another agent\'s hook, with that '
+        + 'agent\'s environment and token.';
+    }
+    if (within(join(hiveRoot, '.git'), t)) {
+      return 'Denied: the hive root is a git repo the app itself commits to. A hook or '
+        + 'core.hooksPath under <hive>/.git executes as a child of the main process on '
+        + 'the next hive commit — outside every limit that applies to you.';
+    }
+    const sock = this.hive.sockPath();
+    // win32 sockPath() is a `\\.\pipe\` NAME, not a filesystem path — nothing to
+    // delete, nothing to resolve, so the whole branch is POSIX-shaped.
+    if (sock && process.platform !== 'win32' && within(realResolve(sock), t)) {
+      return 'Denied: deleting or replacing the hook socket takes the PreToolUse gate '
+        + 'down for EVERY agent (the shims fail open), and rebinding that path harvests '
+        + 'every agent\'s token.';
+    }
+    const agents = join(hiveRoot, 'agents');
+    if (within(agents, t)) {
+      const owner = relative(agents, t).split(/[\\/]/)[0];
+      // An agent may write its OWN directory — a gate that blocks that is an
+      // outage, not a control.
+      if (owner && owner !== agentId) {
+        return `Denied: <hive>/agents/${owner} belongs to another agent. Its settings.json `
+          + 'names the hook commands that agent runs, so writing it is code execution in '
+          + 'their session.';
+      }
+    }
+    return null;
+  }
+
+  private handle(p: HookPayload, agentId: string): unknown {
     const event = p.hook_event_name ?? 'Unknown';
     if (agentId && typeof p.transcript_path === 'string' && p.transcript_path) {
       this.transcriptPaths.set(agentId, p.transcript_path);
@@ -344,6 +627,25 @@ export class HookServer {
       }
       this.emit(agentId, event, p);
       return {};
+    }
+
+    // GATE-01 — the hive's own protected set: the shared shim, the hive repo's
+    // .git, the socket, and other agents' directories. FIRST, and deliberately
+    // outside the `this.control` guard below: this is a floor invariant, not an
+    // operator preference, so it must hold on a floor with no ControlRegistry.
+    if (event === 'PreToolUse') {
+      const denial = this.protectedPathDenial(agentId, p);
+      if (denial) {
+        this.emitControl(agentId, p.tool_name, denial);
+        this.emit(agentId, event, p, true);
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: denial
+          }
+        };
+      }
     }
 
     // 7C.1 — HITL gate: deny a tool call at the PreToolUse boundary when the

@@ -33,6 +33,11 @@ interface PtySession {
   proc: pty.IPty;
   cwd: string;
   command: string;
+  /** GATE-01 — the per-spawn hook token handed to THIS pty's environment, kept
+   *  so every path that drops the session can revoke exactly it (and not a
+   *  replacement minted for the same id by a restart). Absent for a PTY with no
+   *  AGENT_ID: an installer or plain shell posts no hook payloads. */
+  hookToken?: string;
   /** The window (webContents) that spawned this PTY and should receive its
    *  output. Multi-window: each floor owns its own terminals, so `pty:data:<id>`
    *  / `pty:exit:<id>` route ONLY here — never broadcast — so one floor's stream
@@ -324,6 +329,13 @@ export class PtyManager {
    *  runs. Best-effort — set once by the main process. */
   private exitHandler: ((id: string, exitCode?: number) => void) | null = null;
 
+  /** GATE-01 — mint/revoke the per-spawn hook token (HookServer, injected by
+   *  main so this file keeps no dependency on hooks.ts). Optional: a PtyManager
+   *  with no source simply spawns PTYs that carry no HIVE_SOCK_TOKEN, which is
+   *  what every test that does not care about hooks already expects. */
+  private mintHookToken: ((agentId: string) => string) | null = null;
+  private revokeHookToken: ((token: string) => void) | null = null;
+
   /** The default/fallback output sink — set to the PRIMARY window. Used only for
    *  sessions with no recorded owner; owned sessions route to their owner. */
   attachWebContents(wc: WebContents) {
@@ -356,6 +368,7 @@ export class PtyManager {
         // phantom terminal and a respawn under the same id is refused with
         // "pty already exists".
         this.sessions.delete(id);
+        this.releaseHookToken(s); // GATE-01 — the env that held it is gone
         // ...but unlike kill(), NOBODY else runs teardown for this path (kill()'s
         // callers all follow it with teardownPty; the window 'closed' handler does
         // not). The delete above makes onExit's identity guard bail, so fire the
@@ -373,6 +386,22 @@ export class PtyManager {
    *  install → auto restart-and-continue) from a crash. */
   setExitHandler(handler: (id: string, exitCode?: number) => void): void {
     this.exitHandler = handler;
+  }
+
+  /** Register the per-spawn hook-token mint/revoke pair (GATE-01). Set once by
+   *  main, from the live HookServer. */
+  setHookTokenSource(mint: (agentId: string) => string, revoke: (token: string) => void): void {
+    this.mintHookToken = mint;
+    this.revokeHookToken = revoke;
+  }
+
+  /** Give up a session's hook token. Called from EVERY path that drops a session
+   *  from the map — natural exit, kill(), killByOwner() — because a token whose
+   *  PTY is gone should not authenticate anything. Idempotent. */
+  private releaseHookToken(s: PtySession): void {
+    if (!s.hookToken) return;
+    try { this.revokeHookToken?.(s.hookToken); } catch { /* never break teardown */ }
+    s.hookToken = undefined;
   }
 
   /** Send to the renderer only if it's still alive. During app quit, killing a
@@ -561,6 +590,9 @@ export class PtyManager {
       return { ok: false, error: `cwd does not exist: ${opts.cwd}` };
     }
     const resolved = this.resolveCommand(opts.command).path;
+    // Declared out here so the catch below can hand back a token whose PTY never
+    // started — a minted-but-unused token would authenticate forever.
+    let hookToken: string | undefined;
     try {
       // Build a user-shell PATH so child can resolve subprocess deps. Cached
       // for the session (shellEnv.userShellPath, fenced against rc-file noise) —
@@ -661,6 +693,14 @@ export class PtyManager {
           );
         }
       }
+      // GATE-01 — the hook token, minted for THIS spawn only and keyed on the
+      // very id the shims report (`AGENT_ID`), so the server can derive identity
+      // from the token instead of believing `payload.agent_id`. Keyed off
+      // opts.env rather than opts.id deliberately: AGENT_ID is what the shim
+      // reads and sends, and a PTY without one (the missing-CLI installer, a
+      // plain shell) installs no hooks and so needs no token.
+      const hookAgentId = opts.env?.AGENT_ID;
+      hookToken = hookAgentId ? (this.mintHookToken?.(hookAgentId) ?? undefined) : undefined;
       const proc = pty.spawn(file, spawnArgs, {
         name: 'xterm-256color',
         cols: opts.cols ?? 100,
@@ -689,7 +729,9 @@ export class PtyManager {
             : { LANG: process.env.LANG ?? 'en_US.UTF-8',
                 LC_CTYPE: process.env.LC_ALL ?? process.env.LC_CTYPE ?? process.env.LANG ?? 'en_US.UTF-8' }),
           // Per-agent hive identity (AGENT_ID, HIVE_ROOT, …) when provided.
-          ...(opts.env ?? {})
+          ...(opts.env ?? {}),
+          // LAST, so nothing upstream can shadow it: this PTY's own hook token.
+          ...(hookToken ? { HIVE_SOCK_TOKEN: hookToken } : {})
         } as Record<string, string>
       });
 
@@ -706,6 +748,7 @@ export class PtyManager {
         proc,
         cwd: opts.cwd,
         command: resolved,
+        hookToken,
         lastOutputAt: Date.now(),
         hasOutput: false,
         owner,
@@ -736,6 +779,7 @@ export class PtyManager {
         if (this.sessions.get(opts.id) !== session) return;
         this.safeSend(`pty:exit:${opts.id}`, { exitCode, signal }, session.owner);
         this.sessions.delete(opts.id);
+        this.releaseHookToken(session); // GATE-01 — the env that held it is gone
         // Natural exit must run the same lifecycle teardown as an explicit kill.
         // Guarded so a teardown error can never crash node-pty's exit callback.
         try { this.exitHandler?.(opts.id, exitCode); } catch { /* never throw out of onExit */ }
@@ -743,6 +787,8 @@ export class PtyManager {
 
       return { ok: true };
     } catch (e) {
+      // The PTY never started, so nothing will ever present this token.
+      if (hookToken) { try { this.revokeHookToken?.(hookToken); } catch { /* noop */ } }
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
@@ -791,6 +837,7 @@ export class PtyManager {
       s.proc.kill();
       ensureKilled(pid); // verify + sweep the process group so no PID leaks
       this.sessions.delete(id);
+      this.releaseHookToken(s); // GATE-01 — the env that held it is gone
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
