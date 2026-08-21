@@ -621,3 +621,102 @@ test('a codex agent gets a usage sample through the collector fallback', () => {
   assert.equal(s.cacheRead, 1000);
   assert.equal(s.output, 700);
 });
+
+// ─── FLOOR-10 (#34): the budget arm, fed from the production breaker beat ───
+
+/**
+ * Plan 01-09 minted `BreakerInput.budget`, the breaker arm that enforces it and
+ * `hive.budgetForAgent()`, and could not wire them: `src/main/index.ts` belonged
+ * to plan 01-08 that wave, and a call to a method whose definition had not landed
+ * yet does not typecheck. So for one wave every unit test above built its own
+ * BreakerInput, stayed green, and proved nothing about production — `budget` is
+ * an OPTIONAL field, so the tree compiles perfectly whether or not anything ever
+ * sets it. That is the exact shape of a feature that ships dead.
+ *
+ * This assertion and the line it asserts land in the same commit.
+ */
+
+/**
+ * The `inputs.push({...})` object literal inside `runBreakerBeat`, comment-free.
+ *
+ * Bounded by STRUCTURE — the anchor declaration, then the push, then the `});`
+ * that closes it — and never by a character count. src/main/index.ts is ~5,800
+ * lines and grows every wave, so a fixed-size window is a coin flip: plan 01-09
+ * measured the 2,000 characters after this same anchor and found they end THREE
+ * LINES SHORT of `inputs.push({`, which would have made this test red no matter
+ * what index.ts contained. A structural bound cannot drift that way, and it is
+ * also tighter — the regex below can only match INSIDE the literal, so a comment
+ * reading `// budget: hive.budgetForAgent(id) — pulled in wave 6` anywhere in the
+ * file cannot satisfy it (a bare `grep -c budgetForAgent src/main/index.ts >= 1`
+ * would be satisfied by exactly that).
+ */
+function breakerInputLiteral() {
+  const root = path.resolve(__dirname, '..');
+  const main = fs.readFileSync(path.join(root, 'src/main/index.ts'), 'utf8');
+
+  const at = main.indexOf('const inputs: BreakerInput[]');
+  assert.ok(
+    at > 0,
+    'runBreakerBeat no longer builds a BreakerInput[] — re-derive the anchor with: '
+    + 'grep -n "const inputs: BreakerInput\\[\\]" src/main/index.ts'
+  );
+
+  const push = main.indexOf('inputs.push({', at);
+  assert.ok(
+    push > at,
+    'the BreakerInput[] is no longer filled by an inputs.push({...}) literal below its '
+    + 'declaration. Whatever replaced it is where the budget has to be fed, and this window '
+    + 'can no longer find it — re-derive before touching the assertion.'
+  );
+
+  const end = main.indexOf('});', push);
+  assert.ok(
+    end > push,
+    'the inputs.push({ literal is never closed by `});` — the structural bound has no end '
+    + 'delimiter, so any window taken here would run past the beat into unrelated code'
+  );
+
+  return main.slice(push, end).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
+test('FLOOR-10: the breaker beat populates BreakerInput.budget in production (#34)', () => {
+  const literal = breakerInputLiteral();
+
+  // POSITIVE CONTROL, first. A token that is definitely inside this literal must
+  // match, or the window is looking at the wrong bytes and the real assertion
+  // below would be red — or green — for a reason that has nothing to do with the
+  // budget. A source pin whose window is never proven is not evidence.
+  assert.match(
+    literal, /agentId:\s*id,/,
+    'the anchored window does not contain `agentId: id,`, which is the first property of the '
+    + 'literal it is supposed to be bounding. The window is wrong, so the budget assertion '
+    + 'below proves nothing either way — fix the bound, do not relax the assertion.'
+  );
+
+  assert.match(
+    literal, /budget:\s*hive\.budgetForAgent\(/,
+    'the breaker beat does not populate BreakerInput.budget, so the budget arm is an optional '
+    + 'field nothing ever sets. Every breaker unit test constructs its own input and stays '
+    + 'green while the per-card cap goes unenforced in production, which is worse than having '
+    + 'no cap: the UI reports a budget that cannot trip. FLOOR-10 (#34) is not closed until '
+    + 'this property exists inside runBreakerBeat.'
+  );
+});
+
+test('FLOOR-09: the number the budget arm enforces against includes the proxy tier (#19)', () => {
+  // A cap that measures spend excluding every qwen/crush agent is the
+  // 'worse than no cap' failure this phase exists to remove, so the two
+  // requirements are pinned together: FLOOR-10's arm is only meaningful
+  // while FLOOR-09's sink is still wired.
+  const root = path.resolve(__dirname, '..');
+  const main = fs.readFileSync(path.join(root, 'src/main/index.ts'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  assert.match(
+    main, /telemetry\.recordCostSample\(/,
+    'src/main/index.ts no longer hands HookServer the proxy-tier cost sink. The ledger still '
+    + 'fills, but getAgentUsage never sees qwen/crush spend, so budgetForAgent under-reports '
+    + "and a per-card cap silently exempts every proxy-tier agent — asserted on the CALL and "
+    + 'not on a mention, because this source is comment-stripped first.'
+  );
+});

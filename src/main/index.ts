@@ -1610,6 +1610,7 @@ function runBreakerBeat(progressWindowMs: number): void {
     inputs.push({
       agentId: id,
       sample,
+      budget: hive.budgetForAgent(id) ?? undefined,   // FLOOR-10 (#34) — per-card token cap
       progressing: now - lastCoordinationAt(id) < progressWindowMs || now - lastSpanAt < progressWindowMs
     });
   }
