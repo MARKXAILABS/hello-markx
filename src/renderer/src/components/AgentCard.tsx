@@ -110,7 +110,18 @@ export function AgentCard({
   // that gets cut. Widened for every card so the dock stays uniform, with enough
   // slack that Talk's info mark (which only appears when the OpenAI key is
   // missing) has somewhere to sit rather than pushing the row apart.
-  const width = 220;
+  // FLOOR-12 containment, step 2 — MEASURED in a running Electron window, not
+  // estimated. At the 14px floor a four-character Press Start 2P chip is 64px
+  // wide (56 + 8 of padding), and the god card's identity row carries two of
+  // them. Measured at 220px: MICHAEL 64px intrinsic, BOSS 64, AUTO 64, the
+  // `idle` badge 54, gaps 5+5+6 — 262px of content against 160px of column,
+  // and because the name is the row's only flexible item it absorbed the whole
+  // deficit and rendered at ZERO width. A card with no name on it is not
+  // truncation, it is a dropped field, and the e2e smoke caught it. The card
+  // widens by the measured 102px so the name survives; a longer status label
+  // ('compacting') still truncates it with an ellipsis, which is the designed
+  // response to horizontal growth.
+  const width = 322;
   // FLOOR-12 containment, step 2: the 14px floor grew this card's content from
   // 63px to 71px (context row 18->20, note row 14->20), measured. The container
   // moves by the same +8 so the original 3px of slack survives the bump rather
