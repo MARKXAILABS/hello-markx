@@ -540,35 +540,30 @@ export class HookServer {
     // (Lane A #6.6a). Cheap: recordSession writes only when it changes.
     if (agentId && p.session_id) this.hive.recordSession(agentId, p.session_id);
 
-    // CostSample — synthesized by the proxy-bridge sidecar (qwen) on every
-    // response with usage. Persist it to the SAME cost ledger as Claude's OTel
-    // path, keyed by the synthesized session_id, then return early so cost stays
-    // OUT of the Claude-only OTel/breaker/drain paths below. `usd` is the fallback
-    // per-model estimate (a local model normally costs ~$0, but the row keeps the
-    // accounting schema uniform). Pure telemetry — never feeds the loop detector.
+    // CostSample — synthesized by the proxy-bridge sidecar (qwen/crush) on every
+    // response with usage. Its numbers are PER-RESPONSE DELTAS.
+    //
+    // RECORD-04 (#34) — WHY THE HAND-BUILT LEDGER ROW IS GONE FROM HERE.
+    // This branch used to call `this.hive.appendCostLedger({...})` directly with
+    // those deltas, while the ~30s beat (index.ts: `getAgentUsage(id)` →
+    // `appendCostLedger(sample)`) writes CUMULATIVE snapshots for everyone else.
+    // One append-only file, two row semantics — and `taskSpend()` summed both,
+    // over-counting roughly quadratically. `src/main/db.ts:44` states the
+    // contract the beat obeys and this path broke, verbatim: "Rows are
+    // CUMULATIVE snapshots (one per agent per heartbeat beat) — diff consecutive
+    // rows for velocity." So the ledger has ONE writer again, with one semantics.
+    //
+    // The sample is not thrown away: the very next commit hands it to the
+    // injected `recordCost` sink (FLOOR-09, #19), which accumulates it in the
+    // SAME collector the OTel path fills, so the beat then writes this agent's
+    // cumulative row exactly like every other agent's. Deliberately NOT a
+    // fallback to `appendCostLedger` when that sink is absent: that would be the
+    // mixed-semantics defect above, reintroduced as a default. An unwired sink
+    // must mean "no proxy row", visibly, not "the old wrong row".
+    //
+    // The early return stays: cost is pure telemetry and must never feed the
+    // loop detector below.
     if (event === 'CostSample') {
-      if (agentId && p.session_id) {
-        const input = p.input ?? 0;
-        const output = p.output ?? 0;
-        const cacheRead = p.cache_read ?? 0;
-        const cacheCreation = p.cache_creation ?? 0;
-        this.hive.appendCostLedger({
-          agentId,
-          sessionId: p.session_id,
-          ts: Date.now(),
-          input,
-          output,
-          cacheRead,
-          cacheCreation,
-          model: p.model ?? '',
-          usd: estimateCostUsd(p.model, {
-            inputTokens: input,
-            outputTokens: output,
-            cacheReadTokens: cacheRead,
-            cacheWriteTokens: cacheCreation
-          })
-        });
-      }
       return {};
     }
 
