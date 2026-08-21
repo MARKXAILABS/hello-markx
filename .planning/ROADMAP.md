@@ -152,7 +152,7 @@ Plans:
 - [x] 01-19-PLAN.md — FLOOR-12 sweep — the eight densest remaining renderer files (8 files, ~85 sites)
 - [x] 01-20-PLAN.md — FLOOR-12 sweep — the rest of the renderer (23 files, ~75 sites), incl. the FullscreenFileEditor hoisted-object case
 - [x] 01-21-PLAN.md — FLOOR-16 — ESLint flat config, two named rules, 8 suppressions made live and 5 dead disables deleted (the resolver moved one of the nine into the delete column), CI gate at zero warnings
-- [ ] 01-22-PLAN.md — FLOOR-15 — renderToStaticMarkup component tests under node --test, zero new dependencies
+- [x] 01-22-PLAN.md — FLOOR-15 — renderToStaticMarkup component tests under node --test, zero new dependencies
 - [ ] 01-23-PLAN.md — D-45 / D-46 — the repo-fact accumulator asserted whole, the adversarial re-verify, and the mechanical phase gate
 **UI hint**: yes
 
@@ -546,7 +546,7 @@ after Phase 5 rather than closed in Phase 3.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Finish the Floor | 20/23 | In Progress|  |
+| 1. Finish the Floor | 21/23 | In Progress|  |
 | 2. The Daemon and the Protocol | 0/TBD | Not started | - |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |

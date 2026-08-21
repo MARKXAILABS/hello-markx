@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-21-PLAN.md (FLOOR-16, the lint gate). RESEARCH Open Question 1 - the phase's single largest unbounded item - is CLOSED at TOTAL 9 findings for the whole tree, of which FIVE are the orphaned comments themselves and four are real. ESLint is now a HARD CI gate at zero warnings (typecheck job, 'run: npm run lint', script 'eslint . --max-warnings 0'), green on Linux/Node 22 with the Lint step verified INSIDE the Typecheck job from its own step list and log, at head_sha e6067eb, all six PR-77 rows pass. THE HEADLINE: assumption A1 is closed the dangerous way - eslint-plugin-react-hooks 7.1.1 exposes 29 rules and configs.flat.recommended carries SIXTEEN, i.e. fourteen React Compiler rules most at 'error', so amendment B was load-bearing and the two rules are written longhand with no preset anywhere; the surface is pinned by a test asserting through ESLint's OWN resolver, proven RED against a real preset spread. The 13 orphans resolved BY MEASUREMENT: 4 @typescript-eslint deleted (ERROR-severity 'Definition for rule not found'), CompletionToast.tsx:80 deleted on a pasted resolver 0 with its true explanatory comment kept, 8 kept live and the six that lacked one given a reason sentence naming the omitted dep and the failure including it would cause. Of the four real findings ONE WAS A REAL BUG fixed at source - useHive's labelOf held the config object from the render at which onboardingComplete last flipped, so a renamed or newly ADDED Claude account was reported by raw id forever - fixed with a latest-value configRef, NOT by adding the dependency, because that effect owns two long-lived IPC subscriptions. Three suppressed with a reviewed reason and a named rejected alternative (agentGroups' module-level async cache; useHive's god-spawn effect, where the 'fix' respawns the orchestrator on any settings change; OfficeFloor's mount-generation counter, where the rule's copy-to-a-variable advice IS the bug). Zero rules-of-hooks errors. ESLint 9 not 10, forced by engines '>=20 <23'; the whole 9.x line is deprecated-tagged and that cost is filed, not hidden. Lockfile written under portable Node 22.23.2 / npm 10.9.8 - OVERRIDING the plan's 'that rule is dead' clause on the repo's own history. 4 new parsed assertions in test/ci-config.test.cjs, all four driven RED; 9 -> 13 tests. continue-on-error pinned at exactly 2. FONTSIZE-TOUCHED=0, COMMITS=3 OUT-OF-BOUND=0, no test file committed, no UpdateBadge collision with plan 22. npm test 519/515/0 fail/4 skipped. OUTSTANDING: issue #36 left OPEN on clause 4 (slack/webhook still duplicate listen()/openTunnel()) with a per-clause evidence comment posted; four orphaned Electron probe processes had to be killed because they broke npm ci; six FOREIGN untracked scratch files sit in the repo root and were deliberately left alone."
-last_updated: "2026-08-21T16:08:10.621Z"
+stopped_at: "Completed 01-22-PLAN.md (FLOOR-15, the renderer's first component tests). test/renderer-components.test.cjs renders real .tsx to real markup through react-dom/server's renderToStaticMarkup under node --test, ZERO new dependencies (react-dom was already a production dependency; MANIFEST-TOUCHED=0 over this plan's commits, lockfile never opened). 6 tests, TAP # pass 6 / # fail 0 / # skipped 0 / # todo 0. Suite 519 -> 525 with 0 failures on ALL THREE platforms at head_sha 23a8af8 on PR 77 (ubuntu 525/525/0/0, windows 525/521/0/4, macos 525/525/0/0), the six tests confirmed BY NAME in the windows log; Typecheck (which now carries plan 21's eslint --max-warnings 0 gate) also green, and the new file passes that gate with no eslint-disable. THE HEADLINE: the plan's own probe licensed ROUTE B - a pure autoMode.ts assertion whose own acceptance criterion concedes it adds no FLOOR-01/FLOOR-13 coverage because plan 12 already covers that module - and route B was REJECTED after measuring that the obstacle was 'Node is not a browser', not 'the component is untestable'. Two shims Node lacks and Vite/the browser already provide (globalThis.self for @xterm/addon-fit's UMD header, and .css imports resolving to {}) make AgentCard.tsx load and render 3050 characters of real markup with the AUTO chip in it, so FLOOR-01 and FLOOR-13 are asserted on RENDERED MARKUP (route A) - including FLOOR-13 clause 5 ('the model, before the cost') which plan 12 could only record as MEASUREMENT UNAVAILABLE for the pixels. Two measured dead ends recorded for the next person: zustand 4.5's useStore passes 'api.getServerState || api.getInitialState' as React's getServerSnapshot, so setState() is INVISIBLE to a static render (a setState-seeded card renders byte-identically), and assigning useStore.getServerState lands on the wrong object because create() does Object.assign(useBoundStore, api) - the seam is getInitialState()'s own object. ErrorBoundary.tsx DROPPED from the candidate set and named as excluded: react-dom/server RETHROWS a child's error instead of calling getDerivedStateFromError, so its fallback is unreachable and its other branch renders 13 characters - decoration, not coverage. All 6 tests driven RED against 10 injected SOURCE defects (never a test edit), every one reverted (CHECKED=4 DIRTY=0); the T-P22-01 Proxy trap sprung deliberately - the analog's proxy-everything predicate gives EXIT=1 / # pass 0, the file does not even load. COMMITS=1 OUT-OF-BOUND=0. A5 RESOLVED: 0 .tsx reference window.api or window.electron (D-26 true) but 40 of 63 reference window.cth, so the two names D-26 checked would have cleared every file that touches the preload bridge. CONVENTIONS.md:101 is measurably WRONG - 0 of 63 .tsx use a default export. FLOOR-15's requirement checkbox left Pending; plan 23 owns the rows."
+last_updated: "2026-08-21T16:37:31.496Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 35
-  completed_plans: 20
+  completed_plans: 21
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 21 of 23 complete
+Plan: 22 of 23 complete
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [██████░░░░] 57%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Progress: [██████░░░░] 57%
 | Phase 01 P19 | 3h20m | 2 tasks | 8 files |
 | Phase 01 P20 | 3h05m | 3 tasks | 24 files |
 | Phase 01 P21 | 40m | 4 tasks | 18 files |
+| Phase 01 P22 | 25m | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,27 @@ Progress: [██████░░░░] 57%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+- [01-22]: Route A over route B for FLOOR-01/FLOOR-13. The plan's own probe licensed the route-B
+  fallback — a pure `store/autoMode.ts` assertion whose own acceptance criterion concedes it adds no
+  FLOOR-01/FLOOR-13 coverage, because plan 12 already covers that module in
+  `test/renderer-runstate.test.cjs`. Measured that the obstacle was "Node is not a browser", not "the
+  component is untestable": two shims the real build already provides (`globalThis.self` for
+  `@xterm/addon-fit`'s UMD header, `.css` imports resolving to `{}`) make `AgentCard.tsx` render 3,050
+  characters of real markup with the AUTO chip in it. Both requirements are asserted on RENDERED
+  MARKUP, including FLOOR-13 clause 5 ("the model, before the cost"), which plan 12 could only record
+  as MEASUREMENT UNAVAILABLE for the pixels.
+
+- [01-22]: `ErrorBoundary.tsx` excluded from the renderer test set and named as excluded. React error
+  boundaries are inert on the server — `react-dom/server` RETHROWS a child's error instead of calling
+  `getDerivedStateFromError` (measured) — so its fallback is unreachable and its only other branch
+  renders 13 characters. A non-empty check there would be decoration, not coverage.
+
+- [01-22]: Seed zustand's `getInitialState()` object, never `setState()`, for a static render.
+  zustand 4.5's `useStore` passes `api.getServerState || api.getInitialState` as React's
+  `getServerSnapshot`, so `setState()` is invisible to `renderToStaticMarkup` by design (a
+  setState-seeded card renders byte-identically), and assigning `useStore.getServerState` lands on the
+  wrong object because `create()` does `Object.assign(useBoundStore, api)`.
 
 - [Roadmap]: Six prerequisites pulled forward rather than left in their own category's phase —
   RECORD-03/04 and VERDICT-02/03 and GATE-01 into Phase 1, GSD-06 into Phase 2. Each one makes
@@ -344,8 +366,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T16:08:10.600Z
-Stopped at: Completed 01-21-PLAN.md (FLOOR-16, the lint gate). RESEARCH Open Question 1 - the phase's single largest unbounded item - is CLOSED at TOTAL 9 findings for the whole tree, of which FIVE are the orphaned comments themselves and four are real. ESLint is now a HARD CI gate at zero warnings (typecheck job, 'run: npm run lint', script 'eslint . --max-warnings 0'), green on Linux/Node 22 with the Lint step verified INSIDE the Typecheck job from its own step list and log, at head_sha e6067eb, all six PR-77 rows pass. THE HEADLINE: assumption A1 is closed the dangerous way - eslint-plugin-react-hooks 7.1.1 exposes 29 rules and configs.flat.recommended carries SIXTEEN, i.e. fourteen React Compiler rules most at 'error', so amendment B was load-bearing and the two rules are written longhand with no preset anywhere; the surface is pinned by a test asserting through ESLint's OWN resolver, proven RED against a real preset spread. The 13 orphans resolved BY MEASUREMENT: 4 @typescript-eslint deleted (ERROR-severity 'Definition for rule not found'), CompletionToast.tsx:80 deleted on a pasted resolver 0 with its true explanatory comment kept, 8 kept live and the six that lacked one given a reason sentence naming the omitted dep and the failure including it would cause. Of the four real findings ONE WAS A REAL BUG fixed at source - useHive's labelOf held the config object from the render at which onboardingComplete last flipped, so a renamed or newly ADDED Claude account was reported by raw id forever - fixed with a latest-value configRef, NOT by adding the dependency, because that effect owns two long-lived IPC subscriptions. Three suppressed with a reviewed reason and a named rejected alternative (agentGroups' module-level async cache; useHive's god-spawn effect, where the 'fix' respawns the orchestrator on any settings change; OfficeFloor's mount-generation counter, where the rule's copy-to-a-variable advice IS the bug). Zero rules-of-hooks errors. ESLint 9 not 10, forced by engines '>=20 <23'; the whole 9.x line is deprecated-tagged and that cost is filed, not hidden. Lockfile written under portable Node 22.23.2 / npm 10.9.8 - OVERRIDING the plan's 'that rule is dead' clause on the repo's own history. 4 new parsed assertions in test/ci-config.test.cjs, all four driven RED; 9 -> 13 tests. continue-on-error pinned at exactly 2. FONTSIZE-TOUCHED=0, COMMITS=3 OUT-OF-BOUND=0, no test file committed, no UpdateBadge collision with plan 22. npm test 519/515/0 fail/4 skipped. OUTSTANDING: issue #36 left OPEN on clause 4 (slack/webhook still duplicate listen()/openTunnel()) with a per-clause evidence comment posted; four orphaned Electron probe processes had to be killed because they broke npm ci; six FOREIGN untracked scratch files sit in the repo root and were deliberately left alone.
+Last session: 2026-08-21T16:37:31.469Z
+Stopped at: Completed 01-22-PLAN.md (FLOOR-15, the renderer's first component tests). test/renderer-components.test.cjs renders real .tsx to real markup through react-dom/server's renderToStaticMarkup under node --test, ZERO new dependencies (react-dom was already a production dependency; MANIFEST-TOUCHED=0 over this plan's commits, lockfile never opened). 6 tests, TAP # pass 6 / # fail 0 / # skipped 0 / # todo 0. Suite 519 -> 525 with 0 failures on ALL THREE platforms at head_sha 23a8af8 on PR 77 (ubuntu 525/525/0/0, windows 525/521/0/4, macos 525/525/0/0), the six tests confirmed BY NAME in the windows log; Typecheck (which now carries plan 21's eslint --max-warnings 0 gate) also green, and the new file passes that gate with no eslint-disable. THE HEADLINE: the plan's own probe licensed ROUTE B - a pure autoMode.ts assertion whose own acceptance criterion concedes it adds no FLOOR-01/FLOOR-13 coverage because plan 12 already covers that module - and route B was REJECTED after measuring that the obstacle was 'Node is not a browser', not 'the component is untestable'. Two shims Node lacks and Vite/the browser already provide (globalThis.self for @xterm/addon-fit's UMD header, and .css imports resolving to {}) make AgentCard.tsx load and render 3050 characters of real markup with the AUTO chip in it, so FLOOR-01 and FLOOR-13 are asserted on RENDERED MARKUP (route A) - including FLOOR-13 clause 5 ('the model, before the cost') which plan 12 could only record as MEASUREMENT UNAVAILABLE for the pixels. Two measured dead ends recorded for the next person: zustand 4.5's useStore passes 'api.getServerState || api.getInitialState' as React's getServerSnapshot, so setState() is INVISIBLE to a static render (a setState-seeded card renders byte-identically), and assigning useStore.getServerState lands on the wrong object because create() does Object.assign(useBoundStore, api) - the seam is getInitialState()'s own object. ErrorBoundary.tsx DROPPED from the candidate set and named as excluded: react-dom/server RETHROWS a child's error instead of calling getDerivedStateFromError, so its fallback is unreachable and its other branch renders 13 characters - decoration, not coverage. All 6 tests driven RED against 10 injected SOURCE defects (never a test edit), every one reverted (CHECKED=4 DIRTY=0); the T-P22-01 Proxy trap sprung deliberately - the analog's proxy-everything predicate gives EXIT=1 / # pass 0, the file does not even load. COMMITS=1 OUT-OF-BOUND=0. A5 RESOLVED: 0 .tsx reference window.api or window.electron (D-26 true) but 40 of 63 reference window.cth, so the two names D-26 checked would have cleared every file that touches the preload bridge. CONVENTIONS.md:101 is measurably WRONG - 0 of 63 .tsx use a default export. FLOOR-15's requirement checkbox left Pending; plan 23 owns the rows.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
