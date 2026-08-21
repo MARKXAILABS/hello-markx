@@ -217,7 +217,19 @@ export class HookServer {
      *  exactly like `breaker` and `control` above — and LAST, so no existing
      *  call site or test has to move an argument. */
     private recordCost?: (s: AgentUsageSample) => void
-  ) {}
+  ) {
+    // GATE-01 — the qwen/crush PROXY SIDECAR is not a PTY, so `PtyManager`'s
+    // per-spawn mint never sees it: it is a child of `HiveManager`. Register
+    // this server's registry as the hive's token source here rather than adding
+    // a wiring line to the composition root, because we already hold the hive
+    // and this is the only object that can mint. Without it the sidecar sends
+    // `sock_token: ''`, `authorized()` drops it, and every qwen/crush agent is
+    // silently dead-hooked — no live status, no Stop→drain, no cost.
+    this.hive.setHookTokenSource?.(
+      (agentId) => this.mintToken(agentId),
+      (token) => this.revokeToken(token)
+    );
+  }
 
   start(): void {
     const sock = this.hive.sockPath();

@@ -246,6 +246,33 @@ const SWEEP_INTERVAL_MS = 60_000;
 // bound is `costByTask` below — an in-memory accumulator built by ONE scan and
 // then kept current incrementally, so the file is never re-slurped per query.
 
+/**
+ * Where the hive's own `git` looks for hooks: nowhere.
+ *
+ * The hive root IS a git repo (`git init` in ensureHive) and both wrappers below
+ * spawn `git` as a child of the Electron MAIN process, inheriting main's
+ * environment. Nothing stopped an agent writing `<root>/.git/hooks/pre-commit`
+ * and having the next hive commit execute it — arbitrary code with more
+ * privilege than the agent that planted it, reached from outside the PreToolUse
+ * write gate (which cannot see the pi, opencode or proxy tiers at all).
+ *
+ * `core.hooksPath` rather than `--no-verify`, deliberately: `--no-verify`
+ * suppresses only `pre-commit`/`commit-msg` on a commit, leaves `post-commit`
+ * and every other hook running, and would have to be repeated at each of the
+ * seven commit() call sites. This is one flag in the shared `-c` prefix of BOTH
+ * wrappers — either can be the next writer — and it disables every hook for
+ * every git invocation the hive makes.
+ *
+ * THE CEILING, stated rather than implied. This protects git runs the HIVE
+ * makes; an agent running `git` in its own shell still runs its own hooks, and
+ * that is its own repo's business. And `/dev/null` is a char device no
+ * unprivileged process can turn into a directory on POSIX — on win32 the string
+ * resolves to a drive-root path instead, which is weaker, so the behavioural
+ * test in test/engine-parity.test.cjs asserts the hook does not fire rather than
+ * asserting the flag is present.
+ */
+const GIT_HOOKS_DISABLED = '/dev/null';
+
 // ─── git + log budgets ──────────────────────────────────────────────────────
 // Every number here used to be an order of magnitude larger and paid for on the
 // MAIN THREAD (see commit()). They are deliberately small: git is history, not
@@ -624,6 +651,50 @@ export class HiveManager {
    *  ensureAgent, killed on PTY exit / removeAgent / app quit (index.ts) — so a
    *  dead agent never leaks an orphan loopback listener. */
   private proxyChildren = new Map<string, ChildProcess>();
+
+  /** GATE-01 — how the hive mints a hook token for a PROXY SIDECAR.
+   *
+   *  The sidecar is not a PTY, so `PtyManager`'s per-spawn mint never sees it;
+   *  it is a child of THIS class. Injected as callbacks the same way `pty.ts`
+   *  takes them (`setHookTokenSource`), so hive.ts keeps no dependency on
+   *  hooks.ts and no new wiring line is needed in the composition root:
+   *  `HookServer`'s constructor already holds a `HiveManager` and registers
+   *  itself here. Null until it does — a hive with no hook server mints no
+   *  tokens, and its sidecars are inert rather than floor-wide-authenticated. */
+  private hookTokenSource: {
+    mint: (agentId: string) => string;
+    revoke: (token: string) => void;
+  } | null = null;
+
+  /** agentId → the token its live sidecar is using, so it can be revoked when
+   *  that sidecar exits. Mirrors pty.ts revoking token-exact on PTY exit. */
+  private proxyTokens = new Map<string, string>();
+
+  /** Called by `HookServer`'s constructor. See `hookTokenSource`. */
+  setHookTokenSource(mint: (agentId: string) => string, revoke: (token: string) => void): void {
+    this.hookTokenSource = { mint, revoke };
+  }
+
+  /** One fresh token for one sidecar spawn. Empty string when no hook server is
+   *  wired: the sidecar then sends `sock_token: ''`, `authorized()` drops it and
+   *  the tier is visibly dead-hooked — which is the correct failure. NEVER falls
+   *  back to `process.env`; that floor-wide secret is what GATE-01 deleted. */
+  private mintProxyToken(agentId: string): string {
+    this.revokeProxyToken(agentId);
+    const token = this.hookTokenSource?.mint(agentId) ?? '';
+    if (token) this.proxyTokens.set(agentId, token);
+    return token;
+  }
+
+  /** Revoke token-exact, never by agent: a sidecar restart is stop()+start()
+   *  under the same id, and revoking by agent could kill the live replacement's
+   *  token (the same race pty.ts documents). */
+  private revokeProxyToken(agentId: string): void {
+    const token = this.proxyTokens.get(agentId);
+    if (!token) return;
+    this.proxyTokens.delete(agentId);
+    try { this.hookTokenSource?.revoke(token); } catch { /* teardown is best-effort */ }
+  }
 
   // — bootstrap —
 
@@ -1177,6 +1248,12 @@ export class HiveManager {
     this.stopProxyBridge(agentId);
     const script = this.proxyShimPath();
     if (!script) return Promise.resolve(0);
+    // GATE-01 — this sidecar's OWN token, minted through the same registry every
+    // PTY spawn uses. Before this it inherited a floor-wide secret that
+    // index.ts assigned into `process.env`; deleting that assignment is the
+    // whole of GATE-01, and re-reading it here would restore the vulnerability
+    // by a longer route. Empty when no hook server is wired — see mintProxyToken.
+    const token = this.mintProxyToken(agentId);
     return new Promise<number>((resolve) => {
       let settled = false;
       const settle = (port: number): void => { if (!settled) { settled = true; resolve(port); } };
@@ -1191,7 +1268,10 @@ export class HiveManager {
             AGENT_ID: agentId,
             UPSTREAM_BASE_URL: cfg.upstream,
             HIVE_PROXY_SESSION: cfg.sessionId,
-            HIVE_PROXY_API: cfg.api
+            HIVE_PROXY_API: cfg.api,
+            // Last, so the `...process.env` spread above can never shadow it —
+            // including with a stale floor-wide value left in this process.
+            HIVE_SOCK_TOKEN: token
           },
           // Read the port line from stdout; never inherit stdio (the sidecar must
           // never write into the agent's terminal or leak request bodies to a log).
@@ -1218,6 +1298,7 @@ export class HiveManager {
       child.on('error', () => settle(0));
       child.on('exit', () => {
         if (this.proxyChildren.get(agentId) === child) this.proxyChildren.delete(agentId);
+        this.revokeProxyToken(agentId);
         settle(0); // never hang the spawn if the sidecar dies before reporting
       });
       // Hard ceiling: if the sidecar never reports a port, degrade rather than hang.
@@ -1230,6 +1311,7 @@ export class HiveManager {
     const child = this.proxyChildren.get(agentId);
     if (!child) return;
     this.proxyChildren.delete(agentId);
+    this.revokeProxyToken(agentId);
     try { child.kill(); } catch { /* already gone */ }
   }
 
@@ -2810,7 +2892,7 @@ export class HiveManager {
    *  at bootstrap on an empty directory. Everything on the commit path uses
    *  gitAsync; see commit() for why that matters. */
   private git(args: string[], cwd: string): { ok: boolean; out: string; err: string } {
-    const res = spawnSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args], {
+    const res = spawnSync('git', ['-c', `core.hooksPath=${GIT_HOOKS_DISABLED}`, '-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args], {
       cwd, encoding: 'utf8', timeout: 8000
     });
     return { ok: res.status === 0, out: res.stdout ?? '', err: res.stderr ?? '' };
@@ -2830,7 +2912,7 @@ export class HiveManager {
       try {
         const child = spawn(
           'git',
-          ['-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args],
+          ['-c', `core.hooksPath=${GIT_HOOKS_DISABLED}`, '-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args],
           { cwd, timeout: GIT_TIMEOUT_MS }
         );
         child.stdout?.on('data', (d) => { out += d.toString(); });
@@ -3408,6 +3490,8 @@ function post(payload) {
   try {
     if (!SOCK) return;
     payload.agent_id = payload.agent_id || AGENT;
+    // See HOOK_SHIM: without this the socket rejects every payload.
+    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
     var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
     c.on('error', function () {});
   } catch (e) {}
@@ -3445,6 +3529,8 @@ function post(payload) {
   try {
     if (!SOCK) return;
     payload.agent_id = payload.agent_id || AGENT;
+    // See HOOK_SHIM: without this the socket rejects every payload.
+    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
     const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
     c.on('error', () => {});
   } catch (e) {}
@@ -3503,6 +3589,10 @@ function ctxSize(model) {
 // Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.
 function emit(payload) {
   if (!SOCK) return;
+  // See HOOK_SHIM: without this the socket rejects every payload. Set HERE, in
+  // the one function every Status/CostSample/PostToolUse/Stop goes through,
+  // rather than at the five call sites.
+  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
   try {
     const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\n'); });
     c.on('error', function () {});

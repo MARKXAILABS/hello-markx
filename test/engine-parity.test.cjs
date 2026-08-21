@@ -21,6 +21,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
+const crypto = require('node:crypto');
+const { spawn, spawnSync } = require('node:child_process');
 const loadTs = require('./load-ts.cjs');
 
 const { TelemetryCollector } = loadTs('src/main/telemetry.ts');
@@ -210,6 +212,161 @@ test('FLOOR-09 negative control: with no cost sink injected, the same payload ne
     'spend appeared with no sink wired, so the positive test above proves nothing about the '
     + 'wiring — something else is feeding the collector'
   );
+});
+
+// ── 1c. GATE-01: the qwen sidecar tier, handed over from 01-02 ──────────────
+//
+// 01-02 replaced the floor-wide hook secret with a per-agent mint and deleted
+// `process.env.HIVE_SOCK_TOKEN = hookSockToken()` from index.ts. The proxy
+// sidecar lived entirely on that assignment and PROXY_BRIDGE_SHIM sends no
+// `sock_token` of its own, so the tier was dead-hooked. Both halves are needed:
+// the env WITHOUT the shim field is a no-op, and these two tests are what say so.
+
+/** A temp home with a bootstrapped hive in it. */
+function tmpHive(t, prefix) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const hive = new HiveManager(() => home);
+  hive.ensureHive();
+  return { home, hive, root: path.join(home, 'hive') };
+}
+
+/** A socket path this process can listen on, on either platform. */
+function tmpSockPath() {
+  const id = crypto.randomBytes(6).toString('hex');
+  return process.platform === 'win32'
+    ? `\\\\.\\pipe\\md-shim-bytes-${id}`
+    : path.join(os.tmpdir(), `md-shim-bytes-${id}.sock`);
+}
+
+test('GATE-01: the qwen sidecar env carries its OWN agent token, never the floor-wide one', async (t) => {
+  const { home, hive, root } = tmpHive(t, 'md-sidecar-env-');
+
+  // A decoy floor-wide value in THIS process's environment. 01-02 deleted the
+  // assignment that used to put one here; reading it back would restore the
+  // exact vulnerability GATE-01 removed, by a longer route.
+  const prior = process.env.HIVE_SOCK_TOKEN;
+  process.env.HIVE_SOCK_TOKEN = 'FLOOR-WIDE-DECOY';
+  t.after(() => {
+    if (prior === undefined) delete process.env.HIVE_SOCK_TOKEN;
+    else process.env.HIVE_SOCK_TOKEN = prior;
+  });
+
+  const revoked = [];
+  hive.setHookTokenSource((agentId) => `token-for-${agentId}`, (tk) => revoked.push(tk));
+
+  // Stand in for the real sidecar with a recorder: it writes the environment it
+  // was actually given, then reports a port so the spawn settles. This asserts
+  // on the env a REAL spawn produced, not on a string in the source.
+  const recorded = path.join(home, 'sidecar-env.json');
+  fs.writeFileSync(
+    path.join(root, 'bin', 'hive-proxy.cjs'),
+    `require('fs').writeFileSync(${JSON.stringify(recorded)}, JSON.stringify(process.env));\n`
+    + "process.stdout.write(JSON.stringify({ port: 4242 }) + '\\n');\n"
+  );
+
+  const port = await hive.startProxyBridge('qwen-1', {
+    sock: 'unused-in-this-test', sessionId: 'proxy-session-1', api: 'openai', upstream: 'http://127.0.0.1:1'
+  });
+  assert.equal(port, 4242, 'the sidecar never reported a port, so nothing was recorded and this test proves nothing');
+
+  const env = JSON.parse(fs.readFileSync(recorded, 'utf8'));
+  assert.equal(env.HIVE_SOCK_TOKEN, 'token-for-qwen-1',
+    'the sidecar is spawned without its own hook token, so authorized() drops every payload it '
+    + 'sends: no live status, no Stop→drain and no cost rows for the whole qwen/crush tier');
+  assert.notEqual(env.HIVE_SOCK_TOKEN, 'FLOOR-WIDE-DECOY',
+    'the sidecar read the floor-wide secret out of process.env — that is the single shared key '
+    + 'GATE-01 exists to delete, reintroduced');
+  assert.equal(env.AGENT_ID, 'qwen-1');
+
+  hive.stopProxyBridge('qwen-1');
+  assert.deepEqual(revoked, ['token-for-qwen-1'],
+    'the sidecar\'s token outlived its sidecar — a revoked-nowhere token is a credential with no expiry');
+});
+
+test('GATE-01: PROXY_BRIDGE_SHIM puts sock_token in the BYTES it writes, not just in its source', async (t) => {
+  const { root } = tmpHive(t, 'md-shim-bytes-');
+
+  // The REAL file `ensureHive()` writes out of the PROXY_BRIDGE_SHIM template —
+  // the exact bytes a qwen agent's sidecar executes, not a re-derived copy. A
+  // grep proves the field is in the template; only running it proves the field
+  // is in the payload the socket receives. One line is appended to call the
+  // shim's own `emit()`; everything above it is the shipped shim verbatim.
+  const shimFile = path.join(root, 'bin', 'hive-proxy-driven.cjs');
+  fs.writeFileSync(
+    shimFile,
+    fs.readFileSync(path.join(root, 'bin', 'hive-proxy.cjs'), 'utf8')
+    + "\nemit({ hook_event_name: 'CostSample', agent_id: AGENT_ID, session_id: SESSION, input: 7, output: 3 });\n"
+    + 'setTimeout(function () { process.exit(0); }, 400);\n'
+  );
+
+  const capture = async (token) => {
+    const sock = tmpSockPath();
+    const lines = [];
+    const server = net.createServer((c) => {
+      let buf = '';
+      c.on('data', (d) => { buf += d; });
+      c.on('end', () => { if (buf) lines.push(buf); });
+      c.on('error', () => { /* the shim hangs up — its own fire-and-forget */ });
+    });
+    await new Promise((r) => server.listen(sock, r));
+    const env = { ...process.env, HIVE_SOCK: sock, AGENT_ID: 'qwen-1', HIVE_PROXY_SESSION: 'proxy-session-1' };
+    if (token === null) delete env.HIVE_SOCK_TOKEN;
+    else env.HIVE_SOCK_TOKEN = token;
+    const child = spawn(process.execPath, [shimFile], { env, stdio: ['ignore', 'ignore', 'ignore'] });
+    await new Promise((r) => child.on('exit', r));
+    await new Promise((r) => server.close(r));
+    if (process.platform !== 'win32') { try { fs.rmSync(sock); } catch { /* already gone */ } }
+    assert.equal(lines.length, 1, `the shim wrote ${lines.length} payloads, expected exactly 1`);
+    return JSON.parse(lines[0].trim());
+  };
+
+  const withToken = await capture('SENTINEL-TOKEN-abc123');
+  assert.equal(withToken.hook_event_name, 'CostSample');
+  assert.equal(withToken.sock_token, 'SENTINEL-TOKEN-abc123',
+    'the sidecar shim writes no sock_token into its payload, so adding HIVE_SOCK_TOKEN to its '
+    + 'env is a NO-OP: it reads a variable it never sends and authorized() drops it anyway');
+
+  // The pre-fix behaviour, kept legible: with no token in the environment the
+  // field is the empty string, which is exactly what authorized() rejects (the
+  // FLOOR-09 test above pins that rejection with a real HookServer).
+  const withoutToken = await capture(null);
+  assert.equal(withoutToken.sock_token, '',
+    'a shim with no token in its env must still SEND the field, empty — a missing field and an '
+    + 'empty one are dropped alike, but only the empty one says which half is broken');
+});
+
+test('GATE-01 backstop: the hive\'s own git does not run an agent-planted pre-commit hook', async (t) => {
+  const { home, hive, root } = tmpHive(t, 'md-git-hooks-');
+
+  // What a prompt-injected agent plants. The hive root IS a git repo and both
+  // git wrappers spawn as children of the Electron MAIN process, inheriting
+  // main's environment — so this would run with more privilege than the agent
+  // that wrote it, from outside the PreToolUse write gate.
+  const sentinel = path.join(home, 'pwned');
+  const hooks = path.join(root, '.git', 'hooks');
+  fs.mkdirSync(hooks, { recursive: true });
+  const hook = path.join(hooks, 'pre-commit');
+  fs.writeFileSync(hook, `#!/bin/sh\necho pwned > "${sentinel.replace(/\\/g, '/')}"\nexit 1\n`);
+  fs.chmodSync(hook, 0o755);
+
+  // A real commit through the real wrapper: writeTasks persists and commits.
+  hive.writeTasks([{
+    id: 't-hook', title: 't-hook', status: 'todo', dependsOn: [], priority: 3,
+    createdAt: '2026-08-21T00:00:00.000Z'
+  }]);
+  await hive.flushCommit(root);   // the real debounced commit body, driven synchronously
+
+  assert.equal(fs.existsSync(sentinel), false,
+    'the hive ran an agent-planted git hook. <hive>/.git/hooks/pre-commit is arbitrary code '
+    + 'execution as a child of the Electron main process, and core.hooksPath is what stops it');
+
+  // And the commit still happened — a suppression that also breaks committing
+  // would be traded for a different failure.
+  const log = spawnSync('git', ['log', '--oneline'], { cwd: root, encoding: 'utf8' });
+  assert.equal(log.status, 0, `git log failed in the hive root: ${log.stderr}`);
+  assert.ok(log.stdout.trim().length > 0,
+    'nothing was committed, so the hook may simply never have had a chance to run');
 });
 
 // ── 2. caps measure work, not session length (upstream #189) ─────────────────

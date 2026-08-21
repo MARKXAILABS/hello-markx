@@ -152,13 +152,14 @@ test('a shim with no token is still rejected', { skip: !POSIX }, async (t) => {
 });
 
 /** Every shim template in hive.ts, sliced by its REAL delimiters. The old
- *  version took `start + 6000` chars, which overruns HOOK_SHIM into
- *  AGY_HOOK_SHIM — so HOOK_SHIM alone carrying the field would have passed for
- *  both. And it iterated a hardcoded three-element list while hive.ts has had
- *  six shims for some time, so its "fails loudly if a fourth shim is added"
- *  comment was false for the whole life of the file: three of the six have NEVER
- *  carried `sock_token` and the guard never once fired. Derived, so the claim is
- *  now true. */
+ *  version took `start + 6000` chars, which overruns the first template into the
+ *  second — so ONE of them carrying the field would have passed for both. And it
+ *  iterated a hardcoded three-element list while hive.ts has had six shims for
+ *  some time, so its "fails loudly if a fourth shim is added" comment was false
+ *  for the whole life of the file: three of the six had NEVER carried
+ *  `sock_token` and the guard never once fired. Derived, so the claim is now
+ *  true — and since 01-06 task 4 landed the three missing bodies, applied to
+ *  EVERY template the derivation finds rather than to a chosen subset. */
 function shimTemplates() {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src/main/hive.ts'), 'utf8');
   const decl = /^const (\w+_SHIM|\w+_EXTENSION|\w+_PLUGIN) = `/gm;
@@ -180,14 +181,16 @@ test('every shim template in hive.ts is enumerated, and the wired ones send sock
     + 'three shims stayed unwired without anything noticing'
   );
 
-  // Scoped to the three that carry the field TODAY. PI_EXTENSION, OPENCODE_PLUGIN
-  // and PROXY_BRIDGE_SHIM build their payloads with no `sock_token` at all and
-  // are therefore dead-hooked at HEAD — a pre-existing defect, not one GATE-01
-  // introduced. 01-06-PLAN.md task 4 (wave 3) lands all three bodies and widens
-  // this list to every template. Asserting all six HERE would leave the suite red
-  // until another plan lands, which deadlocks a parallel wave.
-  for (const name of ['HOOK_SHIM', 'AGY_HOOK_SHIM', 'GROK_HOOK_SHIM']) {
-    const body = shims.get(name);
+  // EVERY template, with nothing scoped out. Three of them used to build their
+  // payloads with no `sock_token` at all — dead-hooked at HEAD, before this
+  // phase, so a pre-existing defect rather than one GATE-01 introduced — and
+  // this loop was scoped to the other three until those bodies landed. They
+  // have. All six write to the same socket and hooks.ts's single connection
+  // handler is the only door in, so any template that skips the field is an
+  // engine that goes silently dead: no live status, no Stop→drain, no cost.
+  // A future exemption must first show a second connection handler or an
+  // unauthenticated branch in hooks.ts. There is neither.
+  for (const [name, body] of shims) {
     assert.ok(body, `${name} not found — did a shim get renamed?`);
     assert.match(
       body, /sock_token/,
