@@ -33,9 +33,11 @@ const ROSTER_COLLAPSED_KEY = 'cth.fullscreen.rosterCollapsed';
 /** Roster type scale, derived from the shared terminal zoom so Cmd +/- resizes
  *  the whole roster along with the terminal — one knob for the whole view
  *  instead of a size that only looked right on the display it was tuned on.
- *  Each is clamped: names are a pixel display face that turns to mush when it
- *  strays too far from its native size, and the bullets have to stay subordinate
- *  to the name however far the terminal is zoomed. */
+ *  Each is clamped, and every floor is 14 (FLOOR-12): these are agent names,
+ *  repo headers and note bullets — ordinary chrome that happens to scale with
+ *  Cmd +/-, not xterm's own font, so DESIGN.md:706 governs them. The caps were
+ *  raised alongside the floors so the roster still MOVES with the zoom instead
+ *  of pinning flat at the floor. */
 function rosterScale(zoom: number) {
   const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(n)));
   // The portrait is sized in SPRITE steps, not free pixels. The art is an 18×28
@@ -47,9 +49,9 @@ function rosterScale(zoom: number) {
   // tell two hires apart at a glance, which is the tile's whole job.
   const portraitScale = Math.min(2.5, Math.max(1.5, Math.round(zoom * 0.11 * 2) / 2));
   return {
-    name: clamp(zoom * 0.48, 7, 14),
-    group: clamp(zoom * 0.45, 7, 13),
-    note: clamp(zoom * 0.68, 10, 20),
+    name: clamp(zoom * 0.48, 14, 20),
+    group: clamp(zoom * 0.45, 14, 18),
+    note: clamp(zoom * 0.68, 14, 20),
     portraitScale,
     portrait: Math.round(PORTRAIT_W * portraitScale)
   };
@@ -359,7 +361,7 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                       a 16-unit grid, so squeezing it to match a 7px label
                       merged the outline into mush. Dimmed instead of shrunk. */}
                   <span style={{ flexShrink: 0, display: 'inline-flex', opacity: 0.7 }}>
-                    <Icon name="folder" size={scale.group >= 13 ? 2 : 1} />
+                    <Icon name="folder" size={scale.group >= 18 ? 2 : 1} />
                   </span>
                   <span style={{
                     minWidth: 0,
@@ -564,8 +566,8 @@ function SidebarRow({
   // The editor rides the terminal's zoom, capped — it's a short note, not a
   // reading pane, and following the terminal all the way up turned it into a
   // banner wider than the roster itself.
-  const noteFontSize = Math.min(useTerminalFontSize(), 14);
-  const noteLabelSize = Math.max(8, Math.round(noteFontSize * 0.6));
+  const noteFontSize = Math.min(20, Math.max(14, useTerminalFontSize()));
+  const noteLabelSize = Math.max(14, Math.round(noteFontSize * 0.6));
   const noteWidth = Math.min(300, Math.round(noteFontSize * 20));
   const noteHeight = Math.round(noteFontSize * 9);
   // Total popover height, used only to keep it on screen near the bottom edge:
@@ -719,7 +721,7 @@ function SidebarRow({
               terminal is the whole screen and the sidebar is your only index. */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
-            fontSize: Math.max(9, scale.name - 3), lineHeight: 1.4,
+            fontSize: Math.max(14, scale.name - 3), lineHeight: 1.4,
             color: 'var(--cth-ink-500)'
           }}>
             <span style={{

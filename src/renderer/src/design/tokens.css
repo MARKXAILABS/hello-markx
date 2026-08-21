@@ -56,21 +56,25 @@
   --cth-font-ui:      "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --cth-font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Type scale — v0.3.4: one step tighter (Inter reads larger than Pixelify
-     at equal px, and the controls were oversized) */
+  /* Type scale — FLOOR-12. Every size clears the 14px legibility floor
+     DESIGN.md:706 states ("never go below 14 px for any user-facing text").
+     The v0.3.4 scale ran one step tighter than DESIGN.md §4.1 and bottomed out
+     at 8px, so the token layer itself was handing out sub-floor sizes.
+     display-sm is DELETED rather than raised: a token whose whole job was
+     "smaller than everything else" cannot be kept at the floor without
+     inviting the next sub-floor size to be written into it. display-md is now
+     the app's single display-face size; display-lg is the only headroom left. */
   --cth-text-display-lg: 16px;
-  --cth-text-display-md: 12px;
-  --cth-text-display-sm: 8px;
+  --cth-text-display-md: 14px;
   --cth-text-body-lg:    16px;
   --cth-text-body-md:    14px;
-  --cth-text-body-sm:    13px;
+  --cth-text-body-sm:    14px;
   --cth-text-mono-md:    14px;
-  --cth-text-mono-sm:    13px;
+  --cth-text-mono-sm:    14px;
 
   /* Line heights — integer multiples */
   --cth-lh-display-lg: 24px;
   --cth-lh-display-md: 20px;
-  --cth-lh-display-sm: 12px;
   --cth-lh-body-lg:    24px;
   --cth-lh-body-md:    20px;
   --cth-lh-body-sm:    18px;

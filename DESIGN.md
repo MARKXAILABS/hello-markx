@@ -116,7 +116,7 @@ Three fonts, all loaded from Google Fonts. **Every text element must declare a f
 
 | Role | Family | Why |
 |---|---|---|
-| **Display** | `Press Start 2P` | NES-iconic, headings only, 8/12/16 px |
+| **Display** | `Press Start 2P` | NES-iconic, headings only, 14/16 px |
 | **UI** | `Pixelify Sans` | Modern readable pixel font, body/labels |
 | **Mono / terminal** | `VT323` | CRT terminal feel, large x-height |
 
@@ -125,8 +125,7 @@ Three fonts, all loaded from Google Fonts. **Every text element must declare a f
 | Token | Size | Line height | Use |
 |---|---|---|---|
 | `display-lg` | 16 / `Press Start 2P` | 24 | App title, screen titles |
-| `display-md` | 12 / `Press Start 2P` | 20 | Section headers, modal titles |
-| `display-sm` | 8 / `Press Start 2P` | 12 | Badges, chip labels |
+| `display-md` | 14 / `Press Start 2P` | 20 | Section headers, modal titles, badges, chip labels |
 | `body-lg` | 18 / `Pixelify Sans` | 24 | Primary body |
 | `body-md` | 16 / `Pixelify Sans` | 20 | Default UI text |
 | `body-sm` | 14 / `Pixelify Sans` | 18 | Secondary, captions |

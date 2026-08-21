@@ -233,9 +233,9 @@ export function AgentCard({
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between', minWidth: 0 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
                 <span style={{
-                  fontFamily: 'var(--cth-font-display)',
-                  fontSize: 'var(--cth-text-display-sm)',
-                  lineHeight: 'var(--cth-lh-display-sm)',
+                  fontFamily: 'var(--cth-font-ui)',
+                  fontSize: 'var(--cth-text-body-md)',
+                  lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-900)',
                   flex: 1, minWidth: 0,
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
@@ -360,7 +360,8 @@ export function AgentCard({
                   <span
                     title={note}
                     style={{
-                      flex: 1, minWidth: 0, fontSize: 10.5, lineHeight: '14px',
+                      flex: 1, minWidth: 0,
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                       color: 'var(--cth-ink-500)', fontStyle: 'italic',
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                     }}
