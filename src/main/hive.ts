@@ -2690,7 +2690,7 @@ export class HiveManager {
     cumulative: Map<string, { tokens: number; usd: number }>,
     row: { agent_id?: string | null; session_id?: string | null; task_id?: string | null; input?: number; output?: number; usd?: number }
   ): void {
-    const key = `${row.agent_id ?? ''} ${row.session_id ?? ''}`;
+    const key = `${row.agent_id ?? ''}\u0000${row.session_id ?? ''}`;
     const now = { tokens: (row.input ?? 0) + (row.output ?? 0), usd: row.usd ?? 0 };
     const previous = cumulative.get(key);
     const delta = previous
