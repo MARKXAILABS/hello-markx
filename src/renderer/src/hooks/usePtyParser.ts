@@ -169,6 +169,19 @@ export function usePtyParser(agentId: string) {
       // each one reallocates the roster and re-renders the app (#20). The block
       // is already up; there is nothing to say.
       if (self?.status === 'blocked') return;
+      // FLOOR-14 (#42) — the TRANSITION into blocked, and the only place on the
+      // floor that can see it for an engine with no hook `Notification` stream.
+      // Deliberately BELOW the guard above, which IS the de-dupe: a prompt sits
+      // on screen and repaints, so this branch re-runs for every chunk of that
+      // repaint (#20). One transition, one toast — do not add a second guard.
+      // The far end is main's EXISTING `hooks.ts` notify(), which already owns
+      // the `notifications` setting gate and click-to-focus, so there is no new
+      // setting and no new click handler here. Main also drops Claude providers,
+      // whose blocked state already toasts from their own hook `Notification`
+      // stream; firing for those would be two toasts for one event.
+      window.cth.hiveNotifyBlocked(agentId).catch(() => {
+        /* main tearing down, or a renderer hot-reloaded against an older main */
+      });
       const isGod = !!self?.isGod;
       if (isGod) {
         updateAgent(agentId, {

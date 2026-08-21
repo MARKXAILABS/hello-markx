@@ -787,6 +787,12 @@ const api = {
   hiveLog: (n?: number): Promise<unknown[]> => ipcRenderer.invoke('hive:log', n ?? 200),
   hiveMemory: (id: string): Promise<string> => ipcRenderer.invoke('hive:memory', id),
   hiveInbox: (id: string): Promise<HiveMessage[]> => ipcRenderer.invoke('hive:inbox', id),
+  /** FLOOR-14 (#42) — tell main an agent just TRANSITIONED into `blocked`, so it
+   *  can fire the same OS toast a Claude agent already gets from its own hook
+   *  stream. A SIGNAL, not a command: main re-resolves the id against the live
+   *  registry and decides the title, the body, the click target and whether
+   *  anything fires at all. Call once per transition, never per repaint. */
+  hiveNotifyBlocked: (agentId: string): Promise<void> => ipcRenderer.invoke('hive:notifyBlocked', agentId),
   /** Voice read-layer: recent message CONTENT (inbox/outbox bodies), REDACTED in
    *  main. Pass { id } for one message, { agentId } to scope to one mailbox, or
    *  {} for the whole floor. Backs Realtime Michael's get_messages. The renderer

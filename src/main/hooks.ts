@@ -78,6 +78,7 @@ import type { CircuitBreaker } from './breaker';
 // already satisfies it (it guards on a truthy session id and coerces the model).
 import type { AgentUsageSample } from './telemetry';
 import { estimateCostUsd } from './pricing';
+import { isClaudeProvider } from '../shared/agentProvider';
 
 interface HookPayload {
   hook_event_name?: string;
@@ -758,6 +759,46 @@ export class HookServer {
     // Forward everything else to the renderer so avatars reflect real activity.
     this.emit(agentId, event, p);
     return {};
+  }
+
+  /**
+   * FLOOR-14 (#42) — the ONE way a blocked NON-Claude agent reaches an OS toast.
+   *
+   * Three of FLOOR-14's four clauses already shipped: click-to-focus, the
+   * long-task toast, and the blocked-Claude toast (the `event === 'Notification'`
+   * branch above). The residual was narrow and total: `status: 'blocked'` for an
+   * engine with no hook `Notification` stream is a RENDERER determination —
+   * `usePtyParser` matching an approval prompt in the terminal tail — so main
+   * never learned about it and the human got nothing at all.
+   *
+   * PUBLIC on purpose, and as narrowly as the job allows: `notify` stays private,
+   * this takes an agent id and nothing else, and every decision that could be
+   * abused is made HERE off the live registry rather than read off the payload.
+   * The renderer names an agent; it does not get to choose the title, the body,
+   * the click target, or whether a toast happens at all.
+   */
+  notifyBlocked(agentId: string): void {
+    if (!agentId) return;
+    // T-P13-06 — resolve the renderer-supplied id against the LIVE roster first.
+    // An id naming no live agent is dropped: nothing may raise a toast (or arm a
+    // click-to-focus) for an agent that does not exist on this floor.
+    const agent = (() => {
+      try { return this.hive.registry()?.agents?.[agentId]; } catch { return undefined; }
+    })();
+    if (!agent) return;
+    // T-P13-03 — a Claude agent's blocked state ALREADY arrives on its own hook
+    // `Notification` stream and is toasted a few lines above. Firing here too is
+    // two toasts for one event, which is exactly how a floor teaches its operator
+    // to mute notifications. `provider` is unset on legacy records, which means
+    // Claude (see AgentMeta), so the default must be the SKIP side.
+    if (isClaudeProvider(agent.provider ?? 'claude')) return;
+    // UI-SPEC's locked copy: the agent's bare name as the title, a lowercase verb
+    // phrase completing it as the body. No exclamation mark — DESIGN.md:653
+    // reserves those for completions, and being stuck is not one. Who it is
+    // parked on is MAIN's call off the registry, for the same reason the id is.
+    const isGod = agent.isGod === true;
+    this.notify(agentId, this.agentName(agentId),
+      isGod ? 'is waiting on you' : 'is waiting on Michael');
   }
 
   /** Fire a native desktop notification — gated on the user's `notifications`

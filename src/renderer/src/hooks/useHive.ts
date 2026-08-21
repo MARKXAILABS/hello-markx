@@ -536,6 +536,13 @@ export function useHive(config: HarnessConfig | null): void {
           // which also means "parked, nothing to do", so a stuck worker was
           // indistinguishable from a spare one (#12). WHO it is parked on is a
           // separate flag: only the god escalates to the human.
+          // FLOOR-14 (#42) — NO toast call here, deliberately. This branch is
+          // driven by a hook `Notification` event, and main already fired the
+          // OS toast for that exact event when it handled the payload
+          // (`hooks.ts` — the `event === 'Notification'` branch). Adding
+          // `hiveNotifyBlocked` here would be two toasts for one event; the
+          // renderer-only path that main genuinely cannot see is the terminal
+          // one, in `usePtyParser`.
           updateAgent(e.agentId, { status: 'blocked', waitingOnGod: !self.isGod });
         } else {
           // Idle notification — responded, nothing to do. Linger, don't flag.

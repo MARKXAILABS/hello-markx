@@ -4070,6 +4070,20 @@ ipcMain.handle('hive:tasks', () => hive.tasks());
 ipcMain.handle('hive:log', (_evt, n: unknown) => hive.logTail(typeof n === 'number' ? n : 200));
 ipcMain.handle('hive:memory', (_evt, id: unknown) => (typeof id === 'string' ? hive.memory(id) : ''));
 ipcMain.handle('hive:inbox', (_evt, id: unknown) => (typeof id === 'string' ? hive.inbox(id) : []));
+// FLOOR-14 (#42) — the ONE renderer→main edge for a blocked NON-Claude agent.
+// `status: 'blocked'` for an engine with no hook `Notification` stream is a
+// renderer determination (usePtyParser matching an approval prompt in the
+// terminal tail), so main could not see it and the human got no toast at all.
+// This carries the TRANSITION and nothing else: hooks.notifyBlocked re-resolves
+// the id against the live registry, skips Claude providers (whose blocked state
+// already toasts from their own hook stream), and reuses the existing notify()
+// with its `notifications` gate and click-to-focus. `handle` rather than `on`
+// for one reason — every other renderer→main call in this file is `invoke`/
+// `handle` and the preload surface is uniformly promise-shaped; a lone `send`
+// channel would need its own preload idiom to buy nothing.
+ipcMain.handle('hive:notifyBlocked', (_evt, id: unknown) => {
+  if (typeof id === 'string' && id) hookServer.notifyBlocked(id);
+});
 // Voice read-layer: recent message CONTENT (inbox/outbox bodies), REDACTED
 // main-side by hive.voiceMessages(). The renderer/voice layer never sees a raw
 // body — secrets are stripped here, before the result crosses IPC.

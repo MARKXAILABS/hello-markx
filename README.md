@@ -136,6 +136,15 @@ tmux-era MVP spec, kept for history — it no longer describes the app.
   their budget.
 - Budgets & telemetry — per-agent token budgets, real cost from transcripts, a durable ledger,
   OTel spans, and a tool waterfall.
+- Desktop notifications — a native toast when an agent is stuck on a prompt and needs you, or
+  when a long task finally finishes; clicking it brings that agent to the front. Off unless you
+  turn it on in Settings → General. **This one is platform-dependent, and the limitation is on
+  macOS.** Electron 42 moved macOS toasts from `NSUserNotification` to `UNNotification`, which
+  the system will only display for a **code-signed** app — and as the
+  [downloads section](#prebuilt-downloads-and-what-they-are-actually-signed-with) says, paid
+  signing is out of scope here, so an **unsigned macOS build** may show no toasts at all. The
+  app still fires them; macOS decides whether to draw them. The code-signing requirement is
+  Apple's and applies to macOS only.
 
 **Command Center**
 - Kanban tasks with dependencies, scheduled missions + heartbeat, live fleet monitoring, memory
