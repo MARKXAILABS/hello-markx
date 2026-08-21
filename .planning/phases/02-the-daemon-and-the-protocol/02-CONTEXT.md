@@ -7,6 +7,16 @@ parallel advisor-researcher agents ran; every load-bearing claim below was then 
 orchestrator against live source before being locked. Claims that did not survive that check are
 marked **CORRECTED**, and the corrected fact is what is locked.
 
+**Amended 2026-08-21 after `02-RESEARCH.md`.** The phase researcher ran live probes that corrected
+seven decisions in this file, and each amendment below was itself re-verified by the orchestrator
+against source before being written in: D-05 (only two of criterion 1's four tests are actually
+blocked by the split), D-06 (the Phase 1 overlap is five files, and the npm-10 lockfile constraint
+forbids touching `package.json`), D-11 (the headless audit misses two IPC-*push* paths that break
+mail routing outright), D-14 (cloudflared has no publisher checksum), D-23 (`WebhookServer` has no
+path routing, so the PWA cannot simply be dropped into it), D-25 (the MCP no-op is now
+**live-verified**, not suspected), D-26/D-33 (kimi is per-agent-isolatable and its bridge is cheap —
+but building it adds a fifth unverified bridge). Nothing here is inherited on trust.
+
 **Measured baseline at `2f29d0b` (Windows 11, this machine, 2026-08-21):**
 `npm test` → **515 tests / 511 pass / 0 fail / 4 skipped**. `npm run typecheck` → **0 errors**.
 `npm run build` → **✓ built in 41.17s**. Every number in this document was produced by a command run
@@ -52,14 +62,14 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
 ### The god-file extractions — the internal gate (STRUCT-01, STRUCT-02)
 
-- **D-01 — CORRECTED: the roadmap's line counts are stale, and the plan must re-measure rather than
+- **D-01:** **CORRECTED: the roadmap's line counts are stale, and the plan must re-measure rather than
   quote them.** Measured 2026-08-21: `src/main/index.ts` is **5,812** lines (roadmap says 5,620) with
   **153** `ipcMain.handle` registrations (roadmap says ~157), **35** top-level `let`/`var` module
   globals and ~30 top-level `const x = new X(...)` constructions. `src/main/hive.ts` is **4,121**
   lines (roadmap says 3,562 — it grew 559 lines during Phase 1). Every count in a plan must come
   from a command run in the same session, per the standing evidence rule.
 
-- **D-02 — CORRECTED, AND THIS CHANGES WHAT THE EXTRACTION IS FOR. The roadmap's stated reason that
+- **D-02:** **CORRECTED, AND THIS CHANGES WHAT THE EXTRACTION IS FOR. The roadmap's stated reason that
   `index.ts` cannot be tested is the wrong mechanism.** The roadmap says: "`index.ts` imports
   `electron`, so it cannot be loaded under `node --test`; a headless boot path added in place would
   be untestable by construction." Measured directly —
@@ -79,7 +89,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
      cannot be loaded here — it imports 'electron'"). That is a false claim in a test file and is
      corrected as part of this phase.
 
-- **D-03 — The extraction target: `src/main/floor/` with an injectable `bootFloor(deps)`, and
+- **D-03:** **The extraction target: `src/main/floor/` with an injectable `bootFloor(deps)`, and
   `index.ts` reduced to Electron wiring.** Researched against the twelve electron-importing main
   modules: the Electron surface they actually use is small and injectable — `app.getPath`,
   `app.getAppPath`, `app.isPackaged`, `app.getVersion`, `app.quit`,
@@ -112,7 +122,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
      class whose `main()` → `startup()` runs `createServices()` / `initServices()` /
      `claimInstance()`, with the entry file reduced to `const code = new CodeMain(); code.main();`.
 
-- **D-04 — The seams are already written down in the source; do not invent a new taxonomy.**
+- **D-04:** **The seams are already written down in the source; do not invent a new taxonomy.**
   `index.ts:4340-4357` declares `SHUTDOWN_STEPS`, a 16-entry declarative list of every subsystem that
   owns a timer, server or handle: `clearMissionTimers`, `clearContextTimers`,
   `stopWebhookDoneObserver`, `stopWorkerWatcher`, `broker.stop`, `stopRouter`, `hookServer.stop`,
@@ -122,24 +132,45 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   ~50 `// ─── … ───` section banners (`IPC: pty lifecycle`, `IPC: hive`, `IPC: git`, …) which are the
   author's own module boundaries. Extract along those, not along a new scheme.
 
-- **D-05 — The gate is a test, not a metric.** Criterion 1 is verified green by
+- **D-05:** **The gate is a test, not a metric.** Criterion 1 is verified green by
   `test/boot-floor.test.cjs`: `loadTs('src/main/floor/boot.ts')`, build `fakeDeps` from `os.tmpdir()`
   + an identity encrypt + a `send` that pushes into an array, `await bootFloor(fakeDeps)`, then
   assert the router started and the hook server is listening on a temp socket. No Electron binary —
   and CI already installs with `npm ci --ignore-scripts`, so it runs on all three platforms
-  unchanged. Plus the four tests criterion 1 names by hand (agent lifecycle, shutdown, the mail
-  router, the git committer) and `npm run build` from a clean clone. A green `test/boot-floor.test.cjs`
-  is what flips the gate; a line count never is.
+  unchanged. Plus `npm run build` from a clean clone. A green `test/boot-floor.test.cjs` is what
+  flips the gate; a line count never is.
+  **CORRECTED by research (2026-08-21): only TWO of the four tests criterion 1 names are actually
+  blocked by the split.** Measured: the **git committer** already has four tests driving
+  `hive.flushCommit(root)` against real git (`hive-durability.test.cjs:250,270,295,323` plus
+  `engine-parity.test.cjs:359`), and the **mail router** is writable today — `routeOnce()` is a
+  public method (`hive.ts:1711`) and returns 1 against a tmpdir hive with no split at all. Only
+  **shutdown** and **agent lifecycle** are genuinely blocked by module-scope construction. A plan or
+  SUMMARY claiming all four "could not be written before the split" would be a false claim of exactly
+  the kind this phase exists to remove. Write all four, but describe only two as newly-possible.
 
-- **D-06 — Ordering against Phase 1: the extraction lands AFTER plan 01-21 (the eslint pass).** Not a
+- **D-06:** **Ordering against Phase 1: the extraction lands AFTER plan 01-21 (the eslint pass).** Not a
   file collision — plan 21 touches `src/main/{knowledge,nodeInstall,slack}.ts` and the extraction
   touches `index.ts`/`hive.ts`, which are disjoint. The reason is the lint config: plan 21 introduces
   the eslint ruleset and fixes the repo against it, and landing ~9,900 lines of moved code first means
   either linting it twice or shipping the extraction under a ruleset that changes underneath it. If
   plan 21 has not landed when Phase 2 execution starts, the extraction plan waits; nothing else in
   Phase 2 does.
+  **CORRECTED by research — the overlap is five files, not zero, and one of them is the lockfile.**
+  Plan 01-21's `files_modified` is `eslint.config.js`, `package.json`, `package-lock.json`,
+  `.github/workflows/ci.yml`, `test/ci-config.test.cjs`, `src/main/{knowledge,nodeInstall,slack}.ts`,
+  and the wildcard `src/renderer/src/**/*.{ts,tsx}`. Phase 2 needs four of those: `slack.ts` (D-15's
+  shared tunnel helper), `ci.yml` and `test/ci-config.test.cjs` (any new CI surface), and the
+  renderer wildcard (D-31's capability line). **`index.ts` and `hive.ts` are still disjoint**, so the
+  extraction itself remains safe — but every non-extraction Phase 2 plan that touches those four must
+  either wait for 01-21 or declare the conflict.
+  **And a standing constraint bites here: `package-lock.json` is written by npm 10, never npm 11 —
+  but this machine has npm 11.6.2 and no npm 10** (measured: `npm --version` → `11.6.2`). Therefore
+  **no Phase 2 plan may modify `package.json` or `package-lock.json`.** Concretely: do **not** remove
+  the now-unused `tunnelmole` dependency as part of D-14. Leaving an unused dep is a cosmetic debt;
+  rewriting the lockfile with the wrong npm major is a CI-breaking one on three hard-gated platforms.
+  Removal is deferred to a session with npm 10 available.
 
-- **D-07 — `hive.ts` is split for the seam, not for testability — and the plan must say so.** The
+- **D-07:** **`hive.ts` is split for the seam, not for testability — and the plan must say so.** The
   roadmap's rationale ("the extraction is what turns 'runs headless' from a claim into a test") is
   true of `index.ts` and **false of `hive.ts`**, which five test files already load under
   `node --test`. STRUCT-02's real justification is the other one the roadmap gives, which does
@@ -151,7 +182,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
 ### Headless — the floor with no window (DAEMON-01)
 
-- **D-08 — Windowless Electron, one process. NOT a separate plain-Node daemon.** Measured on this
+- **D-08:** **Windowless Electron, one process. NOT a separate plain-Node daemon.** Measured on this
   machine (Electron 43.4.1, Windows 11): a windowless Electron main reaches `whenReady` in 36-47 ms
   with `BrowserWindow.getAllWindows().length === 0` and stays alive — nothing auto-quits when a
   window was never opened.
@@ -171,7 +202,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   this is the cheapest thing in the process table — but it is a real number and no plan may describe
   headless mode as "free".
 
-- **D-09 — DAEMON-01 IS A DEADLOCK FIX, NOT ONLY A BOOT FLAG. Measured hazard.**
+- **D-09:** **DAEMON-01 IS A DEADLOCK FIX, NOT ONLY A BOOT FLAG. Measured hazard.**
   `index.ts:5783-5790`: `before-quit` calls `e.preventDefault()` whenever
   `ptyManager.list().length > 0`, and only *then* sends `app:closeRequested` **inside an
   `if (mainWindow)` guard**. With no window and live PTYs, quit is prevented and nothing can ever
@@ -182,7 +213,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   `teardownAndQuit()` path directly (or an equivalent non-interactive confirmation), and there must be
   a test that a headless floor with live PTYs actually quits.
 
-- **D-10 — The flag, the login item and the re-attach are four small, named edits.**
+- **D-10:** **The flag, the login item and the re-attach are four small, named edits.**
   1. `process.argv.includes('--headless')`, read where `whenReady` already scans argv for the
      `hellomarkx://` cold-start deep link (`index.ts:5703`). It gates `createWindow()`.
   2. `app.on('window-all-closed')` at `index.ts:5792` currently calls `ptyManager.killAll()` +
@@ -200,16 +231,34 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
      limitation, and `app.dock` is `undefined` off macOS). **Unverified — no Mac available.** Ships
      marked, per the standing rule.
 
-- **D-11 — What headless actually risks is small and was measured, so the audit is bounded.**
+- **D-11:** **What headless actually risks is small and was measured, so the audit is bounded.**
   `src/main` contains exactly **5** `webContents.send` call sites (3 in `index.ts` —
   `app:closeRequested`, `hire:error`, `hire:import` — 1 in `telemetry.ts`, 1 in `hive.ts`), and main
   owns its own timers (`delivery.ts` tick, `hive.ts` router, `hooks.ts` socket watchdog, the
   scheduler, the Slack done-poll, the breaker beat). The renderer has 8 `setInterval`s in
-  `src/renderer/src/hooks/` and they are UI pollers. So the DAEMON-01 audit is exactly: those 5 send
+  `src/renderer/src/hooks/` and they are UI pollers. So the poller-and-sender census is: those 5 send
   sites (each must degrade, not throw, with no window) and those 8 pollers (none may be the only
-  driver of autonomous work). A plan claiming a larger or vaguer audit is padding.
+  driver of autonomous work).
+  **CORRECTED by research — THAT CENSUS IS NOT THE WHOLE AUDIT, AND THE TWO IT MISSES ARE THE ONES
+  THAT BREAK THE FLOOR.** Both are IPC-*push* listeners, which a `webContents.send` / `setInterval`
+  census cannot see, and both were verified in source:
+  1. **`hive.ts:1670-1680` `emitTerminalHandoff`** computes
+     `const delivered = this.emit?.('hive:terminalHandoff', {…}) === true;`. With no renderer the
+     emitter does not return `true`, so `delivered` is `false` and **every piece of mail addressed to
+     a terminal-handoff engine — qwen, crush, opencode, pi (and kimi, if it gains a bridge) — bounces
+     to the god** with an `[undeliverable — … renderer unavailable]` subject. The source documents
+     its own failure mode in the comment directly above it ("hand direct mail to the renderer so it
+     can queue a terminal work order"). A headless floor would look healthy while silently routing a
+     whole tier's mail to one agent.
+  2. **Crush's protocol seed never arrives headless.** Crush is the only provider with
+     `seedDelivery: 'type-into-tui'` (`agentProvider.ts:452`), and `hive.ts:1071` returns the seed as
+     `seedPrompt` for the **renderer** to type (`useHive.ts:341`, `AddAgentModal.tsx:413`). With no
+     window a crush agent spawns and never learns the hive protocol at all.
+  Both have the same fix — route through `delivery.enqueue()` in main, which already owns the one
+  PTY-write gate (D-12) — and both are load-bearing for criterion 2's "mail still routes between
+  them". Any DAEMON-01 plan that ships without closing these two has not delivered the requirement.
 
-- **D-12 — ADR-0001 IS NOW FALSE AND NO PHASE 1 PLAN OWNS IT.**
+- **D-12:** **ADR-0001 IS NOW FALSE AND NO PHASE 1 PLAN OWNS IT.**
   `docs/adr/0001-one-gate-for-pty-writes.md` states: "Exactly one place types automatic text into a
   live agent's PTY: **the drain loop, `useHive.ts` effect #4**." FLOOR-02 moved that drain into main
   (`src/main/delivery.ts:518 drainQueue`), and `useHive.ts:746` now reads "THE QUEUE AND ITS DRAIN ARE
@@ -223,7 +272,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
 ### The tunnel that actually closes (DAEMON-05)
 
-- **D-13 — CORRECTED: DAEMON-05's stop-criterion is NOT impossible. The blocker is library mode, not
+- **D-13:** **CORRECTED: DAEMON-05's stop-criterion is NOT impossible. The blocker is library mode, not
   the vendor.** `src/main/slack.ts:158-161` and `src/main/webhook.ts:224-227` both state "tunnelmole()
   resolves with a URL STRING and nothing else — no websocket, no disposer… There is genuinely no
   handle to capture." That is accurate **about the library call**: `dist/src/index.js` exports only
@@ -232,7 +281,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   handle the missing disposer**. Both candidates were live-tested on this Windows 11 machine today and
   both pass the gating property.
 
-- **D-14 — Spawn `cloudflared tunnel --url http://127.0.0.1:PORT` as a child process. Drop the
+- **D-14:** **Spawn `cloudflared tunnel --url http://127.0.0.1:PORT` as a child process. Drop the
   `tunnelmole` library call.** Live-verified close on Win11: `200` → kill (12 ms) → `502` → `530`
   steady, and never `200` again. No account, no card, no expiry; a single static Go binary with no
   Node dep tree, so it needs neither `asarUnpack` nor an `ELECTRON_RUN_AS_NODE` wrapper; hostname is
@@ -245,15 +294,22 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   **`bore.pub` is disqualified outright:** plain TCP with no TLS, which breaks the PWA (service
   workers need a secure context, D-18) and would put the generated auth token on the wire in
   cleartext.
+  **Acquisition facts, verified against cloudflared `2026.8.2`:** win-amd64 is **52.4 MB**, there is
+  **no `cloudflared-windows-arm64` asset**, macOS ships as tarballs rather than bare binaries, and —
+  the one that matters for supply chain — **Cloudflare publishes no checksum file**; GitHub's
+  `assets[].digest` field is the only digest available. So "download on first enable" must pin a
+  release tag and verify against a SHA-256 committed into this repo, not against a vendor checksum
+  that does not exist. **And per D-06, this must not add an npm dependency** — the lockfile is
+  untouchable this phase.
 
-- **D-15 — The kill is already written; the duplication is not.** `src/main/procKill.ts:34`
+- **D-15:** **The kill is already written; the duplication is not.** `src/main/procKill.ts:34`
   `hardKillTree(pid)` already does `taskkill /pid X /T /F` on win32 and group-SIGKILL on POSIX, so the
   cross-platform close is a call, not new code. And `openTunnel()` in `slack.ts:211-221` and
   `webhook.ts:276-286` are **byte-identical** (same TODO comment, same timeout, same dynamic import),
   as are their `stop()` bodies. The change belongs in **one shared helper** that both servers use —
   landing it twice is how the two copies drifted into two identical bugs in the first place.
 
-- **D-16 — The close test polls; it does not assert a thrown error or a single status.** Discovered
+- **D-16:** **The close test polls; it does not assert a thrown error or a single status.** Discovered
   empirically, not assumed: after the child is killed, cloudflared's public URL answers with an **HTTP
   error response, not a network-level error**, and there is a ~7 s transient (502 first, then 530
   steady). A test that awaits a rejected `fetch`, or pins one status code with no poll window, will be
@@ -262,7 +318,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   dependency — so it belongs in a targeted test, not in the default `npm test` gate that must stay
   green offline on three platforms.
 
-- **D-17 — THE LIMITATION THAT MUST SHIP STATED: no $0, no-account tunnel gives a stable URL.** Both
+- **D-17:** **THE LIMITATION THAT MUST SHIP STATED: no $0, no-account tunnel gives a stable URL.** Both
   viable options mint a fresh random hostname per open. At $0 the genuine choice is *stable URL*
   (Tailscale Funnel — free Personal plan, `device.tailnet.ts.net`, but it needs an account and a
   system-level daemon, and **its close semantics could not be live-verified**, so nothing may let it
@@ -277,7 +333,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
 ### The phone (DAEMON-02)
 
-- **D-18 — THE TUNNEL IS MANDATORY FOR THE PHONE. This is a browser rule, not a preference.**
+- **D-18:** **THE TUNNEL IS MANDATORY FOR THE PHONE. This is a browser rule, not a preference.**
   Android Chrome will not install a PWA (no WebAPK, no `display: standalone`, no service worker, no
   push) from a non-secure origin, and **`http://192.168.x.x` is not a secure context** — only loopback
   and `localhost` get the exemption. The `unsafely-treat-insecure-origin-as-secure` escape hatch needs
@@ -291,7 +347,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   dropped that in 108 on mobile — but it is still required for push, and the secure-origin rule is
   unchanged.)
 
-- **D-19 — Origin churn is the dominant failure mode; the answer is QR re-onboarding.** A new tunnel
+- **D-19:** **Origin churn is the dominant failure mode; the answer is QR re-onboarding.** A new tunnel
   hostname is a *different app* to the browser: the installed WebAPK's `start_url`, the service worker
   registration, Cache Storage / IndexedDB / localStorage, cookies and the Web Push subscription all
   die together. `slack.ts` already tells the operator the URL "is ephemeral and changes per restart".
@@ -304,7 +360,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   never enters `Referer` and never lands in an access log; and the enrollment token is burned on first
   use, so a photographed or stale QR is worthless.
 
-- **D-20 — Rejected, with reasons recorded.**
+- **D-20:** **Rejected, with reasons recorded.**
   - *Signed `HttpOnly; Secure; SameSite` session cookie instead of a bearer* — genuinely safe on these
     hosts (`tunnelmole.net`, `trycloudflare.com` and `ngrok-free.app` are all on the Public Suffix
     List, so a co-tenant cannot cookie-toss onto our origin), but it is origin-scoped and dies with
@@ -320,7 +376,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
     cleanest fix for install/SW/push churn, but it contradicts DAEMON-02's "served by the daemon" and
     adds CORS to the trust boundary. On the record, not adopted.
 
-- **D-21 — The phone bundle is hand-written static files under `resources/phone/`, served by the
+- **D-21:** **The phone bundle is hand-written static files under `resources/phone/`, served by the
   existing `WebhookServer`. It is NOT a route in the renderer.** Measured: the renderer's main chunk is
   **12,228.98 kB** (`out/renderer/assets/index-BUj21S7k.js`) and its entry pulls Pixi, Monaco and
   xterm. Worse than size, the renderer is written against the preload `window.cth` IPC bridge, which
@@ -332,7 +388,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   hundred lines, promote it to a second entry in `electron.vite.config.ts`'s existing input map — a
   one-key addition, deliberately the upgrade path rather than paid for now.
 
-- **D-22 — Notification shape: visibility-gated polling for the foreground, Web Push (VAPID) for the
+- **D-22:** **Notification shape: visibility-gated polling for the foreground, Web Push (VAPID) for the
   pocket. Do NOT build on SSE.** Web Push is genuinely free on Android Chrome with no Firebase project
   and no `gcm_sender_id` — standard Web Push Protocol with VAPID auth — and everything server-side is
   reachable from Node core `crypto` on the pinned `node >=20 <23` (`generateKeyPairSync('ec')`,
@@ -344,7 +400,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   Server-Sent Events** (D-17), and SSE only delivers while the page is foregrounded — exactly the
   window where a `setInterval` gated on `document.visibilityState === 'visible'` is already adequate.
 
-- **D-23 — Reuse `WebhookServer`'s trust boundary verbatim; do not write a second one.** Verified:
+- **D-23:** **Reuse `WebhookServer`'s trust boundary verbatim; do not write a second one.** Verified:
   `src/main/webhook.ts` is 468 lines, free of any `electron` import so it unit-tests as plain Node,
   binds `127.0.0.1` **only** (`:268`), and already implements many-endpoints-one-server-one-tunnel,
   constant-time secret comparison with both sides hashed to fixed width, an unknown-endpoint id
@@ -354,10 +410,25 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   **One honest caveat already noted in the source at `webhook.ts:156`:** behind a tunnel every client
   presents the tunnel's IP, so per-IP limiting is meaningless and a global lockout is remotely
   DoS-able. Say that in the plan; do not claim per-client lockout.
+  **CORRECTED by research — "reuse it" is not "drop files in it". Three concrete obstacles, all
+  verified in source:**
+  1. **`WebhookServer` has no path routing at all.** `readEndpointId` (`webhook.ts:422-430`) returns
+     `LEGACY_ENDPOINT_ID` for `/`, the single segment for `/x`, and **`null` for anything with more
+     than one segment** — and `null` is answered identically to a wrong secret (that uniformity is
+     the no-enumeration property, deliberately). So `/phone/index.html` **401s**. Serving a static
+     bundle requires adding real path routing to a file whose current design says every path is one
+     endpoint id.
+  2. **`phone` would collide with the operator-controlled endpoint-id namespace.** Endpoint ids come
+     from user-configured webhook triggers; nothing reserves `phone`. The plan must either reserve a
+     prefix that cannot be a valid endpoint id or route the PWA before the endpoint lookup.
+  3. **Do not reach for `app.isPackaged` to locate the static root.** `webhook.ts` has **no
+     `electron` import today**, and that is the exact property D-23 is reusing — it is why the file
+     unit-tests as plain Node on three platforms. Resolving the bundle path must be injected by the
+     caller, never imported.
 
 ### Telegram and Discord (DAEMON-03)
 
-- **D-24 — They ride the existing webhook rails, with one honest extension: a per-endpoint
+- **D-24:** **They ride the existing webhook rails, with one honest extension: a per-endpoint
   verification strategy.** Today every endpoint is gated by one shape — a constant-time compare of
   `x-md-webhook-secret`. Telegram fits directly (its `setWebhook` `secret_token` arrives as
   `X-Telegram-Bot-Api-Secret-Token`, a header compare). Discord does not: interactions are verified by
@@ -369,23 +440,26 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
 ### MCP per agent, with consent (DAEMON-04)
 
-- **D-25 — PREREQUISITE DEFECT, MUST BE VERIFIED BEFORE ANYTHING IS BUILT ON IT: today's default MCP
-  bundle may be a silent no-op.** `hive.ts:1176` computes `buildDefaultMcpServers(cwd, cfg)` and
-  `:1192` writes the result as an `mcpServers` key inside the **per-session settings file** that
-  `:1110` passes as `args.push('--settings', settingsPath)`. Research against Claude Code's current
-  docs says `mcpServers` is **not** a documented `settings.json` key — the settings config-locations
-  table routes MCP servers to `~/.claude.json` / `.mcp.json`, and the available-settings list contains
-  only `allowedMcpServers`, `deniedMcpServers`, `allowManagedMcpServersOnly` and
-  `disabledMcpjsonServers`. The in-source comment at `:1188-1190` asserts "Claude merges this
-  additively", which is precisely the kind of unverified claim this project treats as a defect.
-  **This is Phase 2's GATE-01-shaped item: verify first with `/mcp` inside a spawned agent, then
-  build.** If confirmed, the fix is one flag, not a rewrite: write `<agentDir>/mcp.json` and append
-  `--mcp-config <path>` next to the `--settings` already on the spawn command (`--mcp-config` also
-  skips the interactive approval prompt that a project-scoped `.mcp.json` would require). Per-agent
-  MCP built on top of a channel that does not work would be a feature whose every test passes and
-  whose effect is nil.
+- **D-25:** **CONFIRMED PREREQUISITE DEFECT — LIVE-VERIFIED, THREE RUNS. Today's default MCP bundle
+  is a complete no-op.** `hive.ts:1176` computes `buildDefaultMcpServers(cwd, cfg)` and `:1192` writes
+  the result as an `mcpServers` key inside the **per-session settings file** that `:1110` passes as
+  `args.push('--settings', settingsPath)`.
+  **Measured against `claude 2.1.236` — the exact CLI version this repo targets — using
+  marker-writing stdio MCP servers driven by `claude --print`:** `mcpServers` inside a `--settings`
+  file is **silently ignored**; the server process is never spawned, and no marker is written.
+  `--mcp-config <file>` **does** spawn it, with and without `--strict-mcp-config`, and with no
+  interactive approval prompt. So the in-source comment at `:1188-1190` ("Claude merges this
+  additively") is false, and every agent on this floor has been running with zero MCP servers.
+  This is Phase 2's GATE-01-shaped item, and it is now settled rather than suspected: **the fix is
+  one flag** — write `<agentDir>/mcp.json` and append `--mcp-config <path>` next to the `--settings`
+  already on the spawn command. Per-agent MCP built on the old channel would have been a feature
+  whose every test passed and whose effect was nil.
+  **One method note the plan must carry: `claude mcp list` is NOT a valid probe** — it ignores both
+  `--settings` and `--mcp-config`, so it reports the user's own servers regardless and would have
+  produced a false green. Verify with a marker-writing server under `claude --print`, or by the
+  server process actually existing.
 
-- **D-26 — Per-agent is structurally free, because every agent already owns its directory.**
+- **D-26:** **Per-agent is structurally free, because every agent already owns its directory.**
   `agentDir(id) = <root>/agents/<id>` (`hive.ts:527`) is the agent's cwd, and the app already writes
   `<agentDir>/.codex/config.toml` (`hive.ts:998` sets a per-agent `CODEX_HOME`),
   `<agentDir>/.opencode/plugin/` and `<agentDir>/.pi-agent/extensions/`. So any engine with a
@@ -402,16 +476,16 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   | copilot | yes | `COPILOT_HOME` or `--additional-mcp-config <file>` | supported |
   | grok | yes | project `.grok/config.toml` | supported — **single vendor source, not live-verified** |
   | antigravity | yes | workspace `.agents/mcp_config.json` | **UNVERIFIED** — documented, but an open upstream issue reports project-local config read and silently ignored |
-  | kimi | yes | `~/.kimi/mcp.json` user-global only; no project scope, no `KIMI_HOME` | **unsupported per-agent** — writing it clobbers the operator's own global config |
+  | kimi | yes | **CORRECTED: `kimi --config-file PATH` exists** (two official vendor pages), so a per-agent config file is expressible after all | **supported per-agent** — was wrongly listed unsupported |
   | pi | no native MCP | needs a third-party adapter | **unsupported** |
   | custom | unknowable | arbitrary binary | **unsupported** |
 
-  Scoreboard: **7 clean, 1 unverified, 3 unsupported.** The card needs a literal
-  `MCP: not supported on this engine` line for kimi / pi / custom — the same register as the existing
-  `NO MAIL` and `spend UNTRACKED` declarations, and subject to D-30 (that register currently renders
-  nowhere).
+  Scoreboard, **corrected: 8 clean, 1 unverified (antigravity), 2 unsupported (pi, custom).** The
+  card needs a literal `MCP: not supported on this engine` line for pi / custom — the same register
+  as the existing `NO MAIL` and `spend UNTRACKED` declarations, and subject to D-30 (that register
+  currently renders nowhere).
 
-- **D-27 — The consent model: floor-wide for the safe tier, per-agent grant for `write`/`secret` only.**
+- **D-27:** **The consent model: floor-wide for the safe tier, per-agent grant for `write`/`secret` only.**
   Rejected: (a) a full per-agent override map over the floor default, and (b) per-agent-only with the
   floor becoming a hire-time seed. Reasons: agents here run with bypassed permissions, so an MCP grant
   is a capability grant and belongs to a grantee — but a read-only, no-secret, cwd-scoped server
@@ -428,7 +502,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   all-or-nothing across the floor, and any existing floor-wide `enabled:true` on a write/secret entry
   is dropped and must be re-granted per agent (fail closed).
 
-- **D-28 — Secrets reuse `integrations.ts`; a second store is not built.** Verified present:
+- **D-28:** **Secrets reuse `integrations.ts`; a second store is not built.** Verified present:
   `setSecret` (`integrations.ts:118`), `hasSecret` (`:150`), `deleteSecret` (`:156`),
   `deleteSecretsWithPrefix` (`:173`), `listRecordsRedacted` (`:78-79`, which hands the renderer only a
   `hasSecret` boolean), and `secretRefFor` (`src/shared/integrations.ts:91`). Key each grant as
@@ -440,7 +514,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   one. **Revoke must call `deleteSecret`**, or withdrawn consent leaves a live encrypted credential
   behind.
 
-- **D-29 — Nothing hot-reloads, so the card must say `pending · restart` rather than lie.** Claude
+- **D-29:** **Nothing hot-reloads, so the card must say `pending · restart` rather than lie.** Claude
   Code resolves its server set at session start (verified `claude --help` v2.1.236 on this machine:
   `--mcp-config <configs...>`, `--settings <file-or-json>`, `--strict-mcp-config`); `/mcp` only
   toggles or reconnects servers *already configured for that session*, and replacing the list is an
@@ -461,7 +535,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
 ### Every engine a first-class citizen (PARITY-01a, PARITY-01b, PARITY-02, PARITY-03)
 
-- **D-30 — THE HEADLINE, MEASURED: `capabilityLine()` HAS ZERO PRODUCTION CONSUMERS. PARITY-01b is
+- **D-30:** **THE HEADLINE, MEASURED: `capabilityLine()` HAS ZERO PRODUCTION CONSUMERS. PARITY-01b is
   100% unbuilt, and Phase 1's D-40 rests on the same false assumption.** `capabilityLine` is defined
   at `src/shared/providerAutomation.ts:332` and calls `providerCapabilities` at `:333`. Consumer count
   outside its own file: **`src/main` 0, `src/renderer` 0, `src/preload` 0.** Its only other caller
@@ -474,7 +548,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   shows them. **Any Phase 1 FLOOR-18 UI clause claimed as closed via `capabilityLine` must be
   re-checked.**
 
-- **D-31 — Where PARITY-01b's surfaces actually are, because the requirement's wording does not match
+- **D-31:** **Where PARITY-01b's surfaces actually are, because the requirement's wording does not match
   the app.** The requirement says the UI must say so "on the agent card **and** in the assignment
   flow, before an operator assigns mail-dependent work". Verified: **the operator never assigns to a
   worker.** `TaskDetailOverlay.tsx:51-60`'s `assign` routes through the Command Center's dispatch box,
@@ -487,7 +561,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   target agent in prose. The plan must name which it covers and must not claim the requirement's
   literal wording if the surface does not exist.
 
-- **D-32 — The engine ledger, measured per engine. This is the table the plans work from.**
+- **D-32:** **The engine ledger, measured per engine. This is the table the plans work from.**
   `src/shared/agentProvider.ts` declares eleven presets:
 
   | Engine | `canReceiveInbox` | `costTracking` | Bridge |
@@ -506,7 +580,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
   So: **8 of 11 can receive mail; 4 of 11 have any cost path at all.**
 
-- **D-33 — PARITY-01a's real work is KIMI, and it is a bridge, not a label.** The kimi preset's own
+- **D-33:** **PARITY-01a's real work is KIMI, and it is a bridge, not a label.** The kimi preset's own
   comment reads: "It supports lifecycle hooks, but Hello MarkX does not yet install a Kimi hook
   bridge, so mail must bounce rather than being delivered with no drain path." Kimi therefore **can**
   have a routed inbox and does not have one — which is exactly what PARITY-01a covers ("every engine
@@ -514,8 +588,18 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   reading the requirement backwards. The two that fall to PARITY-01b's label are **copilot** (print
   mode exits per turn, no hook bridge captures idle, so there is no drain point) and **custom**
   (unknown binary, nothing to install into).
+  **Costed by research: the kimi bridge is the CODEX case, ~50 lines.** Kimi's hook payload is
+  Claude-shaped snake_case and it takes `kimi --config-file PATH`, so the bridge is a string-append
+  into a per-agent TOML plus `HOOK_SHIM` **verbatim** — not a translator like `GROK_HOOK_SHIM`. That
+  is the cheap end of the six existing shim templates.
+  **But the honest consequence must be planned for, not discovered: building it without a Moonshot
+  account makes kimi the FIFTH `LIVE-UNVERIFIED` bridge, not one fewer.** Under D-35's
+  one-directional rule it ships marked. So PARITY-01a's kimi work moves the count of engines that
+  *can* receive mail from 8 to 9 while moving the count of *live-verified* bridges not at all. A plan
+  that presents the kimi bridge as closing a verification gap has the sign backwards; it closes a
+  capability gap and opens a verification one. Both facts belong in the SUMMARY.
 
-- **D-34 — PARITY-02 AS WRITTEN IS UNACHIEVABLE AND MUST BE RESTATED — the same correction shape as
+- **D-34:** **PARITY-02 AS WRITTEN IS UNACHIEVABLE AND MUST BE RESTATED — the same correction shape as
   Phase 1's D-02.** "All eleven engines report cost to the ledger and to the breaker" cannot be true
   for **copilot** (its own preset comment: "spend sits on the user's Copilot plan; nothing per-agent
   reaches us") or **custom** ("unknown binary — nothing to read"). No amount of work makes an engine
@@ -530,7 +614,7 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   api mode in the sidecar. The plan must state which it actually delivers and mark the rest, never
   silently.
 
-- **D-35 — PARITY-03's marker set is eight sites in one file, and the rule is one-directional.**
+- **D-35:** **PARITY-03's marker set is eight sites in one file, and the rule is one-directional.**
   Measured: `LIVE-UNVERIFIED` appears **8 times in `src/main/hive.ts`** (`:1014`, `:1024`, `:2422`,
   `:2449`, `:2458`, `:2483`, `:3747`, `:3788`) and is described in `README.md:63` — "they have never
   been run against a live account, because doing so needs a paid subscription this project does not
@@ -543,12 +627,12 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
 
 ### The human's answer reaches the right agent (GSD-06)
 
-- **D-36 — The protocol already supports it; the defect is one hardcoded UI field plus one missing
+- **D-36:** **The protocol already supports it; the defect is one hardcoded UI field plus one missing
   record field.** `HiveMessage.to` is documented at `hive.ts:57` as "an agentId, `'god'`, or
   `'broadcast'`", and `HiveMessage` already carries `conversation` and `in_reply_to`. The hardcode is
   at **`AskMeTab.tsx:92`** — `to: 'god'` — **CORRECTED from the roadmap's `:93`**.
 
-- **D-37 — Add `askedBy` to the `humanQA` entry, captured exactly the way `claim` already captures
+- **D-37:** **Add `askedBy` to the `humanQA` entry, captured exactly the way `claim` already captures
   identity.** Today `task.cjs patch <id> --q "…"` appends `{ q, askedAt }` and blocks the card
   (`hive.ts:3458`) — there is **no record of who asked**, so the UI has nothing to answer *to*. The
   identity is already in hand: `task.cjs`'s own `claim` branch reads `process.env.AGENT_ID`, and
@@ -559,14 +643,14 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   written before this change has no `askedBy` and falls through to the assignee, then to the god —
   exactly today's behaviour.
 
-- **D-38 — The answer goes to that agent's INBOX, never into its PTY, and ADR-0001 stays intact.**
+- **D-38:** **The answer goes to that agent's INBOX, never into its PTY, and ADR-0001 stays intact.**
   `TaskDetailOverlay.tsx:51` records the current convention — "the human never writes into a worker's
   inbox directly" — as a UI routing choice (everything goes via the god). GSD-06 deliberately changes
   that convention **for answers to questions that worker itself asked**, and only for those. It does
   not touch ADR-0001's decision: the answer is enqueued as hive mail and delivered by main's drain
   when that agent is idle, like every other automatic message. Nothing new types into a PTY.
 
-- **D-39 — The god still gets told.** Today's `hiveSend` to the god is what unblocks the card and
+- **D-39:** **The god still gets told.** Today's `hiveSend` to the god is what unblocks the card and
   resumes the work. Addressing the worker must be an **addition**, not a replacement: the answer goes
   to the asker, and the god is informed, or the card is left blocked with no one moving it. The plan
   must be explicit about which message carries the unblock.

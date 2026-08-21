@@ -761,7 +761,7 @@ D-26's engine table says kimi is *"`~/.kimi/mcp.json` user-global only; no proje
 
 ---
 
-## §9 Validation Architecture
+## Validation Architecture
 
 > `.planning/config.json` → `workflow.nyquist_validation: true`. This section is consumed to build VALIDATION.md.
 
