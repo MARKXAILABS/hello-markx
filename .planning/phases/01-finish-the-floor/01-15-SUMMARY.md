@@ -595,6 +595,21 @@ Anchors **after** this plan's commits are unchanged — both diffs are line-for-
 
 There is no lint/format/secret-scan tooling in this repo (no `lint` script, no `.husky`, no `.git/hooks`, no `.pre-commit-config.yaml`) — typecheck, the unit suite, the build and the e2e suite ARE the gate, and all four are green locally at `19d8051`.
 
+### CI — green on the remote, all six jobs, at `0030a14`
+
+Pushed to `origin/gsd/v1.0-milestone` (`3b2d03e..0030a14`), which is PR #77's CI pointer.
+
+| Workflow | Job | Result | TAP |
+|---|---|---|---|
+| CI | Typecheck | **success** | — |
+| CI | Build | **success** | — |
+| CI | Test (ubuntu-latest) | **success** | tests 515 · pass **515** · fail **0** · skipped 0 · todo 0 |
+| CI | Test (macos-latest) | **success** | tests 515 · pass **515** · fail **0** · skipped 0 · todo 0 |
+| CI | Test (windows-latest) | **success** | tests 515 · pass **511** · fail **0** · skipped 4 · todo 0 |
+| E2E | Electron smoke (ubuntu-latest) | **success** | 2 passed against real Electron 43 |
+
+Runs `32469731743` (CI) and `32469731761` (E2E). Byte-identical to the `3b2d03e` baseline the orchestrator verified before this plan started, and to 01-14's `cea311e`: the four Windows skips are the platform's own, not a red test hidden by this sweep.
+
 **Requirement row:** `FLOOR-12` deliberately left **Pending** in `.planning/REQUIREMENTS.md`, matching the 01-02/04/05/06/07/08/09/10/11/12/13/14 precedent — **plan 23 owns the checkboxes**. FLOOR-12 is not closeable here in any case: 443 of the original 605 M1 occurrences remain and belong to plans 16–20.
 
 ---
