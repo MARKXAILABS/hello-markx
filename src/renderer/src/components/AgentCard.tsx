@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { PixelPanel } from './PixelPanel';
 import { PixelBadge, StatusKind } from './PixelBadge';
 import { useHasTerminalDraft } from './terminalPool';
@@ -7,6 +7,8 @@ import { RealtimeMichaelToggle } from './RealtimeMichaelToggle';
 import { CostHud } from '@/realtime/CostHud';
 import { AccentColorName } from '@/design/tokens';
 import { OfficeCharacterName } from '@/scene/office/cast';
+import { useStore } from '@/store/store';
+import { agentRowForCard, isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
 
 export interface AgentCardProps {
   name: string;
@@ -133,6 +135,17 @@ export function AgentCard({
   const infoLine = (status !== 'idle' && action) ? action : project;
   const noteFirstLine = (note ?? '').split('\n').find((l) => l.trim()) ?? '';
 
+  // FLOOR-01 - does this agent act without asking for tool approval?
+  //
+  // The card is presentational: it is handed display props, never an agent id,
+  // and provider/command/model live on the store row. So it resolves its own row
+  // the same way useHasTerminalDraft above already keys off ptyId, and calls the
+  // ONE shared derivation the fullscreen roster row and the command-centre row
+  // also call. Three copies of a safety rule are three chances to start lying.
+  const row = useStore((s) => agentRowForCard(s.agents, ptyId, name));
+  const liveAutoMode = useSyncExternalStore(subscribeLiveAutoMode, getLiveAutoMode, getLiveAutoMode);
+  const autoMode = isAutoModeAgent(row?.provider, row?.command, liveAutoMode);
+
   return (
     // A <div role="button">, not a <button>. The card carries THREE other
     // controls inside it — the task sticky note, the ✎ note editor, and (on
@@ -152,7 +165,10 @@ export function AgentCard({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       draggable={draggable}
-      aria-label={`${name}${isGod ? ' (boss)' : ''} — ${status}`}
+      // An aria-label on this container REPLACES all inner text for a screen
+      // reader, so the AUTO chip below is silent unless the state is folded in
+      // here. The chip is aria-hidden for the same reason: announced once, here.
+      aria-label={`${name}${isGod ? ' (boss)' : ''} — ${status}${autoMode ? ` — Auto mode — ${name} runs with permissions bypassed` : ''}`}
       // The ring is the visual answer to "which terminal is open"; this is the
       // same answer for a screen reader. Matches SidebarRow in fullscreen.
       aria-current={selected ? 'true' : undefined}
@@ -229,6 +245,28 @@ export function AgentCard({
                     background: `var(--cth-${accent})`, color: 'var(--cth-ink-900)',
                     padding: '1px 4px 0', flexShrink: 0
                   }}>BOSS</span>
+                )}
+                {/* FLOOR-01 - auto mode. The BOSS chip's exact shape (same
+                    padding, same flexShrink) in lilac with a hairline, so it
+                    can never be mistaken for the PixelBadge status chip beside
+                    it. aria-hidden: the card's own aria-label already carries
+                    the state, and announcing it twice is worse than once. An
+                    INDICATOR - not focusable, not clickable, no role. Written at
+                    the token, not a literal size, so wave 6's raise sweeps it. */}
+                {autoMode && (
+                  <span
+                    aria-hidden="true"
+                    title={`Auto mode: ${name} acts without asking for tool approval.`}
+                    style={{
+                      fontFamily: 'var(--cth-font-display)',
+                      fontSize: 'var(--cth-text-display-md)',
+                      lineHeight: 'var(--cth-lh-display-md)',
+                      background: 'var(--cth-lilac-light)',
+                      boxShadow: 'inset 0 0 0 1px var(--cth-lilac)',
+                      color: 'var(--cth-ink-900)',
+                      padding: '1px 4px 0', flexShrink: 0
+                    }}
+                  >AUTO</span>
                 )}
               </span>
               {/* flexShrink:0 — the badge is a fixed 2-to-5 character chip; when

@@ -23,6 +23,7 @@ import { PixelPanel } from '@/components/PixelPanel';
 import { PixelButton } from '@/components/PixelButton';
 import { Icon } from '@/components/Icon';
 import { SidebarSplitter } from '@/components/SidebarSplitter';
+import { setLiveAutoMode } from '@/store/autoMode';
 import { acquireTerminal } from '@/components/terminalPool';
 import { FullscreenTerminal } from '@/components/FullscreenTerminal';
 import { TaskDetailOverlay } from '@/components/TaskDetailOverlay';
@@ -225,6 +226,15 @@ export function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // FLOOR-01 - publish the floor's global auto-mode toggle for the three agent
+  // renderings. The agent card is fed flat display props by AgentStrip and has
+  // no path to `config`, and the command-centre row keeps its own copy - three
+  // routes to one boolean is how a safety indicator starts disagreeing with
+  // itself. One publisher here, one module (store/autoMode.ts), three readers.
+  // Only the opencode arm of the derivation consults it; every other provider
+  // answers from the agent's own command string and ignores this entirely.
+  useEffect(() => { setLiveAutoMode(!!config?.autoMode); }, [config?.autoMode]);
 
   if (!config) {
     return <div style={{ width: '100vw', height: '100vh', background: 'var(--cth-cream-100)' }} />;
