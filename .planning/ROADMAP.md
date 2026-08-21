@@ -142,7 +142,7 @@ Plans:
 - [x] 01-09-PLAN.md — FLOOR-10 — one budget arm in the existing breaker ladder; hive:tasks widened with the meter
 - [x] 01-10-PLAN.md — FLOOR-07 / FLOOR-05 — the FTS5 memory index, the scope honesty pass, and the Settings log-folder button
 - [x] 01-11-PLAN.md — FLOOR-04 — scrub the staged diff with redactSecrets at the single commit choke point
-- [ ] 01-12-PLAN.md — FLOOR-01 / FLOOR-13 — the AUTO chip in three renderings, the model field, the 1024px responsive collapse
+- [x] 01-12-PLAN.md — FLOOR-01 / FLOOR-13 — the AUTO chip in three renderings, the model field, the 1024px responsive collapse
 - [ ] 01-13-PLAN.md — FLOOR-18 / FLOOR-14 — declare the Codex-on-Windows limitation; route the non-Claude blocked transition to notify()
 - [ ] 01-14-PLAN.md — FLOOR-12 — the token migration, DESIGN.md §4.1, Rule 1b's two sites, and the four token-coupled files
 - [ ] 01-15-PLAN.md — FLOOR-12 sweep — the settings cluster (5 files, ~128 sites)
@@ -546,7 +546,7 @@ after Phase 5 rather than closed in Phase 3.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Finish the Floor | 10/23 | In Progress|  |
+| 1. Finish the Floor | 11/23 | In Progress|  |
 | 2. The Daemon and the Protocol | 0/TBD | Not started | - |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |
