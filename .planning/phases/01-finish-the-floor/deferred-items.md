@@ -48,3 +48,33 @@ Out-of-scope discoveries found while executing a plan. Logged, not fixed.
   been deleted from the hive, so a long-lived install accumulates one dead agent's notes per
   teardown. Not a correctness defect and not reachable by recall unless the caller names the dead
   agent's id. RECORD-02 (Phase 4) owns ledger/index retention; this belongs with it.
+
+## From 01-13 (wave 6)
+
+- **The Settings UI still claims notifications work, with no platform qualifier.**
+  `src/renderer/src/components/SettingsModal.tsx:1008` (inside the `activeSection === 'General'`
+  block that opens at `:891`) reads *"Native toasts when an agent finishes or needs your input."* —
+  a bare capability claim, which is exactly the defect 01-13's `must_haves` truth #5 names
+  (*"Every FLOOR-14 sentence in docs or UI carries a platform qualifier"*). Under Electron 42+ macOS
+  routes toasts through `UNNotification`, which only displays for a code-signed app, and this
+  project's macOS signing is best-effort (`build/notarize.cjs` no-ops without `APPLE_*`), so on an
+  unsigned local macOS build that sentence is false. 01-13 fixed the README half
+  (`README.md:139-147`) and could not fix this half: `SettingsModal.tsx` is **not** in 01-13's
+  `files_modified`, and both of 01-13's containment criteria fail on any file outside the declared
+  set. Owners of the file are 01-10 (wave 5, landed) and 01-15 (wave 7), and 01-15 is a
+  `fontSize`/accessible-name sweep whose own truth #3 forbids reflowing or changing copy — so
+  nobody currently picks this up.
+  **The fix is one sentence**, matching the wording already in `README.md`: append something like
+  *"Windows and Linux only in an unsigned build — macOS requires code signing to display them."*
+  to the existing description span. Do not add a `fontSize` while doing it: 01-15 pins a measured
+  count of sub-14px `fontSize` occurrences in this file.
+  Owner: a plan that holds `SettingsModal.tsx` **after** 01-15, or 01-23's wave-9 doc-claim sweep
+  (which already owns `test/repo-claims.test.cjs`, the natural place to pin it so it cannot regress).
+
+- **`src/main/config.ts:277`'s JSDoc for the `notifications` flag is now slightly stale.**
+  It says the flag fires *"on agent lifecycle events (idle finish / waiting for input)"*. Since
+  01-13 the same flag also gates the blocked-non-Claude toast that arrives over
+  `hive:notifyBlocked`, which is neither an idle finish nor a Claude `Notification` hook. Cosmetic —
+  the flag's behaviour is unchanged and `notify()` is still the single gate — but the comment now
+  under-describes its reach. `src/main/config.ts` is not in 01-13's `files_modified` and is owned by
+  other plans. Owner: whichever plan next holds `src/main/config.ts`.
