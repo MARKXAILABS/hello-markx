@@ -39,4 +39,15 @@ pipeline now live in this repository.
 | Linux (AppImage) | [`Hello-MarkX-0.4.4-linux-x86_64.AppImage`](https://github.com/MARKXAILABS/hello-markx/releases/latest/download/Hello-MarkX-0.4.4-linux-x86_64.AppImage) |
 | Source | [`v0.4.4.tar.gz`](https://github.com/MARKXAILABS/hello-markx/archive/refs/tags/v0.4.4.tar.gz) |
 
-Checksums for every artifact are in `SHA256SUMS.txt` on the release.
+Checksums for every artifact are in `SHA256SUMS.txt` on the release, and the release workflow
+attests that file to [Sigstore](https://www.sigstore.dev/), so every artifact named in it can be
+traced back to this repository and the exact commit it was built from:
+
+```bash
+gh attestation verify <artifact> --repo MARKXAILABS/hello-markx
+```
+
+**That is provenance, not code signing, and it does not stop SmartScreen.** The Windows
+installers are unsigned and Windows will warn about an unrecognised app; macOS is unsigned too,
+so open it the first time with right-click → *Open*. Suppressing those prompts needs a paid
+signing certificate, which this project does not buy — see [`SECURITY.md`](./SECURITY.md).

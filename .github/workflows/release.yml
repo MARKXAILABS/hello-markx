@@ -176,6 +176,13 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    # A job-level permissions block REPLACES the workflow-level one rather than
+    # extending it, so `contents: write` has to be restated here — omit it and
+    # the release upload below silently loses its token and 403s.
+    permissions:
+      contents: write # softprops/action-gh-release uploads the assets
+      id-token: write # mint the OIDC token Sigstore signs the provenance with
+      attestations: write # persist the attestation against this repository
     steps:
       - uses: actions/checkout@v4
 
@@ -193,6 +200,26 @@ jobs:
           find artifacts -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.blockmap' -o -name 'latest*.yml' \) -exec cp {} release/ \;
           cat artifacts/*/SHA256SUMS-*.txt > release/SHA256SUMS.txt 2>/dev/null || true
           ls -la release
+
+      # FLOOR-06. Windows and macOS ship UNSIGNED here — every route to code
+      # signing is a recurring charge this project does not pay — so Sigstore
+      # provenance plus the published checksums are the entire control a user
+      # has to tell a real artifact from a tampered one.
+      #
+      # The subject is the merged checksums file the step above already
+      # produces: one call then covers every artifact named in it, across all
+      # three platforms, instead of three per-platform globs. And it runs BEFORE
+      # the upload, so the digests that get attested are the bytes that ship.
+      #
+      # Verify a download with:
+      #   gh attestation verify <artifact> --repo MARKXAILABS/hello-markx
+      #
+      # This does NOT suppress SmartScreen or Gatekeeper — only a paid signing
+      # certificate does that. README.md, RELEASE.md and SECURITY.md say so.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: release/SHA256SUMS.txt
 
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
