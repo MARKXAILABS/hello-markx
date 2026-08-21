@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { PixelPanel } from './PixelPanel';
 import { PixelBadge } from './PixelBadge';
 import { PixelButton } from './PixelButton';
@@ -45,6 +45,7 @@ import {
   type PoolSnapshot
 } from '@/store/config';
 import { canReceiveInbox } from '@shared/agentProvider';
+import { isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
 
 /** Michael's control surface. Shown instead of the plain terminal/files panel
  *  when the god agent is selected: terminal + queue, the floor roster (with
@@ -412,6 +413,11 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
   // Live pool health (PR 2) — per-account state + the failover countdown.
   const pool = useClaudeAccountPool();
 
+  // FLOOR-01 — the floor's global auto-mode toggle, published once by App and
+  // read back here so this row, the agent card and the fullscreen roster row all
+  // answer from ONE value. Only the opencode arm of isAutoModeAgent consults it.
+  const liveAutoMode = useSyncExternalStore(subscribeLiveAutoMode, getLiveAutoMode, getLiveAutoMode);
+
   // Seed the dispatch box from a task-card "assign" (keyed on seq so repeat
   // assigns re-prefill). seq === 0 is the untouched initial state — skip it.
   useEffect(() => {
@@ -733,6 +739,24 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                   fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)'
                 }}
               >{a.name}{a.isGod ? ' (god)' : ''}</button>
+              {/* FLOOR-01 — auto mode. Same shared derivation and same chip as
+                  the agent card and the fullscreen roster row. This row's root
+                  carries no aria-label, so the chip is left audible rather than
+                  aria-hidden: here the visible glyph IS the announcement. */}
+              {isAutoModeAgent(agentProvider, a.command, liveAutoMode) && (
+                <span
+                  title={`Auto mode: ${a.name} acts without asking for tool approval.`}
+                  style={{
+                    fontFamily: 'var(--cth-font-display)',
+                    fontSize: 'var(--cth-text-display-md)',
+                    lineHeight: 'var(--cth-lh-display-md)',
+                    background: 'var(--cth-lilac-light)',
+                    boxShadow: 'inset 0 0 0 1px var(--cth-lilac)',
+                    color: 'var(--cth-ink-900)',
+                    padding: '1px 4px 0', flexShrink: 0
+                  }}
+                >AUTO</span>
+              )}
               <PixelBadge status={armed ? 'looping' : a.status} />
               {armed && <span title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}
               <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--cth-ink-500)' }}>

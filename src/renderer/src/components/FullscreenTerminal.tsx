@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { PixelBadge } from './PixelBadge';
 import { PixelButton } from './PixelButton';
@@ -20,6 +20,7 @@ import { useTerminalFontSize } from './terminalFontSize';
 import { useHasTerminalDraft, disposeTerminal } from './terminalPool';
 import { useAppTheme, toggleAppTheme } from '@/design/theme';
 import { basename, groupKey, useAgentGroups } from './agentGroups';
+import { isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
 import type { HarnessConfig } from '@/store/config';
 
 /** Roster rail width. A fixed 232px is right on a 14" laptop but reads as a
@@ -504,7 +505,7 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
 /** Model ids are long and mostly boilerplate ("claude-opus-4-8[1m]",
  *  "anthropic/claude-sonnet-4-5"). The roster has ~120px, so show the part that
  *  distinguishes one agent from another and keep the full id in the tooltip. */
-function shortModel(model?: string): string | null {
+export function shortModel(model?: string): string | null {
   if (!model || !model.trim()) return null;
   const tail = model.split('/').pop() ?? model;
   return tail
@@ -576,6 +577,13 @@ function SidebarRow({
 
   const typing = useHasTerminalDraft(agent.ptyId);
 
+  // FLOOR-01: does this agent act without asking for tool approval? One shared
+  // derivation (store/autoMode.ts), called identically by the agent card and the
+  // command-centre row, so the three renderings cannot disagree about a safety
+  // state. The live toggle is consulted for opencode only — see that module.
+  const liveAutoMode = useSyncExternalStore(subscribeLiveAutoMode, getLiveAutoMode, getLiveAutoMode);
+  const autoMode = isAutoModeAgent(agent.provider, agent.command, liveAutoMode);
+
   /** The ✎ button opens the editor beside the row — the bullets on the row are
    *  the summary, this is where you write them. EXPLICIT open only (v0.3.4):
    *  hovering the roster no longer pops editors under the pointer. */
@@ -619,7 +627,7 @@ function SidebarRow({
         onDrop={(e) => { e.preventDefault(); drag.drop(agent.id); }}
         onDragEnd={drag.end}
         onClick={onClick}
-        aria-label={`${agent.name} · ${agent.project}`}
+        aria-label={`${agent.name} · ${agent.project}${autoMode ? ` · Auto mode — ${agent.name} runs with permissions bypassed` : ''}`}
         aria-current={active ? 'true' : undefined}
         style={{
           width: '100%',
@@ -663,6 +671,25 @@ function SidebarRow({
               fontFamily: 'var(--cth-font-display)',
               fontSize: scale.name, lineHeight: 1.5
             }}>{agent.name.toUpperCase()}</span>
+            {/* FLOOR-01 — auto mode, cloned from the agent card's BOSS chip so the
+                three renderings read as one control. aria-hidden because the row's
+                own aria-label already carries the state; announcing it twice is
+                worse than once. Indicator only: not focusable, not clickable. */}
+            {autoMode && (
+              <span
+                aria-hidden="true"
+                title={`Auto mode: ${agent.name} acts without asking for tool approval.`}
+                style={{
+                  fontFamily: 'var(--cth-font-display)',
+                  fontSize: 'var(--cth-text-display-md)',
+                  lineHeight: 'var(--cth-lh-display-md)',
+                  background: 'var(--cth-lilac-light)',
+                  boxShadow: 'inset 0 0 0 1px var(--cth-lilac)',
+                  color: 'var(--cth-ink-900)',
+                  padding: '1px 4px 0', flexShrink: 0
+                }}
+              >AUTO</span>
+            )}
             {/* Your unsent text outranks the agent's own state here: an idle
                 agent with a draft on its prompt is not idle-and-free, it is
                 idle-and-held, and nothing else on screen said so. */}
