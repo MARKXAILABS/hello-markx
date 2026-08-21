@@ -1732,12 +1732,52 @@ export class HiveManager {
    *  mass-reviewed at boot — only a card that reaches 'done' while we are watching
    *  gets a reviewer. A restart re-seeds; a card finished while the app was closed
    *  is not reviewed, which is the right trade against mailing the floor a hundred
-   *  stale queries. */
+   *  stale queries.
+   *
+   *  TWO different guards deliver that promise and they cover DIFFERENT sweeps —
+   *  confusing them is how the storm gets shipped. `if (!previous) return 0` in
+   *  sweepTaskReviews suppresses the FIRST sweep and only the first. The
+   *  `previous.get(id) !== 'done'` mint test is what keeps every sweep from the
+   *  SECOND onward quiet against the backlog: the boot seed already recorded every
+   *  historic card as 'done', so the rule mints nothing for them.
+   *
+   *  `owesReview` shares this lifetime deliberately. It is process-local and is
+   *  NEVER rebuilt from the persisted board at startup, because a rebuilt set would
+   *  already hold every historic 'done' card — sweep 2 would mint nothing new, pass
+   *  the obligation guard anyway, and mail one query per historic card. That is
+   *  verbatim the storm this comment promises cannot happen. The price is that an
+   *  obligation minted in a session which ends before any reviewer was free is
+   *  lost, which is the same accepted trade as the card finished while the app was
+   *  closed. (#18) */
   private lastTaskStatus: Map<string, string> | null = null;
 
+  /** Task ids that owe a review — an obligation SET, not a second status field.
+   *  The done-transition edge MINTS the obligation and only a successfully mailed
+   *  query (the `send` AND the `patchTask`, both) clears it, so a card that
+   *  flipped to 'done' while every other agent was busy stays in the set and is
+   *  retried on a later sweep.
+   *
+   *  That retry is the whole of VERDICT-02. `if (!reviewer) continue` used to
+   *  consume the transition permanently, because `this.lastTaskStatus = seen` is
+   *  assigned ABOVE the loop: by the time the sweep found nobody free it had already
+   *  recorded the card as 'done', so no later sweep saw a transition and the card
+   *  was never reviewed again — silently.
+   *
+   *  Process-local by design; see lastTaskStatus above for why it must never be
+   *  rebuilt from the board at startup. (#18) */
+  private owesReview = new Set<string>();
+
   /** The least-loaded idle agent that can actually take mail, excluding `skip`
-   *  (the assignee) and god. Null when nobody qualifies — the sweep then simply
-   *  leaves the card alone and tries again next minute. */
+   *  (the assignee) and god. `canReceiveInbox` is the VERDICT-03 filter: a
+   *  provider with no inbox-drain path (kimi, copilot, custom) is never selected,
+   *  so on a mixed-engine floor a review is not routed into a black hole.
+   *
+   *  Null when nobody qualifies, and the sweep then leaves the card alone and tries
+   *  again on a later sweep. That sentence was a FALSE claim in this comment until
+   *  #18: the sweep recorded the card as 'done' before the loop ran, so a null
+   *  reviewer consumed the transition and the card was never looked at again. It is
+   *  true now, and true ONLY because `owesReview` holds the obligation across
+   *  sweeps — do not remove the set and leave this comment standing. */
   private leastLoadedIdle(skip: string[]): string | null {
     const reg = this.registry();
     const godId = reg.godId ?? 'god';
@@ -1756,21 +1796,62 @@ export class HiveManager {
    * on conversation `review-<taskId>`; their verdict comes back through
    * applyReviewVerdict — `refuse` sends the card back to 'doing'.
    *
-   * Detects the transition from the LEDGER rather than from writeTasks, so it
-   * catches every writer including a god that hand-edits tasks.json.
+   * Reads the LEDGER rather than hooking writeTasks, so no writer is privileged:
+   * whoever moved the card, the sweep sees the same durable state.
+   *
+   * ACCEPTED RESIDUAL (T-P03-07) — this is a SWEEP_INTERVAL_MS poll, not a change
+   * feed. A card that is 'done' at one snapshot, reopened by a writer that does not
+   * go through applyReviewVerdict (a god editing the board by hand), and 'done'
+   * again before the next snapshot presents IDENTICAL durable state at both
+   * observations, so it mints nothing and is not reviewed. No snapshot rule can see
+   * a change that is undone before the next observation, and the alternative —
+   * minting on "done with no open review" with no transition test — IS the boot
+   * review-storm that lastTaskStatus forbids. The supported reopen path is
+   * applyReviewVerdict's refuse branch, which re-mints the obligation directly.
    */
   sweepTaskReviews(): number {
     const tasks = this.ledger().tasks;
     const seen = new Map<string, string>(tasks.map((t) => [t.id, t.status]));
+    // Bound the set by card lifetime (T-P03-05): an id no longer on the board —
+    // archived or deleted — can never be reviewed, so drop it instead of carrying it
+    // for the life of the process. Deliberately ABOVE the first-sweep return so an
+    // obligation re-added by a refuse cannot outlive its card either.
+    for (const id of this.owesReview) if (!seen.has(id)) this.owesReview.delete(id);
     const previous = this.lastTaskStatus;
     this.lastTaskStatus = seen;
     if (!previous) return 0; // first sweep: learn the floor, act on nothing
 
     let asked = 0;
     for (const task of tasks) {
-      if (task.status !== 'done' || task.review || !task.assignee) continue;
-      if (previous.get(task.id) === 'done' || !previous.has(task.id)) continue;
+      if (task.status !== 'done' || !task.assignee) continue;
+      // "already has an OPEN review", not "has ever had a review object". After a
+      // refusal the record survives with ok:false, and that card is precisely the one
+      // a second look matters most for once it is re-done. The open case must still
+      // be skipped or a card under review is re-queried every minute
+      // (test/hive-protocol-v2.test.cjs:233).
+      if (task.review && task.review.ok === undefined) continue;
+      // Mint the obligation from the card's DURABLE state, not from a snapshot
+      // MEMBERSHIP test. The deleted guard also demanded that the card ALREADY EXIST
+      // in the previous snapshot (a bare `has()` membership test on the card id), which
+      // silently dropped every card created AND flipped to 'done' inside one
+      // SWEEP_INTERVAL_MS window: such a card is never observed in a non-done state
+      // by any snapshot, so no obligation was ever minted for it and no amount of
+      // retrying could recover it. That clause is DELETED — `previous.get(missingId)`
+      // is undefined, which is !== 'done', so the absent-from-snapshot case mints
+      // correctly here with no extra branch.
+      //
+      // Deleting it does not re-open the boot backlog storm, because two guards cover
+      // two different sweeps: `if (!previous) return 0` above covers the FIRST sweep
+      // (pinned by test/hive-protocol-v2.test.cjs:220), and the surviving `!== 'done'`
+      // half below covers every sweep from the SECOND onward against the seeded
+      // backlog (pinned by the quiet-second-sweep test in the same file — :220 alone
+      // does NOT prove it, being green purely from the seed guard). Do not add a
+      // second minting path. (#18)
+      if (previous.get(task.id) !== 'done') this.owesReview.add(task.id);
+      if (!this.owesReview.has(task.id)) continue;
       const reviewer = this.leastLoadedIdle([task.assignee]);
+      // Nobody free. The obligation SURVIVES this `continue` — that is the fix: it
+      // used to consume the transition edge and lose the review forever.
       if (!reviewer) continue;
       this.send({
         to: reviewer,
@@ -1785,6 +1866,9 @@ export class HiveManager {
         ].filter(Boolean).join('\n')
       }, 'system');
       this.patchTask(task.id, { review: { by: reviewer, askedAt: new Date().toISOString() } });
+      // Cleared only now, after BOTH the send and the patch succeeded. A throw from
+      // either leaves the obligation standing for the next sweep.
+      this.owesReview.delete(task.id);
       asked++;
     }
     return asked;
@@ -1803,6 +1887,13 @@ export class HiveManager {
       review: { ...task.review, ok },
       ...(ok ? {} : { status: 'doing' as const })
     });
+    // A refusal is NOT terminal. When the assignee fixes the card and marks it
+    // 'done' again the review record still carries ok:false, and the sweep's snapshot
+    // may already hold the card as 'done', so neither the open-review skip nor the
+    // transition mint would fire for it. Re-mint here: this is the supported reopen
+    // path named in sweepTaskReviews's T-P03-07 note, and a refused-then-fixed card
+    // is the one a second look matters most for. (#18)
+    if (!ok) this.owesReview.add(taskId);
     this.appendLog({ kind: 'review', taskId, by: msg.from, ok });
   }
 
