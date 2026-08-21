@@ -664,6 +664,21 @@ component tests beyond the boot smoke spec"* — is TRUE as of this plan.
 | SHA | Message | Size |
 |---|---|---|
 | `23a8af8` | `test(01-22): render real .tsx to markup under node --test, zero new dependencies` | 1 file, +297 |
+| `97f7227` | `docs(01-22): complete FLOOR-15 — the renderer's first component tests` | SUMMARY + STATE + ROADMAP |
+
+`SHAS` (this plan's **code** commits, the list the containment and dependency criteria bind):
+`23a8af86fe7d23410f07e3d522d7e18d5b9252aa`. The bookkeeping commit above is not in it, by the plan's
+own definition.
+
+**Post-bookkeeping CI re-verify at `97f72277cc883877b469818380069793b6a141e5`** — the SHA that actually
+ships, not just the one the code landed on. All seven rows `pass`, `gh pr checks` exit `0`:
+`Build` · `Electron smoke (ubuntu-latest)` · `Test (macos-latest)` · `Test (ubuntu-latest)` ·
+`Test (windows-latest)` · `Typecheck` · `CodeRabbit` (skipped, draft).
+
+**One concurrent commit landed under this plan mid-flight:** `3531f59`
+(`docs(02): phase 2 plan set`) became `23a8af8`'s parent between this executor's `git status` and its
+commit. It is not this plan's, it touches only `.planning/phases/02-*`, and the per-commit containment
+check (`OUT-OF-BOUND=0`) is precisely why that cannot contaminate this plan's verdict.
 
 ---
 
