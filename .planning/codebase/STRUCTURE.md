@@ -7,7 +7,7 @@
 ```
 munder-difflin/  (npm package "hello-markx")
 ├── src/
-│   ├── main/                    # Electron main process (Node) — 45 files, ~24.1k lines
+│   ├── main/                    # Electron main process (Node) — 46 .ts files, ~24.5k lines
 │   │   ├── index.ts             # entry point: app lifecycle, ~157 IPC handlers, scheduler
 │   │   ├── hive.ts              # HiveManager — the agent-to-agent message bus + git committer
 │   │   ├── delivery.ts          # DeliveryService — the autonomy loop (inbox wake, failover)
@@ -34,7 +34,7 @@ munder-difflin/  (npm package "hello-markx")
 │   │   └── src/
 │   │       ├── main.tsx         # ReactDOM root
 │   │       ├── App.tsx          # top-level layout: title bar, OfficeFloor, sidebar, modals
-│   │       ├── components/      # 64 files — modals, panels, terminal pool/automation
+│   │       ├── components/      # 61 top-level files (75 with subdirectories)
 │   │       ├── store/           # zustand store, config types, terminalPoolPolicy
 │   │       ├── hooks/           # useHive (autonomy glue), usePtyParser, useRestoreTeam
 │   │       ├── scene/office/    # Pixi.js isometric office floor
@@ -45,7 +45,7 @@ munder-difflin/  (npm package "hello-markx")
 │   │       ├── markdown/        # markdown rendering helpers
 │   │       ├── design/          # tokens, theme, global.css
 │   │       └── assets/          # images/fonts bundled into the renderer
-│   └── shared/                  # 19 files — types/logic imported by 2+ processes
+│   └── shared/                  # 21 files — types/logic imported by 2+ processes
 │       ├── agentProvider.ts     # provider (claude/codex/grok/…) capability table
 │       ├── claudeAccounts.ts / claudeAccountPool.ts
 │       ├── triggers.ts          # scheduled/webhook/context trigger config shapes
@@ -148,7 +148,7 @@ munder-difflin/  (npm package "hello-markx")
 - `src/main/hive.ts`: agent messaging, task ledger, git committer, provisioning
 - `src/main/delivery.ts`: autonomy loop (inbox wake, failover)
 - `src/main/pty.ts`: terminal session management
-- `src/renderer/src/hooks/useHive.ts`: renderer-side MD-queue drain + hook-driven state
+- `src/renderer/src/hooks/useHive.ts`: hook-driven state + the delivery veto it reports up. The MD-queue drain moved to `src/main/delivery.ts` in Phase 1 plan 01-08
 - `src/renderer/src/store/store.ts`: zustand state shape + actions
 
 **Testing:**
@@ -201,7 +201,9 @@ munder-difflin/  (npm package "hello-markx")
 **New store slice/state:**
 - `src/renderer/src/store/store.ts` — extend the `State` interface and the
   `create<State>((set) => ({...}))` initializer; keep derived/ephemeral fields
-  commented as such (existing convention, see `Agent.blockedOnGod`)
+  commented as such (existing convention, see `Agent.waitingOnGod`, `store.ts:61`
+  — this used to cite `Agent.blockedOnGod`, which does not exist anywhere in
+  `src/` or `test/`)
 
 **New office visual (character, sprite, tile behavior):**
 - `src/renderer/src/scene/office/` — follow the existing split (`Character.ts`

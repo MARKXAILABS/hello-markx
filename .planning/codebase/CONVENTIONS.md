@@ -28,13 +28,15 @@
 - **No formatter configured.** No `.prettierrc*`, no `prettier` dependency, no format-on-save config anywhere in the repo. Formatting is by convention/eye, not enforced.
 
 **Linting:**
-- **No linter configured.** No `.eslintrc*`, `eslint.config.*`, no `eslint` package in `package.json` dependencies. There is no `npm run lint` script.
-- Despite this, **13 orphaned `eslint-disable` comments** remain in source from before ESLint was removed (or never wired up):
-  - `src/main/knowledge.ts:22`, `src/main/nodeInstall.ts:58`, `src/main/slack.ts:30` — `@typescript-eslint/no-var-requires` / `no-require-imports`
-  - `src/renderer/src/ide/monaco.ts:29` — `@typescript-eslint/no-explicit-any`
-  - Seven `react-hooks/exhaustive-deps` disables in renderer components/hooks: `GitTab.tsx:84`, `MemoryGraphPanel.tsx:108`, `OnboardingWizard.tsx:179`, `TerminalView.tsx:80`, `triggers/SchedulesSection.tsx:184`, `triggers/WebhooksSection.tsx:149`, `hooks/useRestoreTeam.ts:252`, `ide/IdePanel.tsx:278`, `realtime/CompletionToast.tsx:80`
-  - These comments are inert (no linter reads them) — do not treat their presence as evidence a rule is enforced. If adding a linter, audit these sites first; several mark real intentional dependency-array omissions.
-- The only enforced gate is the **TypeScript compiler** in `strict: true` mode (`tsconfig.node.json`, `tsconfig.web.json`), run via `npm run typecheck` (`tsc --noEmit`, split into a node project and a web project). This is a hard CI gate (`.github/workflows/ci.yml`, `typecheck` job) — treat type errors as build breaks, since there is no separate lint gate to catch style/logic issues.
+- **ESLint 9 flat config**, `eslint.config.js`, wired as `npm run lint` → `eslint . --max-warnings 0`. Landed by Phase 1 plan 01-21. Exactly **two rules** are enabled, both written longhand with no preset spread anywhere: `react-hooks/rules-of-hooks` and `react-hooks/exhaustive-deps`. That is deliberate — `eslint-plugin-react-hooks` 7.x's `configs.flat.recommended` carries sixteen rules, fourteen of them React Compiler rules mostly at `error`, and the surface is pinned by a test that asserts through ESLint's **own resolver** rather than by grepping the config source.
+- **The 9.x pin is forced, and it is a recorded cost.** `package.json` `engines` is `">=20 <23"`, which admits Node 20.0–20.18 and 22.0–22.12; ESLint 10 refuses to run on those. A gate a contributor cannot run locally is the defect this requirement exists to close. npm flags the whole 9.x line deprecated — a maintenance dist-tag policy, not a security advisory. Unblocking it is a package-wide change: widen `engines.node`, re-check the `">=X <Y"` parser in `test/ci-config.test.cjs`, then `npm i -D eslint@10`.
+- **The orphaned disables are resolved.** They were 13 inert comments (no linter read them) at the start of Phase 1. All were decided by the resolver, never by reading code: the 4 `@typescript-eslint/*` disables are **deleted** (that plugin is not installed, so each was itself an ERROR — "Definition for rule not found"), one dead directive was deleted, and the rest are live suppressions each carrying a reviewed reason. **Re-derived at wave 9, not carried forward:**
+  - `grep -rc "eslint-disable" src/` sums to **11**
+  - `grep -rc "react-hooks/exhaustive-deps" src/` sums to **11** — every remaining disable is one
+  - `grep -rc "@typescript-eslint" src/` sums to **0**
+  - the eleven sites: `components/agentGroups.ts`, `components/GitTab.tsx`, `components/MemoryGraphPanel.tsx`, `components/OnboardingWizard.tsx`, `components/TerminalView.tsx`, `components/triggers/SchedulesSection.tsx`, `components/triggers/WebhooksSection.tsx`, `hooks/useHive.ts`, `hooks/useRestoreTeam.ts`, `ide/IdePanel.tsx`, `scene/office/OfficeFloor.tsx`
+  - the count went **9 → 11** rather than down, because three suppressions were *added* where the rule's own remedy introduces a defect, and one real stale-closure bug was fixed at source so its finding disappeared with its dependency. A suppression here is a decision with a reason beside it, not a silencer.
+- The **TypeScript compiler** in `strict: true` mode (`tsconfig.node.json`, `tsconfig.web.json`) remains the other hard gate, run via `npm run typecheck` (`tsc --noEmit`, split into a node project and a web project). Both gates are hard: `.github/workflows/ci.yml`'s `typecheck` job runs the lint step, and neither the step nor the job may swallow it.
 
 ## Import Organization
 
@@ -98,7 +100,9 @@ When writing code here: if a piece of logic exists because of a bug, a race, a p
 
 ## Module Design
 
-**Exports:** Named exports throughout — no default exports observed in `src/main` or `src/shared`. React components use default exports in `.tsx` files per convention (implied by React/Vite tooling) but shared logic and main-process modules are named-export only, which is what lets tests destructure exactly the functions they need: `const { safeJoin, isWithinRoots, isAllowedExternalUrl } = loadTs('src/main/fs.ts')`.
+**Exports:** Named exports throughout — **including `.tsx`**, with no exceptions anywhere in the repo. Measured 2026-08-21: `grep -rl "export default" src/renderer/src --include=*.tsx | wc -l` returns **0**, against 75 `.tsx` files (63 of them under `components/`). Named-export-only is also what lets tests destructure exactly the functions they need: `const { safeJoin, isWithinRoots, isAllowedExternalUrl } = loadTs('src/main/fs.ts')`.
+
+> **Corrected 2026-08-21.** This entry used to say the opposite for `.tsx` — that renderer components followed a default-export convention, *"implied by React/Vite tooling"*. It was inferred from the tooling rather than measured, and it was never true of this repo. It is precisely the shape of claim a downstream agent follows into expecting `.default` on every import and getting `undefined`, in a document those agents are told to read as canonical. Re-measure before restating it.
 
 **Barrel Files:** Not used. No `index.ts` re-export barrels found in `src/main` or `src/shared` — each module is imported directly by path.
 

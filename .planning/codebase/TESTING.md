@@ -26,7 +26,7 @@ npm run test:focused  # node --test <hand-listed 33 files> — fast subset for t
 
 **Naming:** `<subsystem-or-concern>.test.cjs`, kebab-case. Not a strict 1:1 mapping to source filenames — grouped by concern/issue instead. Example: `src/main/hive.ts` alone is covered by at least `hive-durability.test.cjs`, `hive-protocol-v2.test.cjs`, `hive-cwd.test.cjs`, `hive-task-mutation.test.cjs`, `hive-hook-node.test.cjs`, `hive-roster-injection.test.cjs`, `hive-runtime-path.test.cjs`, `hive-windows-prompt.test.cjs`.
 
-**Structure:** Flat directory, 55 test files, ~466 individual `test(...)` cases, no subdirectories, no per-suite folders.
+**Structure:** Flat directory, **60 test files, 592 individual `test(...)` cases**, no subdirectories, no per-suite folders. Re-derived at wave 9 of Phase 1 (`ls test/*.test.cjs | wc -l`; `grep -rhc "^test(" test/*.test.cjs` summed) — it read "55 files, ~466 cases", which was true before Phase 1 added five files.
 
 ## The Key Piece: `test/load-ts.cjs`
 
@@ -98,7 +98,7 @@ function tempDir(t, prefix) {
 ```
 Note the `realpathSync` wrap — done specifically so macOS's `/var` → `/private/var` symlink doesn't make every path-containment assertion an accidental symlink test.
 
-**Platform guards:** `t.skip('reason')` is used for tests that cannot run in the current environment (e.g. `test/main-hardening.test.cjs`'s symlink test skips on a machine that refuses to create symlinks). These are the suite's only 2 skips, both POSIX-only guards — not failures, not disabled tests.
+**Platform guards:** `t.skip('reason')` is used for tests that cannot run in the current environment (e.g. `test/main-hardening.test.cjs`'s symlink test skips on a machine that refuses to create symlinks). There are **4** such skips, all `{ skip: !POSIX }` guards, and they appear on **win32 only** — the counters read `# skipped 4` on Windows and `# skipped 0` on ubuntu and macOS. By name: two in `test/hive-hook-node.test.cjs` (*a hook fires with NO node on PATH*; *`node` resolves and RUNS with no node on PATH*) and two in `test/hook-auth-roundtrip.test.cjs` (*the real shim authenticates to the real hook server*; *a shim with no token is still rejected*). A fifth appears on any host lacking symlink privilege (`test/main-hardening.test.cjs`). Not failures, not disabled tests — but treat the number as a **ceiling, not a floor**: `node --test` counts skips in its total and exits `0` when every test in a file is skipped, so a `>=` clause on this number lets a whole wave's work go green while skipped.
 
 ## Mocking
 
@@ -150,7 +150,7 @@ const card = (id, extra = {}) => Object.assign({ id, title: id, status: 'todo', 
 
 **View Coverage:** Not applicable — not measured. Coverage confidence instead comes from the CI matrix passing on all 3 platforms plus the explicit "no mocking the thing under test" discipline above.
 
-**Actual current state** (verified by running `npm test` in this environment): **423 tests, 421 pass, 0 fail, 2 skipped** — matching `.github/workflows/ci.yml`'s CI matrix result. `CONTRIBUTING.md` still documents an older "11 tests fail on Windows, non-blocking" baseline; that note is now stale — `ci.yml`'s current comments state all three platforms (ubuntu/windows/macos) are **hard gates with no `continue-on-error`**, and that the 11-failure baseline was root-caused (7 real Windows source bugs fixed: `#58` `expandTilde` drive-letter bug, `#60` Codex remote endpoint backslash bug, `#57` unverified MSI checksum; 4 were genuine test bugs) rather than waived. Treat `ci.yml` as the source of truth over `CONTRIBUTING.md`'s stale paragraph if the two ever disagree again.
+**Actual current state** (verified by running `node --test --test-reporter=tap test/*.test.cjs` at wave 9 of Phase 1, on win32): **535 tests, 531 pass, 0 fail, 4 skipped, 0 todo**. It read "423 / 421 / 0 / 2" before Phase 1, and matched CI then. It matches `.github/workflows/ci.yml`'s CI matrix result now too, on PR #77. `CONTRIBUTING.md` still documents an older "11 tests fail on Windows, non-blocking" baseline; that note is now stale — `ci.yml`'s current comments state all three platforms (ubuntu/windows/macos) are **hard gates with no `continue-on-error`**, and that the 11-failure baseline was root-caused (7 real Windows source bugs fixed: `#58` `expandTilde` drive-letter bug, `#60` Codex remote endpoint backslash bug, `#57` unverified MSI checksum; 4 were genuine test bugs) rather than waived. Treat `ci.yml` as the source of truth over `CONTRIBUTING.md`'s stale paragraph if the two ever disagree again.
 
 ## Test Types
 

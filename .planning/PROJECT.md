@@ -93,9 +93,13 @@ if the office quietly loses an agent's hour of work or stalls without telling yo
 
 ## Constraints
 
-- **Tech stack**: Electron 32 (end-of-life — Chromium 128, outside the latest-3 support
-  window, no CVE backports), React 18, node-pty, Pixi.js, xterm.js, better-sqlite3. The
-  bump to Electron 38+ is real work, not a version string.
+- **Tech stack**: Electron 43.4.1 (Chromium 150, Node 24.18.1 — inside the latest-3 support
+  window), React 18, node-pty, Pixi.js, xterm.js, better-sqlite3. The bump off the end-of-life
+  32.x line landed in Phase 1 plan 01-01 and was real work, not a version string: it carried the native
+  rebuild of `node-pty` and `better-sqlite3` and `electron-builder@26`. Read the supported-major
+  bar as **the latest-3 window as of the current date**, never as a frozen number — "38+" was
+  written into this list when 38 was current and was already end-of-life by the time the bump
+  ran, which is exactly how a version constraint licenses shipping the defect it exists to stop.
 - **Runtime**: Node 22 is required for anything native. Node 24 has no better-sqlite3
   prebuild and breaks node-pty's winpty gyp. Pinned in `engines` and `.nvmrc`; CI uses 22.
 - **Lockfile**: `package-lock.json` must be written by **npm 10**, never the npm 11 that

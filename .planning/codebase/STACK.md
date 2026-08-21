@@ -15,7 +15,7 @@
 
 **Environment:**
 - Node.js 22, pinned three separate ways: `package.json` `engines: ">=20 <23"`, `.nvmrc` = `22`, and `env.NODE_VERSION: "22"` in every GitHub Actions workflow (`ci.yml`, `e2e.yml`, `release.yml`). Node 24 is explicitly excluded — it ships no `better-sqlite3` prebuild and breaks `node-pty`'s winpty gyp build on Windows (documented inline in `ci.yml` and in `CONTRIBUTING.md`).
-- Electron 32.3.3 (resolved; `package.json` pins `^32.2.0`) — bundles Node 20 internally for the main process (relevant to `fetch`/`FormData` availability noted in `src/main/freeflow.ts`).
+- Electron 43.4.1 (resolved; `package.json` pins `^43.4.1`) — bundles **Node 24.18.1** and Chromium 150 internally for the main process (relevant to `fetch`/`FormData` availability noted in `src/main/freeflow.ts`). Re-derived from the installed binary at wave 9 of Phase 1, not carried forward: `ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron.exe -e "console.log(process.versions)"` → `node=24.18.1 chrome=150.0.7871.224 electron=43.4.1`. Note the split this creates and do not conflate the two numbers: the **build** toolchain is pinned to Node 22 (above), while the **shipped runtime under the main process** is Electron's own Node 24.
 
 **Package Manager:**
 - npm (lockfile: `package-lock.json`, present, 454KB)
@@ -24,7 +24,7 @@
 ## Frameworks
 
 **Core:**
-- Electron 32.3.3 — desktop shell; three-process split (main/preload/renderer) built by `electron-vite`
+- Electron 43.4.1 — desktop shell; three-process split (main/preload/renderer) built by `electron-vite`
 - React 18.3.1 + `react-dom` 18.3.1 — renderer UI (`src/renderer/src`)
 - Zustand 4.5.7 — renderer state management
 - `node-pty` 1.1.0 — PTY spawning for agent CLIs (`src/main/pty.ts`)

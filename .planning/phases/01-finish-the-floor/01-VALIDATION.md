@@ -89,31 +89,31 @@ CI link:**
 
 | Req | Behaviour to prove | Test type | Automated command | Test file status |
 |-----|-------------------|-----------|-------------------|------------------|
-| FLOOR-01 | `autoMode` renders on the agent card | static render | `node --test test/renderer-components.test.cjs` | ❌ W0 — needs W1 loader |
+| FLOOR-01 | `autoMode` renders on the agent card | static render | `node --test test/renderer-components.test.cjs` | ✅ W0 landed (plan 22) |
 | FLOOR-02 | queue-drain + quiesce run in main with no window | unit (DI harness) | `node --test test/delivery-main.test.cjs` | ✅ extend |
-| FLOOR-02 | no doc promises a dead code path | repo-fact | `node --test test/repo-claims.test.cjs` | ❌ W0 |
+| FLOOR-02 | no doc promises a dead code path | repo-fact | `node --test test/repo-claims.test.cjs` | ✅ W0 landed |
 | FLOOR-03 | 3-platform suite green on Electron 43 | full suite | the draft PR's three `Test (os)` rows via `gh pr checks` | ✅ `ci.yml` via the PR (a branch push triggers nothing) |
 | FLOOR-03 | the launched app really is Electron ≥43 | e2e | `npm run e2e` (D-10) | ✅ extend `e2e/smoke.spec.ts` |
 | FLOOR-03 | real PTY spawns; real `better-sqlite3` write lands on Windows | **live (D-09)** | operator run of the built app | — |
 | FLOOR-04 | a secret in an agent file never reaches `git log -p` | integration (real temp git repo) | `node --test test/hive-durability.test.cjs` | ✅ extend — already drives real `git` |
-| FLOOR-05 | `openLogs` exposed in preload and reachable from Settings | repo-fact + static render | `test/repo-claims.test.cjs` | ❌ W0 |
+| FLOOR-05 | `openLogs` exposed in preload and reachable from Settings | repo-fact + static render | `test/repo-claims.test.cjs` | ✅ W0 landed |
 | FLOOR-06 | attestation step present with correct permissions | repo-fact (YAML parse) | `node --test test/ci-config.test.cjs` | ✅ extend |
 | FLOOR-06 | a published artifact verifies | **live** | `gh attestation verify <file> --repo MARKXAILABS/hello-markx` | — |
-| FLOOR-07 | FTS5 table created and queryable | integration (**real** SQLite handle) | `node --test test/db-fts.test.cjs` | ❌ W0 — `FakeDatabase` cannot serve this |
-| FLOOR-07 | scope surfaced in `MemoryPanel`; dead preload exports gone | static render + repo-fact | `test/renderer-components.test.cjs`, `test/repo-claims.test.cjs` | ❌ W0 |
+| FLOOR-07 | FTS5 table created and queryable | integration (**real** SQLite handle) | `node --test test/db-fts.test.cjs` | ✅ W0 landed (plan 10) — a real SQLite handle, `# skipped 0` |
+| FLOOR-07 | scope surfaced in `MemoryPanel`; dead preload exports gone | static render + repo-fact | `test/renderer-components.test.cjs`, `test/repo-claims.test.cjs` | ✅ W0 landed |
 | FLOOR-08 | a card finished while everyone is busy is reviewed on a later sweep | unit | `node --test test/hive-protocol-v2.test.cjs` | ✅ extend |
 | FLOOR-09 | proxy-tier (qwen/crush) spend reaches `getAgentUsage` and can trip the breaker | unit | `node --test test/engine-parity.test.cjs` | ✅ extend |
 | FLOOR-10 | an over-cap card reaches `constrained` — **after ≥2 beats** | unit (fake clock) | `node --test test/breaker.test.cjs` | ✅ exists — extend |
-| FLOOR-11 | a single `hiveTasks` timer; no PTY-byte roster re-render | repo-fact | `test/repo-claims.test.cjs` | ❌ W0 |
+| FLOOR-11 | a single `hiveTasks` timer; no PTY-byte roster re-render | repo-fact | `test/repo-claims.test.cjs` | ✅ W0 landed |
 | FLOOR-11 | terminal pool cap + orphan sweep on every drop path | unit (pure) | `node --test test/terminal-*.test.cjs` | ✅ `terminalPoolPolicy` covered |
-| FLOOR-12 | no text token below 14px | repo-fact (parse `tokens.css`) | `test/repo-claims.test.cjs` | ❌ W0 |
-| FLOOR-12 | every icon-only `<button>` has an `aria-label` | repo-fact (icon-only **rule** assertion — never a ratio or a count; `01-UI-SPEC.md:329-343` is binding and states a ratio test *would be wrong*, because adding `aria-label` to a text button overrides its visible label) | `test/repo-claims.test.cjs` | ❌ W0 |
-| FLOOR-13 | the four renderings agree on the field set, cost included | static render | `test/renderer-components.test.cjs` | ❌ W0 |
+| FLOOR-12 | no text token below 14px | repo-fact (parse `tokens.css`) | `test/repo-claims.test.cjs` | ✅ W0 landed |
+| FLOOR-12 | every icon-only `<button>` has an `aria-label` | repo-fact (icon-only **rule** assertion — never a ratio or a count; `01-UI-SPEC.md:329-343` is binding and states a ratio test *would be wrong*, because adding `aria-label` to a text button overrides its visible label) | `test/repo-claims.test.cjs` | ✅ W0 landed |
+| FLOOR-13 | the four renderings agree on the field set, cost included | static render | `test/renderer-components.test.cjs` | ✅ W0 landed |
 | FLOOR-13 | `sidebarWidth` re-clamps on resize | unit (pure clamp fn) | `node --test test/renderer-runstate.test.cjs` | ✅ extend — extract clamp first |
-| FLOOR-14 | a blocked non-Claude agent produces a notify call | unit (DI `notify` fake) | `node --test test/hooks-notify.test.cjs` | ❌ W0 |
-| FLOOR-15 | 3–5 presentational components render to expected markup | static render | `node --test test/renderer-components.test.cjs` | ❌ W0 |
+| FLOOR-14 | a blocked non-Claude agent produces a notify call | unit (DI `notify` fake) | `node --test test/hooks-notify.test.cjs` | ✅ W0 landed |
+| FLOOR-15 | 3–5 presentational components render to expected markup | static render | `node --test test/renderer-components.test.cjs` | ✅ W0 landed |
 | FLOOR-16 | lint is a hard gate at zero warnings | repo-fact + live | `test/ci-config.test.cjs` asserts step + flag; `npm run lint` (local install — never bare `npx eslint`) | ✅ extend / live |
-| FLOOR-17 | bug template asks only for logs that exist; ADRs present | repo-fact | `test/repo-claims.test.cjs` | ❌ W0 |
+| FLOOR-17 | bug template asks only for logs that exist; ADRs present | repo-fact | `test/repo-claims.test.cjs` | ✅ W0 landed |
 | FLOOR-18 | `capabilityLine` declares the Windows Codex gap | unit | `node --test test/engine-parity.test.cjs` | ✅ extend |
 | GATE-01 | agent A's token carrying `agent_id: 'B'` surfaces as A, or is dropped | integration (**real** socket / named pipe) | `node --test test/net-binding.test.cjs` | ✅ extend (D-16) |
 | GATE-01 | the floor-wide `HIVE_SOCK_TOKEN` assignment is gone | repo-fact | `test/net-binding.test.cjs` | ✅ extend |
@@ -154,13 +154,13 @@ Test infrastructure that must exist before the requirements depending on it:
       `<div class="w">hi markx</div><span>b</span>` through `renderToStaticMarkup` with no
       `React` binding in scope.
       Unblocks FLOOR-01, FLOOR-07 (panel), FLOOR-13, FLOOR-15.
-- [ ] `test/repo-claims.test.cjs` — the D-45 repo-fact accumulator, following the existing
+- [x] `test/repo-claims.test.cjs` — **21 tests, 0 fail, 0 skipped at wave 9.** The D-45 repo-fact accumulator, following the existing
       `test/ci-config.test.cjs` / `test/main-hardening.test.cjs` / `test/engine-parity.test.cjs`
       precedent. Accumulated by **plan 05 (wave 2) → plan 07 (wave 3) → plan 10 (wave 5)**, and
       **asserted whole by plan 23 (wave 9)**. This file is what turns the end-of-phase sweep into
       `npm test` plus one `gh` query.
-- [ ] `test/renderer-components.test.cjs` — the `renderToStaticMarkup` harness (D-24). **Plan 22, wave 8.**
-- [ ] `test/db-fts.test.cjs` — needs a **real** SQLite handle; `test/config-secrets.test.cjs`'s
+- [x] `test/renderer-components.test.cjs` — **6 tests, 0 fail, 0 skipped.** The `renderToStaticMarkup` harness (D-24). **Plan 22, wave 8.**
+- [x] `test/db-fts.test.cjs` — **6 pass, 0 fail, 0 skipped, and `grep -cE ".skip(|.todo(|skip:|todo:" test/db-fts.test.cjs` → `0`.** Needs a **real** SQLite handle; `test/config-secrets.test.cjs`'s
       in-memory `FakeDatabase` has no FTS5 and cannot serve it. **Plan 10, wave 5.**
       **No `better-sqlite3` rebuild step is budgeted, and none may be added.** 13.0.3 is N-API,
       ships eight prebuilds and declares no install script, so `npm ci --ignore-scripts` leaves a
@@ -168,7 +168,7 @@ Test infrastructure that must exist before the requirements depending on it:
       synthesise a `node-gyp rebuild`, which CI can only satisfy on Linux (`setup-python` is pinned
       there only). Plan 01 task 2 and plan 10 both assert
       `grep -c "npm rebuild better-sqlite3" .github/workflows/ci.yml` returns `0`.
-- [ ] `test/hooks-notify.test.cjs` — or extend an existing hooks test — with a DI `notify` fake
+- [x] `test/hooks-notify.test.cjs` — **6 pass, 0 fail, 0 skipped.** Or extend an existing hooks test — with a DI `notify` fake
       for FLOOR-14. **Plan 13, wave 6.**
 - [x] `test/breaker.test.cjs` — **verified present.** Extend rather than create.
 - [x] No framework install needed. No coverage tool exists and none is being added — confidence
@@ -190,12 +190,42 @@ Test infrastructure that must exist before the requirements depending on it:
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an `<automated>` verify or a named Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without an automated verify
-- [ ] Wave 0 covers all ❌ references above
-- [ ] No watch-mode flags anywhere
-- [ ] D-09 live Windows run recorded (FLOOR-03 cannot close without it)
-- [ ] D-10 Electron-version assertion present in `e2e/smoke.spec.ts`
-- [ ] `nyquist_compliant: true` set in frontmatter
+Signed off item by item at wave 9 (2026-08-21). Every tick carries the command that
+produced it. **Two are NOT ticked, and the phase is not signed off because of them** —
+see the two entries marked GAP.
+
+- [x] **All tasks have an `<automated>` verify or a named Wave 0 dependency.**
+      Across all 23 plans: **77 tasks, 72 carrying `<automated>`**. The five that do not
+      are exactly the five `checkpoint:*` tasks (01-01 t4, 01-08 t4, 01-12 t4, 01-21 t4,
+      01-23 t4), each of which carries a `<human-check>` instead — which is the point of a
+      checkpoint. No `type="auto"` task anywhere in the phase lacks an automated verify.
+- [x] **Sampling continuity: no 3 consecutive tasks without an automated verify.**
+      Follows from the line above: the five non-automated tasks sit in five different
+      plans, so the longest run without an automated verify is one.
+- [x] **Wave 0 covers all ❌ references above.** All four outstanding Wave 0 files exist
+      and run green — `repo-claims` 21/0/0, `renderer-components` 6/0/0, `db-fts` 6/0/0,
+      `hooks-notify` 6/0/0 (pass/fail/skipped). The twelve `❌ W0` cells in the
+      Per-Requirement Verification Map are flipped to ✅ in this pass.
+- [x] **No watch-mode flags anywhere.**
+      `grep -rnE "--watch|--watchAll|watch: true" package.json .github/workflows/ e2e/ test/`
+      → empty.
+- [ ] **GAP — D-09's live Windows run is NOT recorded, and FLOOR-03 therefore does not
+      close.** `.planning/phases/01-finish-the-floor/01-01-SUMMARY.md` **does not exist**:
+      21 SUMMARYs for 22 completed plans. Plan 01-01's code landed (`package.json` pins
+      `^43.4.1`, three-platform CI green) but its blocking checkpoint — a human launching
+      `distwin-unpackedHello MarkX.exe` and confirming a real PTY echo, a persisted
+      setting surviving a relaunch, and a clean visual pass — has never been run. This
+      file states plainly that CI is **not** acceptable closure evidence here: all 535 unit
+      tests run with `electron` stubbed and are structurally incapable of failing on an
+      Electron-version regression. **Owner: the operator.**
+- [x] **D-10 Electron-version assertion present in `e2e/smoke.spec.ts`.**
+      `e2e/smoke.spec.ts:188` — *"the launched app really is Electron 43 or newer"*,
+      asserting `Number(versions.electron.split('.')[0])` `.toBeGreaterThanOrEqual(43)`
+      with the native ABI in the failure message. Green as the
+      `Electron smoke (ubuntu-latest)` job on PR #77.
+- [ ] **GAP — `nyquist_compliant` stays `false`, and `status` stays `draft`.**
+      Conditional on the item above. Setting either while D-09 is unrun would be exactly
+      the "green checklist that overstates reality" this phase exists to remove. Flip both
+      the moment 01-01's operator run is recorded — nothing else is outstanding here.
 
 **Approval:** pending

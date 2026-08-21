@@ -87,12 +87,12 @@ stream, retrieval, reflection, and planning.
    working, guarded by `stop_hook_active` to prevent infinite loops. **Ships, and
    it ships GUARDED** — the guards are the decision, not a reversal of it.
 
-   > The Stop boundary calls the drain (`hooks.ts:662` → `DeliveryService.drainAtStop`,
-   > `delivery.ts:262`, wired at `index.ts:480`) and returns
+   > The Stop boundary calls the drain (`hooks.ts:663` → `DeliveryService.drainAtStop`,
+   > `delivery.ts:604`, wired at `index.ts:545`) and returns
    > `{decision:'block', reason}` when the agent has unread mail — a forced
    > continuation, which is the documented Claude/Codex contract. With no mail, or
    > with a guard standing, it answers `{}`. `stop_hook_active` is screened first
-   > (`hooks.ts:645`), so a continuation can never re-enter its own boundary.
+   > (`hooks.ts:646`), so a continuation can never re-enter its own boundary.
    >
    > The version that was removed was the UNGUARDED one, for a real reason: turning
    > unread mail into a forced next turn bypassed the terminal-draft and HITL gates
@@ -290,9 +290,9 @@ is the primary control surface — tune the prompt, not the code.
 | Risk | Mitigation |
 | --- | --- |
 | `index.lock` corruption | Single committer (main process), retry+backoff, stale-lock cleanup |
-| Infinite Stop-hook loop | Live risk, actively guarded (§2.5): a drain with mail returns `{decision:'block', reason}`. `stop_hook_active` is screened first (`hooks.ts:645`) so a continuation cannot re-enter its own boundary, and the `hops` cap bounds the chain |
+| Infinite Stop-hook loop | Live risk, actively guarded (§2.5): a drain with mail returns `{decision:'block', reason}`. `stop_hook_active` is screened first (`hooks.ts:646`) so a continuation cannot re-enter its own boundary, and the `hops` cap bounds the chain |
 | Two agents ping-ponging | Only request/query/propose obligate replies; hop cap → god escalates |
-| Reprocessing messages | Agents move handled messages to `inbox/.done/` — instructed in the prompt, not enforced. Dedup does not depend on that: `cursor.json` is advanced by the drain (`hive.ts:1338`) and main holds `delivery.ts`'s `seenSet`, pruned against the live inbox each tick — neither dies with the window |
+| Reprocessing messages | Agents move handled messages to `inbox/.done/` — instructed in the prompt, not enforced. Dedup does not depend on that: `cursor.json` is advanced by the drain (`hive.ts:1375`) and main holds `delivery.ts`'s `seenSet`, pruned against the live inbox each tick — neither dies with the window |
 | `memory.md` unbounded growth | `reflect.ts` condensation (shipped). `log.jsonl` rotates one generation at 8 MB, `backups/` keeps the newest 20 — both gitignored. The **semantic palace** is still unbounded: nothing prunes it ([#16](https://github.com/MARKXAILABS/hello-markx/issues/16)) |
 | Modifying the user's repo with hooks | Write hooks to `<cwd>/.claude/settings.local.json` (gitignored convention) |
 

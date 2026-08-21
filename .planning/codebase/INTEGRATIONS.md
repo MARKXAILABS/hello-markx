@@ -48,7 +48,7 @@ So: 5 in-process HTTP servers + 1 in-process Unix-socket/named-pipe server + N p
 
 **Groq (two independent uses, both main-process-only to keep the key off the renderer and dodge CORS):**
 - `src/main/groq.ts` — chat completion (`https://api.groq.com/openai/v1/chat/completions`, model `llama-3.1-8b-instant`) for VDE AI-assist suggestion text; blocks payloads that look like they contain secrets before egress; 80,000-char prompt cap.
-- `src/main/freeflow.ts` — Whisper transcription (`https://api.groq.com/openai/v1/audio/transcriptions`, model `whisper-large-v3-turbo`) for voice dictation; 25 MB upload cap (Groq free-tier limit), multipart via native `FormData`/`Blob` (Electron 32 bundles Node 20's `undici`).
+- `src/main/freeflow.ts` — Whisper transcription (`https://api.groq.com/openai/v1/audio/transcriptions`, model `whisper-large-v3-turbo`) for voice dictation; 25 MB upload cap (Groq free-tier limit), multipart via native `FormData`/`Blob` (Electron 43 bundles Node 24's `undici`).
 
 **GitHub (three independent surfaces):**
 - `src/main/github.ts` — shells out to the `gh` CLI (`gh issue list --json …`, `gh run list --json …`) for the in-app issue/CI panel; degrades to an error result if `gh` isn't installed/authenticated, never throws.

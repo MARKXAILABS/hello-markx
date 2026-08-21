@@ -6,10 +6,10 @@
 
 | Issue | Landed | Actually remaining |
 | --- | --- | --- |
-| `#4` | the `permissions.deny` list in the per-agent settings | `autoMode` is **not** surfaced on the agent card — `grep autoMode src/renderer/src/components/AgentCard.tsx` is empty. It appears only in the modals and onboarding. Making it visible where an operator watches the agent was half the issue. |
-| `#5` | inbox-wake nudge and account failover moved to `src/main/delivery.ts` | the **queue-drain** (`useHive.ts` effect #4, via `queueDelivery.ts`) and the **idle-quiesce backstop** are still renderer-only, and the backstop's own comment notes both delivery paths are idle-gated by it |
-| `#10` | loopback binds, safeStorage secrets, hook-socket token, `localtunnel` deleted, secret scrub | `electron` is still `^32.2.0`; the 38+ bump never happened (see the EOL entry below) |
-| `#34` | `task_id` on ledger rows, `taskSpend()` | nothing consumes `taskSpend().over`, so the cap is **reported, never enforced** (see the "feature inert" entry below) |
+| `#4` | the `permissions.deny` list in the per-agent settings | **RESOLVED in Phase 1 plan 01-12.** `grep -c autoMode src/renderer/src/components/AgentCard.tsx` → `4`; the AUTO chip renders at `:291` and the card's `aria-label` folds the state in at `:187`. Was empty. |
+| `#5` | inbox-wake nudge and account failover moved to `src/main/delivery.ts` | **RESOLVED in Phase 1 plans 01-07 and 01-08.** The idle-quiesce backstop is `DeliveryService.quiesce()` (`delivery.ts:643`) on main's existing tick, and the queue-drain is `DeliveryService.drainQueue()` (`delivery.ts:518`) — `useHive.ts` effect #4 is deleted, and the pure policy moved to `src/shared/queueDelivery.ts` where both processes read it. |
+| `#10` | loopback binds, safeStorage secrets, hook-socket token, `localtunnel` deleted, secret scrub | **RESOLVED in Phase 1 plan 01-01** — `package.json` pins `"electron": "^43.4.1"` (Chromium 150, Node 24.18.1). But note the mapping error recorded in `REQUIREMENTS.md`: #10 carries **no** Electron clause at all; the end-of-life-Electron issue was #8, now closed. This row was itself a mis-mapping. |
+| `#34` | `task_id` on ledger rows, `taskSpend()` | **RESOLVED in Phase 1 plans 01-09 and 01-10.** `hive.budgetForAgent()` feeds the breaker beat at `index.ts:1635` and `breaker.ts:361` trips on `budget.tokens > budget.cap`. Stated precisely: `taskSpend().over` itself still has no direct caller — its two inputs do, and the same comparison is made one layer down, which is what lets the arm warn at a fraction of the cap instead of only firing at the cliff. |
 
 Take this as the standing rule for this document: a partially-landed fix is an open concern, not a closed one. Everything else below was independently re-verified against current source.
 
@@ -22,7 +22,7 @@ Take this as the standing rule for this document: a partially-landed fix is an o
 - Fix approach: continue the extraction-to-pure-function pattern already established by the hardening pass — pull handler bodies into named functions in topic files (`fs.ts`, `git.ts`, `slack.ts`, `webhook.ts`, etc.) and leave `index.ts` as thin `ipcMain.handle(name, wrapper)` registration.
 
 **`src/main/hive.ts` — a single 3,562-line god class:**
-- Issue: `export class HiveManager` opens at line 424 and runs to end of file (~3,100 lines in one class) — registry, board, task ledger, cost ledger, mail router, single-committer git, memory-mine ignore rules, and task-budget accounting are all methods on one object.
+- Issue: `export class HiveManager` opens at line 491 and closes at 3313 (~2.8k lines in one class; it does NOT run to end of file, and `ARCHITECTURE.md` was the one of the two that had the extent right) — registry, board, task ledger, cost ledger, mail router, single-committer git, memory-mine ignore rules, and task-budget accounting are all methods on one object.
 - Files: `src/main/hive.ts:424` (class start)
 - Impact: same testability problem as `index.ts` — `test/hive-task-mutation.test.cjs` has to instantiate the entire `HiveManager` (with a real temp-dir git repo) to exercise one narrow task-mutation regression, because there is no smaller seam to load independently.
 - Fix approach: split along the responsibilities already named in the class's own header comment (`src/main/hive.ts:1-18`) — registry/workspace, board/ledger, router, git-commit — into cooperating modules the way `fs.ts`/`git.ts` were split out of `index.ts`.
@@ -33,11 +33,12 @@ Take this as the standing rule for this document: a partially-landed fix is an o
 - Impact: style drift has no automated check; the disable comments are inert documentation with no linter to suppress.
 - Fix approach: adopt ESLint (flat config) or delete the 13 orphaned comments. Note: the rest of `#36`'s original claim — "no dependency automation, no npm audit" — is **already fixed**: `.github/dependabot.yml` exists and `.github/workflows/ci.yml:31-36` runs `npm audit --audit-level=high`. The `tools/copy-main-assets.cjs` duplication `#36` flagged is also gone (file no longer exists). The remaining minor duplication is `slack.ts`/`webhook.ts` each implementing their own `listen()` (`src/main/slack.ts:192`, `src/main/webhook.ts:257`) — both now correctly bind `127.0.0.1`, just not through a shared helper.
 
-**Electron 32.2.0 is end-of-life, and the bump has no open tracking issue:**
-- Issue: `package.json` pins `"electron": "^32.2.0"` (installed pulls Chromium 128) — outside Electron's latest-3 support window, no CVE backports.
-- Files: `package.json`
-- Impact: security patches for the Chromium/Node runtime under the app stop arriving. The window-hardening half of this (`will-navigate` guard, https-only open handler, `sandbox: true`) was fixed and closed as `#8`, whose own text says *"The Electron bump (38+) with `electron-builder@26` and a re-rebuild of `node-pty`/`better-sqlite3` is tracked separately"* — but no separate open issue for the version bump exists (`gh issue list --search electron` returns only the closed `#8` and closed `#55`/`#53` CI-native-binary issues).
-- Fix approach: file the bump as its own issue; budget for the native rebuild of `node-pty` and `better-sqlite3` against Electron 38+, plus `electron-builder@26`.
+**RESOLVED — Electron 32.2.0's end-of-life runtime (kept as history, not deleted):**
+- Was: `package.json` pinned `"electron": "^32.2.0"` (Chromium 128) — outside Electron's latest-3 support window, no CVE backports, so security patches for the runtime under the app had stopped arriving.
+- Now: `"electron": "^43.4.1"`, resolving to Electron 43.4.1 / Chromium 150 / Node 24.18.1. Landed by **Phase 1 plan 01-01**, with the native rebuild of `node-pty` and `better-sqlite3` and `electron-builder@26` that the bump actually required. Three-platform suite green.
+- Kept here deliberately: this file is what Phase 1's own premise is audited against, and a resolved concern deleted is a concern nobody can check was ever real.
+- The lesson worth keeping: `#8`'s text tracked the bump as *"38+"*, and 38 was itself end-of-life by the time anyone ran it. A supported-major bar written as a frozen number licenses shipping the exact defect it exists to stop. Read it as the latest-3 window as of the current date.
+- Still open, and NOT closed by the bump: `#8` said the bump was *"tracked separately"* and no separate issue was ever filed, so `FLOOR-03` traces to no open issue at all (`#10`, which `REQUIREMENTS.md` pointed at, carries no Electron clause). Recorded rather than repointed.
 
 **Knowledge graph is a TF keyword index, not a graph; still default-off; still no UI panel (issue #31, partially fixed):**
 - Issue: re-ingest duplication is fixed (`src/main/kg-core.cjs:317-341` — `findByFingerprint`/`contentHash` now makes re-ingest a no-op `{duplicate: true}` instead of minting a new `docId`), but the design doc's own roadmap items remain undone: it is still a plain keyword scorer over `index.jsonl` (`docs/design/knowledge-graph.md:45,191` names SQLite FTS5 as "the documented next step," not yet taken), `knowledgeGraph: { enabled: false }` is still the default (`src/main/config.ts:497`), and there is no renderer panel for it (`find src/renderer -iname "*knowledge*" -o -iname "*kg*"` → no results).

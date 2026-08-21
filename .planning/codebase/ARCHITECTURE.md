@@ -10,8 +10,8 @@
 │                        RENDERER (Chromium, React 18)                      │
 │  `src/renderer/src/`                                                      │
 │  App.tsx → OfficeFloor (Pixi.js) + sidebar panels + terminal pool         │
-│  zustand store (store.ts) · useHive.ts (MD-queue drain, hook-driven      │
-│  avatar state) · terminalPool.ts (one xterm per PTY, WebGL leasing)      │
+│  zustand store (store.ts) · useHive.ts (hook-driven avatar state,      │
+│  delivery VETO up to main) · terminalPool.ts (one xterm per PTY)       │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                  │ window.cth.* (contextBridge)
 ┌───────────────────────────────▼─────────────────────────────────────────┐
@@ -65,7 +65,7 @@ boundary as source (everything else crosses as serialized IPC payloads).
 | PersistStore | SQLite-backed durable app state (better-sqlite3) | `src/main/db.ts` |
 | Preload bridge | Renders ~160 IPC channels into a single `window.cth` object; the only file both processes' types flow through | `src/preload/index.ts` |
 | zustand store | Renderer's single source of truth: agents, MD message queues, UI state | `src/renderer/src/store/store.ts` |
-| useHive hook | Renderer-side glue: god-agent bootstrap, hook-driven avatar state, MD-queue drain (effect #4), veto reporting to main | `src/renderer/src/hooks/useHive.ts` |
+| useHive hook | Renderer-side glue: god-agent bootstrap, hook-driven avatar state, veto reporting to main. **It no longer owns the MD-queue drain** — effect #4 was deleted in Phase 1 plan 01-08 and `DeliveryService.drainQueue()` (`src/main/delivery.ts:518`) owns it, so the queue survives the window closing | `src/renderer/src/hooks/useHive.ts` |
 | terminalPool | Pooled xterm instances (one per live PTY), WebGL context leasing, LRU eviction, draft/picker automation guards | `src/renderer/src/components/terminalPool.ts` |
 | OfficeFloor | Pixi.js isometric scene: agents as characters at desks, message envelopes, thought/tool bubbles | `src/renderer/src/scene/office/OfficeFloor.tsx` |
 
@@ -93,9 +93,10 @@ with per-agent `inbox/`/`outbox/` directories that a router drains on a timer
   write plain files into their own directory. Main is the sole git committer
   (ADR-0004, `docs/adr/0004-single-committer-git.md`) and the sole router.
 - **One writer per PTY.** Automatic text is typed into a live agent's terminal
-  from exactly one place at a time — `useHive.ts` effect #4 for the renderer's MD
-  queue (composer/Slack-ingress messages), `DeliveryService` for main's inbox-wake
-  nudge and failover continuation. Both funnel through the same idle/draft/picker
+  from exactly one place — `DeliveryService` in main, for BOTH the renderer's MD
+  queue (composer/Slack-ingress messages, enqueued over IPC) and main's inbox-wake
+  nudge and failover continuation. `useHive.ts` effect #4 was DELETED in Phase 1
+  plan 01-08. Both paths funnel through the same idle/draft/picker
   gate described in `docs/message-queue.md` and ADR-0001
   (`docs/adr/0001-one-gate-for-pty-writes.md`).
 - **Main outlives the renderer for autonomy-critical state.** `DeliveryService`
@@ -148,8 +149,8 @@ with per-agent `inbox/`/`outbox/` directories that a router drains on a timer
 - Purpose: single client-side source of truth (zustand) and the effects that keep
   it synced with main-process reality
 - Location: `src/renderer/src/store/`, `src/renderer/src/hooks/`
-- Contains: `store.ts` (agents, MD message queues, UI state), `useHive.ts` (god
-  bootstrap, hook-driven avatar state, MD-queue drain, veto reporting), other
+- Contains: `store.ts` (agents, a READ-ONLY view of the MD queues, UI state), `useHive.ts` (god
+  bootstrap, hook-driven avatar state, veto reporting — the drain moved to main), other
   hooks (`usePtyParser.ts`, `useRestoreTeam.ts`)
 - Depends on: `window.cth` (preload), `src/shared/*`
 - Used by: `App.tsx` and nearly every component
@@ -169,9 +170,11 @@ with per-agent `inbox/`/`outbox/` directories that a router drains on a timer
 ### Primary request path — spawning an agent
 
 1. User submits **Add Agent** in the renderer (`src/renderer/src/components/AddAgentModal.tsx`)
-   → calls `window.cth.spawnAgent(opts)` (preload-exposed `pty:spawn` invoke).
-2. Main's `ipcMain.handle('pty:spawn', …)` (`src/main/index.ts:2870`) calls
-   `spawnAgentCore()` (`src/main/index.ts:2886`), which resolves the CLI command,
+   → calls `window.cth.spawnPty(opts)` (preload-exposed `pty:spawn` invoke,
+   `src/preload/index.ts:617`). **There is no `window.cth.spawnAgent`** — this
+   line named a method that has never existed on the bridge.
+2. Main's `ipcMain.handle('pty:spawn', …)` (`src/main/index.ts:2971`) calls
+   `spawnAgentCore()` (`src/main/index.ts:2987`), which resolves the CLI command,
    optionally allocates a git worktree (`git.ts`), provisions the agent's hive
    workspace via `HiveManager.ensureAgent()` (`src/main/hive.ts:734`) — writing
    `identity.md`, hook settings, MCP config, per-provider bridge files — then
@@ -197,9 +200,10 @@ with per-agent `inbox/`/`outbox/` directories that a router drains on a timer
    `flushCommit`, `src/main/hive.ts:2698-2762`) debounces and commits the change —
    see ADR-0004 (`docs/adr/0004-single-committer-git.md`).
 4. Delivery to a *live, idle* agent's terminal goes through `DeliveryService.tick()`
-   (`src/main/delivery.ts:236`) — the inbox wake nudge — or, if the agent is
+   (`src/main/delivery.ts:678`) — the inbox wake nudge — or, if the agent is
    mid-turn, through the guarded Stop-hook drain (`drainAtStop`,
-   `src/main/delivery.ts:216`), which advances `cursor.json` and hands back a
+   `src/main/delivery.ts:604`, called from `hooks.ts:663`), which advances
+   `cursor.json` (`hive.ts:1375`) and hands back a
    continuation prompt with no PTY write at all.
 5. Both paths emit `hive:delivered` to the renderer so the UI reflects what moved;
    see **Entry Points → main↔renderer delivery contract** below.
@@ -234,7 +238,7 @@ SQLite database via `PersistStore` (`src/main/db.ts`, app-level settings/usage).
 **HiveManager (`src/main/hive.ts`):**
 - Purpose: owns the on-disk hive — workspace provisioning, message routing, task
   ledger, single-committer git, per-provider hook/template installation
-- Examples: `src/main/hive.ts` (class `HiveManager`, ~2.3k lines, lines 424-2772)
+- Examples: `src/main/hive.ts` (class `HiveManager`, ~2.8k lines, lines 491-3313 at wave 9 of Phase 1)
 - Pattern: one large stateful class with clearly separable method clusters (see
   **Anti-Patterns**); template strings for on-disk shim files
   (`cth-hook.cjs`, `agy-hook.cjs`, the pi/opencode bridges, `hive-proxy.cjs`,
@@ -263,7 +267,7 @@ SQLite database via `PersistStore` (`src/main/db.ts`, app-level settings/usage).
   queues, breaker/context telemetry
 - Examples: `interface Agent` in `src/renderer/src/store/store.ts`
 - Pattern: plain data object held in zustand, mutated only through store actions;
-  ephemeral/derived fields (e.g. `blockedOnGod`) are explicitly commented as
+  ephemeral/derived fields (e.g. `waitingOnGod`, `store.ts:61`) are commented as
   never persisted
 
 **IPC channel (`namespace:action`):**
@@ -337,18 +341,26 @@ respawned). The renderer keeps exactly one input into that loop: a draft/picker
   long-lived subsystem (`HiveManager`, `PtyManager`, `DeliveryService`,
   `AccountPoolManager`) is otherwise a class instance constructed once at boot
   and closed over by the IPC handlers that use it.
-- **Circular imports:** None observed between `src/main/*` modules; `index.ts` is
-  the only file that imports the domain modules, and they do not import back from
-  it (dependencies flow one way, into `hive.ts`/`pty.ts`/etc. from `index.ts`, and
-  sideways only through explicitly passed callbacks, e.g. `ClosingTimeController`
-  taking `hive`, `control`, and closures for teardown).
+- **Circular imports: there is at least one, and this entry used to deny it.**
+  `src/main/config.ts:15` imports from `./integrations` and
+  `src/main/integrations.ts:28` imports back from `./config` — a real runtime
+  cycle. Measured 2026-08-21.
+- **`index.ts` is not the only file importing the domain modules either.**
+  `grep -rhoE "from '\./[a-zA-Z0-9_-]+'" src/main/*.ts --exclude=index.ts | wc -l`
+  returns **45** cross-module imports among `src/main/*.ts` with `index.ts`
+  excluded. Dependencies do *mostly* flow one way from `index.ts`, and callbacks
+  are still the main sideways seam (`ClosingTimeController` takes `hive`,
+  `control`, and closures for teardown) — but "none observed" was a claim about
+  something nobody had run a command against, in the document downstream agents
+  read as canonical. Re-measure before restating it.
 - **Process boundary is IPC-only.** Nothing outside `src/shared/*` may be
   imported by both main and renderer; everything else crosses as a serialized IPC
   payload through `src/preload/index.ts`.
 - **PTY writes are single-gated per writer.** See ADR-0001
   (`docs/adr/0001-one-gate-for-pty-writes.md`) — automatic text reaches a live
-  terminal through exactly one queue/drain per process (renderer's MD queue,
-  main's `DeliveryService`), never ad hoc.
+  terminal through exactly ONE gate — main's `DeliveryService`, which serializes
+  per PTY on `writeChains`. The renderer's own drain is DELETED, not left as a
+  fallback (Phase 1 plan 01-08), so there is no second writer.
 - **Git is single-committer.** See ADR-0004
   (`docs/adr/0004-single-committer-git.md`) — only `HiveManager` in the main
   process ever runs `git commit` against the hive repo.
@@ -371,7 +383,7 @@ have no owning module: the ephemeral-worker watcher + `spawn-requests/` queue
 (`src/main/index.ts:4942-5356`), the mission/context-trigger scheduler
 (`src/main/index.ts:871-1080`), Slack ingestion (`:1650-2050`), generic webhook
 ingestion (`:2050-2420`), window/floor management (`:2420-2814`), and
-`spawnAgentCore` (`:2886-3729`, ~850 lines).
+`spawnAgentCore` (`:2987-3444`, ~460 lines).
 
 **Why it's wrong:** Every one of those clusters is independently testable logic
 trapped behind Electron-only module load (unlike `delivery.ts`, which was
@@ -380,7 +392,7 @@ grepping a 5.6k-line file; two unrelated features touching nearby line ranges is
 a standing merge-conflict risk.
 
 **Do this instead — the extraction seams this file already implies:**
-- **Agent lifecycle/spawn:** `spawnAgentCore` (`:2886`), `teardownPty` (`:639`),
+- **Agent lifecycle/spawn:** `spawnAgentCore` (`:2987`), `teardownPty` (`:739`),
   `finalizeWorkerWorktree`/`finalizeAgentWorktree` (`:720`, `:770`) → a
   `spawnLifecycle.ts` module, following the same electron-free-where-possible
   pattern as `delivery.ts`.
@@ -403,7 +415,7 @@ a standing merge-conflict risk.
 
 ### HiveManager mixes four concerns in one class
 
-**What happens:** `src/main/hive.ts`'s `HiveManager` (lines 424-2772, ~2.3k
+**What happens:** `src/main/hive.ts`'s `HiveManager` (lines 491-3313, ~2.8k
 lines) combines workspace provisioning (`ensureAgent`, per-provider hook
 installers), message routing (`send`/`routeMessage`/`routeOnce`), the task ledger
 (`writeTasks`/`mutateTasks`), and the git committer (`commit`/`scheduleCommit`/

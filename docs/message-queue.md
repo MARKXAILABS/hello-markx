@@ -23,17 +23,25 @@ The short version of §1 — one writer, everyone else enqueues — is recorded 
 ## 1. One gate
 
 One place types automatic messages into a live agent's PTY: the **drain loop**,
-`useHive.ts` effect #4. Everything that wants to reach a running agent enqueues into
-the MD queue and lets the drain decide when.
+`DeliveryService.drainQueue()` (`src/main/delivery.ts:518`). Everything that wants
+to reach a running agent enqueues into the MD queue and lets the drain decide when.
 
-(The single exception is the god agent's boot sequence, `useHive.ts:284`, which
-writes its remote-control command and orientation prompt directly. That PTY was
-spawned milliseconds earlier and is covered by the boot-grace window, so there is no
-user draft it could land on.)
+> **Corrected 2026-08-21 — this section named a code path that no longer runs.**
+> The drain used to be `useHive.ts` effect #4, in the renderer. Phase 1 plan 01-08
+> **deleted** that effect — roughly 150 lines that died with every window — and moved
+> the queue and its drain into main, because a delivery path that stops when you close
+> the window is not autonomy (#5). The pure policy both processes read now lives in
+> `src/shared/queueDelivery.ts`. The renderer's drain was deleted rather than left as
+> a fallback, so there is still exactly one writer.
+
+(The single exception is the god agent's boot sequence in `useHive.ts`, which writes
+its remote-control command and orientation prompt directly. That PTY was spawned
+milliseconds earlier and is covered by the boot-grace window, so there is no user
+draft it could land on.)
 
 ```
 composer / Slack ingress ─┐
-inbox nudge (effect #3) ──┼──▶ enqueueMessage(agentId, text) ──▶ MD queue ──▶ drain (#4) ──▶ PTY
+inbox nudge (main tick) ──┼──▶ enqueue (over IPC) ──▶ MD queue (main) ──▶ drainQueue() ──▶ PTY
 scheduled /compact (#6) ──┘
 ```
 
@@ -44,8 +52,8 @@ together as one garbled prompt. Routing it through the queue means one loop owns
 every "is this terminal free?" decision, and the nudge needs no prompt logic of its
 own.
 
-The drain runs on every store change (debounced 200 ms, so a burst of PTY output
-coalesces) plus a 3 s backstop tick.
+The drain rides `DeliveryService`'s existing tick — the same one that carries the
+inbox wake and the idle-quiesce backstop. No new timer was added for it.
 
 ## 2. What the drain checks
 
@@ -151,5 +159,7 @@ there", not "is the queue blocked".
 |---|---|
 | `src/renderer/src/components/terminalAutomation.ts` | pure policy — blocks, expiry windows. No DOM, fully unit-tested (`test/terminal-automation.test.cjs`) |
 | `src/renderer/src/components/terminalPool.ts` | the pooled xterm per PTY; buffer reads, latches, `isTerminalAutomationSafe`, `hasTerminalDraft` |
-| `src/renderer/src/hooks/useHive.ts` | effect #3 inbox nudge (enqueues), effect #4 drain (the one writer), effect #6 scheduled `/compact` |
-| `src/renderer/src/store/store.ts` | the MD queues themselves + agent persistence |
+| `src/main/delivery.ts` | **the one writer** — `drainQueue()`, the inbox wake nudge, the idle-quiesce backstop, account failover. All on one tick |
+| `src/shared/queueDelivery.ts` | the pure drain policy both processes import — `nextForDelivery`, `noteAttempt`, `deliverWithAcknowledgement`, `MAX_QUEUED_PER_AGENT` |
+| `src/renderer/src/hooks/useHive.ts` | hook-driven avatar state, effect #6 scheduled `/compact`, and the delivery **veto** it reports up (`hive:deliveryVeto`) — the xterm buffer and the operator's keystrokes are the one fact only the renderer can see |
+| `src/renderer/src/store/store.ts` | a read-only view of the MD queues + agent persistence. The queue itself is a file main owns |
