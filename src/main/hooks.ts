@@ -72,6 +72,11 @@ import type { HiveManager } from './hive';
 import type { HarnessConfig } from './config';
 import type { ControlRegistry } from './control';
 import type { CircuitBreaker } from './breaker';
+// FLOOR-09 (#19): the TELEMETRY AgentUsageSample, deliberately — `usage.ts`
+// declares a second interface of the same name whose `sessionId`/`model` are
+// nullable, and `recordCostSample` takes this stricter one. The branch below
+// already satisfies it (it guards on a truthy session id and coerces the model).
+import type { AgentUsageSample } from './telemetry';
 import { estimateCostUsd } from './pricing';
 
 interface HookPayload {
@@ -205,7 +210,13 @@ export class HookServer {
      *  Optional so tests (and a hive-less run) get the old plain Stop. */
     private drainAtStop?: (agentId: string) => { block: boolean; reason?: string },
     /** #42 — put an agent in front of the human when they click its toast. */
-    private focus?: (agentId: string) => void
+    private focus?: (agentId: string) => void,
+    /** FLOOR-09 (#19) — the proxy tier's cost sink. `telemetry.recordCostSample`
+     *  in production (injected at index.ts's `new HookServer(...)`), omitted in
+     *  tests that don't care. Optional so the server still runs without it,
+     *  exactly like `breaker` and `control` above — and LAST, so no existing
+     *  call site or test has to move an argument. */
+    private recordCost?: (s: AgentUsageSample) => void
   ) {}
 
   start(): void {
@@ -544,26 +555,55 @@ export class HookServer {
     // response with usage. Its numbers are PER-RESPONSE DELTAS.
     //
     // RECORD-04 (#34) — WHY THE HAND-BUILT LEDGER ROW IS GONE FROM HERE.
-    // This branch used to call `this.hive.appendCostLedger({...})` directly with
-    // those deltas, while the ~30s beat (index.ts: `getAgentUsage(id)` →
-    // `appendCostLedger(sample)`) writes CUMULATIVE snapshots for everyone else.
+    // This branch used to call the hive's cost-ledger appender directly with
+    // those deltas, while the ~30s beat (index.ts: `getAgentUsage(id)` → that
+    // same appender) writes CUMULATIVE snapshots for everyone else.
     // One append-only file, two row semantics — and `taskSpend()` summed both,
     // over-counting roughly quadratically. `src/main/db.ts:44` states the
     // contract the beat obeys and this path broke, verbatim: "Rows are
     // CUMULATIVE snapshots (one per agent per heartbeat beat) — diff consecutive
     // rows for velocity." So the ledger has ONE writer again, with one semantics.
     //
-    // The sample is not thrown away: the very next commit hands it to the
-    // injected `recordCost` sink (FLOOR-09, #19), which accumulates it in the
-    // SAME collector the OTel path fills, so the beat then writes this agent's
-    // cumulative row exactly like every other agent's. Deliberately NOT a
-    // fallback to `appendCostLedger` when that sink is absent: that would be the
-    // mixed-semantics defect above, reintroduced as a default. An unwired sink
-    // must mean "no proxy row", visibly, not "the old wrong row".
-    //
-    // The early return stays: cost is pure telemetry and must never feed the
-    // loop detector below.
+    // FLOOR-09 (#19) — WHERE THE SAMPLE GOES INSTEAD, AND WHY THE EARLY RETURN
+    // STAYS. It is handed to the injected `recordCost` sink
+    // (`telemetry.recordCostSample` in production), which accumulates it in the
+    // SAME collector the OTel path fills. So the branch now reaches:
+    //   - `telemetry.getAgentUsage(agentId)`, and therefore the circuit
+    //     breaker's cost, token and velocity arms — qwen/crush spend can arm a
+    //     budget for the first time instead of only being archived;
+    //   - the cost ledger, but INDIRECTLY, via the ~30s beat writing this
+    //     agent's cumulative row like everyone else's. That indirection is the
+    //     whole of RECORD-04's fix.
+    // And it still does NOT reach the loop detector, the OTel span buffer or the
+    // Stop/drain path below — cost is pure telemetry and a CostSample is not a
+    // tool call. That is what the early `return {}` is for; it is rewritten
+    // here, not deleted.
+    // Deliberately NO fallback to the ledger appender when the sink is absent:
+    // that would be the mixed-semantics defect above, reintroduced as a default.
+    // An unwired sink must mean "no proxy row", visibly, not "the old wrong row".
     if (event === 'CostSample') {
+      if (agentId && p.session_id) {
+        const input = p.input ?? 0;
+        const output = p.output ?? 0;
+        const cacheRead = p.cache_read ?? 0;
+        const cacheCreation = p.cache_creation ?? 0;
+        this.recordCost?.({
+          agentId,
+          sessionId: p.session_id,
+          ts: Date.now(),
+          input,
+          output,
+          cacheRead,
+          cacheCreation,
+          model: p.model ?? '',
+          usd: estimateCostUsd(p.model, {
+            inputTokens: input,
+            outputTokens: output,
+            cacheReadTokens: cacheRead,
+            cacheWriteTokens: cacheCreation
+          })
+        });
+      }
       return {};
     }
 
