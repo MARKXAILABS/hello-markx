@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: "Phase 1 planned (23 plans/9 waves); red-team rounds 1-3 all NOT CLEAN (16 / ~35 / ~50 findings); 3 iterations exhausted; RED_TEAM_CLEAN=false; execute-phase BLOCKED — re-plan recommended"
-last_updated: "2026-08-20T21:40:00.000Z"
-last_activity: 2026-08-20 — Roadmap extended to 6 phases over 71 v1 requirements; six
+status: executing
+stopped_at: Phase 1 planned (23 plans/9 waves). Red-team rounds 1, 2 and 3 all returned NOT CLEAN
+last_updated: "2026-08-21T01:24:57.417Z"
+last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -21,17 +21,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-20)
 
 **Core value:** You can leave it running and trust it.
-**Current focus:** Phase 1 — Finish the Floor
+**Current focus:** Phase 01 — finish-the-floor
 
 ## Current Position
 
-Phase: 1 of 6 (Finish the Floor)
-Plan: — of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-08-20 — Roadmap extended to 6 phases over 71 v1 requirements; six
+Phase: 01 (finish-the-floor) — EXECUTING
+Plan: 2 of 23
+Status: Ready to execute
+Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [░░░░░░░░░░] 4%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 01 P02 | 2h10m | 4 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Recent decisions affecting current work:
 
 - [PROJECT]: Land the CI/test surface before any fixes — it immediately exposed 4 defects.
 - [PROJECT]: Close only genuinely-fixed issues; keep partials open with what remains.
+- [Phase 01]: GATE-01 hook token minted at PtyManager (pty.ts:664), not per index.ts call site — one choke point covers every current and future spawn; a missed site is a silently dead-hooked engine
+- [Phase 01]: Hook token revoked token-exact on PTY exit, not by agent — a restart is kill()+spawn() under the same id, so revokeAgent there would dead-hook the live replacement
+- [Phase 01]: GATE-01 NOT marked complete at 01-02: the qwen sidecar edit and the three missing shim bodies are 01-06 task 4 (wave 3); qwen/crush is dead-hooked for one wave, deliberately
 
 ### Pending Todos
 
@@ -131,6 +135,8 @@ Recent decisions affecting current work:
   embeddings or metered API on a required path. FLOOR-06 delivers Sigstore provenance and
   checksums instead of Authenticode, and the docs must say plainly that SmartScreen still fires.
 
+- QWEN SIDECAR DEAD-HOOKED UNTIL 01-06: hive.ts startProxyBridge carries no HIVE_SOCK_TOKEN, and PI_EXTENSION/OPENCODE_PLUGIN/PROXY_BRIDGE_SHIM send no sock_token at all (dead-hooked at HEAD, pre-existing). Owner: 01-06 task 4, wave 3. Also hand it --no-verify on gitAsync.
+
 ## Deferred Items
 
 Items acknowledged and carried forward from previous milestone close:
@@ -141,7 +147,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-20T12:31:00.125Z
+Last session: 2026-08-21T01:24:36.268Z
 Stopped at: Phase 1 planned (23 plans/9 waves). Red-team rounds 1, 2 and 3 all returned NOT CLEAN
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
@@ -152,4 +158,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: .planning/phases/01-finish-the-floor/01-CONTEXT.md
+Resume file: None
