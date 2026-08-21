@@ -399,6 +399,123 @@ test('the FLOOR budget still counts every token kind', () => {
   assert.match(d.state.reason, /token cap/);
 });
 
+// ── 2b. FLOOR-10: the per-card budget is ENFORCED, not merely reported ───────
+//
+// The budget arm is the FIRST consumer `taskSpend().over` ever had: before this
+// plan `grep -rn "\.over\b" src/ --include=*.ts` returned nothing at all, so the
+// number was computed, attributed, persisted — and acted on by nobody.
+//
+// Pitfall 6, which these tests exist to not fall into: `evaluate()` returns a
+// BOOLEAN, not a level, and `tick()` escalates ONE rank per beat. A budget test
+// with a single `tick()` sees `steering` and gets "fixed" by asserting it,
+// silently accepting a cap that never constrains. Every test below asserts the
+// FINAL level after the last beat.
+//
+// What they do NOT prove: that the production beat ever populates
+// `BreakerInput.budget`. Each one builds its own input. That wiring assertion
+// reads main's breaker beat at source and lands in plan 01-10's commit, alongside the one
+// line it asserts — see 01-09-SUMMARY.md § "T-INDEX HANDOFF → 01-10 (FLOOR-10)".
+
+/** One beat's input for an agent with a card in flight — exactly the shape
+ *  the hive's per-agent budget accessor returns, fed the way `runBreakerBeat` will
+ *  feed it. `sample: null` keeps every OTHER arm silent, so a trip here can only
+ *  have come from the budget arm. */
+const carded = (agentId, taskId, tokens, cap) => ({
+  agentId, sample: null, progressing: true, budget: { taskId, tokens, cap }
+});
+
+const NOW = 1_700_000_000_000;
+const BEAT = 30_000;
+
+test('FLOOR-10: an over-cap card takes its assignee to constrained — on the SECOND beat', () => {
+  const b = makeBreaker();
+  const input = [carded('jim-1', 't-1', 12_000, 10_000)];
+
+  const first = b.tick(input, NOW)[0];
+  assert.equal(first.state.level, 'steering',
+    'beat 1 must be steering by construction (one rank per beat from healthy). If this is '
+    + 'already healthy the arm never tripped at all and the next assertion proves nothing');
+
+  const second = b.tick(input, NOW + BEAT)[0];
+  assert.equal(second.state.level, 'constrained',
+    'a card 20% past its token cap never reached the level that actually stops active work. '
+    + 'The budget is reported and not enforced, which is the whole of FLOOR-10');
+  assert.match(second.state.reason, /over budget/,
+    'the operator reads this string — it must say the card is over budget, not name some '
+    + 'other arm that happened to trip first');
+  assert.match(second.state.reason, /t-1/,
+    'the reason names no card, so the operator cannot tell WHICH card burned the budget');
+  assert.equal(second.action, 'constrain',
+    'the level moved but no action was emitted, so the beat sends no constrain message and '
+    + 'fires no operator toast — a silent stop is the failure D-18 exists to prevent');
+});
+
+test('FLOOR-10: the same spend against a generous cap is not stopped early', () => {
+  const b = makeBreaker();
+  const input = [carded('jim-1', 't-1', 12_000, 10_000_000)];
+
+  assert.equal(b.tick(input, NOW)[0].state.level, 'healthy');
+  assert.equal(b.tick(input, NOW + BEAT)[0].state.level, 'healthy',
+    'a card at 0.12% of its cap was stopped. This is the arithmetic 01-06 corrected: summing '
+    + 'cumulative snapshots instead of diffing them over-counts roughly quadratically, and a '
+    + 'generous cap then trips anyway');
+});
+
+test('FLOOR-10: a card at 85% of its cap steers and STAYS steering — it is a warning, not a stop', () => {
+  const b = makeBreaker();
+  const input = [carded('jim-1', 't-1', 8_500, 10_000)];
+
+  assert.equal(b.tick(input, NOW)[0].state.level, 'steering',
+    'the >= 80% band did not warn at all, so a card gets no notice before it is stopped');
+
+  const second = b.tick(input, NOW + BEAT)[0];
+  assert.equal(second.state.level, 'steering',
+    'a card that is merely NEAR its cap was escalated to constrained. The >= 80% band is a '
+    + 'warning to the assignee; only a real overage may stop active work');
+  assert.match(second.state.reason, /85% of its cap/,
+    'the warning must say how close to the cap the card is, or it reads as an unexplained steer');
+
+  assert.equal(b.tick(input, NOW + 2 * BEAT)[0].state.level, 'steering',
+    'the level oscillated instead of holding. A warn/recover flip re-escalates every other '
+    + 'beat, and each escalation re-sends the steer mail to the assignee');
+});
+
+test('FLOOR-10: only the assignee is affected — the breaker is per-agent, never a floor-wide trip', () => {
+  const b = makeBreaker();
+  // pam-1 has NO card in flight, which is what a null from that accessor
+  // looks like at the beat: the property is simply absent.
+  const inputs = [
+    carded('jim-1', 't-1', 12_000, 10_000),
+    { agentId: 'pam-1', sample: null, progressing: true }
+  ];
+
+  b.tick(inputs, NOW);
+  const second = b.tick(inputs, NOW + BEAT);
+  const level = (id) => second.find((d) => d.state.agentId === id).state.level;
+
+  assert.equal(level('jim-1'), 'constrained');
+  assert.equal(level('pam-1'), 'healthy',
+    'an agent with no card in flight was dragged down by someone else\'s budget. One expensive '
+    + 'card would then stop the whole floor, which is the failure mode that made a per-agent '
+    + 'breaker the right place for this arm in the first place');
+});
+
+test('FLOOR-10 / D-18: four beats far over cap and the agent is never stopped, only constrained', () => {
+  // makeBreaker ships hardStop false — the shipped default, deliberately not
+  // overridden here, because the ceiling IS the assertion.
+  const b = makeBreaker();
+  const input = [carded('jim-1', 't-1', 999_999, 1_000)];
+
+  const levels = [0, 1, 2, 3].map((i) => b.tick(input, NOW + i * BEAT)[0].state.level);
+
+  assert.deepEqual(levels, ['steering', 'constrained', 'constrained', 'constrained'],
+    'the ladder did not settle at constrained. One rank per beat, and the ceiling holds');
+  assert.ok(!levels.includes('stopped'),
+    'a card 1000x over its cap reached `stopped`, which archives an agent that may hold '
+    + 'unsaved work. D-18: over-budget means PAUSED AND REPORTED. A hard kill stays behind '
+    + 'the explicit config opt-in and must never be reached by adding a budget');
+});
+
 // ── 3. the capability line the god is oriented with ─────────────────────────
 
 test('the capability line is honest about a mail-capable engine', () => {

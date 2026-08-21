@@ -526,6 +526,138 @@ test('a card in flight does not reset its spend across an app restart — proven
     'spend survived deleting the ledger, so it is not being read from the ledger');
 });
 
+// ─── #34 / FLOOR-10 — the card's meter, and the budget the beat reads ───────
+//
+// D-22 is the whole reason the meter needs no new IPC channel: the renderer
+// already polls `hive:tasks`, so the row is widened instead. NO grep over
+// hive.ts can tell a widened row from the eight `budgetTokens` occurrences that
+// predate this phase — only these assertions can, which is why they are here
+// rather than in a count.
+
+test('D-22: the hive:tasks row carries the card\'s meter, and a capless card reads null rather than NaN', (t) => {
+  const { hive } = floor(t);
+  hive.writeTasks([
+    card('t-capped', { status: 'doing', assignee: 'jim-1', budgetTokens: 200 }),
+    card('t-capless', { status: 'doing', assignee: 'pam-1' })
+  ]);
+  hive.appendCostLedger(cumulative('jim-1', 30, 20, 0.05));            // series opens at 50 → +50
+  hive.appendCostLedger(cumulative('pam-1', 10, 5, 0.01, 'pam-s1'));   // → +15
+
+  const ledger = hive.tasks();
+  assert.equal(ledger.rev, 1,
+    'the rev envelope did not survive the widening. Every mutation path compare-and-swaps on '
+    + 'rev, so a row map that drops it re-opens #17 (a stale writer erasing a live answer)');
+  assert.equal(typeof ledger.updatedAt, 'string', 'the updatedAt envelope was dropped too');
+
+  const capped = ledger.tasks.find((r) => r.id === 't-capped');
+  for (const key of ['tokens', 'budgetTokens', 'pct']) {
+    assert.ok(key in capped,
+      `the row has no "${key}", so the card can render no meter and FLOOR-13 has nothing to `
+      + 'consume — D-22 was skipped and every count-based criterion in this plan still passed');
+  }
+  assert.equal(capped.tokens, 50,
+    'the row\'s spend disagrees with taskSpend(). Two numbers for one card is how a meter and '
+    + 'an enforcement decision drift apart');
+  assert.equal(capped.budgetTokens, 200, 'the row lost the cap the dispatch set');
+  assert.equal(capped.pct, 50 / 200,
+    'pct is not spend/cap at the row\'s own numbers, so the meter renders a different '
+    + 'proportion than the one the breaker enforces');
+
+  const capless = ledger.tasks.find((r) => r.id === 't-capless');
+  assert.equal(capless.tokens, 15, 'a capless card still has real spend and must still report it');
+  assert.equal(capless.budgetTokens, null,
+    'an unset cap must read as null, not undefined — undefined vanishes through JSON over IPC '
+    + 'and the renderer cannot tell "no cap" from "field missing"');
+  assert.equal(capless.pct, null,
+    'a capless card was divided by nothing. NaN and Infinity both render as a blank or a full '
+    + 'meter, which reads as "this card is fine" or "this card is doomed" — never as "no cap"');
+  assert.ok(!Number.isNaN(capless.pct) && capless.pct !== Infinity,
+    'pct came back NaN or Infinity for a card with no cap');
+});
+
+test('D-22: the derived meter never leaks back into tasks.json', (t) => {
+  const { home, hive } = floor(t);
+  hive.writeTasks([
+    card('t-capped', { status: 'doing', assignee: 'jim-1', budgetTokens: 200 }),
+    card('t-capless', { status: 'doing', assignee: 'pam-1' })
+  ]);
+  hive.appendCostLedger(cumulative('jim-1', 30, 20, 0.05));
+
+  // TWO production paths read rows straight out of hive.tasks() and hand those
+  // same objects back to hive.writeTasks(): the webhook card-creation path
+  // (src/main/index.ts — `const ledger = hive.tasks()` … `hive.writeTasks([...existing, card])`)
+  // and every voice task action (src/main/realtimeActions.ts findTasks →
+  // hiveWriteTasks). Without a strip at the writeTasks choke point, the first
+  // webhook card or voice command after this widening writes a derived meter
+  // into the ledger as if it were card data.
+  const readBack = hive.tasks();
+  assert.equal(hive.writeTasks(readBack.tasks, readBack.rev), true, 'the round-trip write was refused');
+
+  const onDisk = JSON.parse(fs.readFileSync(path.join(home, 'hive', 'tasks.json'), 'utf8'));
+  const capped = onDisk.tasks.find((c) => c.id === 't-capped');
+  assert.ok(!('tokens' in capped),
+    'the derived spend was persisted as a card field. It is a snapshot of a number that keeps '
+    + 'moving, and tasks.json is the ledger every writer compare-and-swaps on');
+  assert.ok(!('pct' in capped), 'the derived percentage was persisted as a card field');
+  assert.equal(capped.budgetTokens, 200,
+    'the strip took the REAL card field with it — the cap the dispatch set is gone from the '
+    + 'ledger, so the budget arm has nothing left to enforce');
+
+  const capless = onDisk.tasks.find((c) => c.id === 't-capless');
+  assert.ok(!('budgetTokens' in capless),
+    'a capless card came back from tasks() carrying budgetTokens:null and that null was '
+    + 'persisted onto the card');
+});
+
+test('FLOOR-10: budgetForAgent hands the beat the assignee\'s card — and null when there is no cap to enforce', (t) => {
+  const { hive } = floor(t);
+  hive.writeTasks([
+    card('t-capped', { status: 'doing', assignee: 'jim-1', budgetTokens: 200 }),
+    card('t-capless', { status: 'doing', assignee: 'pam-1' }),
+    card('t-todo', { status: 'todo', assignee: 'dwight-1', budgetTokens: 50 })
+  ]);
+  hive.appendCostLedger(cumulative('jim-1', 30, 20, 0.05));   // → 50
+
+  assert.deepEqual(hive.budgetForAgent('jim-1'), { taskId: 't-capped', tokens: 50, cap: 200 },
+    'the ONE accessor the breaker beat calls did not resolve the assignee\'s in-flight card. '
+    + 'It resolves through the same activeTaskId() the ledger stamps task_id with, so the row '
+    + 'the spend was billed to and the card the cap is read from can never disagree');
+
+  assert.equal(hive.budgetForAgent('pam-1'), null,
+    'a card with NO cap produced a budget. A {tokens, cap: 0} object trips the arm on the '
+    + 'first token spent — no cap must mean no arm, never a surprise stop');
+  assert.equal(hive.budgetForAgent('dwight-1'), null,
+    'a card that has not been started yet was treated as in flight');
+  assert.equal(hive.budgetForAgent('nobody-1'), null,
+    'an agent with no card at all got a budget out of nowhere');
+});
+
+test('FLOOR-10: a card that has LEFT the board yields no budget rather than a zero-spend cap', (t) => {
+  const { home, hive } = floor(t);
+  hive.writeTasks([card('t-gone', { status: 'doing', assignee: 'jim-1', budgetTokens: 100 })]);
+  hive.appendCostLedger(cumulative('jim-1', 200, 100, 0.50));   // 300 against a cap of 100
+
+  assert.deepEqual(hive.budgetForAgent('jim-1'), { taskId: 't-gone', tokens: 300, cap: 100 },
+    'the over-cap card is not visible while it is ON the board, so the rest of this test is vacuous');
+
+  hive.deleteTask('t-gone');
+
+  // 01-06 bounds the cost accumulator by CARD LIFETIME (pruneCostByTask) — that
+  // prune is the memory bound which replaced RECORD-03's deleted 1 MB window, so
+  // taskSpend() on a card that has left the board now legitimately answers ZERO.
+  // A fresh manager over the same home rather than a five-second sleep on the
+  // active-card cache; it is also exactly what a restart does.
+  const restarted = new HiveManager(() => home);
+  assert.equal(restarted.taskSpend('t-gone').tokens, 0,
+    '01-06\'s card-lifetime bound is not in place, and this test is asserting against the '
+    + 'wrong contract — re-read 01-06-SUMMARY before changing anything here');
+  assert.equal(restarted.budgetForAgent('jim-1'), null,
+    'the beat was handed a budget for a card that is no longer on the board. Because the '
+    + 'accumulator prunes it, that budget reads {tokens: 0} against a live cap — "comfortably '
+    + 'under budget" — and an agent that was constrained a beat ago recovers on a number that '
+    + 'only means the card was archived');
+});
+
 // ─── #44 — the capability line rides the cache-safe path ────────────────────
 
 test('the roster names each agent’s engine and can carry a capability legend', (t) => {
