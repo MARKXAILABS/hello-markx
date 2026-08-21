@@ -23,3 +23,28 @@ Out-of-scope discoveries found while executing a plan. Logged, not fixed.
   promising a code path that does not run" clause FALSE. Neither file is in 01-08's `files_modified`;
   01-07's twelve-denial sweep is the precedent for doc corrections landing in their own plan.
   Owner: a plan that holds those two files, before 01-23's wave-9 sweep.
+
+## From 01-10 (wave 5)
+
+- **Seven more `"Enterprise Knowledge Graph"` sites survive the FLOOR-07 (#31) rename.**
+  01-10 renamed the two the plan scoped (`README.md` — already clean, and `src/preload/index.ts`,
+  three instances) plus the two comments in `src/main/index.ts` (:552, :4201), because leaving the
+  claim in a file this plan was renaming it out of would have recreated the defect one line over.
+  Still carrying it, measured at 94d6653:
+  `resources/skills/capabilities/SKILL.md:96` (**agent-facing** — the highest-value one left),
+  `src/main/config.ts:159/:275/:493`, `src/main/hive.ts:1444`,
+  `src/renderer/src/store/config.ts:74/:142`.
+  `docs/floor-inspection.html:710` is deliberately excluded: it is the audit record QUOTING the
+  defect, and correcting it would erase the finding. None of these files is in 01-10's
+  `files_modified`, and `src/main/hive.ts` and `src/main/config.ts` have owners in other waves, so
+  editing them here risks a lost update (`use_worktrees: false`). The repo-claims pin added by 01-10
+  covers only `README.md` and `src/preload/index.ts` — widening it would turn it red today.
+  Owner: a plan that holds those files, before 01-23's wave-9 sweep.
+
+- **`cost-ledger.jsonl` still has no rotation, and `memory_fts` now has no retention either.**
+  01-10 added an FTS5 index fed from every agent's `memory.md` on the mine loop. It is bounded
+  per agent (a re-index REPLACES that agent's rows, and each chunk is capped at 4,000 chars), so it
+  cannot grow without bound for a fixed roster — but nothing prunes the rows of an agent that has
+  been deleted from the hive, so a long-lived install accumulates one dead agent's notes per
+  teardown. Not a correctness defect and not reachable by recall unless the caller names the dead
+  agent's id. RECORD-02 (Phase 4) owns ledger/index retention; this belongs with it.

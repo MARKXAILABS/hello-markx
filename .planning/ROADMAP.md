@@ -140,7 +140,7 @@ Plans:
 - [x] 01-07-PLAN.md — FLOOR-02a — the idle-quiesce backstop into main's delivery tick; HIVE.md's TWELVE stale Stop-drain denials deleted (five in §2 decision 5, one §3, one §5's diagram, two §7, three §8 — the "four" here was the pre-red-team count)
 - [x] 01-08-PLAN.md — FLOOR-02b — main owns the delivery queue and its drain; producers enqueue over IPC
 - [x] 01-09-PLAN.md — FLOOR-10 — one budget arm in the existing breaker ladder; hive:tasks widened with the meter
-- [ ] 01-10-PLAN.md — FLOOR-07 / FLOOR-05 — the FTS5 memory index, the scope honesty pass, and the Settings log-folder button
+- [x] 01-10-PLAN.md — FLOOR-07 / FLOOR-05 — the FTS5 memory index, the scope honesty pass, and the Settings log-folder button
 - [ ] 01-11-PLAN.md — FLOOR-04 — scrub the staged diff with redactSecrets at the single commit choke point
 - [ ] 01-12-PLAN.md — FLOOR-01 / FLOOR-13 — the AUTO chip in three renderings, the model field, the 1024px responsive collapse
 - [ ] 01-13-PLAN.md — FLOOR-18 / FLOOR-14 — declare the Codex-on-Windows limitation; route the non-Claude blocked transition to notify()
@@ -546,7 +546,7 @@ after Phase 5 rather than closed in Phase 3.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Finish the Floor | 8/23 | In Progress|  |
+| 1. Finish the Floor | 9/23 | In Progress|  |
 | 2. The Daemon and the Protocol | 0/TBD | Not started | - |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |

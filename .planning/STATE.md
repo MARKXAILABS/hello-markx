@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-09-PLAN.md (FLOOR-10 MINTING half: the breaker budget arm, hive.budgetForAgent(), the D-22 hive:tasks meter). CI green on PR #77 at 17bf26d, all six jobs incl. Electron smoke; ubuntu/macos 478 tests 478 pass 0 fail 0 skipped, windows 478/474/0 fail/4 skipped (469 before). B-breaker 2->15, B-hive 8->18, B-nan 1->5, hardStop still exactly 4, budgetForAgent in index.ts still 0. FLOOR-10 NOT closed and #34 stays open - the production injection is 01-10's, wave 5, recorded verbatim under 'T-INDEX HANDOFF -> 01-10 (FLOOR-10)'."
-last_updated: "2026-08-21T05:23:44.248Z"
+stopped_at: "Completed 01-10-PLAN.md (FLOOR-07 FTS5 recall + FLOOR-05 log folder + FLOOR-10 CLOSED). CI green on all six jobs at 94d6653: ubuntu/macos 492 tests 492 pass 0 fail 0 skipped, windows 492/488/0 fail/4 skipped (the pre-existing 4). E2E Electron smoke green. Local: typecheck 0, npm test 0, npm run build 0 under Node 22.23.2. B-pass-ep-w5 24 -> 26, B-repo-claims 5 -> 11, db-fts 6/6 with skipped 0, user_version 1 -> 2, grep -c budgetForAgent src/main/index.ts 0 -> 1. OUTSTANDING: FLOOR-05's manual click (operator) and 7 residual 'Enterprise Knowledge Graph' sites incl. the agent-facing SKILL.md:96."
+last_updated: "2026-08-21T06:05:54.041Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 8
+  completed_plans: 9
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 9 of 23 complete
+Plan: 10 of 23 complete
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [████░░░░░░] 35%
+Progress: [████░░░░░░] 39%
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Progress: [████░░░░░░] 35%
 | Phase 01 P07 | 2h05m | 3 tasks | 6 files |
 | Phase 01 P08 | 3h05m | 5 tasks | 9 files |
 | Phase 01 P09 | 55m | 3 tasks | 5 files |
+| Phase 01 P10 | 35m | 4 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -118,6 +119,11 @@ Recent decisions affecting current work:
 - [Phase 01-07]: the renderer's 'lastOutputAt > 0' never meant 'never painted' — pty.ts:752 SEEDS the stamp at spawn, so a hung TUI reads as quiet-for-ages the moment its 35s boot grace lapses and would be flipped idle, un-gating delivery against a terminal that cannot receive. Porting it verbatim would have shipped the hole into main. Fixed at SOURCE with hasOutput (pty.ts:753/764) in its own atomic fix commit c291e76, proven RED against the old guard.
 - [Phase 01-07]: FLOOR-02 is a THREE-clause requirement and only two close here. The Stop-drain-live clause was ALREADY satisfied before the plan ran (drainAtStop at hooks.ts:662, guarded at delivery.ts:262, wired index.ts:480) — the roadmap's premise that it was dead is factually wrong and was deliberately NOT acted on. The quiesce backstop and the twelve-denial doc clause close here; the queue-drain half (useHive.ts effect #4, :819-968) is plan 08's, wave 4.
 - [Phase 01-07]: a fourth test beyond the plan's three: the other three call svc.tick() by hand and would all stay green if start() stopped scheduling the tick — at which point the backstop does not run at all, which IS T-P07-01. It stubs global.setInterval, asserts exactly one timer at <=4s, fires the callback and asserts the flip. Zero wall-clock, proven RED.
+- [Phase 01-10]: FLOOR-10 CLOSES HERE — budget: hive.budgetForAgent(id) is applied in runBreakerBeat (index.ts:1613; anchor re-derived by content to :1570, not 01-09's :1560) and its wiring pin landed in the SAME commit 94d6653 (index=1 test=1). The pin is bounded by STRUCTURE (declaration -> inputs.push -> the closing brace-paren), overriding BOTH the plan's slice-then-strip form (01-09 measured it stops 3 lines short of the literal, so it would be red regardless of the code) AND 01-09's strip-then-bound form (still a fixed byte count on a file that grows every wave). Carries a positive control on its own window, and was proven RED against a comment-shaped fake under which grep -c budgetForAgent src/main/index.ts still returns 1.
+- [Phase 01-10]: the mine loop no longer requires the mempalace CLI. start()/mineNow() gated on active(), so on the COMMON machine (no mempalace on PATH) the loop never started and the whole memory subsystem was a silent no-op. memory.md is now indexed into memory_fts whenever the harness DB is open, and search() falls back to keywordSearch() — the FTS5 index is the recall path that survives a missing CLI, which is the reason it exists. MemoryManager is wired to the open PersistStore + the registry cwd in index.ts (Rule 2): task 2's file list omitted the wire, and without it the index is never populated and the must-have truth is false.
+- [Phase 01-10]: CREATE VIRTUAL TABLE IF NOT EXISTS is KEPT, not silently dropped — probed against the binary that actually loads (better-sqlite3 13.0.3 / SQLite 3.53.4) and run TWICE, because accepting the syntax once proves the parser and running it twice proves the guard. Eight prebuilds are present and new Database(':memory:') opens under plain node here, so test/db-fts.test.cjs RAN LOCALLY and in CI on all three platforms with NO rebuild step: grep -c 'npm rebuild better-sqlite3' ci.yml stays 0 and WORKFLOW-COMMITS=0 against B-sha efb367d.
+- [Phase 01-10]: README's 'Enterprise Knowledge Graph' rename was ALREADY-SATISFIED (0 hits) and deliberately NOT performed — README:101 already says 'keyword scoring over text chunks, not entities or a graph', which is exactly what kg-core.cjs:7 means by 'the README says the same thing; keep it that way'; deleting correct prose to satisfy a clause is the 01-04 CONTRIBUTING.md call. The preload carried THREE instances, not the one at :838 the plan names, and index.ts:552/:4201 carried two more which were also renamed, because leaving the claim in the file being renamed recreates the defect one line over.
+- [Phase 01-10]: a repo-claims pin that will not go RED is decoration: the first top-level-load assertion for test/db-fts.test.cjs was /^(const|let|var) .*require('better-sqlite3')/m, and 'let Database; try { Database = require(...); } catch { return; }' SATISFIES it — the control stayed green. Fixed at source to match the WHOLE load line against an exact top-level-binding shape plus 'no try opens before the load'; three guard shapes now go red. All 11 repo-claims clauses and both db-fts controls were driven RED before being trusted.
 
 ### Pending Todos
 
@@ -174,7 +180,10 @@ Recent decisions affecting current work:
 - cost-ledger.jsonl is NOT rotated. 01-06-PLAN's T-P06-05 accepts the startup rescan on the premise the file is 'already bounded by LOG_ROTATE_BYTES' — measured false: LOG_ROTATE_BYTES applies only to log.jsonl. The scan is over an unbounded file, once per process. Recorded alternative: PersistStore's cost_ledger table, one SUM(...) GROUP BY task_id. RECORD-02 (Phase 4) owns ledger retention. Also: taskSpend() on a card no longer on the board now returns 0, because pruneCostByTask bounds the accumulator by card lifetime.
 - FLOOR-02's MANUAL clause is OUTSTANDING and 01-07 does NOT claim it: nobody has run 'npm run dev', closed the window (not quit) and watched an agent that goes idle still get woken. It needs a real hive + a real agent CLI session with a live subscription — an interactive operator observation that cannot be automated from a headless session. What IS proven: the flip happens on main's tick with emit a genuine no-op (only the durable hive-log half can carry it), and start() demonstrably schedules that tick. Plan 23 must not tick FLOOR-02 on that alone. Owner: operator, before plan 23.
 - FLOOR-02 IS NOT COMPLETE at 01-07. Two of three clauses close: the idle-quiesce backstop now runs in main's delivery tick, and all twelve of HIVE.md's stale Stop-drain denials are deleted and pinned in test/repo-claims.test.cjs (B-repo-claims 3 -> 5). The THIRD clause — the queue-drain half, useHive.ts effect #4 at :819-968 — is untouched and is plan 08's, wave 4. The Stop-drain-live clause was ALREADY satisfied before 01-07 ran and was neither restored nor deleted. Requirement row left Pending in REQUIREMENTS.md matching the 01-02/01-04/01-05/01-06 precedent: plan 23 owns the checkboxes.
-- ANCHOR DRIFT recorded by 01-07, for later plans and 01-23's greps: hooks.ts's drainAtStop call is at :662 (plans say :332); hive.ts's cursor advance is at :1338 (plans say :1253); after 01-07 delivery.ts drainAtStop is :262 and index.ts's HookServer drain wiring is :480. HIVE.md sections 6-9 are +4 from 01-07-PLAN's table because of plan 02's wave-2 edit. Also drift vs 01-07-PLAN's environment claims: node_modules/@playwright, node-pty/build/Release and better-sqlite3/build ALL EXIST at HEAD — the plan states none do, so the e2e blocker may be softer than assumed.
+- ANCHOR DRIFT recorded by 01-07, for later plans and 01-23's greps: hooks.ts's drainAtStop call is at :662 (plans say :332); hive.ts's cursor advance is at :1338 (plans say :1253); after 01-07 delivery.ts drainAtStop is :262 and index.ts's HookServer drain wiring is :480. HIVE.md sections 6-9 are +4 from 01-07-PLAN's table because of plan 02's wave-2 edit. Also drift vs 01-07-PLAN's environment claims: node_modules/@playwright, node-pty/build/Release and better-sqlite3/build ALL EXIST at HEAD — the plan states do, so the e2e blocker may be softer than assumed.
+- FLOOR-05's MANUAL clause is OUTSTANDING and 01-10 does NOT claim it: nobody has run 'npm run dev', opened Settings -> General, clicked 'open logs' and watched the OS file manager open the folder; nor opened the Memory panel and seen the shared-scope warning render. MEASUREMENT UNAVAILABLE - it is an interactive GUI observation on a live Electron window. What IS proven: app:openLogs is untouched and live (grep -c 1, present in out/main/index.js), out/preload/index.js carries openLogs and 0 memoryWakeUp/reflectNow, and out/renderer/assets/index-*.js carries 'open logs', 'Log folder' and the warning's first sentence - plus typecheck 0, CI green on 3 platforms and the Electron smoke E2E green at 94d6653. The untested link is the click itself. Owner: operator, before plan 23. Plan 23 must not tick FLOOR-05 on built-bundle evidence alone.
+- FLOOR-07 (#31) is only PARTLY closed at 01-10. Renamed: src/preload/index.ts (3 instances), src/main/index.ts:552 and :4201. README needed no rename (0 hits - already honest). STILL carrying 'Enterprise Knowledge Graph' at 94d6653: resources/skills/capabilities/SKILL.md:96 (AGENT-FACING, highest-value one left), src/main/config.ts:159/:275/:493, src/main/hive.ts:1444, src/renderer/src/store/config.ts:74/:142. docs/floor-inspection.html:710 is deliberately excluded - it is the audit record QUOTING the defect. of those files is in 01-10's files_modified and hive.ts/config.ts have owners in other waves (use_worktrees:false), so editing them here risks a lost update. The repo-claims pin covers README.md + src/preload/index.ts only. Owner: a plan holding those files, before 01-23's wave-9 sweep. Also in deferred-items.md.
+- FLOOR-05/FLOOR-07/FLOOR-10 rows deliberately left Pending in REQUIREMENTS.md by 01-10, matching the 01-02/04/05/06/07/08/09 precedent: plan 23 owns the checkboxes. FLOOR-10's code half is genuinely complete and proven at runtime (budget: hive.budgetForAgent(id) in runBreakerBeat at index.ts:1613, pinned in the same commit 94d6653, RED-controlled against a comment fake that still satisfies a bare grep) and #34 can close on it. FLOOR-05's code half is complete with the manual clause outstanding. FLOOR-07's index/predicate/honesty halves are complete and pinned; its rename half has the 7-site residual above. FLOOR-09 was HARD-GATED here, not assumed: recordCostSample present at index.ts:525, and it is now PINNED by a test in test/engine-parity.test.cjs so it cannot silently regress before plan 23.
 
 ## Deferred Items
 
@@ -186,8 +195,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T05:23:44.230Z
-Stopped at: Completed 01-09-PLAN.md (FLOOR-10 MINTING half: the breaker budget arm, hive.budgetForAgent(), the D-22 hive:tasks meter). CI green on PR #77 at 17bf26d, all six jobs incl. Electron smoke; ubuntu/macos 478 tests 478 pass 0 fail 0 skipped, windows 478/474/0 fail/4 skipped (469 before). B-breaker 2->15, B-hive 8->18, B-nan 1->5, hardStop still exactly 4, budgetForAgent in index.ts still 0. FLOOR-10 NOT closed and #34 stays open - the production injection is 01-10's, wave 5, recorded verbatim under 'T-INDEX HANDOFF -> 01-10 (FLOOR-10)'.
+Last session: 2026-08-21T06:05:54.022Z
+Stopped at: Completed 01-10-PLAN.md (FLOOR-07 FTS5 recall + FLOOR-05 log folder + FLOOR-10 CLOSED). CI green on all six jobs at 94d6653: ubuntu/macos 492 tests 492 pass 0 fail 0 skipped, windows 492/488/0 fail/4 skipped (the pre-existing 4). E2E Electron smoke green. Local: typecheck 0, npm test 0, npm run build 0 under Node 22.23.2. B-pass-ep-w5 24 -> 26, B-repo-claims 5 -> 11, db-fts 6/6 with skipped 0, user_version 1 -> 2, grep -c budgetForAgent src/main/index.ts 0 -> 1. OUTSTANDING: FLOOR-05's manual click (operator) and 7 residual 'Enterprise Knowledge Graph' sites incl. the agent-facing SKILL.md:96.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
