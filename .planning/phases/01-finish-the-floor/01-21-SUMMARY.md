@@ -581,6 +581,11 @@ Typecheck  Lint (react-hooks, zero warnings)  > eslint . --max-warnings 0
 
 That is the gate running green on **Linux / Node 22**, not just on this Windows host.
 
+Re-verified after the bookkeeping commits, at branch tip `9cbace7e730f4057372050bb2e04f8054b949c58`:
+all six job rows `success` again, `Lint (react-hooks, zero warnings) — success` inside `Typecheck`
+(run 32501433890, job 96831773599). The code SHA `e6067eb` above is the one that matters — the
+commits between it and `9cbace7` touch only `.planning/`, which no workflow reads.
+
 ## LOCAL GATES
 
 ```
