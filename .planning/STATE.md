@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-10-PLAN.md (FLOOR-07 FTS5 recall + FLOOR-05 log folder + FLOOR-10 CLOSED). CI green on all six jobs at 94d6653: ubuntu/macos 492 tests 492 pass 0 fail 0 skipped, windows 492/488/0 fail/4 skipped (the pre-existing 4). E2E Electron smoke green. Local: typecheck 0, npm test 0, npm run build 0 under Node 22.23.2. B-pass-ep-w5 24 -> 26, B-repo-claims 5 -> 11, db-fts 6/6 with skipped 0, user_version 1 -> 2, grep -c budgetForAgent src/main/index.ts 0 -> 1. OUTSTANDING: FLOOR-05's manual click (operator) and 7 residual 'Enterprise Knowledge Graph' sites incl. the agent-facing SKILL.md:96."
-last_updated: "2026-08-21T06:05:54.041Z"
+stopped_at: "Completed 01-11-PLAN.md (FLOOR-04: secret scrub at the single commit choke point). CI green on all six jobs at a9db6b9: ubuntu/macos 496/496/0 fail/0 skipped, windows 496/492/0 fail/4 skipped (the pre-existing 4) - exactly +4 on every platform. Local typecheck 0, npm test 0. B-durability 6 -> 10 with skipped 0, RED-controlled 4/4 against pre-fix hive.ts. redactSecrets 5 -> 9, --staged 0 -> 3, diff --cached 0 -> 2. LOCKSTEP verdict (a) NO WIDENING: REDACT-BODY c9c1cf47 unchanged, voice-messages.test.cjs untouched. gitAsync's pre-commit-hook hole CONFIRMED already fixed by 840c36e (core.hooksPath on both wrappers) - no fix needed here. OUTSTANDING: FLOOR-04's optional manual dev-app check (operator) and the FLOOR-03/#10 issue-mapping errors filed as a blocker."
+last_updated: "2026-08-21T06:34:37.895Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 9
+  completed_plans: 10
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 10 of 23 complete
+Plan: 11 of 23 complete
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [████░░░░░░] 39%
+Progress: [████░░░░░░] 43%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [████░░░░░░] 39%
 | Phase 01 P08 | 3h05m | 5 tasks | 9 files |
 | Phase 01 P09 | 55m | 3 tasks | 5 files |
 | Phase 01 P10 | 35m | 4 tasks | 11 files |
+| Phase 01 P11 | 1h55m | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,10 @@ Recent decisions affecting current work:
 - [Phase 01-10]: CREATE VIRTUAL TABLE IF NOT EXISTS is KEPT, not silently dropped — probed against the binary that actually loads (better-sqlite3 13.0.3 / SQLite 3.53.4) and run TWICE, because accepting the syntax once proves the parser and running it twice proves the guard. Eight prebuilds are present and new Database(':memory:') opens under plain node here, so test/db-fts.test.cjs RAN LOCALLY and in CI on all three platforms with NO rebuild step: grep -c 'npm rebuild better-sqlite3' ci.yml stays 0 and WORKFLOW-COMMITS=0 against B-sha efb367d.
 - [Phase 01-10]: README's 'Enterprise Knowledge Graph' rename was ALREADY-SATISFIED (0 hits) and deliberately NOT performed — README:101 already says 'keyword scoring over text chunks, not entities or a graph', which is exactly what kg-core.cjs:7 means by 'the README says the same thing; keep it that way'; deleting correct prose to satisfy a clause is the 01-04 CONTRIBUTING.md call. The preload carried THREE instances, not the one at :838 the plan names, and index.ts:552/:4201 carried two more which were also renamed, because leaving the claim in the file being renamed recreates the defect one line over.
 - [Phase 01-10]: a repo-claims pin that will not go RED is decoration: the first top-level-load assertion for test/db-fts.test.cjs was /^(const|let|var) .*require('better-sqlite3')/m, and 'let Database; try { Database = require(...); } catch { return; }' SATISFIES it — the control stayed green. Fixed at source to match the WHOLE load line against an exact top-level-binding shape plus 'no try opens before the load'; three guard shapes now go red. All 11 repo-claims clauses and both db-fts controls were driven RED before being trusted.
+- [Phase 01-11]: FLOOR-04's issue IS #10 (H2 network+secret hygiene, defect 5) — the plan's 'confirm it is NOT #10, #10 is the Electron issue' criterion is FACTUALLY WRONG and was reported rather than satisfied. A body search of all 24 open floor-inspection issues returns #10 as the ONLY match for the scrub clause. #10 is NOT closed: 5 defects, only defect 5 is FLOOR-04, so a per-clause evidence comment was posted per D-42/D-44 (the 01-03 #18 call). Consequent upstream errors FILED not fixed: REQUIREMENTS.md:20-23 maps FLOOR-03 (Electron 38+) to #10 which has no Electron clause (the EOL-Electron issue is #8, CLOSED), and D-42 in 01-CONTEXT.md inherited the same mis-mapping.
+- [Phase 01-11]: the scrub sits INSIDE flushCommit's retry loop, and harnessAuthored() exists because a naive version unstages the hive's OWN bootstrap forever — measured, not predicted. GIT_ATTEMPTS is 2 and every attempt re-runs add -A, so a scrub hoisted above the loop is undone by the retry (which fires on index.lock, common on Windows behind AV). Both generated hook shims carry 'payload.sock_token = process.env.HIVE_SOCK_TOKEN' (put there by 01-06's GATE-01 work), which pattern 5 matches on sight; an unstaged file stays untracked so the next add -A re-stages it and the warning fires on every commit forever. Suppressed by BYTE-IDENTITY against the compiled-in constant read from the INDEX blob (git show :path), not a path allowlist and not readFileSync: an agent editing a shim changes the bytes and the scrub fires, and core.autocrlf is true by default on Git for Windows (measured true in a fresh hive) so a disk comparison would silently never match there.
+- [Phase 01-11]: failure polarity is deliberately ASYMMETRIC — fail-OPEN when the scrub cannot look, fail-CLOSED when it found something it cannot fix. A failing git diff or an over-bound diff commits anyway and logs loudly (halting every commit would take the hive's whole durability path down, and commit()'s own doc says git here is history not storage); a found secret whose path cannot be resolved or unstaged blocks the commit. Bounded TWICE and both bounds named in the comment: 20,000 changed lines checked via --numstat BEFORE the content diff is ever buffered (a cap applied after buffering is not a bound), then 4 MB on the scanned text because a line count does not bound bytes. Scans ADDED lines only — flagging a removed line would unstage a DELETION, which unpublishes nothing and would wedge the committer permanently on any repo that once held a secret.
+- [Phase 01-11]: git restore --staged does NOT work on an unborn HEAD — measured (exit 128 'could not resolve HEAD', unstaged NOTHING), so unstagePath() falls back to git rm --cached --ignore-unmatch. The hive's FIRST commit stages the entire bootstrap, which is precisely the highest-risk window a planted secret rides in on; without the fallback the graded clause fails on exactly that commit while looking fine everywhere else. Also: GitHub Push Protection REJECTED the first ceiling fixture (GH013, Stripe API Key) and the unblock URL was deliberately NOT used — allowing a secret-shaped fixture past push protection weakens the repo's scanning posture permanently. Fixture changed to CAUGHT_SECRET's own material with _ for -, which isolates one character and is a better test. That GitHub catches a shape redactSecrets misses is itself a data point on the ceiling.
 
 ### Pending Todos
 
@@ -195,8 +200,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T06:05:54.022Z
-Stopped at: Completed 01-10-PLAN.md (FLOOR-07 FTS5 recall + FLOOR-05 log folder + FLOOR-10 CLOSED). CI green on all six jobs at 94d6653: ubuntu/macos 492 tests 492 pass 0 fail 0 skipped, windows 492/488/0 fail/4 skipped (the pre-existing 4). E2E Electron smoke green. Local: typecheck 0, npm test 0, npm run build 0 under Node 22.23.2. B-pass-ep-w5 24 -> 26, B-repo-claims 5 -> 11, db-fts 6/6 with skipped 0, user_version 1 -> 2, grep -c budgetForAgent src/main/index.ts 0 -> 1. OUTSTANDING: FLOOR-05's manual click (operator) and 7 residual 'Enterprise Knowledge Graph' sites incl. the agent-facing SKILL.md:96.
+Last session: 2026-08-21T06:34:37.874Z
+Stopped at: Completed 01-11-PLAN.md (FLOOR-04: secret scrub at the single commit choke point). CI green on all six jobs at a9db6b9: ubuntu/macos 496/496/0 fail/0 skipped, windows 496/492/0 fail/4 skipped (the pre-existing 4) - exactly +4 on every platform. Local typecheck 0, npm test 0. B-durability 6 -> 10 with skipped 0, RED-controlled 4/4 against pre-fix hive.ts. redactSecrets 5 -> 9, --staged 0 -> 3, diff --cached 0 -> 2. LOCKSTEP verdict (a) NO WIDENING: REDACT-BODY c9c1cf47 unchanged, voice-messages.test.cjs untouched. gitAsync's pre-commit-hook hole CONFIRMED already fixed by 840c36e (core.hooksPath on both wrappers) - no fix needed here. OUTSTANDING: FLOOR-04's optional manual dev-app check (operator) and the FLOOR-03/#10 issue-mapping errors filed as a blocker.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
