@@ -92,7 +92,7 @@ export function OfficeThemePicker({ config }: { config: HarnessConfig }) {
   return (
     <div>
       <div style={{
-        fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+        fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 10
       }}>
         Office Theme
@@ -101,10 +101,10 @@ export function OfficeThemePicker({ config }: { config: HarnessConfig }) {
       {/* Experimental feature flag */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
             TV-show office themes <span style={{ color: 'var(--cth-ink-500)' }}>(experimental)</span>
           </span>
-          <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
             Re-skin the pixel office as a TV show. Switching starts a fresh cast.
           </span>
         </div>
@@ -139,21 +139,21 @@ export function OfficeThemePicker({ config }: { config: HarnessConfig }) {
                 }} />
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {t.label}
                     </span>
                     {isCurrent && (
-                      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 7, color: 'var(--cth-mint)', textTransform: 'uppercase' }}>
+                      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-mint)', textTransform: 'uppercase' }}>
                         current
                       </span>
                     )}
                     {!t.built && !isCurrent && (
-                      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 7, color: 'var(--cth-ink-500)', textTransform: 'uppercase' }}>
+                      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', textTransform: 'uppercase' }}>
                         soon
                       </span>
                     )}
                   </span>
-                  <span style={{ fontSize: 11, lineHeight: '14px', color: 'var(--cth-ink-500)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {t.blurb}
                   </span>
                 </span>
@@ -164,7 +164,7 @@ export function OfficeThemePicker({ config }: { config: HarnessConfig }) {
       )}
 
       {enabled && note && (
-        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--cth-ink-500)' }}>{note}</div>
+        <div style={{ marginTop: 10, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>{note}</div>
       )}
 
       {pending && pendingMeta && (
@@ -218,7 +218,7 @@ function ThemeSwitchConfirmModal({
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{
-                  fontFamily: 'var(--cth-font-display)', fontSize: 12, lineHeight: '20px',
+                  fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
                   color: 'var(--cth-ink-900)', marginBottom: 4,
                 }}>
                   STARTS A FRESH CAST
@@ -231,7 +231,7 @@ function ThemeSwitchConfirmModal({
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)', marginTop: 8 }}>
+                <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', marginTop: 8 }}>
                   This can't be undone.
                 </div>
               </div>
