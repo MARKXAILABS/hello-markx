@@ -136,3 +136,62 @@ chip at any width. Only the chip pair still overruns the card.
 One-line evaluation for whoever takes it: give `SkillsTab.tsx`'s `Chip` (`:24-34`) the same truncation
 contract the name now has (`flexShrink: 1, minWidth: 0` plus the triplet), or cap the rendered
 category/owner text. Both are content decisions, not typography.
+
+---
+
+## 01-21 (FLOOR-16, lint gate) — four items, none in this plan's declared bound
+
+### 1. ESLint 9.x is deprecated-tagged upstream; moving to 10 needs an `engines` widening first
+
+`npm install eslint@9` prints *"npm warn deprecated eslint@9.39.5: This version is no longer
+supported."* Every 9.x carries the identical message (checked 9.39.1 … 9.39.5), so it is the
+`maintenance` dist-tag's support policy applied to the whole major, not a security advisory —
+`npm audit --audit-level=high` is unaffected.
+
+ESLint 9 was still the right pick **because of this repo's own `engines`**: `package.json` declares
+`node: ">=20 <23"`, which admits Node 20.0–20.18 and 22.0–22.12. ESLint 10 requires
+`^20.19.0 || ^22.13.0 || >=24`, so on those Node versions — versions this package says it supports —
+`npm run lint` would not run at all. A gate a contributor cannot execute locally is the same defect
+class FLOOR-16 exists to close. ESLint 9's `^18.18.0 || ^20.9.0 || >=21.1.0` is a superset of the
+repo's range.
+
+**The fix, when someone takes it:** widen `engines.node` to `^20.19.0 || ^22.13.0 || >=24` (`.nvmrc`
+is already `22` and CI's `NODE_VERSION` is `22`, so both already satisfy it), confirm
+`test/ci-config.test.cjs`'s `">=X <Y"` engines parser still holds or update it, then
+`npm i -D eslint@10`. That is a package-wide compatibility change, not an executor call inside a lint
+plan.
+
+### 2. Six untracked scratch files appeared in the repo root during this plan, and are NOT ours
+
+`c.ts`, `inv.ts`, `pre.ts`, `pred.ts`, `sig.ts`, `f5/wrapped.ts` (plus the pre-existing `psl.dat`).
+Contents are wrapped/multi-line source shapes — a multi-line function signature, a wrapped `if`
+condition, a wrapped `ipcRenderer.invoke`, a multi-line `import` — i.e. fixtures for testing whether
+some assertion survives line wrapping. Timestamps land inside this plan's window but nothing this
+plan ran writes them, and no file in `test/` references those names.
+
+**Left completely alone**: not staged, not deleted. Deleting another agent's working files is the
+exact class of destruction the executor rules forbid. Whoever owns them should clean them up or
+`.gitignore` them; a stray `f5/` directory in the repo root will otherwise reach a future
+containment filter.
+
+### 3. `eslint .` does not cover TypeScript outside `src/`
+
+The flat config's single entry is `files: ['src/**/*.{ts,tsx}']`, so `e2e/*.ts`,
+`playwright.config.ts` and `electron.vite.config.ts` are parsed by nothing. That is deliberate and
+harmless today — the two configured rules are React-hooks rules and there are no React hooks in
+those files — but it is a real scope statement, not an oversight, and it is written down here so a
+future "why didn't lint catch that" has an answer. Widening `files` costs nothing while the rule
+surface stays at two rules.
+
+### 4. Orphaned Electron probe processes hold `node_modules/electron/dist` open and break `npm ci`
+
+Four `electron.exe` processes running `node_modules/electron/dist/electron.exe probe/main.js` —
+leftovers from an earlier plan's CDP probe harness — were still alive on this host and held
+`dist/dxil.dll` and `dist/resources/default_app.asar` locked. `npm ci --ignore-scripts` deleted
+`node_modules/` and then failed `EPERM: unlink` half way through, leaving the tree unusable until
+they were killed and the install re-run.
+
+The probe harnesses that waves 5–7 wrote should `app.quit()` (and the driver should kill the child
+on both the success and the failure path) so this cannot happen again. Cost here was one broken
+`node_modules` and a re-install; on a machine without a portable Node 22 to re-install with it would
+have been worse.
