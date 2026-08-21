@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import type { AgentProvider } from '../shared/agentProvider';
+import type { QueueOp } from '../shared/queueDelivery';
+import type { QueueResult, QueueSnapshot } from '../main/delivery';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
 export type { ClaudeAccount } from '../shared/claudeAccounts';
 import type { PoolSnapshot } from '../shared/claudeAccountPool';
@@ -967,6 +969,19 @@ const api = {
    *  renderer can never wedge the floor's autonomy. */
   hiveDeliveryVeto: (agentId: string, reason: string | null): void => {
     ipcRenderer.send('hive:deliveryVeto', agentId, reason);
+  },
+  /** The MD queue (#5 / FLOOR-02). MAIN owns the queue and its drain now, so a
+   *  message composed here is delivered with the window closed; every renderer
+   *  mutation — park, remove, "send now", clear — goes through this one channel
+   *  instead of writing the store slice directly. */
+  hiveQueue: (op: QueueOp): Promise<QueueResult> => ipcRenderer.invoke('hive:queue', op),
+  /** Main's push of the whole queue, on every mutation and every delivery. The
+   *  renderer's copy is a VIEW: this is what keeps the composer's pending list
+   *  honest now that it is no longer the thing being drained. */
+  onHiveQueue: (cb: (queues: QueueSnapshot) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, queues: QueueSnapshot) => cb(queues);
+    ipcRenderer.on('hive:queue', listener);
+    return () => ipcRenderer.removeListener('hive:queue', listener);
   },
   /** Main is putting an agent in front of the human — today from a clicked OS
    *  notification (#42), which has already raised the window. The renderer only

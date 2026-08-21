@@ -31,8 +31,9 @@ import { HiveManager, redactSecrets, type AgentMeta, type HiveMessage, type Hive
 import { AccountPoolManager } from './accountPool';
 import {
   DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
-  type AccountSwitch, type LiveAgentPty
+  type AccountSwitch, type LiveAgentPty, type QueueResult
 } from './delivery';
+import type { QueueOp, QueuedDelivery } from '../shared/queueDelivery';
 import { HookServer } from './hooks';
 import { CircuitBreaker, type BreakerInput } from './breaker';
 import type { UsageProvider } from './usage';
@@ -457,6 +458,24 @@ const delivery = new DeliveryService({
     return { ...res, delivered: res.block ? pending.map((m) => ({ id: m.id, from: m.from })) : [] };
   },
   respawn: respawnOnAccount,
+  // FLOOR-02 — the MD queue is MAIN's now, so it needs a durable home. One plain
+  // JSON file beside the hive's other live files (`log.jsonl`,
+  // `cost-ledger.jsonl`, `fleet.json`, `roster.json`), named for what it holds.
+  // A thunk because harnessHome is legitimately null before onboarding and can
+  // change in Settings afterwards; a path captured at module scope would be
+  // relative (i.e. the process CWD) and would then stay pointed at the old hive.
+  queuePath: () => {
+    const home = readConfig().harnessHome;
+    return home ? join(home, 'delivery-queue.json') : null;
+  },
+  // T-P08-05 — resolve the recipient against MAIN's roster rather than trusting
+  // the agent id a renderer sent. `isAssistant` agents are excluded for the same
+  // reason `liveAgents` skips them: the prep assistant is send-only.
+  knownAgent: (agentId) => {
+    if (!hive.enabled()) return false;
+    const a = hive.registry().agents[agentId];
+    return !!a && !a.archived;
+  },
   breakerLevel: (agentId) => breaker.levelFor(agentId),
   // The DURABLE half of the idle-quiesce backstop (#5). `emit` below reaches a
   // renderer that may not exist — the whole point of moving the backstop out of
@@ -3390,6 +3409,44 @@ ipcMain.on('hive:deliveryVeto', (_evt, agentId: string, reason: string | null) =
   if (typeof agentId !== 'string' || !agentId) return;
   delivery.setVeto(agentId, typeof reason === 'string' && reason ? reason : null);
 });
+/**
+ * FLOOR-02 — the ONE channel through which a renderer touches the delivery
+ * queue. The queue itself is main's (`delivery-queue.json` beside the hive), so
+ * the renderer's store no longer writes it; its producers call this and its
+ * pending list renders the snapshot main pushes back on `hive:queue`.
+ *
+ * This is an IPC trust boundary and text accepted here is text that will be
+ * typed into a live terminal, so every field is validated and the recipient is
+ * resolved against main's own roster (T-P08-01/05, `DeliveryDeps.knownAgent`).
+ * Never throws across IPC — a bad op is a `{ok:false, error}` (CONVENTIONS.md).
+ */
+ipcMain.handle('hive:queue', (_evt, raw: unknown): QueueResult => {
+  const req = raw as Partial<QueueOp> | null;
+  if (!req || typeof req !== 'object') return { ok: false, error: 'invalid op' };
+  const agentId = typeof (req as { agentId?: unknown }).agentId === 'string'
+    ? (req as { agentId: string }).agentId : '';
+  const id = typeof (req as { id?: unknown }).id === 'string' ? (req as { id: string }).id : '';
+  switch (req.op) {
+    case 'enqueue': {
+      const { text, slack, instruction } = req as Extract<QueueOp, { op: 'enqueue' }>;
+      const okSlack = !slack
+        || (typeof slack === 'object'
+          && typeof slack.channel === 'string' && typeof slack.thread_ts === 'string');
+      if (!okSlack) return { ok: false, error: 'invalid slack coordinates' };
+      return delivery.enqueue({
+        agentId,
+        text: typeof text === 'string' ? text : '',
+        ...(slack ? { slack } : {}),
+        ...(typeof instruction === 'string' ? { instruction } : {})
+      });
+    }
+    case 'remove': return id ? delivery.removeQueued(agentId, id) : { ok: false, error: 'invalid id' };
+    case 'release': return id ? delivery.releaseQueued(agentId, id) : { ok: false, error: 'invalid id' };
+    case 'clear': return agentId ? delivery.clearQueued(agentId) : { ok: false, error: 'invalid agentId' };
+    case 'list': return { ok: true, queues: delivery.queueSnapshot() };
+    default: return { ok: false, error: 'unknown op' };
+  }
+});
 ipcMain.handle('pty:resize', (_evt, id: string, cols: number, rows: number) => {
   if (typeof id !== 'string' || typeof cols !== 'number' || typeof rows !== 'number') return { ok: false, error: 'invalid args' };
   return ptyManager.resize(id, cols, rows);
@@ -3911,6 +3968,42 @@ const roster = new RosterStore(() => readConfig().harnessHome);
 ipcMain.on('roster:readSync', (evt) => { evt.returnValue = roster.read(); });
 ipcMain.handle('roster:read', () => roster.read());
 ipcMain.handle('roster:write', (_evt, snap: unknown) => roster.write(snap));
+
+/**
+ * FLOOR-02 — one-shot adoption of messages parked BEFORE the queue moved to main.
+ *
+ * The renderer used to own the MD queue and mirrored it into `roster.json`'s
+ * `queues` field. Anyone upgrading across this change has real messages sitting
+ * there, and a migration that silently drops them turns "the queue survives an
+ * app restart" into a lie on the one restart that matters. Guarded on the queue
+ * file's absence, so it runs at most once per hive and can never resurrect a
+ * message the operator deleted afterwards.
+ */
+function adoptRendererQueues(): void {
+  try {
+    const home = readConfig().harnessHome;
+    if (!home) return;
+    if (existsSync(join(home, 'delivery-queue.json'))) return;
+    const queues = roster.read()?.queues;
+    if (!queues) return;
+    let adopted = 0;
+    for (const [agentId, items] of Object.entries(queues)) {
+      for (const m of (Array.isArray(items) ? items : []) as Partial<QueuedDelivery>[]) {
+        if (typeof m?.text !== 'string' || !m.text.trim()) continue;
+        const res = delivery.enqueue({
+          agentId,
+          text: m.text,
+          ...(m.slack ? { slack: m.slack } : {}),
+          ...(m.instruction ? { instruction: m.instruction } : {})
+        });
+        if (res.ok) adopted += 1;
+      }
+    }
+    if (adopted) console.log(`[delivery] adopted ${adopted} message(s) parked by the renderer`);
+  } catch (e) {
+    console.error('[delivery] queue adoption failed', e);
+  }
+}
 
 // ─── IPC: hive (multi-agent coordination) ───────────────────────────────────
 ipcMain.handle('hive:registry', () => hive.registry());
@@ -5411,6 +5504,7 @@ function bootstrapHiveServices(): void {
   memory.start(); // init shared palace + mine loop (no-op without mempalace)
   reflector.start(); // bound oversized memory.md files on a timer (no-op until threshold)
   delivery.start(); // #5 — the inbox wake + failover executor, in MAIN
+  adoptRendererQueues(); // FLOOR-02 — one-shot: don't lose messages parked before the move
 
   armAlwaysOnBeats();
 }

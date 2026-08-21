@@ -23,7 +23,7 @@ import {
   terminalAutomationBlockFor,
   disposeOrphanedTerminals
 } from '@/components/terminalPool';
-import { deliverWithAcknowledgement } from './queueDelivery';
+import { deliverWithAcknowledgement } from '@shared/queueDelivery';
 import { OFFICE_CAST, DEFAULT_CHARACTER } from '@/scene/office/cast';
 
 const GOD_ID = 'god';

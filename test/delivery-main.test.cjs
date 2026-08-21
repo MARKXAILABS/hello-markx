@@ -52,6 +52,11 @@ function harness(overrides = {}) {
       return { ok: true };
     },
     paused: (id) => state.paused.has(id),
+    // No durable home by default: `null` disables the main-owned MD queue, so
+    // every pre-existing test drives exactly the loop it always drove. The queue
+    // tests below pass a real path into a mkdtemp dir and read the bytes back.
+    queuePath: () => null,
+    knownAgent: () => true,
     breakerLevel: (id) => state.breaker[id] ?? 'healthy',
     setStatus: (id, status) => state.statuses.push({ id, status }),
     drain: () => state.drain,

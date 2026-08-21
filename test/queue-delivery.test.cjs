@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const loadTs = require('./load-ts.cjs');
 
 const { deliverWithAcknowledgement } =
-  loadTs('src/renderer/src/hooks/queueDelivery.ts');
+  loadTs('src/shared/queueDelivery.ts');
 
 test('queue item is acknowledged only after delivery succeeds', async () => {
   let finish;

@@ -25,8 +25,44 @@
  * loop with fakes (test/delivery-main.test.cjs). All Electron/hive/PTY specifics
  * arrive through {@link DeliveryDeps}, wired in index.ts.
  */
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { AgentProvider } from '../shared/agentProvider';
-import { terminalReadyToReceive } from '../shared/providerAutomation';
+import { isCompactionCommand, terminalReadyToReceive } from '../shared/providerAutomation';
+import {
+  deliverWithAcknowledgement,
+  nextForDelivery,
+  noteAttempt,
+  MAX_QUEUED_PER_AGENT,
+  type QueuedDelivery
+} from '../shared/queueDelivery';
+
+export type { QueuedDelivery };
+
+/** The queue as the renderer's pending list wants to read it: grouped by agent.
+ *  Main owns the list; this is a VIEW pushed down on every mutation. */
+export type QueueSnapshot = Record<string, QueuedDelivery[]>;
+
+/** What a renderer producer may ask main to park. Everything else on a
+ *  {@link QueuedDelivery} — its id, its timestamp, its attempt count — is
+ *  minted here, because a renderer that picks its own ids can collide with
+ *  another window's and with main's own. */
+export interface EnqueueRequest {
+  agentId: string;
+  text: string;
+  slack?: { channel: string; thread_ts: string };
+  instruction?: string;
+}
+
+/** Every mutation returns the fresh snapshot, so a caller that just enqueued
+ *  renders the new state without waiting for the push. Never throws — this is
+ *  an IPC return value (CONVENTIONS.md: never throw across IPC). */
+export interface QueueResult {
+  ok: boolean;
+  error?: string;
+  id?: string;
+  queues?: QueueSnapshot;
+}
 
 /** One live agent + its PTY, as the loop needs to see it. */
 export interface LiveAgentPty {
@@ -83,6 +119,26 @@ export interface DeliveryDeps {
    *  the window closed, so index.ts points it at the hive log. Same split as
    *  `drain` (durable cursor advance) vs `emit('hive:delivered')` above. */
   setStatus?: (agentId: string, status: 'idle') => void;
+  /**
+   * Where the MAIN-OWNED delivery queue is persisted (FLOOR-02).
+   *
+   * A THUNK, not the `string` the plan drafted, and the difference is a real bug
+   * rather than a preference: `index.ts` builds this service at module scope,
+   * where `readConfig().harnessHome` is legitimately `null` before onboarding.
+   * A string captured there would be `join(null-ish, …)` → a RELATIVE path, and
+   * the queue would be written into whatever the process CWD happens to be —
+   * and would then keep pointing there after the operator changes their hive
+   * home in Settings. `null` means "no durable home yet", which disables the
+   * queue rather than scattering it.
+   *
+   * Injected so a test can point the queue at a temp dir and read the bytes.
+   */
+  queuePath: () => string | null;
+  /** Is this agent a live, addressable member of the floor? The enqueue handler
+   *  resolves the recipient against MAIN's roster instead of trusting the id a
+   *  renderer sent (T-P08-05). Optional: a floor with no roster source accepts
+   *  any id, exactly like `breakerLevel` reads every agent as healthy. */
+  knownAgent?: (agentId: string) => boolean;
   /** Send an event to the renderer (a no-op when no window is attached). */
   emit: (channel: string, payload: unknown) => void;
   log?: (...args: unknown[]) => void;
@@ -163,6 +219,22 @@ const WAKE_NUDGE =
  * into PTYs too, and this cluster owns neither that file nor src/shared. See
  * `crossFileNeeds` — it belongs in src/shared/ptyText.ts with both callers on it.
  */
+/** Process-unique suffix for a queued message id (the clock alone collides when
+ *  several are parked inside one millisecond — the same reason the renderer
+ *  store's `newQueuedId` carried a counter). */
+let queueSeq = 0;
+
+/** Is this parsed JSON actually a queue entry? The file is on disk where an
+ *  agent, an editor or a half-finished write could have touched it. */
+function isQueuedDelivery(v: unknown): v is QueuedDelivery {
+  const m = v as Partial<QueuedDelivery> | null;
+  return !!m && typeof m === 'object'
+    && typeof m.id === 'string' && !!m.id
+    && typeof m.agentId === 'string' && !!m.agentId
+    && typeof m.text === 'string' && !!m.text
+    && typeof m.ts === 'number';
+}
+
 export function sanitizeForPty(text: string): string {
   return text
     .replace(/\x1b\[20[01]~/g, '')
@@ -193,6 +265,22 @@ export class DeliveryService {
   /** ptyId → tail of its serialized write chain, so two callers (a wake nudge and
    *  a post-failover "continue") can never jam their text onto one line. */
   private readonly writeChains = new Map<string, Promise<void>>();
+  /** The MD queue, in memory, mirroring the file at `deps.queuePath()`. `null`
+   *  until first read. NEVER the source of truth on its own: every mutation is
+   *  written through to disk before the mutator returns, because the whole point
+   *  of moving this out of the renderer is surviving a process that goes away. */
+  private queue: QueuedDelivery[] | null = null;
+  /** The path `this.queue` was loaded from, so a changed harness home reloads
+   *  rather than writing one hive's queue into another's file. */
+  private queueFile: string | null = null;
+  /** agentId → the instant of its last queue delivery (the FLUSH_COOLDOWN_MS
+   *  gate the renderer drain kept in a ref). */
+  private readonly lastFlushAt = new Map<string, number>();
+  /** `agentId:messageId` claimed BEFORE the first await, exactly as the renderer
+   *  drain's `inFlight` Set was: every await between "is this already going out?"
+   *  and the claim is a window in which two ticks both pass that check and the
+   *  head of the queue is typed in twice. Released in a `finally`. */
+  private readonly queueInFlight = new Set<string>();
 
   constructor(private readonly deps: DeliveryDeps) {}
 
@@ -242,6 +330,244 @@ export class DeliveryService {
 
   /** True while a failover is between kill and respawn for this agent. */
   isSwitching(agentId: string): boolean { return this.switching.has(agentId); }
+
+  // ─── the MAIN-OWNED MD queue (FLOOR-02) ─────────────────────────────────────
+  //
+  // This queue was renderer state until now, and `useHive.ts` effect #4's own
+  // comment explained why it had to be: "it holds messages the RENDERER produced
+  // … it lives in renderer state, and main has no view of it." That is exactly
+  // why nothing composed in the UI was delivered with the window closed. Moving
+  // the DRAIN alone was never possible; the QUEUE had to move, so it did.
+  //
+  // Storage is one plain JSON file beside the hive's other live files, written
+  // through on every mutation before the mutator returns. Not `PersistStore`:
+  // `src/main/delivery.ts` is deliberately the cluster's only Electron-free
+  // module, which is what lets `node --test` drive the whole loop with fakes,
+  // and pulling a native SQLite binding in here would end that.
+  //
+  // Not append-only jsonl either, unlike `log.jsonl` and `cost-ledger.jsonl`
+  // beside it: those are records of things that happened, while this is a
+  // MUTABLE list — items leave it on delivery and move within it on "send now".
+  // An append-only log of enqueue/remove events would need its own compactor,
+  // which is precisely the unbounded-growth failure (T-P08-04) that pruning is
+  // supposed to close. A whole-file rewrite is O(queue), the queue is bounded by
+  // MAX_QUEUED_PER_AGENT, and pruning is free: a delivered item is simply not in
+  // the next write.
+
+  /** The queue as it is on disk, read once per path. Anything unreadable or
+   *  malformed degrades to an EMPTY queue rather than throwing out of a timer —
+   *  and, because a load failure must not then be written back over a file that
+   *  might be fine, `queueFile` is only armed once a load has actually landed. */
+  private loadQueue(): QueuedDelivery[] {
+    const path = this.deps.queuePath();
+    if (!path) { this.queue = null; this.queueFile = null; return []; }
+    if (this.queue && this.queueFile === path) return this.queue;
+    let items: QueuedDelivery[] = [];
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      const raw = (parsed as { items?: unknown })?.items;
+      if (Array.isArray(raw)) items = raw.filter(isQueuedDelivery);
+    } catch { /* absent or corrupt — an empty queue, not a crashed tick */ }
+    this.queue = items;
+    this.queueFile = path;
+    return items;
+  }
+
+  /**
+   * Persist SYNCHRONOUSLY, before the caller returns.
+   *
+   * A buffer flushed "later" is indistinguishable from no durability at all in
+   * the kill-the-process case this exists for. Staged through a temp file and
+   * renamed into place (the same rule `roster.ts` follows) so a crash mid-write
+   * leaves the previous queue intact rather than a truncated one — the hive's
+   * `.gitignore` already carries `*.tmp-*` for exactly this staging pattern.
+   */
+  private saveQueue(): void {
+    const path = this.queueFile;
+    if (!path) return;
+    const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(tmp, JSON.stringify({ version: 1, items: this.queue ?? [] }), 'utf8');
+      renameSync(tmp, path);
+    } catch (e) {
+      this.log('queue persist failed', String(e));
+      try { rmSync(tmp, { force: true }); } catch { /* nothing staged */ }
+    }
+  }
+
+  /** Persist, then tell every attached renderer. The push is what keeps the
+   *  composer's pending list a live VIEW now that main owns the list itself —
+   *  main is a no-op emitter with no window, which is the whole point. */
+  private commitQueue(): QueueResult {
+    this.saveQueue();
+    const queues = this.queueSnapshot();
+    this.deps.emit('hive:queue', queues);
+    return { ok: true, queues };
+  }
+
+  /** The queue grouped by agent, in delivery order. */
+  queueSnapshot(): QueueSnapshot {
+    const out: QueueSnapshot = {};
+    for (const m of this.loadQueue()) (out[m.agentId] ??= []).push(m);
+    return out;
+  }
+
+  /**
+   * Park a message for an agent. THE one way anything reaches the drain.
+   *
+   * Validates at this boundary rather than trusting its caller: the renderer's
+   * producers reach it over IPC, and text accepted here is text that will be
+   * typed into a live terminal (T-P08-01/05).
+   */
+  enqueue(req: EnqueueRequest): QueueResult {
+    const agentId = typeof req?.agentId === 'string' ? req.agentId.trim() : '';
+    const text = typeof req?.text === 'string' ? req.text.trim() : '';
+    if (!agentId) return { ok: false, error: 'invalid agentId' };
+    if (!text) return { ok: false, error: 'empty message' };
+    // Resolve the recipient against MAIN's roster. A renderer naming an agent
+    // that is not on this floor does not get to make main type at it.
+    if (this.deps.knownAgent && !this.deps.knownAgent(agentId)) {
+      return { ok: false, error: `unknown agent: ${agentId}` };
+    }
+    const queue = this.loadQueue();
+    if (!this.queueFile) return { ok: false, error: 'no harness home — nowhere durable to park this' };
+    if (queue.filter((m) => m.agentId === agentId).length >= MAX_QUEUED_PER_AGENT) {
+      return { ok: false, error: `queue full for ${agentId} (${MAX_QUEUED_PER_AGENT})` };
+    }
+    // ONE PENDING COMPACT PER AGENT. Compaction is idempotent in the worst way:
+    // the first `/compact` does the work and every one behind it answers "nothing
+    // to compact", so a queue that accumulates them spends a delivery slot and a
+    // model round-trip per copy and buries the operator's real backlog.
+    //
+    // This invariant used to live in the renderer store's `enqueueMessage`, for a
+    // reason that survives the move verbatim: there are several producers — the
+    // context trigger, god dispatching a work order, Slack, the composer — and
+    // each one that grew its own check could still be bypassed by the next path
+    // someone adds. So it moved WITH the queue, to the queue's new one gate.
+    // Leaving it in the renderer would have made it advisory: two producers can
+    // both read a stale view between their enqueue and main's push back.
+    if (isCompactionCommand(text)
+      && queue.some((m) => m.agentId === agentId && isCompactionCommand(m.text))) {
+      return { ok: true, error: 'compaction already queued', queues: this.queueSnapshot() };
+    }
+    const item: QueuedDelivery = {
+      id: `q-${Date.now()}-${++queueSeq}`,
+      agentId,
+      text,
+      ts: Date.now(),
+      ...(req.slack ? { slack: req.slack } : {}),
+      ...(typeof req.instruction === 'string' && req.instruction ? { instruction: req.instruction } : {})
+    };
+    queue.push(item);
+    return { ...this.commitQueue(), id: item.id };
+  }
+
+  /** Drop one parked message (the user removed it, or it was just delivered). */
+  removeQueued(agentId: string, messageId: string): QueueResult {
+    const queue = this.loadQueue();
+    const i = queue.findIndex((m) => m.id === messageId && m.agentId === agentId);
+    if (i < 0) return { ok: false, error: 'not queued', queues: this.queueSnapshot() };
+    queue.splice(i, 1);
+    return this.commitQueue();
+  }
+
+  /** "Send now" while auto-delivery is paused: mark it manual and move it to the
+   *  front of that agent's queue. Bypasses ONLY the pause gate. */
+  releaseQueued(agentId: string, messageId: string): QueueResult {
+    const queue = this.loadQueue();
+    const i = queue.findIndex((m) => m.id === messageId && m.agentId === agentId);
+    if (i < 0) return { ok: false, error: 'not queued', queues: this.queueSnapshot() };
+    const [item] = queue.splice(i, 1);
+    item.manual = true;
+    queue.unshift(item);
+    return this.commitQueue();
+  }
+
+  /** Clear one agent's whole queue (the user asked, or the agent was removed). */
+  clearQueued(agentId: string): QueueResult {
+    const queue = this.loadQueue();
+    for (let i = queue.length - 1; i >= 0; i--) if (queue[i].agentId === agentId) queue.splice(i, 1);
+    return this.commitQueue();
+  }
+
+  /**
+   * Drain the queue into live terminals, from the tick that already exists.
+   *
+   * Every gate the renderer drain applied is applied here, and the two that only
+   * the renderer could see are the two the renderer KEPT: the draft/picker gate
+   * arrives as `vetoed()`, reported up over `hive:deliveryVeto`. The rest —
+   * idle, boot grace, operator pause, mid-failover — main can see for itself and
+   * already did, which is why they are the tick's own guards rather than copies.
+   *
+   * ADR-0001 is intact: this writes through `submit()`, the same single gate the
+   * wake nudge and the post-failover "continue" use, which serializes per PTY.
+   * The renderer drain is DELETED, not left as a fallback — one queue, one owner,
+   * one writer.
+   */
+  private async drainQueue(live: LiveAgentPty[], now: number): Promise<void> {
+    if (!this.loadQueue().length) return;
+    const jobs: Array<Promise<void>> = [];
+    for (const a of live) {
+      if (this.switching.has(a.agentId)) continue;                  // mid-respawn
+      if (this.vetoed(a.agentId)) continue;                         // the human is typing
+      if ((this.bootGraceUntil.get(a.ptyId) ?? 0) > now) continue;  // TUI still booting
+      if (a.idleMs < IDLE_MS) continue;                             // mid-turn
+      const next = nextForDelivery(this.loadQueue(), a.agentId, {
+        now,
+        lastFlushAt: this.lastFlushAt.get(a.agentId) ?? 0,
+        paused: this.deps.paused(a.agentId)
+      });
+      if (!next) continue;
+      const key = `${a.agentId}:${next.id}`;
+      if (this.queueInFlight.has(key)) continue;
+      // CLAIMED BEFORE THE AWAIT — see `queueInFlight`.
+      this.queueInFlight.add(key);
+      this.lastFlushAt.set(a.agentId, now);
+      jobs.push(this.deliverQueued(a, next, key));
+    }
+    await Promise.all(jobs);
+  }
+
+  private async deliverQueued(a: LiveAgentPty, item: QueuedDelivery, key: string): Promise<void> {
+    try {
+      // `instruction`, when present, is the authoritative text to type; card and
+      // list surfaces keep showing the readable `text`.
+      const sent = await deliverWithAcknowledgement(
+        () => this.submit(a.ptyId, item.instruction ?? item.text, a.provider),
+        () => {
+          // The DURABLE dedup: a delivered message leaves the file. Deliberately
+          // NOT the wake's `seenSet` — that set is pruned against the live hive
+          // inbox on every tick (`stillUnread` below), so a queue id parked in it
+          // would be erased within four seconds and the message re-typed. The
+          // queue's own removal is both narrower and stronger: it survives the
+          // restart the in-memory set cannot.
+          const q = this.loadQueue();
+          const i = q.findIndex((m) => m.id === item.id);
+          if (i >= 0) q.splice(i, 1);
+          this.commitQueue();
+        }
+      );
+      if (sent) {
+        this.deps.emit('hive:queueDelivered', { to: a.agentId, id: item.id });
+        return;
+      }
+      // Failed write (a dead/crashed pty the roster still thinks is live): retry
+      // on the next cooldown-spaced tick, bounded, then drop LOUDLY. (#113/#36)
+      if (noteAttempt(item).drop) {
+        const q = this.loadQueue();
+        const i = q.findIndex((m) => m.id === item.id);
+        if (i >= 0) q.splice(i, 1);
+        this.log(
+          `dropping queued message ${item.id} for ${a.agentId} after ${item.attempts} failed pty writes`,
+          `("${item.text.slice(0, 80)}${item.text.length > 80 ? '…' : ''}")`
+        );
+      }
+      this.commitQueue();
+    } finally {
+      this.queueInFlight.delete(key);
+    }
+  }
 
   // ─── the guarded Stop drain (#5) ────────────────────────────────────────────
 
@@ -340,7 +666,10 @@ export class DeliveryService {
       const now = this.now();
       const live = this.deps.liveAgents();
       this.quiesce(live, now);
-      const jobs: Array<Promise<void>> = [];
+      // FLOOR-02's queue drain rides THIS tick — no second timer, in this file or
+      // in index.ts. It shares `submit()`'s per-PTY write chain with the wake
+      // nudge below, so the two can never jam their text onto one line.
+      const jobs: Array<Promise<void>> = [this.drainQueue(live, now)];
       for (const a of live) {
         if (this.switching.has(a.agentId)) continue;      // mid-respawn
         if (this.deps.paused(a.agentId)) continue;         // operator pause
