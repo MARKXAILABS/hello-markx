@@ -983,6 +983,15 @@ const api = {
     ipcRenderer.on('hive:queue', listener);
     return () => ipcRenderer.removeListener('hive:queue', listener);
   },
+  /** One queued message just landed in a terminal. Carries the text because the
+   *  renderer's remaining job on this path depends on WHAT landed: a delivered
+   *  `/clear` starts a new session whose size nothing reports until the next
+   *  status line, so the context gauge has to be zeroed rather than left full. */
+  onHiveQueueDelivered: (cb: (e: { to: string; id: string; text: string }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { to: string; id: string; text: string }) => cb(payload);
+    ipcRenderer.on('hive:queueDelivered', listener);
+    return () => ipcRenderer.removeListener('hive:queueDelivered', listener);
+  },
   /** Main is putting an agent in front of the human — today from a clicked OS
    *  notification (#42), which has already raised the window. The renderer only
    *  has to select the card. */

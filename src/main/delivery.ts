@@ -561,7 +561,11 @@ export class DeliveryService {
       if (sent) {
         try { this.deps.onQueueDelivered?.(item); }
         catch (e) { this.log('post-delivery hook threw for', item.id, String(e)); }
-        this.deps.emit('hive:queueDelivered', { to: a.agentId, id: item.id });
+        // `text` rides along because the renderer has a job that depends on WHAT
+        // landed, not just that something did: zeroing the context gauge on a
+        // delivered `/clear`. It cannot read the item out of the queue any more —
+        // the acknowledge above already removed it, which is the point.
+        this.deps.emit('hive:queueDelivered', { to: a.agentId, id: item.id, text: item.text });
         return;
       }
       // Failed write (a dead/crashed pty the roster still thinks is live): retry

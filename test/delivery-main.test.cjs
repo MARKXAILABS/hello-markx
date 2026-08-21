@@ -449,6 +449,24 @@ test('enqueue-and-tick twice writes ONCE — a delivered message leaves the queu
   });
 });
 
+test('the delivered event names the message AND its text — the /clear gauge depends on it', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, emitted } = harness({ queuePath: () => queuePath });
+    state.inbox.dev1 = [];
+    const { id } = svc.enqueue({ agentId: 'dev1', text: '/clear' });
+
+    await svc.tick();
+
+    // The acknowledge REMOVES the item before this fires, so the renderer cannot
+    // look the text up afterwards — it has to arrive on the event or the context
+    // bar stays stale-full through a session that no longer has that context.
+    assert.deepEqual(
+      emitted.filter((e) => e.channel === 'hive:queueDelivered').map((e) => e.payload),
+      [{ to: 'dev1', id, text: '/clear' }]
+    );
+  });
+});
+
 test('an operator pause holds a queued message, and "send now" releases it', async () => {
   await withQueueDir(async ({ queuePath }) => {
     const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });

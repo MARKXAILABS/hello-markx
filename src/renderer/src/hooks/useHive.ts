@@ -766,7 +766,17 @@ export function useHive(config: HarnessConfig | null): void {
     void window.cth.hiveQueue?.({ op: 'list' }).then((r) => {
       if (r.queues) useStore.getState().setQueues(r.queues);
     }).catch(() => { /* main's half absent - the view stays empty, nothing breaks */ });
-    return off;
+
+    // The ONE thing on this path that still depends on WHAT was delivered, kept
+    // verbatim from the deleted drain: zero the gauge on a DELIVERED `/clear`.
+    // The new session's context is unknown until statusLine fires after the first
+    // post-clear response, so leaving the old value shows a stale-full bar.
+    const offDelivered = window.cth.onHiveQueueDelivered?.(({ to, text }) => {
+      if (text.trim().toLowerCase() !== '/clear') return;
+      useStore.getState().updateAgent(to, { contextTokens: 0, contextLimit: undefined, progress: 0 });
+    });
+
+    return () => { off?.(); offDelivered?.(); };
   }, []);
 
   // 4b) THE VETO (#5). The renderer keeps its draft/picker gate — it is the only
