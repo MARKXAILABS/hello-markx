@@ -57,7 +57,7 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
       borderBottom: '1px solid var(--cth-ink-300)', flexShrink: 0
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 9, color: 'var(--cth-ink-500)', marginRight: 2 }}>CONTROL</span>
+        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', marginRight: 2 }}>CONTROL</span>
         {/* Neither of these kills anything, and the two-word labels never said
             so — the difference is WHEN the agent stops and whether it keeps its
             session. Spelled out on hover rather than left to be discovered. */}
@@ -76,10 +76,10 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
         {/* v0.3.4: the auto-delivery switch moved to the god's Command Center
             header — ONE floor-wide control instead of a per-agent toggle. */}
         {snap?.autoDeliveryPaused && (
-          <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>delivery paused (floor)</span>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>delivery paused (floor)</span>
         )}
-        {snap?.halted && <span style={{ fontSize: 11, color: 'var(--cth-coral)' }}>halting…</span>}
-        {!!snap?.pendingSteers && <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{snap.pendingSteers} steer queued</span>}
+        {snap?.halted && <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-coral)' }}>halting…</span>}
+        {!!snap?.pendingSteers && <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>{snap.pendingSteers} steer queued</span>}
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input
@@ -90,12 +90,12 @@ export function AgentControlStrip({ agentId }: { agentId: string }) {
           style={{
             flex: 1, padding: '4px 6px', background: 'var(--cth-paper-100)', border: 'none',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', fontFamily: 'var(--cth-font-ui)',
-            fontSize: 12, color: 'var(--cth-ink-900)', outline: 'none'
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', outline: 'none'
           }}
         />
         <PixelButton variant="secondary" size="sm" onClick={sendSteer} disabled={!steer.trim()}>steer</PixelButton>
       </div>
-      {note && <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{note}</span>}
+      {note && <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>{note}</span>}
     </div>
   );
 }

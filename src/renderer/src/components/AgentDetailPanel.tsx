@@ -126,7 +126,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: 'var(--cth-font-display)',
-            fontSize: 10, lineHeight: '14px',
+            fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
             color: 'var(--cth-ink-900)',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
           }}>{agent.name.toUpperCase()}</div>
@@ -135,7 +135,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
           }}>
             <PixelBadge status={agent.status} />
             <span style={{
-              fontSize: 12, color: 'var(--cth-ink-500)',
+              fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
             }}>{agent.project}</span>
             {/* Claude account pin — stored now, applied on the next (re)start
@@ -148,7 +148,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
                 style={{
                   padding: '1px 4px', background: 'var(--cth-paper-100)', border: 'none',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-700)',
+                  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)',
                   cursor: 'pointer', flexShrink: 0, maxWidth: 130
                 }}
               >
@@ -183,7 +183,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
 
       {openTerminalError && (
         <div style={{
-          fontSize: 12, color: 'var(--cth-coral)',
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-coral)',
           padding: '2px 8px',
           background: 'var(--cth-coral-light)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
@@ -278,11 +278,11 @@ function EmptyTab({ title, children }: { title: string; children: React.ReactNod
       background: 'var(--cth-paper-200)'
     }}>
       <div style={{
-        fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
+        fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-500)'
       }}>{title.toUpperCase()}</div>
       <p style={{
-        margin: 0, fontSize: 13, textAlign: 'center', color: 'var(--cth-ink-700)',
+        margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', textAlign: 'center', color: 'var(--cth-ink-700)',
         maxWidth: 280
       }}>{children}</p>
     </div>

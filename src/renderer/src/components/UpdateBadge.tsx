@@ -73,8 +73,8 @@ export function UpdateBadge() {
         borderRadius: 2,
         boxShadow: view.label ? 'inset 0 0 0 1px var(--cth-ink-300)' : 'none',
         fontFamily: 'var(--cth-font-ui)',
-        fontSize: 13,
-        lineHeight: '18px',
+        fontSize: 'var(--cth-text-body-md)',
+        lineHeight: 'var(--cth-lh-body-md)',
         color: view.tone === 'idle' ? 'var(--cth-ink-500)' : 'var(--cth-ink-900)',
         cursor: interactive ? 'pointer' : 'default'
       }}

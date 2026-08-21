@@ -57,18 +57,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         boxShadow: 'inset 0 0 0 1px var(--cth-coral)'
       }}>
         <div style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-900)', textTransform: 'uppercase', textAlign: 'center'
         }}>{this.props.label} crashed</div>
         <p style={{
           margin: 0, maxWidth: 320, textAlign: 'center',
-          fontFamily: 'var(--cth-font-mono)', fontSize: 12, lineHeight: '18px',
+          fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
           color: 'var(--cth-ink-700)',
           overflowWrap: 'anywhere'
         }}>{error.message || String(error)}</p>
         <p style={{
           margin: 0, maxWidth: 320, textAlign: 'center',
-          fontSize: 12, lineHeight: '18px', color: 'var(--cth-ink-700)'
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
         }}>
           The rest of the office is still running. Full stack in the devtools console.
         </p>

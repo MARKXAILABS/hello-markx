@@ -62,7 +62,7 @@ export function ReleaseDrop({
     background: primary ? INK : 'transparent',
     color: primary ? '#FBFAF8' : INK_SOFT,
     border: primary ? '1px solid ' + INK : `1px solid ${LINE}`,
-    fontFamily: 'inherit', fontSize: 13.5, fontWeight: primary ? 600 : 500,
+    fontFamily: 'inherit', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', fontWeight: primary ? 600 : 500,
     cursor: busy ? 'not-allowed' : 'pointer',
     opacity: busy && primary ? 0.6 : 1
   });
@@ -114,7 +114,7 @@ export function ReleaseDrop({
           background: '#FBFAF8'
         }}>
           <span style={{
-            fontSize: 11.5, fontWeight: 600, letterSpacing: '.1em',
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', fontWeight: 600, letterSpacing: '.1em',
             textTransform: 'uppercase', color: INK_SOFT, flex: 1, minWidth: 0
           }}>
             Hello MarkX · {version}
@@ -128,7 +128,13 @@ export function ReleaseDrop({
               fontFamily: 'inherit', fontSize: 14, lineHeight: 1, color: INK_SOFT,
               display: 'flex', alignItems: 'center', justifyContent: 'center'
             }}
-          >✕</button>
+          >
+            {/* Rule 0 exempt glyph. It already sits at 14px so there is nothing
+                to hold below the floor and nothing to allowlist — only the
+                aria-hidden the rule asks for, on a span so the focusable button
+                keeps its accessible name. */}
+            <span aria-hidden="true">✕</span>
+          </button>
         </div>
 
         {/* The drop itself — authored HTML, fully sandboxed. */}
@@ -152,7 +158,7 @@ export function ReleaseDrop({
           {showStar && (
             <button onClick={onStar} style={{
               border: 'none', background: 'transparent', cursor: 'pointer', padding: 0,
-              fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
+              fontFamily: 'inherit', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', fontWeight: 500,
               color: INK_SOFT, textDecoration: 'underline', textUnderlineOffset: 3
             }}>⭐ Star us on GitHub</button>
           )}

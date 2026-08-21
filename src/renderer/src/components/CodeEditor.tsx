@@ -157,14 +157,14 @@ export function CodeEditor({
           <Icon name="code" size={2} />
         </div>
         <div style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '14px',
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           textTransform: 'uppercase', letterSpacing: 1,
           color: 'var(--cth-ink-700)'
         }}>
           No file open
         </div>
         <div style={{
-          fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+          fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
           color: 'var(--cth-ink-500)'
         }}>
           Pick a file from the tree to view it here.
@@ -185,7 +185,7 @@ export function CodeEditor({
         padding: '4px 8px',
         background: 'var(--cth-cream-200)',
         borderBottom: '1px solid var(--cth-ink-700)',
-        fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+        fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
         color: 'var(--cth-ink-700)'
       }}>
         <Icon name="code" />
@@ -262,7 +262,7 @@ export function CodeEditor({
 
 const editorBtn: React.CSSProperties = {
   padding: '0 6px', height: 22,
-  fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
   color: 'var(--cth-ink-900)',
   background: 'var(--cth-cream-100)',
   border: 'none',

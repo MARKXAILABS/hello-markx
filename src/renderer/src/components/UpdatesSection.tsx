@@ -60,7 +60,7 @@ export function UpdatesSection() {
   return (
     <div>
       <div style={{
-        fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+        fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 10
       }}>
         Updates
@@ -68,14 +68,14 @@ export function UpdatesSection() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
           <span style={{
-            fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)',
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)',
             // Only an actionable state earns emphasis; "you're up to date" is
             // information, not a call to action.
             fontWeight: view.tone === 'ready' ? 600 : 400
           }}>
             {view.headline}
           </span>
-          <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
             {view.detail}
           </span>
         </div>
@@ -106,7 +106,7 @@ export function UpdatesSection() {
           {notes.map((line, i) => (
             <li key={i} style={{
               display: 'flex', gap: 6,
-              fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)'
+              fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
             }}>
               <span aria-hidden style={{ color: 'var(--cth-ink-300)' }}>•</span>
               <span>{line}</span>

@@ -108,7 +108,7 @@ export function TerminalView({ initialLines = [], feed = [] }: TerminalViewProps
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         fontFamily: 'var(--cth-font-ui)',
-        fontSize: 12,
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
         color: 'var(--cth-ink-500)',
         borderBottom: '1px dashed var(--cth-ink-300)',
         paddingBottom: 4,
