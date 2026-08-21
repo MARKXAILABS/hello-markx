@@ -104,3 +104,35 @@ Out-of-scope discoveries found while executing a plan. Logged, not fixed.
   not one of the six requirements and is outside 01-14's authorised action, so it was swept as
   specified and recorded here instead. Owner: a later cleanup plan, or leave it — but do not cite it
   as evidence that a 14px label ships on the floor.
+
+## [01-19] SkillsTab catalog identity row overflows at Rule 1's 14px — containment step 3
+
+`src/renderer/src/components/SkillsTab.tsx:308-313`. MEASURED in real Electron 43 at 1280x900 /
+1024x768 / 800x600 (CDP `Emulation.setDeviceMetricsOverride`, `window.innerWidth` read back on every
+scan), row width 368px inside the shipped app's 420px sidebar:
+
+| row | chip 1 | chip 2 | +gap | leftover for the name | row spill |
+|---|---|---|---|---|---|
+| `CATALOG SKILL 5` | `engineering` 170px | `abubakarsiddik31` 242px | 428px | **-60px** | **dx 61** |
+| `CATALOG SKILL 11` | `research` 127px | `abubakarsiddik31` 242px | 385px | -17px | dx 8 / dx 18 |
+| `CATALOG SKILL 2` | `writing` 113px | `abubakarsiddik31` 242px | 371px | -3px | dx 3 |
+| `CATALOG SKILL 1` | `engineering` 170px | `anthropics` 156px | 342px | +26px | dx 51 (card) |
+
+Both chips are `flexShrink: 0` and sized by UNBOUNDED catalog content, so at Press Start 2P 14px they
+exceed the column on their own and the name's flex box collapses to 0. At the BASE sha (11px) the
+worst chip pair was 320px against 368px, so this is new with FLOOR-12.
+
+NOT fixed by plan 01-19, deliberately, per UI-SPEC's containment ladder:
+- step 1 (it already truncates) does not apply to the chips;
+- step 2 (raise the container integer) is unavailable — the integer is `sidebarWidth`, whose default
+  lives in `src/renderer/src/store/store.ts`, outside 01-19's declared `files_modified`, and raising it
+  would not close the class because the chips are content-sized;
+- so step 3: stop and report.
+
+The name spans themselves ARE fixed (commit `af8f202`): both carry
+`whiteSpace:'nowrap' + overflow:'hidden' + textOverflow:'ellipsis'`, so a name no longer prints over a
+chip at any width. Only the chip pair still overruns the card.
+
+One-line evaluation for whoever takes it: give `SkillsTab.tsx`'s `Chip` (`:24-34`) the same truncation
+contract the name now has (`flexShrink: 1, minWidth: 0` plus the triplet), or cap the rendered
+category/owner text. Both are content decisions, not typography.
