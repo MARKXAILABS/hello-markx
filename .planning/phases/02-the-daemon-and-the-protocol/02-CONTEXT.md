@@ -105,7 +105,8 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
     packaged: boolean;
     secrets: { available(): boolean; encrypt(s: string): Buffer; decrypt(b: Buffer): string };
     notify(o: { title: string; body: string }): void;
-    send(channel: string, payload: unknown): void;   // replaces every liveWebContents().send
+    // ⚠ MUST return boolean — see the landmine note below. NOT `void`.
+    send(channel: string, payload: unknown): boolean;  // replaces every liveWebContents().send
     quit(): void;
   };
   // src/main/floor/boot.ts
@@ -121,6 +122,17 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   3. Precedent: VS Code's `src/vs/code/electron-main/main.ts` is exactly this split — a `CodeMain`
      class whose `main()` → `startup()` runs `createServices()` / `initServices()` /
      `claimInstance()`, with the entry file reduced to `const code = new CodeMain(); code.main();`.
+
+  **⚠ LANDMINE, found by pattern mapping and verified in source — copying the house pattern here
+  silently breaks D-11.** `DeliveryDeps` (`src/main/delivery.ts:94-162`) is otherwise the exact model
+  for `FloorDeps`, and the obvious move is to copy its `emit` signature. Do not: `delivery.ts:153`
+  declares `emit: (channel: string, payload: unknown) => void`, while `hive.ts:1671` branches on
+  `this.emit?.(…) === true`. A `void`-returning `send` makes that comparison **permanently false**,
+  which is exactly the "all terminal-handoff mail bounces to the god" bug D-11 exists to fix — so a
+  faithful copy of the local convention would re-introduce the defect while looking idiomatic.
+  `FloorDeps.send` returns `boolean`. Also note the in-repo forward order is already written twice:
+  `bootstrapHiveServices()` (`index.ts:5537-5577`) is `bootFloor`'s sequence and `SHUTDOWN_STEPS`
+  (`:4340-4357`) is `Floor.shutdown()`'s.
 
 - **D-04:** **The seams are already written down in the source; do not invent a new taxonomy.**
   `index.ts:4340-4357` declares `SHUTDOWN_STEPS`, a 16-entry declarative list of every subsystem that
@@ -257,6 +269,12 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   Both have the same fix — route through `delivery.enqueue()` in main, which already owns the one
   PTY-write gate (D-12) — and both are load-bearing for criterion 2's "mail still routes between
   them". Any DAEMON-01 plan that ships without closing these two has not delivered the requirement.
+  **And the fix has an exact in-repo precedent, so it does not need inventing.** `index.ts:411-434`:
+  `accountPool`'s injected `emit` intercepts one renderer-bound channel and runs it in main instead —
+  `if (channel === 'claudeAccount:failover') { delivery.failover(...); return; }` — with a comment
+  recording why ("MAIN owns the kill→respawn now… two executors would respawn the same agent twice",
+  upstream #151). `emitTerminalHandoff` needs the same move, comment discipline included. Copy that
+  shape rather than inventing a parallel one.
 
 - **D-12:** **ADR-0001 IS NOW FALSE AND NO PHASE 1 PLAN OWNS IT.**
   `docs/adr/0001-one-gate-for-pty-writes.md` states: "Exactly one place types automatic text into a
@@ -301,13 +319,26 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   release tag and verify against a SHA-256 committed into this repo, not against a vendor checksum
   that does not exist. **And per D-06, this must not add an npm dependency** — the lockfile is
   untouchable this phase.
+  **The acquisition pattern already exists in this repo:** `src/main/nodeInstall.ts:114-170` does
+  download → refuse-without-digest → per-platform artifact returning `null` when unsupported, which is
+  exactly the shape cloudflared needs (including the `null` for `windows-arm64`). Its one divergence:
+  `nodeInstall`'s `shaFor()` reads Node's published `SHASUMS256.txt`, and Cloudflare publishes no
+  equivalent — so the digest is a committed repo constant instead of a fetched file, and the plan must
+  say that out loud rather than leaving a reader to assume a vendor checksum was verified.
 
 - **D-15:** **The kill is already written; the duplication is not.** `src/main/procKill.ts:34`
   `hardKillTree(pid)` already does `taskkill /pid X /T /F` on win32 and group-SIGKILL on POSIX, so the
   cross-platform close is a call, not new code. And `openTunnel()` in `slack.ts:211-221` and
   `webhook.ts:276-286` are **byte-identical** (same TODO comment, same timeout, same dynamic import),
-  as are their `stop()` bodies. The change belongs in **one shared helper** that both servers use —
-  landing it twice is how the two copies drifted into two identical bugs in the first place.
+  as are their `stop()` bodies (byte-identity `diff`-proven, not eyeballed). The change belongs in
+  **one shared helper** that both servers use — landing it twice is how the two copies drifted into
+  two identical bugs in the first place.
+  **Design consequence from pattern mapping, not a preference: the helper must accept its spawner as
+  an injected option.** No existing test in this repo fakes a spawner — `hive.ts:1302` calls `spawn`
+  directly — so if `tunnel.ts` calls `spawn` at module or method scope, `test/tunnel.test.cjs` cannot
+  exist and D-16's `stop()` → `hardKillTree` assertion has no home. Inject the spawner and the binary
+  path both, following the same electron-free-by-injection rule `delivery.ts`, `webhook.ts` and
+  `slack.ts` all state in their headers.
 
 - **D-16:** **The close test polls; it does not assert a thrown error or a single status.** Discovered
   empirically, not assumed: after the child is killed, cloudflared's public URL answers with an **HTTP
