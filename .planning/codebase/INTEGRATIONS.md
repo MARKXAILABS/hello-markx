@@ -113,7 +113,7 @@ So: 5 in-process HTTP servers + 1 in-process Unix-socket/named-pipe server + N p
 
 **Runtime env vars (user-supplied, at spawn time, per agent):**
 - `CLAUDE_CODE_ENABLE_TELEMETRY`, `OTEL_EXPORTER_OTLP_ENDPOINT` — Claude Code → `telemetry.ts`
-- `HIVE_SOCK`, `HIVE_SOCK_TOKEN`, `AGENT_ID` — every spawned agent → `hooks.ts`'s Unix-socket/named-pipe protocol
+- `HIVE_SOCK`, `HIVE_SOCK_TOKEN`, `AGENT_ID` — every spawned agent → `hooks.ts`'s Unix-socket/named-pipe protocol. `HIVE_SOCK_TOKEN` is **per-agent, minted per-spawn** (`mintToken`) into that one PTY's environment — not one value handed to every agent — and the server derives the sender's identity from it rather than trusting `payload.agent_id`. The qwen proxy sidecar is spawned separately and does **not** receive one yet, so it is dead-hooked until its `hive.ts` spawn site is given the agent's token
 - `OPENAI_BASE_URL` / `CRUSH_PROXY_BASE_URL` (inert sentinel for Crush) — proxy-tier engines routed through the per-agent `hive-proxy.cjs` sidecar
 - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY` — BYOK keys for non-Claude engines, injected main-only at spawn
 

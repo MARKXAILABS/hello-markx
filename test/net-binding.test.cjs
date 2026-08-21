@@ -399,6 +399,43 @@ test('no length-mismatch early return survives in any of the four files', () => 
   }
 });
 
+test('no document this plan owns still describes ONE floor-wide hook secret', () => {
+  // A stale trust-boundary claim is the worst kind of stale doc: a reader uses it
+  // to decide what the app protects. These three described a single process-wide
+  // secret, which is the design GATE-01 deleted — so left alone they would make
+  // the repo's own security claim false.
+  //
+  // Exactly three files. A fourth document carries the same stale claim and is
+  // deliberately absent from this list — including from this comment, which a
+  // plain grep cannot read the intent of — because it belongs to another plan in
+  // the same wave, and a test that stays red until someone else's work lands
+  // turns a parallel wave into a deadlock. That plan pins its own file.
+  const read = (f) => fs.readFileSync(path.resolve(__dirname, '..', f), 'utf8');
+  const docs = ['HIVE.md', '.planning/codebase/ARCHITECTURE.md', '.planning/codebase/INTEGRATIONS.md'];
+  const stale = [
+    /injected into agent child environments only/,
+    /minted once at module load/,
+    /per-process `sock_token`/,
+    /hooks\.ts:70/
+  ];
+  for (const doc of docs) {
+    const src = read(doc);
+    for (const claim of stale) {
+      assert.equal(
+        claim.test(src), false,
+        `${doc} still describes the floor-wide hook secret (${claim}). The code mints a `
+        + 'token per agent per spawn; a doc that says otherwise tells a reader the app '
+        + 'protects something it does not'
+      );
+    }
+    assert.match(
+      src, /per-spawn/,
+      `${doc} does not say the token is per-spawn — deleting the old claim is not the `
+      + 'same as making the new one'
+    );
+  }
+});
+
 test('the floor-wide hook token cannot come back into main', () => {
   // D-12. `pty.ts` spreads process.env into every PTY, so ONE assignment on the
   // main process's own environment hands every LLM-controlled shell on the floor

@@ -468,11 +468,22 @@ runtime validation.
 
 **Authentication:** The hook socket (`src/main/hooks.ts`) is the one local trust
 boundary in the app — any local process could otherwise connect and impersonate
-an agent's hook payloads. Every payload must carry a per-process `sock_token`
-(minted once at module load, `SOCK_TOKEN`, `src/main/hooks.ts:70`) equal to
-`hookSockToken()`, passed to spawned agents as the `HIVE_SOCK_TOKEN` env var and
-echoed back by the hook shims. There is no other authentication layer — the app
-is local-first, single-user, and the hive git repo is filesystem-permission-only.
+an agent's hook payloads. Every payload must carry a `sock_token` that is
+**per-agent and per-spawn**: `mintToken` mints one at each PTY spawn, `pty.ts`
+injects it into that agent's child environment as `HIVE_SOCK_TOKEN`, the shim
+echoes it back, and `authorized` looks it up in a `Map<token, agentId>` to
+**derive** the sender's identity. The payload's own `agent_id` is discarded, and
+tokens are revoked when the PTY exits. There is no other authentication layer —
+the app is local-first, single-user, and the hive git repo is
+filesystem-permission-only.
+
+The ceiling is exactly two properties: there is no floor-wide key, and
+`payload.agent_id` is not trusted for identity. It is not secrecy — an agent's own
+shell reads whatever its own shim reads — and it is not "agent A cannot
+authenticate as agent B", which is false on Linux, where a same-uid sibling reads
+B's token out of `/proc/<B-pid>/environ`. The qwen proxy sidecar does **not** yet
+carry a token of its own; it is dead-hooked until its spawn site in `hive.ts` is
+given one.
 
 ---
 

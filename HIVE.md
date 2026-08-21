@@ -189,9 +189,13 @@ agent C keeps working: reads the messages, acts, replies via its own outbox
 ```
 
 The same hook socket drives the avatars: `PreToolUse`/`PostToolUse` payloads move
-an agent to the right station. Every payload must carry `HIVE_SOCK_TOKEN`
-(`hookSockToken()` in `hooks.ts`), injected into agent child environments only, so
-another local process cannot forge agent events — see [`SECURITY.md`](./SECURITY.md).
+an agent to the right station. Every payload must carry `HIVE_SOCK_TOKEN`, a
+per-agent token minted per-spawn (`mintToken` in `hooks.ts`) and injected into
+that one agent's PTY environment; the server looks it up to derive who is calling
+and ignores the payload's own `agent_id`. So there is no floor-wide key, and a
+payload's claim about its sender is not trusted — but this is not secrecy, and an
+agent that can read another agent's environment still defeats it. See
+[`SECURITY.md`](./SECURITY.md).
 
 ---
 
