@@ -174,8 +174,19 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
             {openTerminalState === 'opening' ? '...' : openTerminalState === 'ok' ? 'ok' : openTerminalState === 'error' ? 'err' : 'open'}
           </span>
         </PixelButton>
+        {/* The only icon-only control in this panel, and it was the only button
+            on the whole agent surface with an EMPTY accessible name — measured on
+            the AX tree at BASE and at HEAD, not inferred from a grep. It ships as
+            `title` rather than `aria-label` because PixelButton's props are a
+            closed set that plan 23 pins byte-identical, so no caller can hand it
+            an aria-label. Names the agent, per FullscreenTerminal.tsx:665. */}
         {isReal && (
-          <PixelButton variant="destructive" size="sm" onClick={onKill}>
+          <PixelButton
+            variant="destructive"
+            size="sm"
+            onClick={onKill}
+            title={`End ${agent.name}'s process`}
+          >
             <Icon name="x" />
           </PixelButton>
         )}
