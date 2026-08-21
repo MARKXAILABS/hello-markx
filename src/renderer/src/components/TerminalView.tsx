@@ -49,7 +49,7 @@ export function TerminalView({ initialLines = [], feed = [] }: TerminalViewProps
     const term = new Terminal({
       theme,
       fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
-      fontSize: 13,
+      fontSize: 14, // was 13. Not carved out: no zoom hook here, so nothing about this size is user-controlled. Number, not a var() — xterm cannot read one.
       lineHeight: 1.0,
       cursorBlink: true,
       cursorStyle: 'block',
