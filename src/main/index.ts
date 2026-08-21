@@ -537,7 +537,17 @@ ptyManager.setHookTokenSource(
 );
 const memory = new MemoryManager(
   () => readConfig().harnessHome,
-  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; }
+  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; },
+  // FLOOR-07: the FTS5 keyword index lives in the PersistStore this process is
+  // ALREADY holding open — no second database, no new dependency. Lazy on
+  // purpose: `persist` is declared below and is not open until whenReady, and
+  // the mine loop is the only caller.
+  () => persist,
+  // The project half of D-33's `WHERE agent_id = ? AND project = ?` predicate.
+  // The registry cwd is what an agent is actually working in; without it the
+  // project column would ship permanently empty and the predicate would be
+  // decoration rather than a filter.
+  (agentId) => hive.registry().agents[agentId]?.cwd ?? null
 );
 // Enterprise Knowledge Graph — file-backed store + agent CLI (default OFF).
 const knowledge = new KnowledgeManager();

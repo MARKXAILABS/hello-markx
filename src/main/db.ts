@@ -20,6 +20,15 @@ import { app } from 'electron';
 import { existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
+/** One keyword-recall hit out of `memory_fts`. `project` is '' when the caller
+ *  had no project to name — the column is stored either way so RECALL-02
+ *  (Phase 5) can bind it server-side without another migration. */
+export interface MemoryHit {
+  text: string;
+  agentId: string;
+  project: string;
+}
+
 /** A captured user prompt, as returned to the renderer (camelCase columns). */
 export interface CommandHistoryRow {
   id: number;
@@ -66,6 +75,33 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
         ts       INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_ch_agent_ts ON command_history(agent_id, ts DESC);
+    `);
+  },
+
+  // → user_version 2 (FLOOR-07): FTS5 keyword recall.
+  //
+  // `IF NOT EXISTS` IS accepted on CREATE VIRTUAL TABLE by the SQLite that ships
+  // inside better-sqlite3 13.0.3 (3.53.4) — verified 2026-08-21 by running both
+  // forms twice against the binary that actually loads here, not by reading the
+  // grammar. So the guard is KEPT rather than silently dropped; older grammars
+  // reject it, and if this ever has to run against one, the fix is an explicit
+  // sqlite_master probe, never a bare CREATE that fails the second time.
+  //
+  // agent_id and project are UNINDEXED on purpose: they are never MATCHed, only
+  // compared in a `WHERE agent_id = ?` predicate (D-33). Indexing them would let
+  // a search TERM match an id, which is precisely the cross-agent leak the
+  // predicate exists to close.
+  //
+  // No `throw` in here. The quarantine path in open() is what makes a bad
+  // migration survivable, and it only fires for corruption — a throw raised by a
+  // migration escapes it and leaves the store permanently unopenable.
+  (db) => {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+        text,
+        agent_id UNINDEXED,
+        project  UNINDEXED
+      );
     `);
   }
 ];
@@ -186,6 +222,55 @@ export class PersistStore {
       "SELECT id, agent_id AS agentId, cwd, text, ts FROM command_history WHERE text LIKE ? ESCAPE '\\' ORDER BY ts DESC, id DESC LIMIT ?"
     ).all(needle, lim) as CommandHistoryRow[];
   }
+
+  // ─── memory_fts (FLOOR-07 keyword recall) ──────────────────────────────────
+
+  /** Re-index ONE agent's memory as `chunks`, replacing everything previously
+   *  stored for that agent.
+   *
+   *  Replace, not append: `memory.md` is rewritten wholesale by the reflector's
+   *  condense, so appending would leave every superseded decision in the index
+   *  and recall would keep surfacing text that no longer exists in the memory it
+   *  came from. Scoped by agent_id ALONE — not (agent_id, project) — because an
+   *  agent whose project changed would otherwise keep a full stale copy of its
+   *  notes filed under the old one, reachable by anyone who names it. */
+  indexMemory(agentId: string, chunks: string[], project = ''): void {
+    if (!this.db || !agentId) return;
+    const del = this.db.prepare('DELETE FROM memory_fts WHERE agent_id = ?');
+    const ins = this.db.prepare('INSERT INTO memory_fts (text, agent_id, project) VALUES (?, ?, ?)');
+    this.db.transaction(() => {
+      del.run(agentId);
+      for (const c of chunks) if (c) ins.run(c, agentId, project);
+    })();
+  }
+
+  /** Keyword recall over `memory_fts`, narrowed by a real WHERE predicate.
+   *
+   *  Every value is a BOUND parameter — the MATCH term, the agent id, the
+   *  project and the limit. Nothing is concatenated into the SQL (T-P10-03).
+   *
+   *  Omitting `agentId` really does search every agent, and that is the
+   *  documented 'shared' default (see the sharing model at memory.ts:10-21), not
+   *  an oversight. What this does NOT do is enforce the scope: the id is
+   *  supplied by whoever asks. RECALL-02 (Phase 5) is what makes the server bind
+   *  it instead of trusting the agent's own `--wing`. */
+  searchMemory(
+    query: string,
+    opts: { agentId?: string; project?: string; limit?: number } = {}
+  ): MemoryHit[] {
+    if (!this.db) return [];
+    const match = ftsMatchTerms(query);
+    if (!match) return [];
+    const where = ['memory_fts MATCH ?'];
+    const params: unknown[] = [match];
+    if (opts.agentId) { where.push('agent_id = ?'); params.push(opts.agentId); }
+    if (opts.project) { where.push('project = ?'); params.push(opts.project); }
+    params.push(clampLimit(opts.limit ?? 5, 5));
+    return this.db.prepare(
+      `SELECT text, agent_id AS agentId, project FROM memory_fts
+        WHERE ${where.join(' AND ')} ORDER BY rank LIMIT ?`
+    ).all(...params) as MemoryHit[];
+  }
 }
 
 /** Is this the "that file is not a SQLite database" family of failures — a
@@ -208,6 +293,23 @@ function quarantine(path: string): void {
     const from = `${path}${suffix}`;
     if (existsSync(from)) renameSync(from, `${path}.corrupt-${stamp}${suffix}`);
   }
+}
+
+/** Reduce a user/agent query to a plain FTS5 phrase search.
+ *
+ *  MATCH takes a query LANGUAGE, not a literal: `AND`, `OR`, `NOT`, `NEAR`, `*`,
+ *  `^`, `-`, `:` and an unbalanced `"` are all operators or syntax errors there.
+ *  A bound parameter binds the STRING and not its MEANING, so binding alone does
+ *  NOT stop a search box from steering the query or throwing (T-P10-03). Keeping
+ *  only word characters and re-quoting each term makes every possible input a
+ *  literal phrase search that cannot be either.
+ *
+ *  Returns null when nothing survives, so the caller answers "no hits" rather
+ *  than running `MATCH ''`, which is itself a syntax error. */
+function ftsMatchTerms(query: string): string | null {
+  const terms = String(query ?? '').match(/[\p{L}\p{N}_]+/gu);
+  if (!terms || terms.length === 0) return null;
+  return terms.slice(0, 32).map((t) => `"${t}"`).join(' ');
 }
 
 /** Coerce an untrusted limit into [1, 1000] with a sane fallback. */
