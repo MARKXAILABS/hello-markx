@@ -21,6 +21,8 @@
  *   • #20 (FLOOR-11) — N independent 5-second polls of one JSON file
  *   • #20 (FLOOR-11) — the shared poller keeps its callers
  *   • #7  (D-45)     — a hand-rolled harness whose assertions cannot fail
+ *   • #5  (FLOOR-02) — HIVE.md denying the Stop-drain runs, twelve ways
+ *   • #5  (FLOOR-02) — the Stop-drain wiring HIVE.md now describes
  *
  * Everything here greps COMMENT-STRIPPED source. That is mandatory, not
  * tidiness: several Phase 1 fixes deliberately add a comment quoting the very
@@ -173,5 +175,89 @@ test('every hand-rolled harness fails loudly — no assertion that cannot fail (
     `these harnesses cannot fail, so their green is meaningless: ${silent.join(', ')}. Every `
     + 'assertion in them was made to throw and they still exited 0 — they run to completion '
     + 'without asserting anything, or they swallow the failure and exit 0 anyway'
+  );
+});
+
+// ─── FLOOR-02 (#5): HIVE.md must stop denying the Stop-drain runs ────────────
+
+/**
+ * Every stale denial HIVE.md carried, frozen ON the false claim rather than next
+ * to it. Each of the twelve was measured at exactly `1` in HIVE.md immediately
+ * before it was deleted (2026-08-21), so every one of these assertions could
+ * actually fail — a literal that was already `0` is a permanently-green
+ * assertion, not a gate.
+ *
+ * Compared with `String.prototype.includes`, never a RegExp: two contain `*`
+ * and three contain `{}`, and a regex engine reads both as syntax.
+ *
+ * Section attributions are from `grep -n "^## " HIVE.md` before the edit
+ * (§2 :36, §3 :107, §5 :169, §7 :221, §8 :268); the line numbers are pointers,
+ * the LITERAL is the key.
+ */
+const STALE_STOP_DRAIN_DENIALS = [
+  'nothing calls that',            // HIVE.md:125 — §3 on-disk layout, cursor.json block
+  'shipped, but not as planned',   // HIVE.md:227 — §7 phased plan
+  'Moot today',                    // HIVE.md:273 — §8 risk table
+  'never advanced',                // HIVE.md:275 — §8 risk table
+  '**Reversed',                    // HIVE.md:88  — §2 decision 5 struck out
+  'answers **every**',             // HIVE.md:90  — §2 "Stop always returns {}"
+  'never forces a continuation',   // HIVE.md:91  — §2
+  'nothing in the app calls it',   // HIVE.md:94  — §2 drainForStop "uncalled"
+  'per-renderer-session',          // HIVE.md:101 — §2 dedup denial
+  '`Stop` returns `{}`',           // HIVE.md:232 — §7 phased plan, second half
+  'always answers `{}`',           // HIVE.md:273 — §8 risk table, second half
+  'main answers {} — never a forced continue' // HIVE.md:184 — §5 control-flow diagram
+];
+
+test('HIVE.md no longer promises the Stop-drain does not run (#5, FLOOR-02)', () => {
+  // Trimming this list is the obvious way to make the loop below pass, so the
+  // length is asserted too: eleven fails here instead of passing there.
+  assert.equal(
+    STALE_STOP_DRAIN_DENIALS.length, 12,
+    'the freeze list has been shortened. Five of the twelve denials live in §2 decision 5, one in '
+    + "§3's on-disk layout, one in §5's control-flow diagram, two in §7 and three in §8 — dropping "
+    + 'one lets that section go back to denying the feature while this test stays green'
+  );
+
+  const hive = stripComments(fs.readFileSync(path.join(root, 'HIVE.md'), 'utf8'));
+  const found = STALE_STOP_DRAIN_DENIALS.filter((claim) => hive.includes(claim));
+
+  assert.deepEqual(
+    found,
+    [],
+    'HIVE.md says the Stop-drain does not run, and it does: '
+    + `${found.map((c) => JSON.stringify(c)).join(', ')}. `
+    + '.planning/codebase/ARCHITECTURE.md describes the same code correctly, so the two docs '
+    + 'contradict each other — and ROADMAP criterion 1 for FLOOR-02 bans exactly this: "grep finds '
+    + 'no doc promising a code path that does not run". The drain is live and guarded: '
+    + 'hooks.ts calls DeliveryService.drainAtStop at the Stop boundary and returns '
+    + "{decision:'block', reason} when the agent has unread mail"
+  );
+});
+
+test('the Stop-drain wiring HIVE.md now describes is still there (#5, FLOOR-02)', () => {
+  // The negative test above can be satisfied by DELETING the feature as well as by
+  // correcting the docs — and a deletion would make every removed denial
+  // retroactively true. Pin the positive direction in the same file so that
+  // refactor fails the suite instead of quietly winning the argument.
+  const index = readStripped('src/main/index.ts');
+  const hooks = readStripped('src/main/hooks.ts');
+  const delivery = readStripped('src/main/delivery.ts');
+
+  assert.ok(
+    /drainForStop\(/.test(index) && /delivery\.drainAtStop\(/.test(index),
+    'src/main/index.ts no longer wires the Stop-drain (hive.drainForStop into DeliveryService.deps.drain, '
+    + 'and delivery.drainAtStop into HookServer). HIVE.md §2.5/§3/§5/§7/§8 now all say it runs'
+  );
+  assert.ok(
+    /this\.drainAtStop\?\.\(/.test(hooks) && /decision: 'block'/.test(hooks),
+    "src/main/hooks.ts no longer calls the drain at the Stop boundary, or no longer returns "
+    + "{decision:'block'} — without both, Stop really does always answer {} and HIVE.md's "
+    + 'corrected sections would be the lie instead'
+  );
+  assert.ok(
+    /paused\(agentId\)/.test(delivery) && /vetoed\(agentId\)/.test(delivery),
+    'src/main/delivery.ts drainAtStop lost a guard. The UNGUARDED drain is the version that was '
+    + 'removed for bypassing the terminal-draft/HITL gate; both guards are why decision 5 ships'
   );
 });
