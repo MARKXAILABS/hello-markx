@@ -219,6 +219,38 @@ test('the backstop never fights the breaker pin', async () => {
   assert.deepEqual(state.statuses, [{ id: 'dev1', status: 'idle' }], 'a healthy silent agent was not flipped');
 });
 
+test('the backstop is on the timer start() arms — not a method nobody schedules', () => {
+  // The three tests above call svc.tick() by hand, so all three would stay green
+  // if start() stopped scheduling the tick at all — and then the backstop would
+  // not run, which is the whole property. Stub the global timer instead of
+  // waiting TICK_MS of real wall clock: capture what start() arms, then fire it.
+  const realSetInterval = global.setInterval;
+  const armed = [];
+  global.setInterval = (fn, ms) => { armed.push({ fn, ms }); return { unref() { /* noop */ } }; };
+  try {
+    const { svc, state } = harness();
+    state.inbox.dev1 = [];
+
+    svc.start();
+    assert.equal(armed.length, 1, 'start() armed ' + armed.length + ' timers; the backstop rides the ONE tick');
+    assert.ok(
+      armed[0].ms <= 4000,
+      `the tick is ${armed[0].ms} ms apart, slower than the 4 s cadence the renderer's backstop ran at`
+    );
+
+    // quiesce() runs at the top of tick(), before its first await, so the
+    // scheduled callback drives it synchronously.
+    armed[0].fn();
+    assert.deepEqual(
+      state.statuses,
+      [{ id: 'dev1', status: 'idle' }],
+      'the timer start() arms does not run the quiesce backstop — it is dead code in production'
+    );
+  } finally {
+    global.setInterval = realSetInterval;
+  }
+});
+
 // ─── failover: the guard that used to die with the window ───────────────────
 
 const SWITCH = { agentId: 'dev1', from: 'a', to: 'b', fromLabel: 'Work', toLabel: 'Personal' };
