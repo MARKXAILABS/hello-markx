@@ -105,15 +105,7 @@ export function IdePanel() {
 
   const [isRepo, setIsRepo] = useState<boolean | null>(null);
   const [status, setStatus] = useState<GitStatusT | null>(null);
-  // 424, not 300, and the delta is MEASURED not derived. The git rail below
-  // carries three Press Start 2P labels (CHANGES / HISTORY / COMPARE) which
-  // FLOOR-12 Rule 1 puts at 14px; Press Start 2P is ~1em per character, so the
-  // rail alone needs ~386px and ComparePane's action row needs 424. Probed in
-  // real Electron 43 at 1280/1024/800: at 300 the rail spilled its column by 85px
-  // and ComparePane by 124px (the latter already spilled by 39/51 BEFORE the
-  // sweep — this widening closes that too). Still inside the existing 200..520
-  // drag clamp, so the operator can pull it back.
-  const [treeWidth, setTreeWidth] = useState(424);
+  const [treeWidth, setTreeWidth] = useState(424); // 424 = 300 + the 124px spill MEASURED in real Electron 43 at 1280/1024/800; inside the 200..520 drag clamp.
   // v0.3.4 git visualization: which rail pane is showing, and the repo's MAIN
   // root (a worktree's history/compare must run against the shared repo).
   const [railTab, setRailTab] = useState<'changes' | 'history' | 'compare'>('changes');
