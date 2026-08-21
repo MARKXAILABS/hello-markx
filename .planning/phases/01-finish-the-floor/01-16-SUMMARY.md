@@ -804,6 +804,10 @@ Pushed to `origin/gsd/v1.0-milestone` (`6e13162..d523a06`), PR #77's CI pointer.
 Runs `32472447573` (CI) and `32472447586` (E2E). Byte-identical to the `6e13162` baseline and to
 01-15's `0030a14`: the four Windows skips are the platform's own, not a red test hidden by this sweep.
 
+The docs-only tip commit `4f69593` was pushed and re-verified rather than assumed green: runs
+`32473258503` (CI) and `32473258550` (E2E), **all six jobs success**. The branch tip is green, not
+just the code commit.
+
 **Requirement row:** `FLOOR-12` deliberately left **Pending** in `.planning/REQUIREMENTS.md`, matching
 the 01-02 … 01-15 precedent — **plan 23 owns the checkboxes**. FLOOR-12 is not closeable here in any
 case: 343 of the original 604 M1 occurrences remain and belong to plans 17–20.
