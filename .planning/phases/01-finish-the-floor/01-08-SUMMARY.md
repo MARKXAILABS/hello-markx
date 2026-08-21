@@ -690,3 +690,13 @@ same count 01-07 recorded; the suite grew 460 → 469 and every added test passe
 | `1a30333` | `feat(01-08): delete the renderer drain; the store asks main instead of writing` |
 | `583f515` | `feat(01-08): apply plan 06's T-INDEX handoff -- FLOOR-09's proxy cost sink` |
 | `e77ac98` | `fix(01-08): the deleted drain took the /clear context-gauge reset with it` |
+
+---
+
+## Self-Check: PASSED
+
+```
+FOUND: src/shared/queueDelivery.ts
+FOUND: .planning/phases/01-finish-the-floor/01-08-SUMMARY.md
+FOUND: d7cb04e   FOUND: 1a30333   FOUND: 583f515   FOUND: e77ac98   FOUND: 04c949e
+```
