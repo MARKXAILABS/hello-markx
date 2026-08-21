@@ -107,7 +107,7 @@ Out-of-scope discoveries found while executing a plan. Logged, not fixed.
 
 ## [01-19] SkillsTab catalog identity row overflows at Rule 1's 14px — containment step 3
 
-`src/renderer/src/components/SkillsTab.tsx:308-313`. MEASURED in real Electron 43 at 1280x900 /
+`src/renderer/src/components/SkillsTab.tsx:319-336`. MEASURED in real Electron 43 at 1280x900 /
 1024x768 / 800x600 (CDP `Emulation.setDeviceMetricsOverride`, `window.innerWidth` read back on every
 scan), row width 368px inside the shipped app's 420px sidebar:
 

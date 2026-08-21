@@ -156,7 +156,7 @@ on a **span inside** the button, never on the focusable button, which keeps its
 `aria-label="dismiss this ask"` (01-14's convention, copied verbatim — `aria-hidden` on a focusable
 element strips its accessible name while leaving it tabbable, which is axe `aria-hidden-focus`).
 
-**AskMeTab's second exempt glyph, the tree elbow `└` (:255), gets `aria-hidden="true"` and NO
+**AskMeTab's second exempt glyph, the tree elbow `└` (:258), gets `aria-hidden="true"` and NO
 allowlist entry.** It has no `fontSize` of its own — it rides its swept row, now 14px — and 01-14's
 handoff item 3 is explicit: do not invent a sub-14px override just to have something to allowlist.
 
@@ -240,7 +240,7 @@ size-only and Press Start 2P stays everywhere.
 
 | File | `cth-font-display` at BASE | now | Rule 1 sites here |
 |---|---|---|---|
-| `SkillsTab.tsx` | 3 | **3** | :27 Chip, :242 name, :309 catalog name |
+| `SkillsTab.tsx` | 3 | **3** | :27 Chip, :243 name, :321 catalog name |
 | `MessageQueueComposer.tsx` | 3 | **3** | :196 DROP TO ATTACH, :204 QUEUE, :668 Set up dictation |
 | `WorkersTab.tsx` | 0 | **0** | — |
 | `MemoryPanel.tsx` | 1 | **1** | :186 Search language |
@@ -301,11 +301,11 @@ line **108**, immediately above its target on **109**. After the sweep it is sti
 | File | native | Pixel | ICON-ONLY | already named |
 |---|---|---|---|---|
 | `SkillsTab.tsx` | 8 | 1 | 0 | all 9 have visible text |
-| `MessageQueueComposer.tsx` | 9 | 3 | **3** (`<Icon name="x"/>` ×2, `<Icon name="info"/>`) | `:317`, `:518`, `:639` aria-label ✓ |
+| `MessageQueueComposer.tsx` | 9 | 3 | **3** (`<Icon name="x"/>` ×2, `<Icon name="info"/>`) | `:325`, `:526`, `:647` aria-label ✓ |
 | `WorkersTab.tsx` | 0 | 1 | 0 | `stop` / `stopping…` |
 | `MemoryPanel.tsx` | 2 | 4 | 0 | all 6 have visible text |
 | `MemoryGraphPanel.tsx` | 2 | 0 | 0 | `refresh`, `topics` |
-| `App.tsx` | 6 | 5 | **2** (`☀`/`☾`, the wrench) + 1 (`ExpandGlyph`) | `:369`, `:388`, `:415` aria-label ✓ |
+| `App.tsx` | 6 | 5 | **2** (`☀`/`☾`, the wrench) + 1 (`ExpandGlyph`) | `:370`, `:389`, `:416` aria-label ✓ |
 | `CostHud.tsx` | 0 | 0 | 0 | — |
 | `AskMeTab.tsx` | 3 | 1 | **1** (`✕`) | `:182` aria-label ✓ |
 
@@ -343,9 +343,9 @@ All three are **derived** from `composerFontSize`; no literal was hand-edited, a
 the same number of visible lines it was designed to hold. Every other fixed integer in the group was
 inspected and deliberately left alone: `MessageQueueComposer.tsx:277` `maxHeight: 280` (the queue
 scroller, `overflowY:'auto'`), `:484` `maxHeight: 220` (expanded-body cap, `overflowY:'auto'`), `:567`
-`HINT_W = 244`, `:320` `maxWidth: 180`; `MemoryGraphPanel.tsx:442` `W = 240` (tooltip),
-`:430` `maxWidth: 280` (legend); `MemoryPanel.tsx:81` `width: 380`, `:243` `maxHeight: '40vh'`;
-`App.tsx:452` `width: 400`, `:495` `width: 360`, `:373` `28×28` (theme button). **Twelve inspected,
+`HINT_W = 244`, `:320` `maxWidth: 180`; `MemoryGraphPanel.tsx:444` `W = 240` (tooltip),
+`:432` `maxWidth: 280` (legend); `MemoryPanel.tsx:81` `width: 380`, `:244` `maxHeight: '40vh'`;
+`App.tsx:453` `width: 400`, `:496` `width: 360`, `:374` `28×28` (theme button). **Twelve inspected,
 one family of three moved, and all three move because the floor moved them.**
 
 ---
@@ -444,7 +444,7 @@ No grep in this plan could see it. It was found by building the BASE sha into a 
 (M1 over that copy returned exactly **85**, confirming the right bytes were under test) and running
 the identical CDP probe against both.
 
-**`SkillsTab.tsx:242` / `:309` — the identity-row name span.** MEASURED, row width 368px:
+**`SkillsTab.tsx:243` / `:321` — the identity-row name span** (the `fontSize` lines; the three containment properties land at `:252` and `:330`). MEASURED, row width 368px:
 
 | | BASE 11px | HEAD 14px (before the fix) |
 |---|---|---|
@@ -470,7 +470,7 @@ not claimed as mine.
 
 ### The residual, and it is containment step 3 — STOP AND REPORT, not fixed
 
-**`SkillsTab.tsx:308-313`, the BROWSE identity row.** The catalog's two chips are `flexShrink: 0` and
+**`SkillsTab.tsx:319-336`, the BROWSE identity row.** The catalog's two chips are `flexShrink: 0` and
 sized by **unbounded catalog content**, and at 14px they no longer fit the column on their own:
 
 | row | chip 1 | chip 2 | + gap | vs row 368px | row spill |
@@ -564,7 +564,7 @@ see §10.
 | Owner | What | Evidence |
 |---|---|---|
 | **plan 10** | `MemoryPanel.tsx`'s FTS5 recall UI and the `scope` sharing-model warning | `:114` still `fontSize: 'var(--cth-text-body-md, 14px)'` with `lineHeight: '20px'` — **not** normalised back down and **not** re-tokenised; the classifier skipped it as non-numeric. Both the warning and the search box render live: `memorypanel/open` finds `Memory is shared`, `memorypanel/searched` finds the result box. |
-| **plan 12** | `App.tsx`'s 1024px collapse, the overlay and the `aria-expanded` toggle | `grep -c aria-expanded App.tsx` = **3**, unchanged; `:564` still `fontSize: 'var(--cth-text-body-sm)'`, untouched; no `aria-label` added; the live boundary table above. |
+| **plan 12** | `App.tsx`'s 1024px collapse, the overlay and the `aria-expanded` toggle | `grep -c aria-expanded App.tsx` = **3**, unchanged; `:557` still `fontSize: 'var(--cth-text-body-sm)'`, untouched; no `aria-label` added; the live boundary table above. |
 | **plan 05** | `AskMeTab.tsx`'s `useHiveTasks` call and its deliberate local optimistic `useState` in `dismiss` | `grep -c useHiveTasks AskMeTab.tsx` = **3** (import, comment, call at `:58`). The `dismiss` `useState` was not touched — the sweep changed only `fontSize`/`lineHeight` and the two `aria-hidden` spans. |
 | **plan 21** | `MemoryGraphPanel.tsx`'s `react-hooks/exhaustive-deps` suppression | still on **108**, target on **109**. |
 | **plan 23** | `PixelButton.tsx` byte pin | not touched; no caller tries to pass it an `aria-label`. |
@@ -609,7 +609,7 @@ of this plan's eight surfaces — that is what §6 and §7 are for.
 - **Issue:** measured `dx 15` and **7px of ink inside the chip** at 800×600 (installed), up to 68px
   and a 0px name box (catalog)
 - **Fix:** UI-SPEC containment step 1's cited house pattern on both name spans
-- **Files:** `src/renderer/src/components/SkillsTab.tsx` (`:242`, `:309`)
+- **Files:** `src/renderer/src/components/SkillsTab.tsx` (`:242-253` installed, `:320-331` catalog)
 - **Commit:** `af8f202`
 
 **2. [Rule 3 — Blocking] `ELECTRON_RUN_AS_NODE=1` in the executor's shell**
@@ -624,7 +624,7 @@ of this plan's eight surfaces — that is what §6 and §7 are for.
 
 ### Reported, NOT fixed — containment step 3
 
-**The SkillsTab catalog identity row spills 3–61px at 14px** (`SkillsTab.tsx:308-313`). Full
+**The SkillsTab catalog identity row spills 3–61px at 14px** (`SkillsTab.tsx:319-336`). Full
 measurement in §7. Step 2's container integer is outside this plan's file set and would not close the
 class. Filed as a STATE blocker and a deferred item.
 
@@ -660,3 +660,31 @@ pixels is not claimed.**
   `PtyTerminalView.tsx:34` / `:388` (12px) to your set — they are the only sub-14px text left on the
   floor with the sidebar open.
 - **Whoever takes the deferred item:** §7's residual table has the measured deltas.
+
+---
+
+## Self-Check: PASSED
+
+Every claim in this document re-verified against disk after it was written.
+
+**Files** — all 10 claimed present: the 8 modified sources, this SUMMARY, `deferred-items.md`.
+**Commits** — `b7c58c4`, `af8f202`, `f126aa6` all found in `git log --oneline --all`.
+**The allowlist entry resolves:**
+```
+sed -n '195p' src/renderer/src/components/AskMeTab.tsx
+  ->                 <span aria-hidden="true" style={{ fontSize: 13 }}>✕</span>
+```
+**Final per-file M1 re-run against live source:** `0 0 0 0 0 0 0 1` — total **1**, equal to the
+allowlist size.
+**Every other line reference re-resolved** (`MessageQueueComposer.tsx:71/:72/:356/:357/:363`,
+`MemoryGraphPanel.tsx:108/:109/:335`, `AskMeTab.tsx:182/:195/:258`, `MemoryPanel.tsx:114-116`,
+`App.tsx:370/:389/:416/:557`, `SkillsTab.tsx:243/:252/:321/:330`).
+
+**Corrected during the self-check rather than left wrong** — eight line references drifted because
+the sweep and the containment fix moved lines under them: the tree-elbow glyph (`:255` → **`:258`**),
+both name spans (`:242`/`:309` → **`:243`/`:321`**, with the containment properties at `:252`/`:330`),
+the browse identity row (`:308-313` → **`:319-336`**, corrected in this SUMMARY, in `deferred-items.md`
+AND in the STATE blocker), App's plan-12 toggle (`:564` → **`:557`**), the composer's three
+`aria-label`s (`:317`/`:518`/`:639` → **`:325`/`:526`/`:647`**), App's three (`:369`/`:388`/`:415` →
+**`:370`/`:389`/`:416`**), and four inspected container integers. A `file:line` nobody re-resolved is
+a claim, not evidence.
