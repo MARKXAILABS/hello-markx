@@ -321,6 +321,17 @@ function passesContextPressure(a: Agent, rule: ContextRule): boolean {
  *      doesn't stall while an agent sits at its prompt.
  */
 export function useHive(config: HarnessConfig | null): void {
+  // The LATEST config, readable from a long-lived IPC callback without making that
+  // callback's effect depend on `config`. The account-failover subscription (#12)
+  // needs account LABELS at the moment an event ARRIVES, not at the moment it
+  // subscribed: its effect is keyed on `onboardingComplete`, so it captured the
+  // config object from the render at which that last changed. An account renamed
+  // - or ADDED - after mount was therefore reported to the user by raw id
+  // ("switching to acc_7f3a..."), which is the one string that identifies nothing.
+  // Mirrored in an effect rather than assigned during render, so render stays pure.
+  const configRef = useRef(config);
+  useEffect(() => { configRef.current = config; }, [config]);
+
   // Per-agent timestamp of the last automatic message typed into this agent —
   // ours (the queue drain) or MAIN's (a wake nudge it reports on hive:delivered).
   // Guards against re-sending before the agent's hooks have flipped it to
@@ -1143,7 +1154,7 @@ export function useHive(config: HarnessConfig | null): void {
   useEffect(() => {
     if (!config?.onboardingComplete) return;
     const labelOf = (id?: string): string =>
-      config.claudeAccounts?.find((x) => x.id === id)?.label ?? id ?? 'another account';
+      configRef.current?.claudeAccounts?.find((x) => x.id === id)?.label ?? id ?? 'another account';
 
     const offFailover = autonomyApi().onHiveFailover?.(({ agentId, phase, account, error }) => {
       const { agents, updateAgent } = useStore.getState();
