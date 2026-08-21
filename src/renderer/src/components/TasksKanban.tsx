@@ -167,10 +167,10 @@ export function TasksKanban() {
         display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', flexShrink: 0,
         borderBottom: '1px solid var(--cth-ink-300)'
       }}>
-        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 9, color: 'var(--cth-ink-500)' }}>
+        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)' }}>
           {tasks.length} task{tasks.length === 1 ? '' : 's'}
         </span>
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--cth-ink-300)' }}>
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-300)' }}>
           new work? dispatch it to Michael (monitor tab)
         </span>
       </div>
@@ -189,14 +189,14 @@ export function TasksKanban() {
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px 4px',
                 background: col.accent, boxShadow: 'inset 0 -1px 0 var(--cth-ink-900)',
-                fontFamily: 'var(--cth-font-display)', fontSize: 9, color: 'var(--cth-ink-900)'
+                fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-900)'
               }}>
                 {col.label}
-                <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'var(--cth-font-ui)' }}>{cards.length}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', fontFamily: 'var(--cth-font-ui)' }}>{cards.length}</span>
               </div>
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {cards.length === 0 && (
-                  <div style={{ fontSize: 12, color: 'var(--cth-ink-300)', textAlign: 'center', padding: '8px 0' }}>—</div>
+                  <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-300)', textAlign: 'center', padding: '8px 0' }}>Nothing here yet</div>
                 )}
                 {cards.map((t) => (
                   <TaskCard
@@ -245,20 +245,20 @@ function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
         <span style={{ width: 4, flexShrink: 0, background: accent, boxShadow: 'inset -1px 0 0 var(--cth-ink-700)' }} />
         <span style={{ flex: 1, minWidth: 0, padding: '6px 18px 6px 7px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{
-            fontFamily: 'var(--cth-font-ui)', fontSize: 12, lineHeight: '16px',
+            fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
             color: 'var(--cth-ink-900)',
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden'
           }}>{task.title}</span>
           {assigneeName && (
-            <span style={{ fontSize: 10, color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)' }}>
+            <span style={{ fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)' }}>
               {assigneeName.toUpperCase()}
             </span>
           )}
         </span>
         {waitsOnHuman(task) && (
-          <span title="waiting on YOUR answer — see the ASK ME tab" style={{
+          <span title="waiting on YOUR answer — see the ASK ME tab" role="img" aria-label="Waiting on your answer" style={{
             alignSelf: 'center', marginRight: 18, flexShrink: 0,
-            fontFamily: 'var(--cth-font-display)', fontSize: 10, padding: '2px 5px 1px',
+            fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', padding: '2px 5px 1px',
             background: 'var(--cth-lilac)', color: 'var(--cth-ink-900)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
           }}>?</span>
@@ -273,11 +273,15 @@ function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
           position: 'absolute', top: 0, right: 0, width: 16, height: 16, padding: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
           border: 'none', cursor: 'pointer', background: 'transparent',
-          color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-ui)', fontSize: 12
+          color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-ui)'
         }}
         onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--cth-coral)'; }}
         onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--cth-ink-500)'; }}
-      >✕</button>
+      >
+        {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH; the button keeps
+            its accessible name and stays focusable. */}
+        <span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>
+      </button>
     </div>
   );
 }
@@ -328,14 +332,14 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
             {/* Fact row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{
-                fontFamily: 'var(--cth-font-display)', fontSize: 8, padding: '2px 6px 1px',
+                fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', padding: '2px 6px 1px',
                 background: col.accent, color: 'var(--cth-ink-900)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
               }}>{col.label}</span>
               {assigneeName
                 ? <PixelBadge status="working" label={assigneeName} />
-                : <span style={{ fontSize: 11, color: 'var(--cth-ink-300)' }}>unassigned</span>}
+                : <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-300)' }}>unassigned</span>}
               <PriorityDots level={Math.max(1, Math.min(5, task.priority))} />
-              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)' }}>
+              <span style={{ marginLeft: 'auto', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)' }}>
                 {isNaN(created.getTime()) ? '' : created.toLocaleString()}
               </span>
             </div>
@@ -344,7 +348,7 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
             <div style={{
               padding: 10, background: 'var(--cth-paper-100)',
               boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-              fontFamily: 'var(--cth-font-mono)', fontSize: 12, lineHeight: '18px',
+              fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
               color: 'var(--cth-ink-900)', whiteSpace: 'pre-wrap', wordBreak: 'break-word'
             }}>
               {task.description?.trim() || <span style={{ color: 'var(--cth-ink-300)' }}>(no description on this card)</span>}
@@ -353,7 +357,7 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
             {/* The human Q&A trail — every decision documented on the card */}
             {(task.humanQA?.length ?? 0) > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-500)' }}>
+                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)' }}>
                   HUMAN Q&A
                 </div>
                 {task.humanQA!.map((e, i) => (
@@ -361,22 +365,22 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
                     <div style={{
                       padding: '5px 7px', background: 'var(--cth-lilac-light, #ece2f5)',
                       boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-                      fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-900)', whiteSpace: 'pre-wrap'
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', whiteSpace: 'pre-wrap'
                     }}>
-                      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, marginRight: 6 }}>Q</span>
+                      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', marginRight: 6 }}>Q</span>
                       {e.q}
                     </div>
                     {e.a ? (
                       <div style={{
                         padding: '5px 7px', background: 'var(--cth-mint-light, #d9eed9)',
                         boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-                        fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-900)', whiteSpace: 'pre-wrap'
+                        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', whiteSpace: 'pre-wrap'
                       }}>
-                        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, marginRight: 6 }}>A</span>
+                        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', marginRight: 6 }}>A</span>
                         {e.a}
                       </div>
                     ) : (
-                      <div style={{ fontSize: 11, color: 'var(--cth-coral)', fontFamily: 'var(--cth-font-display)' }}>
+                      <div style={{ fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-coral)', fontFamily: 'var(--cth-font-display)' }}>
                         AWAITING YOUR ANSWER — ASK ME TAB
                       </div>
                     )}
@@ -388,7 +392,7 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
             {/* Dependencies, resolved to titles */}
             {deps.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-500)' }}>
+                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)' }}>
                   DEPENDS ON
                 </div>
                 {deps.map((d) => {
@@ -397,7 +401,7 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
                     <div key={d.id} style={{
                       display: 'flex', alignItems: 'center', gap: 6, padding: '3px 6px',
                       background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-                      fontSize: 12, color: 'var(--cth-ink-700)'
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
                     }}>
                       <span style={{ width: 8, height: 8, background: dc.accent, boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', flexShrink: 0 }} />
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
@@ -415,7 +419,7 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
                 style={{
                   flex: 1, padding: '4px 6px', background: 'var(--cth-paper-100)', border: 'none',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', fontFamily: 'var(--cth-font-ui)',
-                  fontSize: 12, color: 'var(--cth-ink-900)', cursor: 'pointer'
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', cursor: 'pointer'
                 }}
               >
                 {COLUMNS.map((c) => (<option key={c.key} value={c.key}>{c.label.toLowerCase()}</option>))}
@@ -451,15 +455,15 @@ function PriorityDots({ level }: { level: number }) {
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 8px', background: 'var(--cth-paper-100)', border: 'none',
   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', fontFamily: 'var(--cth-font-ui)',
-  fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-900)', outline: 'none', boxSizing: 'border-box'
+  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', outline: 'none', boxSizing: 'border-box'
 };
 
 const selectStyle: React.CSSProperties = {
   padding: '3px 6px', background: 'var(--cth-paper-100)', border: 'none',
   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', fontFamily: 'var(--cth-font-ui)',
-  fontSize: 12, color: 'var(--cth-ink-900)', cursor: 'pointer'
+  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', cursor: 'pointer'
 };
 
 const labelStyle: React.CSSProperties = {
-  fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-500)'
+  fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)'
 };
