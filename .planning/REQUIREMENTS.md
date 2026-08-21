@@ -213,9 +213,16 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 - [ ] **VERDICT-02**: No card reaches `done` unreviewed because nobody happened to be free at
       that instant — a card that flips to done while every other agent is busy is still
       reviewed later — **prerequisite of FLOOR-08**
-- [ ] **VERDICT-03**: A reviewer that cannot receive mail is never selected as a reviewer, so
-      on a mixed-engine floor a review is not routed into a black hole *(filter on
-      `canReceiveInbox`)* — **prerequisite of FLOOR-08**
+- [ ] **VERDICT-03**: ALREADY LIVE IN SOURCE — the `canReceiveInbox` filter inside
+      `leastLoadedIdle` (`src/main/hive.ts:1786`; it sat at `hive.ts:1746` before plan 01-03's
+      comment delta — re-derive it by content match, never by line number) means a reviewer that
+      cannot receive mail is never selected, so on a mixed-engine floor a review is not routed
+      into a black hole. The old parenthetical *(filter on `canReceiveInbox`)* read as undone
+      work and was itself a false claim this project made about itself. Plan 01-03 PINS the
+      shipped behaviour with the named test *"a reviewer whose engine cannot receive mail is
+      never selected"* in `test/hive-protocol-v2.test.cjs` instead of rebuilding working code.
+      The box stays unchecked only because the phase gate (plan 23) owns checking it —
+      **prerequisite of FLOOR-08**
 
 ### RECALL — memory an agent can actually use
 
@@ -468,7 +475,7 @@ criterion untrue if it lands after, so none is held for a later phase:
 | Pulled into | Requirement | Because |
 |---|---|---|
 | Phase 1 - FLOOR-10 | RECORD-03, RECORD-04 | the cap would be enforced against a truncated, quadratically over-counted number |
-| Phase 1 - FLOOR-08 | VERDICT-02, VERDICT-03 | FLOOR-08 passes today while cards go silently unreviewed and reviews route to engines that cannot receive mail |
+| Phase 1 - FLOOR-08 | VERDICT-02, VERDICT-03 | FLOOR-08 passes today while cards go silently unreviewed. VERDICT-03's `canReceiveInbox` filter already ships, so it is pulled forward to be PINNED by a named test before FLOOR-08 may be called done, not to be built |
 | Phase 1 - new | GATE-01 | `hooks.ts` calls the socket "the one local trust boundary"; PR #76 restored it, but one shared secret readable by every agent shell is not identity |
 | Phase 2 - DAEMON-02 | GSD-06 | the phone's "answer from anywhere" has nowhere to land while `AskMeTab` is hardcoded `to: 'god'` |
 

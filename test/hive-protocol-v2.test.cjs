@@ -253,6 +253,129 @@ test('a verdict from anyone but the assigned reviewer is ignored', (t) => {
   assert.equal(byId(hive, 't2').status, 'done', 'only the reviewer we asked can reopen the card');
 });
 
+// ─── #18 — the review sweep loses no card: retry, fast cards, refuse→redo ────
+// Three separate mechanisms used to lose a review SILENTLY, and the first two are
+// invisible to the tests above: `if (!reviewer) continue` consumed the transition
+// edge (lastTaskStatus is assigned ABOVE the loop), the snapshot MEMBERSHIP guard
+// dropped any card that never existed in the previous snapshot, and a `refuse` left
+// `task.review` truthy forever. The last test in this block is the opposite
+// assertion — the fix must not turn a lost review into a boot review-storm.
+
+test('a card that flips to done while every other agent is busy is reviewed on a later sweep', (t) => {
+  const { home, hive } = floor(t);
+  seedAgent(home, 'god-1', { isGod: true });
+  seedAgent(home, 'jim-1');                          // the assignee — may never review itself
+  seedAgent(home, 'kevin-1', { status: 'working' }); // the only other agent, and busy
+
+  hive.writeTasks([card('t1', { status: 'doing', assignee: 'jim-1' })]);
+  assert.equal(hive.sweepTaskReviews(), 0, 'the seed sweep learns the floor and reviews nothing');
+
+  hive.patchTask('t1', { status: 'done', result: 'shipped' });
+  assert.equal(hive.sweepTaskReviews(), 0, 'nobody is free, so no review can be mailed yet');
+  assert.equal(hive.inbox('kevin-1').length, 0, 'and a busy agent is not mailed anyway');
+
+  seedAgent(home, 'kevin-1', { status: 'idle' });
+  assert.equal(hive.sweepTaskReviews(), 1,
+    'a 0 here means the busy sweep CONSUMED the done transition — the card is now never reviewed again, silently, which is the whole of VERDICT-02 (#18)');
+  const query = hive.inbox('kevin-1')[0];
+  assert.ok(query, 'the obligation survived "no reviewer" and was mailed once someone freed up');
+  assert.equal(query.act, 'query');
+  assert.equal(query.conversation, 'review-t1');
+});
+
+test('a card created AND finished inside one sweep window is still reviewed', (t) => {
+  const { home, hive } = floor(t);
+  seedAgent(home, 'god-1', { isGod: true });
+  seedAgent(home, 'jim-1');
+  seedAgent(home, 'pam-1'); // idle non-assignee, so a review is mailable
+
+  hive.writeTasks([]);
+  assert.equal(hive.sweepTaskReviews(), 0, 'the seed sweep learns a floor on which this card does not exist yet');
+
+  // Born and finished between two ticks. SWEEP_INTERVAL_MS is 60 s, so this is a
+  // whole class of real cards: no snapshot EVER observes it in a non-done state.
+  hive.writeTasks([card('fast-1', { status: 'done', assignee: 'jim-1', result: 'shipped' })]);
+
+  assert.equal(hive.sweepTaskReviews(), 1,
+    'a 0 here means the sweep still requires the card to have existed in the PREVIOUS snapshot, so a fast card is dropped permanently — no obligation is ever minted for it and no retry can recover it (#18)');
+  const query = hive.inbox('pam-1')[0];
+  assert.ok(query, 'the review was actually MAILED, not merely counted');
+  assert.equal(query.conversation, 'review-fast-1');
+});
+
+test('a card refused by its reviewer and then re-done is reviewed again', (t) => {
+  const { home, hive } = floor(t);
+  seedAgent(home, 'god-1', { isGod: true });
+  seedAgent(home, 'jim-1');
+  seedAgent(home, 'pam-1');
+
+  hive.writeTasks([card('t1', { status: 'doing', assignee: 'jim-1' })]);
+  assert.equal(hive.sweepTaskReviews(), 0, 'the seed sweep learns the floor');
+  hive.patchTask('t1', { status: 'done', result: 'first attempt' });
+  assert.equal(hive.sweepTaskReviews(), 1, 'the first review goes out');
+  const first = hive.inbox('pam-1').filter((m) => m.conversation === 'review-t1').length;
+  assert.equal(first, 1);
+
+  hive.send({ to: 'god-1', act: 'refuse', conversation: 'review-t1', subject: 'not done', body: 'no tests' }, 'pam-1');
+  assert.equal(byId(hive, 't1').status, 'doing', 'a refusal reopens the card');
+
+  hive.patchTask('t1', { status: 'done', result: 'tests added' });
+  assert.equal(hive.sweepTaskReviews(), 1,
+    'a 0 here means `task.review` stayed truthy after the refusal, so the refused-then-fixed path — the one where a second look matters most — is silently unreviewable (#18)');
+  assert.equal(hive.inbox('pam-1').filter((m) => m.conversation === 'review-t1').length, 2,
+    'the second review was MAILED, not merely counted');
+});
+
+// Pins behaviour that ALREADY SHIPPED at src/main/hive.ts leastLoadedIdle's
+// `canReceiveInbox(a?.provider)` filter — this is not new work. It exists so a
+// future refactor of the reviewer picker cannot quietly route a review into a
+// black hole on a mixed-engine floor (VERDICT-03).
+test('a reviewer whose engine cannot receive mail is never selected', (t) => {
+  const { home, hive } = floor(t);
+  seedAgent(home, 'god-1', { isGod: true });
+  seedAgent(home, 'jim-1');
+  seedAgent(home, 'oscar-1', { provider: 'custom' }); // idle, non-assignee, no inbox-drain path
+
+  hive.writeTasks([card('t1', { status: 'doing', assignee: 'jim-1' })]);
+  assert.equal(hive.sweepTaskReviews(), 0, 'the seed sweep learns the floor');
+  hive.patchTask('t1', { status: 'done', result: 'shipped' });
+
+  assert.equal(hive.sweepTaskReviews(), 0,
+    'the only candidate cannot receive mail, so leastLoadedIdle must return null rather than route the review into a black hole (VERDICT-03)');
+  assert.equal(hive.inbox('oscar-1').length, 0, 'nothing was mailed to an engine that cannot read it');
+  assert.equal(byId(hive, 't1').review, undefined,
+    'and the card was not stamped as under review by a reviewer that never got the query');
+});
+
+// The opposite assertion to the three above, and the one neither existing sweep
+// test covers. It is GREEN against pre-fix source — a PRESERVED invariant, not a
+// fixed defect — and goes RED against an `owesReview` rebuilt from the persisted
+// board at startup, which is exactly why no such rebuild exists (#18).
+test('a restart against a board full of historic done cards mails nothing, on the first sweep or the second', (t) => {
+  const { home, hive } = floor(t);
+  seedAgent(home, 'god-1', { isGod: true });
+  seedAgent(home, 'jim-1');
+  seedAgent(home, 'pam-1'); // idle non-assignee — a storm would really be mailable
+
+  hive.writeTasks([
+    card('old-1', { status: 'done', assignee: 'jim-1', result: 'a' }),
+    card('old-2', { status: 'done', assignee: 'jim-1', result: 'b' }),
+    card('old-3', { status: 'done', assignee: 'jim-1', result: 'c' })
+  ]);
+
+  // The restart: a brand-new manager over the same on-disk floor, whose board
+  // already holds three finished, never-reviewed cards.
+  const restarted = new HiveManager(() => home);
+  restarted.ensureHive();
+
+  assert.equal(restarted.sweepTaskReviews(), 0,
+    'the seed sweep acts on nothing — covered by "the first sweep learns the floor" above');
+  assert.equal(restarted.sweepTaskReviews(), 0,
+    'the SECOND sweep is what nothing else covers: a failure here means the boot backlog was MASS-REVIEWED, which the lastTaskStatus comment in src/main/hive.ts promises cannot happen');
+  assert.equal(restarted.inbox('pam-1').length, 0,
+    'and nothing was mailed — a storm that forgets to increment the counter still fails here');
+});
+
 // ─── #34 — per-card cost attribution ────────────────────────────────────────
 
 test('cost rows carry the card they were spent on, and a card knows its cap', (t) => {
