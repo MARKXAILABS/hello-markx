@@ -254,3 +254,42 @@ test('the bug template asks only for things a reporter can actually produce', ()
       + 'it makes the ask unanswerable again.'
   );
 });
+
+test('SECURITY.md describes the per-agent hook token, not the floor-wide secret it replaced', () => {
+  const security = read('SECURITY.md');
+
+  // The old design was ONE secret minted at app start and spread into every
+  // agent's environment, which meant any prompt-injected agent shell could read
+  // the key to the whole floor. It is gone from the code; a doc still describing
+  // it is a false claim about what this app protects, in the one file a reader
+  // checks first.
+  for (const stale of ['process-local token', 'minted fresh at each app start']) {
+    assert.equal(
+      security.includes(stale),
+      false,
+      `SECURITY.md still says "${stale}", which describes the single floor-wide hook secret that `
+        + 'no longer exists. Tokens are now minted per agent per PTY spawn and the sender identity '
+        + 'is derived server-side. A stale trust-boundary claim is worse than no claim.'
+    );
+  }
+
+  const perAgent = (security.match(/per-agent/g) || []).length;
+  assert.ok(
+    perAgent >= 2,
+    `SECURITY.md mentions "per-agent" ${perAgent} time(s); the hook-server paragraph must say so `
+      + 'explicitly. Deleting the stale wording without replacing it leaves a reader with no '
+      + 'description of the boundary at all, which passes a "the lie is gone" check and still '
+      + 'fails the reader.'
+  );
+
+  // Squeezed, because this sentence wraps and a re-wrap must not be able to
+  // "delete" it by accident.
+  assert.ok(
+    security.replace(/\s+/g, ' ').includes(
+      'not a defence against a process that can already read this app\'s child environments'
+    ),
+    'SECURITY.md lost the sentence stating the honest ceiling of the hook token. It survived the '
+      + 'per-agent rewrite on purpose: it was true before and is true now, and it is the sentence '
+      + 'that keeps the rest of the paragraph from reading as a stronger guarantee than it is.'
+  );
+});

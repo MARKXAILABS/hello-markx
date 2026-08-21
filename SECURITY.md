@@ -31,12 +31,32 @@ agent. Two of these can be reachable from the internet, and only when you opt in
 (All under `src/main/`. Symbols rather than line numbers on purpose — stale line
 numbers are how this document went wrong the first time.)
 
-- **The hook server** is how each agent's lifecycle shims report in. Every payload
-  must carry the process-local token `HIVE_SOCK_TOKEN` (`hookSockToken()` in
-  `hooks.ts`), minted fresh at each app start and injected only into agent child
-  environments. A payload without it is dropped at the socket boundary. This stops
-  any other local process from forging agent events; it is not a defence against a
-  process that can already read this app's child environments.
+- **The hook server** is how each agent's lifecycle shims report in. The socket is
+  a Unix domain socket / named pipe, so any local process can connect to it and
+  post a payload claiming to be any agent. So the server does not read the
+  `agent_id` a payload claims. Main mints a **per-agent** token at each PTY spawn
+  (`mintToken` in `hooks.ts`), injects it into that one agent's PTY environment as
+  `HIVE_SOCK_TOKEN`, and the server DERIVES the sender's identity from the token
+  through its own token→agent map (`authorized`). The token is revoked when that
+  PTY exits. A payload with no token, or one the server does not recognise, is
+  dropped at the socket boundary and logged.
+
+  Two properties are claimed here, and deliberately not a third. There is **no
+  floor-wide key** — reading one agent's token buys that agent's identity, not the
+  floor's — and **the payload's own `agent_id` is never trusted**. What is *not*
+  claimed is secrecy, because an agent's own shell can read whatever its own shim
+  can read, and it is not a defence against a process that can already read this
+  app's child environments. Nor is it "one agent cannot authenticate as another":
+  agent B's token lives in B's process environment, and on Linux a same-uid
+  sibling can read that out of `/proc`, which the deny list does not cover.
+
+  **Not yet covered, and it fails closed.** Three of the six lifecycle shims send
+  no token at all today — the per-agent proxy sidecar, and the pi and OpenCode
+  extensions — so the hook server drops everything they post. The consequence is
+  that those engines lose live status, the Stop-boundary inbox drain and cost
+  rows, rather than gaining an unauthenticated way in. That is a gap being closed,
+  not a design: until it is, treat the hook boundary as enforced only for the
+  engines whose shims send a token.
 - **The proxy sidecar** is a child process spawned per agent whose CLI has no hook
   system (Codex-family, Crush, …). The CLI is pointed at it with
   `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`; it forwards to the real upstream and tees
