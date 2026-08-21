@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Phase 2 context gathered — 39 decisions locked; 7 roadmap/source claims corrected (index.ts/hive.ts line counts, the untestability mechanism, hive.ts's testability rationale, the impossible tunnel close, PARITY-02's 'all eleven', capabilityLine having any consumer, ADR-0001's named gate). Two GATE-01-shaped prerequisites found: the MCP bundle may never reach Claude (hive.ts:1192 writes mcpServers into a --settings file), and capabilityLine renders nowhere (0 consumers in main/renderer/preload). Headless quit deadlock found at index.ts:5783-5790."
-last_updated: "2026-08-21T12:26:12.507Z"
+stopped_at: "Completed 01-18-PLAN.md (FLOOR-12 sweep sub-group 4 of 6: triggers tab, git and IDE chrome, 13 files). M1 68 -> 3 occurrences from an EXACT plan baseline, M1d 1 -> 0, M1x 0 -> 0; the 3 residuals ARE the frozen Rule 0 allowlist (IdePanel:499 the gitCollapsed caret, GitPanes:138 the close X, GitPanes:225 the swap arrows) and each carries aria-hidden on its own fontSize line. THE HEADLINE: the sweep SPILLED the IDE git rail out of its 300px column by 85px and no grep in the plan could see it -- three Press Start 2P labels at Rule 1's 14px need ~386px and nothing on that row truncates, so it painted over the editor at 1280, 1024 AND 800. Found only by building the BASE sha c46393d and running the identical CDP probe against it; fixed at source in its own commit (treeWidth 300 -> 424, the MEASURED delta, inside the pre-existing 200..520 clamp), after which overflow=0 on ide, gitpanes_history and gitpanes_compare at all three widths. ComparePane was ALREADY spilling 39/51px before the sweep -- closed by the same integer, reported not claimed. SECOND HEADLINE: the plan's smallBtn consumer map was WRONG -- six consumers, not three, and TWO are glyphs; allowlisting the shared declaration would have held four text buttons below the floor with every grep green. THIRD: Monaco's own fontSize option had no lawful allowlist entry, so it went 12 -> 14 as a NUMERIC literal in both MonacoEditor and MonacoDiff and was verified on the rendered .view-line (14px/20px, real text) -- at BASE all 315/630 rendered lines of source and diff were sub-14px. JsonEditor:19's M1-invisible quoted '13px' closed to cth-text-mono-md with .cm-scroller's 17px literal moved onto --cth-lh-mono; live CodeMirror measures 14px/20px with no scroller spill. 11 surfaces x 3 real CDP viewports x 2 shas = 33/33 MOUNTED at both, and the positive control earned its keep THREE times (TriggersTab throwing on an unstubbed endpoints array; trigger-history showing only its empty state; GitPanes' X needing a commit click and load older... needing 200+ commits). Every hidden=false sub-14px residual attributed MECHANICALLY to FileTree.tsx (plan 20) or triggers/ui.tsx (plan 17). Zero aria-labels added across 22 buttons + 13 PixelButtons -- the correct outcome, unnamedButtons=0 on all 33 AX-tree scans. All four eslint anchors on 84/149/184/278, two of them actively restored after this plan's own edits displaced them. cth-font-display counts unchanged in all 13 files. ONE container integer changed of nine inspected. typecheck 0; npm test 515/511/0 fail/4 skipped at every checkpoint; npm run build 0. CI GREEN on all six jobs at 5bdf6bc. NO whole-renderer M1 total recorded (plan 23 owns the bar); this plan contributes -65 occurrences and 10 files to zero. OUTSTANDING: the operator visual check (MEASUREMENT UNAVAILABLE) and the 424px default tree width. [previous stopped_at: the phase-2 context session -- its full record lives in .planning/phases/02-*/]"
+last_updated: "2026-08-21T12:33:37.287Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 16
+  completed_plans: 18
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 17 of 23 complete
+Plan: 18 of 23 complete
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [███████░░░] 70%
+Progress: [███████░░░] 74%
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Progress: [███████░░░] 70%
 | Phase 01 P15 | 2h20m | 3 tasks | 5 files |
 | Phase 01 P16 | 2h05m | 3 tasks | 5 files |
 | Phase 01 P17 | 3h | 3 tasks | 6 files |
+| Phase 01 P18 | 3h05m | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,38 @@ Recent decisions affecting current work:
 - [Phase 01-17]: The sweep caused TWO real container regressions invisible to every grep in the plan (the TriggerCard caret spilling a fixed 8px box at all three widths; the TasksKanban assignee chip spilling an 87px column). Both were found only by the BASE-vs-HEAD Electron differential and fixed at source.
 - [Phase 01-17]: The positive control earned its keep again: 01-17's first probe run reported sub14=0 on all 30 surface-scans while the app sat behind the launch-time hive picker. texts=10 and every control MISSING is what caught it.
 
+- [Phase 01-18]: GitPanes' hoisted smallBtn has SIX consumers, not the three the plan mapped — two are
+  glyphs (✕ :138, ⇄ :225), four are text. Allowlisting the shared declaration would have held `load
+  older…`, `jump here`, the mode toggle and `switch to` below the floor with every grep green. A hoisted
+  object's consumer list is derived by grep from LIVE SOURCE, never taken from the plan.
+
+- [Phase 01-18]: Monaco's own fontSize option raised 12 -> 14 as a NUMERIC literal in MonacoEditor and
+  MonacoDiff. It is user-facing editor text under DESIGN.md:706 with no allowlist entry it could
+  lawfully take (it is not a glyph, so it can never carry aria-hidden), and Monaco cannot parse a var().
+  Verified on the rendered .view-line — 14px/20px with real text at 1280/1024/800; at BASE every one of
+  315/630 rendered lines of source and diff was sub-14px.
+
+- [Phase 01-18]: THE FINDING — the sweep spilled the IDE git rail out of its 300px column by 85px. Three
+  Press Start 2P labels at Rule 1's 14px need ~386px and nothing on that row truncates, so it painted
+  over the editor at 1280, 1024 and 800. Invisible to every grep in the plan; found ONLY by building the
+  BASE sha and running the identical CDP probe against it. Fixed at source in its own commit: treeWidth
+  300 -> 424, the MEASURED delta, inside the pre-existing 200..520 drag clamp. ComparePane was ALREADY
+  spilling 39/51px before the sweep and is closed by the same integer — reported, not claimed as mine.
+
+- [Phase 01-18]: TriggerHistoryTab's eight `fontSize: 11` overrides on top of uiText/muted were DELETED,
+  not rewritten to the token twice — post-sweep the base object already carries 14/20, so the override is
+  a no-op and deleting it is the smaller true diff.
+
+- [Phase 01-18]: two eslint-disable-next-line anchors were displaced by this plan's OWN edits
+  (SchedulesSection 184->187 by a 4-line style expansion; IdePanel 278->286 by the containment fix's
+  rationale block) and BOTH were actively reversed. Suppressions bind by adjacency so neither was ever
+  detached — but a criterion that has to be argued is not a criterion. The rationale moved into the
+  commit message and the code kept a one-line trailing comment. All four anchors are on 84/149/184/278.
+
+- [Phase 01-18]: zero aria-labels added across 22 buttons + 13 PixelButtons, reported as the CORRECT
+  outcome rather than a miss (the 01-14/01-15 call). Every icon-only control already carried one; every
+  other has visible text. Proven live with unnamedButtons=0 on all 33 AX-tree scans, not by grep.
+
 ### Pending Todos
 
 - **Operator decision, Phase 3 ordering.** Either run `1 → 2 → 4 → 5 → 3 → 6`, or run numeric
@@ -173,6 +206,18 @@ Recent decisions affecting current work:
   Default recorded in ROADMAP.md is numeric order with re-verification. See "Blockers" below.
 
 ### Blockers/Concerns
+
+- **[01-18] OPERATOR VISUAL CHECK OUTSTANDING — MEASUREMENT UNAVAILABLE.** A human must open the git
+  tab, the triggers tabs and the IDE panel (with a diff open) in the dev app and confirm nothing is
+  clipped, `load older…` is legible, and Monaco's own font looks right. Everything a machine can
+  measure was measured (33 mounted surface-scans, three real viewports, two shas, per-node computed
+  font sizes + overflow deltas + AX-tree names). Truth 1-5 are SATISFIED on that evidence; the human
+  eye on finished pixels is NOT claimed.
+
+- **[01-18] The 424px default IDE file-tree width is a visible product change.** At 800x600 the editor
+  drops to 376px. It is the smallest value satisfying UI-SPEC's containment ladder without a forbidden
+  reflow, and the splitter can drag it back — but it deserves an operator look.
+
 
 - **Phase 3 has two forward dependencies** (found while extending the roadmap; not resolved by
   moving requirements, because the pull-forward cascades):
@@ -268,7 +313,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T12:26:12.490Z
+Last session: 2026-08-21T12:33:30.292Z
 Stopped at: Phase 2 context gathered — 39 decisions locked; 7 roadmap/source claims corrected (index.ts/hive.ts line counts, the untestability mechanism, hive.ts's testability rationale, the impossible tunnel close, PARITY-02's 'all eleven', capabilityLine having any consumer, ADR-0001's named gate). Two GATE-01-shaped prerequisites found: the MCP bundle may never reach Claude (hive.ts:1192 writes mcpServers into a --settings file), and capabilityLine renders nowhere (0 consumers in main/renderer/preload). Headless quit deadlock found at index.ts:5783-5790.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
@@ -279,4 +324,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: .planning/phases/02-the-daemon-and-the-protocol/02-CONTEXT.md
+Resume file: None
