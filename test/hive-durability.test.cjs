@@ -205,3 +205,136 @@ test('the composition root passes a cost sink at the sole new HookServer() call 
   assert.doesNotMatch(line, /=>\s*(\{\s*\}|undefined|null)/,
     'the cost sink is a stub — proxy-tier spend is accepted and discarded, which is worse than no cap');
 });
+
+// ─── FLOOR-04 (#10, defect 5): a secret an agent writes must not reach history ──
+//
+// The hive's committer is a bare `git add -A` over an agent's workspace, so a
+// token an agent echoes into memory.md was in git history forever — and git
+// history is durable and hard to redact after the fact. scrubStagedSecrets()
+// runs the staged diff through redactSecrets between `add -A` and `commit`,
+// inside flushCommit, which ADR-0004's single-committer model makes the one
+// place every hive write reaches git through.
+//
+// These drive a REAL git against a real temp repo — no `git` is mocked or faked
+// anywhere below — because the claim being made is about what `git log -p`
+// contains, and a fake git cannot be wrong in the way a real one can.
+
+const { spawnSync } = require('node:child_process');
+
+/** Real git in the hive root. Never a fake: the assertion is about history. */
+const gitIn = (root, ...args) => {
+  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 });
+  assert.equal(r.status, 0, `git ${args.join(' ')} failed in ${root}: ${r.stderr}`);
+  return r.stdout;
+};
+
+// Synthetic credentials. Every one is filler — no account has ever issued these.
+/** Matches redactSecrets pattern 3 (the sk-ant- provider prefix). */
+const CAUGHT_SECRET = 'sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';
+/** The SAME key material as CAUGHT_SECRET with `_` where it has `-`. Pattern 3
+ *  anchors on a literal `sk-`, so this is missed: one character is the whole
+ *  gap. Underscore-separated keys are not hypothetical — Stripe ships
+ *  `sk_live_…`. Do NOT "improve" this into a literal Stripe key: a realistic one
+ *  here trips GitHub push protection (measured — it blocked this very file with
+ *  `GH013 … Stripe API Key`) and the only ways forward are weakening the repo's
+ *  secret-scanning posture or not pushing at all. */
+const MISSED_SECRET = 'sk_ant_api03_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';
+
+test('a secret an agent writes into its workspace never reaches the hive git history (FLOOR-04)', async (t) => {
+  const { hive, root } = floor(t);
+  await hive.ensureAgent(agent('dwight'));
+  const dir = path.join(root, 'agents', 'dwight');
+
+  // What the audit describes: a key pasted into an agent-written file.
+  fs.writeFileSync(path.join(dir, 'notes.md'), `the key is ${CAUGHT_SECRET}\n`, 'utf8');
+  await hive.flushCommit(root); // the real debounced commit body, driven synchronously
+
+  const history = gitIn(root, 'log', '-p');
+  assert.equal(history.includes(CAUGHT_SECRET), false,
+    'the secret is in `git log -p` of the hive. Git history is durable and replicated to every '
+    + 'clone and every backup, so this is a permanent disclosure that no later commit undoes');
+
+  // The file itself is untouched — the scrub unstages, it does not edit or delete
+  // an agent's work. Anything else would make the fix a data-loss path of its own.
+  assert.match(fs.readFileSync(path.join(dir, 'notes.md'), 'utf8'), /the key is sk-ant-/,
+    "the scrub rewrote or deleted the agent's file — it must only drop it from the INDEX");
+});
+
+test('the scrub drops the offending path only — the rest of the commit still lands (FLOOR-04)', async (t) => {
+  const { hive, root } = floor(t);
+  await hive.ensureAgent(agent('dwight'));
+  const dir = path.join(root, 'agents', 'dwight');
+
+  fs.writeFileSync(path.join(dir, 'notes.md'), `the key is ${CAUGHT_SECRET}\n`, 'utf8');
+  fs.writeFileSync(path.join(dir, 'plan.md'), 'ship the paper order\n', 'utf8');
+  await hive.flushCommit(root);
+
+  const history = gitIn(root, 'log', '-p');
+  assert.ok(history.trim().length > 0,
+    'nothing was committed at all — a scrub that suppresses the whole commit has traded a '
+    + 'disclosure for silent history loss, which is the failure this file exists to catch');
+  assert.match(history, /ship the paper order/,
+    'the clean file was dropped along with the dirty one — the scrub must be per-path');
+  assert.equal(history.includes(CAUGHT_SECRET), false, 'the secret rode in on the same commit');
+
+  // The harness's OWN generated shims must still be versioned. Both embed
+  // `payload.sock_token = process.env.HIVE_SOCK_TOKEN`, which pattern 5 matches
+  // on sight, so if harnessAuthored() ever stops recognising them the hive
+  // unstages its own bootstrap on every commit and the warning above becomes
+  // noise an operator learns to ignore.
+  assert.match(history, /bin\/cth-hook\.cjs/,
+    "the hive unstaged its own hook shim — redactSecrets matches the shim's own "
+    + 'HIVE_SOCK_TOKEN line, and harnessAuthored() is what keeps that from crying wolf forever');
+  assert.match(history, /bin\/hive-proxy\.cjs/, 'the hive unstaged its own proxy shim');
+});
+
+test('a scrubbed commit is announced on the durable hive log, not silently altered (FLOOR-04)', async (t) => {
+  const { hive, root } = floor(t);
+  await hive.ensureAgent(agent('dwight'));
+  fs.writeFileSync(path.join(root, 'agents', 'dwight', 'notes.md'), `key=${CAUGHT_SECRET}\n`, 'utf8');
+  await hive.flushCommit(root);
+
+  const scrubbed = hive.logTail().filter((e) => e.kind === 'secret-scrubbed');
+  assert.equal(scrubbed.length, 1,
+    'the commit was altered with nothing on the record. An operator who cannot tell that a file '
+    + 'was withheld will not know a credential is sitting in the workspace waiting to be committed');
+  assert.equal(scrubbed[0].path, 'agents/dwight/notes.md',
+    'the log names no path, so the operator is told something was scrubbed but not what');
+});
+
+test('FLOOR-04 ceiling: redactSecrets is best-effort, and these shapes get through (FLOOR-04)', async (t) => {
+  const { hive, root } = floor(t);
+  await hive.ensureAgent(agent('dwight'));
+  const dir = path.join(root, 'agents', 'dwight');
+
+  // This pins the HONEST LIMIT of a best-effort matcher, so the ceiling is a
+  // measured fact rather than a promise in a doc. It is deliberately NOT a bug
+  // report: the project trusts exactly ONE pattern set (redactSecrets, shared
+  // with the mail path under a LOCKSTEP contract with test/voice-messages.test.cjs),
+  // and two matchers that disagree is a worse position than one imperfect one
+  // because the disagreement is silent. Widening the battery is a decision for
+  // whoever owns that contract; if this test ever goes red because a pattern grew
+  // to cover one of these, that is an IMPROVEMENT — update it, do not revert it.
+  fs.writeFileSync(path.join(dir, 'underscore-key.md'), `${MISSED_SECRET}\n`, 'utf8');
+  // JSON is the operationally sharpest miss: pattern 5 needs the `:`/`=` directly
+  // after the key name and the closing quote is in the way — and the hive commits
+  // registry.json, tasks.json and every per-agent settings.json.
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{"token": "abcdef123456789"}\n', 'utf8');
+  await hive.flushCommit(root);
+
+  const history = gitIn(root, 'log', '-p');
+  assert.ok(history.includes(MISSED_SECRET),
+    'redactSecrets now catches underscore-separated credential prefixes. That is a WIDENING of the '
+    + 'shared battery — mirror it in test/voice-messages.test.cjs and update this ceiling rather '
+    + 'than narrowing it back');
+  assert.match(history, /"token": "abcdef123456789"/,
+    'redactSecrets now catches JSON-quoted key/value pairs — same as above, this is the '
+    + 'ceiling moving up, not a regression');
+
+  // ...and the shape it DOES know still does not get through, in the same commit,
+  // so this test can never pass by the scrub being switched off wholesale.
+  fs.writeFileSync(path.join(dir, 'anthropic.md'), `${CAUGHT_SECRET}\n`, 'utf8');
+  await hive.flushCommit(root);
+  assert.equal(gitIn(root, 'log', '-p').includes(CAUGHT_SECRET), false,
+    'the scrub is off entirely — this ceiling test would then pass vacuously for the wrong reason');
+});
