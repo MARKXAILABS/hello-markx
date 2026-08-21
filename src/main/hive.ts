@@ -313,6 +313,17 @@ const GIT_TIMEOUT_MS = 2_000;
 const GIT_ATTEMPTS = 2;
 /** Base backoff between attempts (async timer, never a blocking sleep). */
 const GIT_RETRY_MS = 50;
+/** FLOOR-04 bound on the staged diff the secret scrub will scan, in LINES
+ *  (added + deleted, straight off `--numstat`). Measured BEFORE the content diff
+ *  is ever pulled into memory, so a pathological commit is turned away rather
+ *  than buffered — `--numstat` costs one short row per changed PATH, not per
+ *  byte. Past this the scan is skipped and said out loud; never skipped quietly. */
+const SECRET_SCAN_MAX_LINES = 20_000;
+/** …and a byte bound on the text actually handed to the matcher, because a line
+ *  count does not bound bytes: one minified 10 MB line is a single line to
+ *  `--numstat`. Beyond this only the first slice is scanned, and the shortfall
+ *  is logged rather than presented as a clean scan. */
+const SECRET_SCAN_MAX_BYTES = 4 * 1024 * 1024;
 /** How old `.git/index.lock` must be before we treat it as abandoned. Must stay
  *  comfortably ABOVE GIT_TIMEOUT_MS — the old 10 s was BELOW the old 8 s git
  *  timeout, so a slow-but-alive git (a big `add -A` behind Windows antivirus)
@@ -3088,6 +3099,166 @@ export class HiveManager {
     return { subject, body: uniq.length > 1 ? uniq.join('\n') : '' };
   }
 
+  /**
+   * True when a staged path's blob is BYTE-IDENTICAL to the constant this class
+   * writes there — i.e. the harness authored it, not an agent.
+   *
+   * This exists because both hook shims embed the line
+   * `payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';` — source that
+   * READS a token, which redactSecrets pattern 5 matches on sight. Without this
+   * check every hive would unstage its own bootstrap on its very first commit,
+   * the shims would stay untracked so the next `add -A` would re-stage them, and
+   * the scrub would then shout on every commit forever. An alarm that fires
+   * constantly on the harness's own files is one an operator learns to skip,
+   * which costs more than it buys.
+   *
+   * It is byte-identity against a compiled-in constant, NOT a path allowlist:
+   * an agent that edits a shim to smuggle a key changes the bytes and the scrub
+   * fires on it like any other file. The comparison is against the INDEX blob
+   * (`git show :path`), not the working file — the index is what is about to be
+   * committed, and it is also the only form immune to core.autocrlf, which is
+   * `true` by default on Git for Windows and would otherwise make every
+   * comparison fail there and quietly restore the false positives.
+   */
+  private async harnessAuthored(root: string, rel: string): Promise<boolean> {
+    const generated: Record<string, string | undefined> = {
+      'bin/cth-hook.cjs': HOOK_SHIM,
+      'bin/hive-proxy.cjs': PROXY_BRIDGE_SHIM
+    };
+    const want = generated[rel];
+    if (want === undefined) return false;
+    const blob = await this.gitAsync(['show', `:${rel}`], root);
+    return blob.ok && blob.out === want;
+  }
+
+  /** Drop one path from the index, leaving it untouched on disk. `restore
+   *  --staged` is the modern spelling and restores from HEAD — which is exactly
+   *  why it needs the fallback: on a repo whose first commit has not landed yet
+   *  HEAD is unborn, and it exits 128 `could not resolve HEAD` having unstaged
+   *  NOTHING (measured). The hive's first commit stages the whole bootstrap, so
+   *  that is precisely the window an agent-planted secret would ride in on. */
+  private async unstagePath(root: string, rel: string): Promise<boolean> {
+    const restored = await this.gitAsync(['restore', '--staged', '--', rel], root);
+    if (restored.ok) return true;
+    const removed = await this.gitAsync(['rm', '--cached', '-q', '--ignore-unmatch', '--', rel], root);
+    return removed.ok;
+  }
+
+  /**
+   * FLOOR-04 (#10, defect 5): scrub secret-shaped content out of the staged set,
+   * between `git add -A` and `git commit`.
+   *
+   * WHY HERE AND NOWHERE ELSE. ADR-0004 makes this class the hive repo's single
+   * committer, so flushCommit is the ONE place every hive write reaches git
+   * through. A per-caller guard would have to be repeated at each of commit()'s
+   * callers and would be missed by the next one added. A `.git/hooks/pre-commit`
+   * would be both a second committer and unrunnable by construction, since the
+   * hive deliberately suppresses hooks with core.hooksPath so an agent cannot
+   * plant one (see git/gitAsync).
+   *
+   * WHY redactSecrets AND NOT A SECOND MATCHER. The project trusts exactly one
+   * pattern set; the mail path already runs every subject and body through it.
+   * Two matchers that disagree is worse than one imperfect matcher, because the
+   * disagreement is silent — the commit path would accept what the mail path
+   * redacts. This call site does not change the battery, which is under a
+   * LOCKSTEP contract with test/voice-messages.test.cjs.
+   *
+   * WHAT IT DOES NOT CATCH — measured, not assumed, and pinned by a test in
+   * test/hive-durability.test.cjs rather than promised here: credential shapes
+   * with no pattern (`sk_live_…`, since pattern 3 wants `sk-` and not `sk_`),
+   * bare high-entropy strings carrying neither a prefix nor a label, and JSON —
+   * `"token": "…"` does NOT match pattern 5, which needs the `:`/`=` directly
+   * after the key name and finds the closing quote in the way. Binary blobs
+   * produce no `+` lines and are never scanned. This is defence in depth, not a
+   * guarantee, and no doc may claim more of it.
+   *
+   * ADDED LINES ONLY. A removed line is content git already has, so flagging it
+   * would mean unstaging a DELETION — which cannot unpublish anything and would
+   * wedge the committer permanently on any repo that ever held a secret.
+   *
+   * @returns false ONLY when a secret is staged and could not be unstaged, the
+   * single case where the caller must not commit. Every other failure returns
+   * true and degrades loudly: a scrub that throws or halts would take the hive's
+   * whole durability path down with it, which is a worse failure than the one it
+   * prevents, and nothing is lost by committing late — see commit(), git here is
+   * history and not storage.
+   */
+  private async scrubStagedSecrets(root: string): Promise<boolean> {
+    const addedLines = (s: string): string =>
+      s.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+
+    // 1. Bound the work before it exists as a string.
+    const stat = await this.gitAsync(['diff', '--cached', '--numstat'], root);
+    if (!stat.ok) {
+      console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', stat.err.trim());
+      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
+      return true;
+    }
+    if (!stat.out.trim()) return true; // nothing staged — nothing to scan
+    let changed = 0;
+    for (const row of stat.out.split('\n')) {
+      const [added, deleted] = row.split('\t');
+      changed += (Number(added) || 0) + (Number(deleted) || 0); // '-' (binary) → 0
+    }
+    if (changed > SECRET_SCAN_MAX_LINES) {
+      console.warn(`[hive] FLOOR-04: staged diff is ${changed} lines, over the ${SECRET_SCAN_MAX_LINES} scan cap — committing UNSCANNED`);
+      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-too-large', lines: changed });
+      return true;
+    }
+
+    // 2. core.quotePath=false so a non-ASCII path comes back raw and can be
+    //    handed straight back to `restore --staged`; -U0 drops context lines,
+    //    which are unchanged content and so cannot be a NEW leak.
+    const diff = await this.gitAsync(
+      ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color', '--no-ext-diff'],
+      root
+    );
+    if (!diff.ok) {
+      console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', diff.err.trim());
+      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
+      return true;
+    }
+    const text = diff.out.slice(0, SECRET_SCAN_MAX_BYTES);
+    if (text.length < diff.out.length) {
+      console.warn(`[hive] FLOOR-04: staged diff is ${diff.out.length} bytes — only the first ${SECRET_SCAN_MAX_BYTES} were scanned`);
+      this.appendLog({ kind: 'secret-scan-truncated', bytes: diff.out.length, scanned: text.length });
+    }
+
+    // 3. One pass over every added line in the whole diff. The common case is
+    //    clean and pays for a single regex battery, not a per-file split.
+    const all = addedLines(text);
+    if (!all || redactSecrets(all) === all) return true;
+
+    // 4. Something matched — split per file to name it. `^diff --git ` is the
+    //    per-file boundary; the b-side of `+++` is the path as it will be
+    //    committed (it survives renames, where the a-side does not).
+    let safe = true;
+    for (const section of text.split(/^diff --git /m).slice(1)) {
+      const plus = addedLines(section);
+      if (!plus || redactSecrets(plus) === plus) continue;
+      const rel = /^\+\+\+ b\/(.+)$/m.exec(section)?.[1];
+      if (!rel) {
+        console.warn('[hive] FLOOR-04: a secret-shaped value is staged under a path this scrub could not name — NOT committing');
+        this.appendLog({ kind: 'secret-blocked', reason: 'unresolved-path' });
+        safe = false;
+        continue;
+      }
+      if (await this.harnessAuthored(root, rel)) continue;
+      if (!(await this.unstagePath(root, rel))) {
+        console.warn(`[hive] FLOOR-04: ${rel} carries a secret-shaped value and could NOT be unstaged — NOT committing`);
+        this.appendLog({ kind: 'secret-blocked', reason: 'unstage-failed', path: rel });
+        safe = false;
+        continue;
+      }
+      console.warn(
+        `[hive] FLOOR-04: unstaged ${rel} — it carries a secret-shaped value, and it has been kept OUT of the hive's `
+        + 'git history. The file is untouched on disk; remove the credential from it, or it will be skipped again on every commit.'
+      );
+      this.appendLog({ kind: 'secret-scrubbed', path: rel });
+    }
+    return safe;
+  }
+
   /** The debounced commit body — async end to end. Two attempts at a 2 s timeout,
    *  with a TIMER backoff rather than a blocking sleep: a repo whose lock is held
    *  by something outside this process is retried by the next mutation anyway, so
@@ -3103,6 +3274,13 @@ export class HiveManager {
       for (let attempt = 0; attempt < GIT_ATTEMPTS; attempt++) {
         this.clearStaleLock(root);
         const add = await this.gitAsync(['add', '-A'], root);
+        // FLOOR-04: the scrub sits INSIDE the retry loop, not above it, because
+        // every attempt re-runs `add -A` — a scrub hoisted out would be undone
+        // by the second attempt's staging and the secret would ride in on the
+        // retry. It returns false only when a secret is staged that it could not
+        // unstage; committing anyway would put it in history permanently, and
+        // the files are already durable on disk either way.
+        if (!(await this.scrubStagedSecrets(root))) return;
         const commit = await this.gitAsync(
           ['commit', '-q', '-m', subject, ...(body ? ['-m', body] : [])],
           root
