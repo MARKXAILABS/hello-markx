@@ -81,6 +81,9 @@ export function GitTab({ cwd }: GitTabProps) {
     // Poll the working-tree status every 4s so freshly-edited files show up.
     const id = window.setInterval(refresh, 4000);
     return () => window.clearInterval(id);
+    // Keyed on `cwd` alone, deliberately: `refresh` is redefined on every render, so
+    // depending on it would clear and re-create this 4s poll every time the component
+    // re-renders — which is once per poll, because the poll itself sets state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd]);
 

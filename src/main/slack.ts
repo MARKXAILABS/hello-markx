@@ -27,7 +27,6 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 // `openTunnel()` instead — Rollup preserves dynamic import() in CJS output, which
 // can load ESM. Do not hoist this back to a top-level import.
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const {
   shouldTrigger: _shouldTrigger,
   ActivatedThreads: _ActivatedThreads,

@@ -181,6 +181,9 @@ function MissionRow({ mission, targetName, agents, onPatch, onDelete }: {
     setIntervalMs(mission.intervalMs);
     setBody(mission.body);
     setSaved(false);
+    // Keyed on `open` alone, deliberately: `mission.label`, `mission.to`,
+    // `mission.intervalMs` and `mission.body` are omitted so the scheduler stamping
+    // `lastFiredAt` mid-edit cannot reseed the draft and wipe what you are typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 

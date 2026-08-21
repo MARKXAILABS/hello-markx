@@ -275,6 +275,10 @@ export function IdePanel() {
     } else {
       setEditBuffers((p) => ({ ...p, [rel]: { ...p[rel], saveState: 'error', error: res.error } }));
     }
+    // `refreshStatus` is omitted deliberately: it is declared BELOW this callback, so
+    // naming it here is a use-before-declaration on the const binding. It is a
+    // useCallback keyed on `root`, which this callback already depends on, so the
+    // omission cannot make `save` stale.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root]);
 

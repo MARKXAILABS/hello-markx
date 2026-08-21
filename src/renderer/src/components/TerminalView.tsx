@@ -77,6 +77,9 @@ export function TerminalView({ initialLines = [], feed = [] }: TerminalViewProps
       term.dispose();
       termRef.current = null;
     };
+    // Mount-once, deliberately: `initialLines` is the backfill snapshot read at
+    // construction time. Depending on it would dispose and rebuild the xterm on every
+    // new line; the effect below streams later lines in via `writtenCount` instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

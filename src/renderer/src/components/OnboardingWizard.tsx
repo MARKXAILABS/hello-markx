@@ -176,6 +176,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   // downstream reader still sees one absolute path. No new IPC surface.
   useEffect(() => {
     if (!home) setHome('~/HarnessAgents');
+    // Mount-once, deliberately: `home` is omitted so this suggests a default exactly
+    // once. Depending on it would re-run the moment the field is cleared and write the
+    // suggestion straight back, making the box impossible to empty.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

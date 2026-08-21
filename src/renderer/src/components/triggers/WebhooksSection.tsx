@@ -146,6 +146,8 @@ function WebhookRow({ hook, url, serverRunning, onPatch, onDelete }: {
     setSchemaText(hook.schema);
     setSchemaError(null);
     setSchemaSaved(false);
+    // Keyed on `schemaOpen` alone, deliberately: `hook.schema` is omitted so a stored
+    // schema that changes underneath cannot overwrite the editor while it is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schemaOpen]);
 

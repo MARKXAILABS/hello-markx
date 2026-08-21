@@ -55,7 +55,6 @@ export function nodeIsUsable(version: string | null | undefined): boolean {
 type VersionProbe = (nodePath: string) => string;
 
 const execNodeVersion: VersionProbe = (nodePath) =>
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   require('node:child_process')
     .execFileSync(nodePath, ['--version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
 
