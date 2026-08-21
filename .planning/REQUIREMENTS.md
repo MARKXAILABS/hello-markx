@@ -15,10 +15,27 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       glance that an agent is running with permissions bypassed — #4
       *(the `permissions.deny` list already ships; only the surfacing is missing)*
 - [ ] **FLOOR-02**: Closing or reloading the window does not stop **any** delivery path —
-      the queue-drain and the idle-quiesce backstop move to main alongside the nudge, and
-      the dead Stop-drain is either restored under a guard or deleted with its doc claims — #5
-- [ ] **FLOOR-03**: Electron is on a supported major (38+), with `node-pty` and
-      `better-sqlite3` rebuilt and the three-platform suite still green — #10
+      the queue-drain and the idle-quiesce backstop move to main alongside the nudge, and the
+      Stop-drain's own doc claims are made true — #5
+      *(**Premise corrected 2026-08-21 (D-37).** This read "the **dead** Stop-drain is either
+      restored under a guard or deleted with its doc claims". The drain is not dead and never
+      was: `index.ts:545` → `hooks.ts:663` → `delivery.ts:604` → `hive.ts:1368`, with the cursor
+      advanced at `hive.ts:1375`, all live and guarded by `stop_hook_active`. `ROADMAP.md`
+      already carried this correction; this file did not, and a requirement stating undone work
+      that is done is the same false claim in the other direction. Locate every anchor above by
+      content — the line numbers drifted twice during Phase 1.)*
+- [ ] **FLOOR-03**: Electron is on a supported major — **Electron 43.x**, with `node-pty` and
+      `better-sqlite3` rebuilt and the three-platform suite still green — #10 (see the pointer
+      note below)
+      *(**Restated 2026-08-21 (D-02).** This read "a supported major (**38+**)". Electron 38 is
+      itself end-of-life, so a literal reading would let this requirement ship the exact
+      unsupported-runtime defect it exists to close. Read it as the latest-3 supported window as
+      of 2026-08. `PROJECT.md` carried the same stale "38+" and is corrected with it.)*
+      *(**Issue pointer is wrong and has no correct replacement.** #10 is "H2 — Network and
+      secret hygiene" and its body carries **no** Electron clause; the end-of-life-Electron issue
+      is **#8**, which is CLOSED. So FLOOR-03 currently traces to no open issue. Filed by plan
+      01-11, recorded here rather than silently repointed — inventing a trace is worse than
+      naming a missing one. FLOOR-04 is the clause of #10 that is genuinely FLOOR-04's.)*
 - [ ] **FLOOR-04**: A secret written into an agent's files is scrubbed before the hive
       commits it, so it never reaches git history — #10
 - [ ] **FLOOR-05**: An operator can open the log folder from Settings without knowing where
@@ -214,8 +231,8 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       that instant — a card that flips to done while every other agent is busy is still
       reviewed later — **prerequisite of FLOOR-08**
 - [ ] **VERDICT-03**: ALREADY LIVE IN SOURCE — the `canReceiveInbox` filter inside
-      `leastLoadedIdle` (`src/main/hive.ts:1786`; it sat at `hive.ts:1746` before plan 01-03's
-      comment delta — re-derive it by content match, never by line number) means a reviewer that
+      `leastLoadedIdle` (`src/main/hive.ts:1908` at wave 9; it sat at `:1746`, then `:1786`, as
+      Phase 1 grew the file — re-derive it by content match, never by line number) means a reviewer that
       cannot receive mail is never selected, so on a mixed-engine floor a review is not routed
       into a black hole. The old parenthetical *(filter on `canReceiveInbox`)* read as undone
       work and was itself a false claim this project made about itself. Plan 01-03 PINS the
