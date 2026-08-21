@@ -18,7 +18,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "brand": "node tools/make-logo.cjs",
-    "postinstall": "electron-rebuild -f && node tools/ensure-pty-perms.cjs && node tools/patch-node-pty-conpty.cjs",
+    "postinstall": "electron-rebuild -f && node tools/ensure-pty-perms.cjs && node tools/patch-node-pty-conpty.cjs && node tools/patch-electron-builder-cycle.cjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
