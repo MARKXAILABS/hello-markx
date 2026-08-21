@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 planned (23 plans/9 waves). Red-team rounds 1, 2 and 3 all returned NOT CLEAN
-last_updated: "2026-08-21T01:24:57.417Z"
+stopped_at: "Completed 01-03-PLAN.md (review sweep obligation set). CI green on PR #77 at b09fd74, all six jobs. #18 left open with 3 unmet clauses."
+last_updated: "2026-08-21T01:51:59.545Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 2 of 23
+Plan: 3 of 23
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [░░░░░░░░░░] 4%
+Progress: [█░░░░░░░░░] 9%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [░░░░░░░░░░] 4%
 
 *Updated after each plan completion*
 | Phase 01 P02 | 2h10m | 4 tasks | 10 files |
+| Phase 01 P03 | 1h05m | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Recent decisions affecting current work:
 - [Phase 01]: GATE-01 hook token minted at PtyManager (pty.ts:664), not per index.ts call site — one choke point covers every current and future spawn; a missed site is a silently dead-hooked engine
 - [Phase 01]: Hook token revoked token-exact on PTY exit, not by agent — a restart is kill()+spawn() under the same id, so revokeAgent there would dead-hook the live replacement
 - [Phase 01]: GATE-01 NOT marked complete at 01-02: the qwen sidecar edit and the three missing shim bodies are 01-06 task 4 (wave 3); qwen/crush is dead-hooked for one wave, deliberately
+- [Phase 01]: [Phase 01-03]: owesReview is process-local and is NEVER rebuilt from the persisted board at startup — 01-RESEARCH recommended a startup rebuild; the plan overrode it and the plan is right. The rebuild IS the boot review-storm: sweep 1 returns 0 at the seed guard, sweep 2 mints nothing new, but a rebuilt set already holds every historic done card, so one query is mailed per card. Proven RED, not argued: 3 !== 0, with three [review] queries in the reviewer's inbox.
+- [Phase 01]: [Phase 01-03]: defect 2 is closed by DELETING the previous-snapshot membership guard, not by the obligation set — A card created AND flipped to done inside one 60s SWEEP_INTERVAL_MS window is never observed in a non-done state by any snapshot, so an obligation set gated on previous.has(id) never mints for it and no retry recovers it. The set alone fixes 'nobody was free'; only the deletion fixes 'nobody ever looked'.
+- [Phase 01]: [Phase 01-03]: issue #18 left OPEN — only 1 of its 7 Fix clauses is closed — The reviewer step is closed; spawn-requests is in no agent-facing doc, enrichTaskPrompt still has zero callers, and the work-order string's anchor has drifted. D-42 sets the bar per-acceptance-clause precisely to prevent closing on partial work, so a full per-clause evidence comment was posted instead of a close.
 
 ### Pending Todos
 
@@ -136,6 +140,7 @@ Recent decisions affecting current work:
   checksums instead of Authenticode, and the docs must say plainly that SmartScreen still fires.
 
 - QWEN SIDECAR DEAD-HOOKED UNTIL 01-06: hive.ts startProxyBridge carries no HIVE_SOCK_TOKEN, and PI_EXTENSION/OPENCODE_PLUGIN/PROXY_BRIDGE_SHIM send no sock_token at all (dead-hooked at HEAD, pre-existing). Owner: 01-06 task 4, wave 3. Also hand it --no-verify on gitAsync.
+- #18 IS NOT CLOSED and plan 23 must not treat it as closed. Plan 01-03 closed its reviewer clause only. Three Fix clauses remain unmet at b09fd74: (a) spawn-requests is documented in no agent-facing doc — PROTOCOL.md and COMMANDS.md do not exist; (b) the hookless-engine work-order string's audit anchor (useHive.ts:137) has drifted and the clause cannot be adjudicated from source without its own pass; (c) enrichTaskPrompt (src/renderer/src/hooks/useHive.ts:241) still has zero callers, neither wired nor deleted. D-46's phase gate (open floor-inspection issues excluding epics == 0) cannot pass until these land. Per-clause evidence: https://github.com/MARKXAILABS/hello-markx/issues/18#issuecomment-5364189116
 
 ## Deferred Items
 
@@ -147,8 +152,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T01:24:36.268Z
-Stopped at: Phase 1 planned (23 plans/9 waves). Red-team rounds 1, 2 and 3 all returned NOT CLEAN
+Last session: 2026-08-21T01:51:59.525Z
+Stopped at: Completed 01-03-PLAN.md (review sweep obligation set). CI green on PR #77 at b09fd74, all six jobs. #18 left open with 3 unmet clauses.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the

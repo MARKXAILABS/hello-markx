@@ -133,7 +133,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
 Plans:
 - [ ] 01-01-PLAN.md — Electron 32 → 43.x runtime bump (gates every other plan) + the load-ts.cjs wave-0 loader fixes
 - [x] 01-02-PLAN.md — GATE-01 — per-agent hook tokens bound to agent_id server-side; the floor-wide secret deleted
-- [ ] 01-03-PLAN.md — FLOOR-08 / VERDICT-02 / VERDICT-03 — the review obligation set; the refuse→redo hole; canReceiveInbox pinned
+- [x] 01-03-PLAN.md — FLOOR-08 / VERDICT-02 / VERDICT-03 — the review obligation set; the refuse→redo hole; canReceiveInbox pinned
 - [ ] 01-04-PLAN.md — FLOOR-06 / FLOOR-17 — Sigstore attestation, the SmartScreen honesty sentence, bug template, two ADRs
 - [ ] 01-05-PLAN.md — FLOOR-11 — adopt the shared hiveTasks poller; pool drop-path audit; create test/repo-claims.test.cjs
 - [ ] 01-06-PLAN.md — RECORD-03 / RECORD-04 / FLOOR-09 — one ledger row semantics, clamped-diff spend over all rows, proxy-tier cost to the breaker
@@ -546,7 +546,7 @@ after Phase 5 rather than closed in Phase 3.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Finish the Floor | 1/23 | In Progress|  |
+| 1. Finish the Floor | 2/23 | In Progress|  |
 | 2. The Daemon and the Protocol | 0/TBD | Not started | - |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |

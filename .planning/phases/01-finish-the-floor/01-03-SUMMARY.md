@@ -813,3 +813,22 @@ FOUND: b09fd74
 Every file this SUMMARY claims to have created or modified exists on disk, and both commit hashes
 resolve in `git log`. The CI rows were additionally re-fetched by SHA (`b09fd74`) rather than by
 branch tip, so the six `success` conclusions are bound to the exact tree described here.
+
+---
+
+## State updates — one handler deliberately not run
+
+`state.advance-plan`, `state.update-progress`, `state.record-metric`, three `state.add-decision`
+calls, `state.add-blocker` and `state.record-session` all ran, plus
+`roadmap.update-plan-progress --phase 01`.
+
+**`requirements.mark-complete FLOOR-08 VERDICT-02 VERDICT-03` was NOT run.** The plan's frontmatter
+lists those three requirements, but task 3 states in as many words: *"Do not mark the checkbox — plan
+23 owns the phase gate."* Marking them here would also be false on the merits: FLOOR-08 is tied to
+#18, and three of #18's seven Fix clauses are unmet. All three requirement rows therefore still read
+`Pending` in `.planning/REQUIREMENTS.md`, and plan 23 owns flipping them once the phase gate is
+genuinely green.
+
+The `Current Position` counter now reads `Plan: 3 of 23` and progress `9%` (2 SUMMARYs on disk out of
+23 PLANs). That undercount is 01-01's open D-09 operator gate, whose SUMMARY is intentionally not
+written yet — not a miscount by this plan.
