@@ -584,13 +584,20 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   flow, before an operator assigns mail-dependent work". Verified: **the operator never assigns to a
   worker.** `TaskDetailOverlay.tsx:51-60`'s `assign` routes through the Command Center's dispatch box,
   which mails the god (`CommandCenterPanel.tsx:608` → `{ to: 'god', act: 'request' }`), and the god
-  does the actual assignment via `task.cjs patch --assignee`. So "the assignment flow" as literally
-  worded has no operator-facing agent picker. The three surfaces where an operator's choice is
-  actually constrained by an engine's limits are: **(1) `AgentCard.tsx`** (the card, as written);
-  **(2) `AddAgentModal.tsx`**, where the operator picks the provider and thereby inherits its limits,
-  before any work exists; and **(3) the Command Center dispatch box**, where the operator names a
-  target agent in prose. The plan must name which it covers and must not claim the requirement's
-  literal wording if the surface does not exist.
+  does the actual assignment via `task.cjs patch --assignee`.
+  **CORRECTED by the UI contract — I had this half wrong, and the correction makes PARITY-01b's
+  literal wording achievable rather than aspirational.** The *final* assignment is the god's, but the
+  *flow* absolutely has an operator-facing agent picker: `CommandCenterPanel.tsx:673-682` renders a
+  `SUGGESTED OWNER` `<Select>` — `agents.filter((a) => !a.isGod)`, i.e. **every non-god agent,
+  unfiltered by capability** — above the dispatch textarea, defaulting to "Michael decides". So an
+  operator can and does point mail-dependent work at an engine that cannot receive mail, today, from a
+  dropdown. That is precisely the moment PARITY-01b names.
+  **All three surfaces are therefore in scope:** **(1) `AgentCard.tsx`** (the card, as written);
+  **(2) `AddAgentModal.tsx`**, where the operator picks the provider and inherits its limits before
+  any work exists; and **(3) the Command Center dispatch picker** at `CommandCenterPanel.tsx:679`.
+  The dispatch surface **informs, it does not veto** (`role="status"`), because the picker is
+  explicitly a suggestion the god may decline — disabling the option would misrepresent how routing
+  actually works.
 
 - **D-32:** **The engine ledger, measured per engine. This is the table the plans work from.**
   `src/shared/agentProvider.ts` declares eleven presets:
@@ -685,6 +692,39 @@ cannot collide with the extraction. See D-06 for the one ordering constraint tha
   resumes the work. Addressing the worker must be an **addition**, not a replacement: the answer goes
   to the asker, and the god is informed, or the card is left blocked with no one moving it. The plan
   must be explicit about which message carries the unblock.
+
+### Gates must be able to fail (phase-wide rule)
+
+- **D-40:** **NO GATE MAY PASS BECAUSE IT PARSED NOTHING. This run produced three separate instances,
+  so it is a rule rather than an observation.** (1) GSD's `check.decision-coverage-plan` returned
+  `"no trackable decisions"` and passed green against **both** this file and Phase 1's, because its
+  parser wants `- **D-NN:** text` and both files used `- **D-NN — text**` — Phase 1 was planned with
+  that gate silently disabled. (2) The workflow's validation-strategy step greps for the literal
+  `## Validation Architecture`; RESEARCH.md shipped it as `## §9 Validation Architecture`, so
+  VALIDATION.md would never have been created. (3) The UI checker found the proposed Rule C-1a
+  repo-fact test — a line-oriented `grep -rn "providerCapabilities(" src/renderer` asserting
+  two-argument calls — is defeated by ordinary formatter line-wrapping **and passes vacuously if every
+  call site is deleted**; and because `platform?` is *optional* rather than defaulted, TypeScript will
+  not backstop a one-argument renderer call either.
+  **Binding on every plan in this phase:** any repo-fact or grep-based assertion must (a) assert over
+  joined/parsed text rather than single lines where a formatter could wrap the construct, and (b)
+  assert a **positive lower bound** (`count >= 1`) alongside the negative, so deleting the feature
+  fails the test instead of satisfying it. `test/repo-claims.test.cjs:245-269` already demonstrates the
+  both-directions pattern — follow it. A test that cannot fail is not coverage, and this phase exists
+  to remove exactly that class of claim.
+
+- **D-41:** **DAEMON-05's literal wording is not fully met at the narrowest width, and the SUMMARY must
+  say so rather than tick it.** The requirement reads "the live public URL **always visible** in the
+  UI". The approved UI contract's degradation step 2 (forced at 800px, where the census leaves ~28px
+  after the chip and truncating a 48-character host is forbidden) renders `PUBLIC` alone, with the
+  untruncated URL one click away in the panel the chip already opens. The requirement's *purpose* —
+  the tunnel can never be up without the operator seeing it — survives intact, because presence is the
+  signal. Its literal clause does not, at that one width. Record it as a stated limitation in the
+  SUMMARY; do not claim the clause verbatim and do not quietly widen the wording.
+  Also carried from the UI review, binding on the DAEMON-05 and DAEMON-02 plans: the vendored QR
+  encoder's purity was verified against Project Nayuki's moving `master`, so the plan must **record the
+  retrieved commit SHA at the time it vendors**, alongside the file's SHA-256 — the same bar D-14 sets
+  for the cloudflared binary, applied to executable source.
 
 ### Claude's Discretion
 
