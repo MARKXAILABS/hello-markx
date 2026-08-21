@@ -88,7 +88,8 @@ export function MemoryPanel() {
             background: active ? 'var(--cth-lemon-light)' : 'var(--cth-cream-200)',
             boxShadow: 'inset 0 0 0 1.5px var(--cth-ink-500)',
             fontFamily: 'var(--cth-font-ui)',
-            fontSize: 12,
+            fontSize: 'var(--cth-text-body-md)',
+            lineHeight: 'var(--cth-lh-body-md)',
             color: 'var(--cth-ink-900)',
             cursor: 'pointer',
             border: 'none'
@@ -101,7 +102,7 @@ export function MemoryPanel() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14 }}>
 
             {/* What this is — one plain line. */}
-            <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 1.5 }}>
               What your agents remember across sessions, shared between them. Search it by meaning, not just exact words.
             </div>
 
@@ -129,7 +130,7 @@ export function MemoryPanel() {
 
             {/* Status + on/off — the two things the user controls at a glance. */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--cth-ink-900)', fontFamily: 'var(--cth-font-ui)' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', fontFamily: 'var(--cth-font-ui)' }}>
                 <span style={{ width: 9, height: 9, background: state.dot, boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)' }} />
                 {state.label}
               </span>
@@ -147,7 +148,7 @@ export function MemoryPanel() {
             {/* Not installed: show full self-sufficient setup so any machine can follow it. */}
             {!status?.available && (
               <div style={{
-                fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.6,
+                fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 1.6,
                 background: 'var(--cth-cream-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', padding: 10
               }}>
                 Meaning-based search isn't installed yet.
@@ -183,7 +184,7 @@ export function MemoryPanel() {
             {/* Model: a benefit-framed choice, not a codename dump. */}
             {status?.available && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <span style={{ fontSize: 11, color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                <span style={{ fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                   Search language
                 </span>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -201,7 +202,7 @@ export function MemoryPanel() {
                           fontFamily: 'var(--cth-font-ui)'
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--cth-ink-900)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
                           <span style={{
                             width: 8, height: 8, flexShrink: 0,
                             background: sel ? 'var(--cth-ink-900)' : 'transparent',
@@ -209,7 +210,7 @@ export function MemoryPanel() {
                           }} />
                           {m.title}
                         </div>
-                        <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', marginTop: 3 }}>{m.detail}</div>
+                        <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', marginTop: 3 }}>{m.detail}</div>
                       </button>
                     );
                   })}
@@ -230,7 +231,7 @@ export function MemoryPanel() {
                       flex: 1, padding: '6px 8px 4px',
                       background: 'var(--cth-paper-100)', border: 'none',
                       boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                      fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+                      fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                       color: 'var(--cth-ink-900)', outline: 'none'
                     }}
                   />
@@ -243,7 +244,7 @@ export function MemoryPanel() {
                     margin: 0, maxHeight: '40vh', overflow: 'auto',
                     background: 'var(--cth-cream-100)',
                     boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                    padding: 8, fontFamily: 'var(--cth-font-mono)', fontSize: 12,
+                    padding: 8, fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                     whiteSpace: 'pre-wrap', color: 'var(--cth-ink-900)'
                   }}>{result}</pre>
                 )}

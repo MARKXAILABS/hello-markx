@@ -28,20 +28,22 @@ const wrap: React.CSSProperties = {
   flexDirection: 'column',
   gap: 6,
   fontFamily: 'var(--cth-font-mono)',
-  fontSize: 12,
+  fontSize: 'var(--cth-text-mono-md)',
+  lineHeight: 'var(--cth-lh-mono)',
   color: 'var(--cth-ink-900)'
 };
 const labelStyle: React.CSSProperties = {
   fontFamily: 'var(--cth-font-display)',
-  fontSize: 8,
-  lineHeight: '12px',
+  fontSize: 'var(--cth-text-display-md)',
+  lineHeight: 'var(--cth-lh-display-md)',
   color: 'var(--cth-ink-500)',
   textTransform: 'uppercase'
 };
 const capInputStyle: React.CSSProperties = {
   width: 92,
   fontFamily: 'var(--cth-font-mono)',
-  fontSize: 12,
+  fontSize: 'var(--cth-text-mono-md)',
+  lineHeight: 'var(--cth-lh-mono)',
   padding: '4px 6px',
   border: '2px solid var(--cth-ink-300)',
   background: 'var(--cth-paper-100)',
@@ -89,7 +91,8 @@ export function CostHud({ compact = false }: CostHudProps): React.ReactElement |
         title={`${totalTok.toLocaleString()} voice audio tokens this session`}
         style={{
           fontFamily: 'var(--cth-font-mono)',
-          fontSize: 12,
+          fontSize: 'var(--cth-text-mono-md)',
+          lineHeight: 'var(--cth-lh-mono)',
           fontWeight: 600,
           color: 'var(--cth-ink-900)',
           flexShrink: 0,
@@ -127,22 +130,22 @@ export function CostHud({ compact = false }: CostHudProps): React.ReactElement |
           <span style={{ color: meterColor, fontWeight: 600 }}>
             {formatUsd(usd)} this session{capUsd != null ? ` / ${formatUsd(capUsd)}` : ''}
           </span>
-          <span style={{ color: 'var(--cth-ink-500)', fontSize: 11 }}>
+          <span style={{ color: 'var(--cth-ink-500)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
             {inputTokens.toLocaleString()} in · {outputTokens.toLocaleString()} out audio tokens
           </span>
           {overCap && (
-            <span style={{ color: 'var(--cth-danger, #c0392b)', fontSize: 11 }}>
+            <span style={{ color: 'var(--cth-danger, #c0392b)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
               Over the spend cap — time to wrap up.
             </span>
           )}
           {near && (
-            <span style={{ color: 'var(--cth-warn, #b8860b)', fontSize: 11 }}>
+            <span style={{ color: 'var(--cth-warn, #b8860b)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
               Approaching the spend cap.
             </span>
           )}
         </div>
       ) : (
-        <span style={{ color: 'var(--cth-ink-500)', fontSize: 11 }}>
+        <span style={{ color: 'var(--cth-ink-500)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
           {usd > 0 ? `Last session: ${formatUsd(usd)}` : 'No active voice session.'}
         </span>
       )}

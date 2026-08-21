@@ -278,10 +278,10 @@ export function App() {
         justifyContent: 'center', alignItems: 'center', gap: 12
       }}>
         <div style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-500)'
         }}>WAKING THE FLOOR</div>
-        <p style={{ margin: 0, fontSize: 13, textAlign: 'center', color: 'var(--cth-ink-700)' }}>
+        <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', textAlign: 'center', color: 'var(--cth-ink-700)' }}>
           Michael is clocking in.<br />
           The terminal will land here once he's seated.
         </p>
@@ -293,10 +293,10 @@ export function App() {
         justifyContent: 'center', alignItems: 'center', gap: 12
       }}>
         <div style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-500)'
         }}>NO AGENT SELECTED</div>
-        <p style={{ margin: 0, fontSize: 13, textAlign: 'center', color: 'var(--cth-ink-700)' }}>
+        <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', textAlign: 'center', color: 'var(--cth-ink-700)' }}>
           Spawn an agent from the strip below.<br />
           The terminal and command bar will land here.
         </p>
@@ -347,7 +347,8 @@ export function App() {
         <UpdateBadge />
         <span style={{
           fontFamily: 'var(--cth-font-ui)',
-          fontSize: 13,
+          fontSize: 'var(--cth-text-body-md)',
+          lineHeight: 'var(--cth-lh-body-md)',
           color: 'var(--cth-ink-500)'
         }}>
           {config.autoMode ? 'auto mode on' : 'auto mode off'}
@@ -374,7 +375,7 @@ export function App() {
             background: 'var(--cth-paper-100)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
             border: 'none', borderRadius: 2, cursor: 'pointer',
-            color: 'var(--cth-ink-900)', fontSize: 13, lineHeight: 1
+            color: 'var(--cth-ink-900)', fontSize: 'var(--cth-text-body-md)', lineHeight: 1
           }}
         >
           {appThemeNow === 'dark' ? '☀' : '☾'}
@@ -452,14 +453,14 @@ export function App() {
               <div style={{ pointerEvents: 'auto', width: 400 }}>
                 <PixelPanel variant="dialog" title="MICHAEL DIDN'T CLOCK IN" noPadding>
                   <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: '20px' }}>
+                    <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
                       The floor is empty because the agent CLI never launched — usually
                       because the engine picked during onboarding isn&rsquo;t installed on
                       this machine.
                     </p>
                     {godError && (
                       <div style={{
-                        fontFamily: 'var(--cth-font-mono)', fontSize: 12, lineHeight: '18px',
+                        fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                         color: 'var(--cth-ink-900)', background: 'var(--cth-coral-light)',
                         padding: '6px 8px', boxShadow: 'inset 0 0 0 1px var(--cth-coral)',
                         maxHeight: 120, overflow: 'auto', overflowWrap: 'anywhere'
@@ -495,7 +496,7 @@ export function App() {
               <div style={{ pointerEvents: 'auto', width: 360 }}>
                 <PixelPanel variant="dialog" title="EMPTY FLOOR" noPadding>
                   <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: '20px' }}>
+                    <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
                       No agents on the floor yet. Spawn one to see real claude output stream in here.
                     </p>
                     <PixelButton variant="primary" size="md" onClick={() => setAddAgentOpen(true)}>

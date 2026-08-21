@@ -61,7 +61,14 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
 
   // The draft box is the terminal's twin — it should read at the same size the
   // agent's output does, at every zoom level.
-  const composerFontSize = useTerminalFontSize();
+  //
+  // FLOOR-12: floored HERE, on the consumer, not on the shared zoom store.
+  // useTerminalFontSize()'s own minimum is MIN_TERMINAL_FONT_SIZE = 8, and that
+  // constant is UI-SPEC's terminal carve-out — raising it to 14 would floor this
+  // textarea by taking the user's xterm zoom range away. A textarea is not xterm,
+  // so the floor goes on the reader: the box still follows Cmd +/- upward and
+  // never renders below the 14px legibility floor (DESIGN.md:706).
+  const composerFontSize = Math.max(14, useTerminalFontSize());
   const composerLineHeight = Math.round(composerFontSize * 1.4);
 
   const idle = agent.status === 'idle';
@@ -193,7 +200,7 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
       }}>
       {dragOver && (
         <span style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 9, lineHeight: '12px',
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-700)', textAlign: 'center'
         }}>DROP TO ATTACH</span>
       )}
@@ -201,12 +208,12 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{
           fontFamily: 'var(--cth-font-display)',
-          fontSize: 9, lineHeight: '12px',
+          fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-700)'
         }}>QUEUE</span>
         {queue.length > 0 && (
           <span style={{
-            fontSize: 11, padding: '1px 6px 0',
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', padding: '1px 6px 0',
             background: 'var(--cth-cream-200)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
             fontFamily: 'var(--cth-font-ui)', color: 'var(--cth-ink-900)'
@@ -218,7 +225,8 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
               ? 'Auto-delivery is paused for the whole floor. Resume it in the Command Center, or use "send now" on a message below.'
               : statusHint}
             style={{
-              fontSize: 12,
+              fontSize: 'var(--cth-text-body-md)',
+              lineHeight: 'var(--cth-lh-body-md)',
               color: idle ? 'var(--cth-ink-700)' : 'var(--cth-ink-500)',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
             }}
@@ -243,7 +251,7 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
               : "Move the leftover text on this agent's prompt into this box so queued messages can be delivered"}
             style={{
               border: 'none', background: 'transparent', cursor: 'pointer', padding: 0,
-              fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+              fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
               color: 'var(--cth-ink-900)', textDecoration: 'underline'
             }}
           >{block === 'picker' ? 'close picker' : 'recover prompt'}</button>
@@ -255,7 +263,7 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
             style={{
               marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap',
               border: 'none', background: 'transparent', cursor: 'pointer',
-              fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+              fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
               color: 'var(--cth-ink-500)'
             }}
           >clear all</button>
@@ -284,7 +292,7 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
       {/* Free Flow recording / transcription status (entry point A) */}
       {ffHint && (
         <span style={{
-          fontSize: 12, lineHeight: '16px',
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
           color: ff.error && !(ffMine && ff.status !== 'idle') ? 'var(--cth-coral)' : 'var(--cth-ink-500)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
         }}>{ffHint}</span>
@@ -303,7 +311,7 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
                 padding: '2px 4px 2px 6px',
                 background: 'var(--cth-cream-200)',
                 boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                fontFamily: 'var(--cth-font-mono)', fontSize: 12, lineHeight: '16px',
+                fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                 color: 'var(--cth-ink-900)'
               }}
             >
@@ -459,15 +467,15 @@ function QueuedMessageRow(
       boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
     }}>
       <span style={{
-        fontFamily: 'var(--cth-font-mono)', fontSize: 12,
-        color: 'var(--cth-ink-500)', lineHeight: '18px', flexShrink: 0
+        fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)',
+        color: 'var(--cth-ink-500)', lineHeight: 'var(--cth-lh-mono)', flexShrink: 0
       }}>{`${index + 1}.`}</span>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div
           ref={bodyRef}
           title={expanded ? undefined : message.text}
           style={{
-            fontSize: 12, lineHeight: '18px',
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
             color: 'var(--cth-ink-900)',
             whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             ...(expanded
@@ -488,7 +496,7 @@ function QueuedMessageRow(
                 title={expanded ? 'Collapse this message' : 'Show the full message'}
                 style={{
                   border: 'none', background: 'transparent', cursor: 'pointer', padding: 0,
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 12, lineHeight: '16px',
+                  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-500)', textDecoration: 'underline'
                 }}
               >{expanded ? 'see less' : 'see more'}</button>
@@ -499,13 +507,13 @@ function QueuedMessageRow(
                 title="Deliver this message even though auto-delivery is paused. It moves to the front of the queue and types in as soon as the terminal is free."
                 style={{
                   border: 'none', background: 'transparent', cursor: 'pointer', padding: 0,
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 12, lineHeight: '16px',
+                  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-900)', textDecoration: 'underline'
                 }}
               >send now</button>
             )}
             {paused && message.manual && (
-              <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+              <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                 sending when free…
               </span>
             )}
@@ -660,12 +668,12 @@ function FreeFlowButton({ agentId, hasGroqKey }: { agentId: string; hasGroqKey: 
                 display: 'flex', flexDirection: 'column', gap: 7,
                 background: 'var(--cth-paper-100)',
                 boxShadow: 'inset 0 0 0 1.5px var(--cth-ink-500), 4px 4px 0 rgba(26,19,32,0.25)',
-                fontFamily: 'var(--cth-font-ui)', fontSize: 11, lineHeight: '15px',
+                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                 color: 'var(--cth-ink-900)', textAlign: 'left', whiteSpace: 'normal'
               }}
             >
               <span style={{
-                fontFamily: 'var(--cth-font-display)', fontSize: 9, letterSpacing: 0.5,
+                fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', letterSpacing: 0.5,
                 textTransform: 'uppercase', color: 'var(--cth-ink-500)'
               }}>Set up dictation</span>
 
@@ -701,7 +709,7 @@ function FreeFlowButton({ agentId, hasGroqKey }: { agentId: string; hasGroqKey: 
                 style={{
                   border: 'none', background: 'none', padding: 0, cursor: 'pointer',
                   alignSelf: 'flex-start',
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 11, lineHeight: '15px',
+                  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-900)', textDecoration: 'underline'
                 }}
               >set it up now</button>
