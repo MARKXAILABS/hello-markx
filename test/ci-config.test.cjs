@@ -293,3 +293,138 @@ test('SECURITY.md describes the per-agent hook token, not the floor-wide secret 
       + 'that keeps the rest of the paragraph from reading as a stronger guarantee than it is.'
   );
 });
+
+// ─── FLOOR-16: the lint gate ─────────────────────────────────────────────────
+//
+// The repo shipped its whole life with no linter while carrying 13
+// `eslint-disable` comments in src/. A disable comment nothing reads is worse
+// than no comment: it reads like a reviewed exception and is inert, so a real
+// dependency bug can hide under one indefinitely. These four tests pin the three
+// halves of the gate that can each be softened independently — the STEP (a
+// workflow that stops invoking it), the FLAG (a script that stops failing on
+// warnings), and the RULE SURFACE (a preset swap that silently adopts ~14 more
+// rules) — plus the count of steps in this file that are allowed to swallow
+// their own failure.
+//
+// Parsed, never grepped, for the same reason the assertions above are: with the
+// gate written as `run: npm run lint`, a grep of ci.yml for `max-warnings`
+// returns 0 on a FULLY CORRECT implementation, and `continue-on-error` appears
+// four times in ci.yml of which two are prose in comments.
+
+test('the typecheck job runs `npm run lint`, and neither the step nor the job can swallow it', () => {
+  const job = readYaml('.github/workflows/ci.yml').jobs.typecheck;
+  const steps = job.steps || [];
+  const lint = steps.filter((s) => String(s.run || '').trim() === 'npm run lint');
+
+  assert.equal(
+    lint.length,
+    1,
+    'the typecheck job must run exactly one `npm run lint` step. Written as the npm script (not a '
+      + 'bare `eslint` invocation) so the command is byte-identical to the one a contributor runs '
+      + 'locally, and so the --max-warnings 0 flag has one definition rather than two that can drift. '
+      + `Found ${lint.length} such step(s).`
+  );
+
+  assert.equal(
+    lint[0]['continue-on-error'],
+    undefined,
+    'the Lint step carries continue-on-error. A gate that reports and merges anyway is '
+      + 'indistinguishable from no gate — which is exactly the state that let 13 inert '
+      + 'eslint-disable comments accumulate in src/.'
+  );
+
+  assert.equal(
+    job['continue-on-error'],
+    undefined,
+    'the typecheck job carries a job-level continue-on-error, which silently disarms the lint step '
+      + 'and the tsc gate together.'
+  );
+});
+
+test('the `lint` script IS the gate: eslint, at --max-warnings 0, from devDependencies', () => {
+  const script = (pkg.scripts || {}).lint || '';
+
+  assert.match(
+    script,
+    /eslint/,
+    `package.json's "lint" script must invoke eslint; it is ${JSON.stringify(script)}. ci.yml runs `
+      + '`npm run lint` and nothing else, so this string is the entire gate.'
+  );
+
+  assert.match(
+    script,
+    /--max-warnings 0/,
+    `the "lint" script must carry --max-warnings 0; it is ${JSON.stringify(script)}. Both `
+      + 'react-hooks/exhaustive-deps and unused-disable-directive reporting default to WARNING '
+      + 'severity, so without the flag eslint exits 0 while printing findings and CI goes green on '
+      + 'a repo full of them.'
+  );
+
+  assert.ok(
+    (pkg.devDependencies || {}).eslint,
+    'eslint left devDependencies. The typecheck job installs with `npm ci --ignore-scripts`, which '
+      + 'installs devDependencies — losing it there makes `npm run lint` fail to resolve, not fail '
+      + 'to find problems.'
+  );
+
+  assert.equal(
+    (pkg.dependencies || {}).eslint,
+    undefined,
+    'eslint is in runtime dependencies. It is build tooling; shipping it inside the packaged app '
+      + 'adds megabytes and a parser to the attack surface for no runtime benefit.'
+  );
+});
+
+test('exactly two steps in ci.yml are allowed to swallow their own failure', () => {
+  const ci = readYaml('.github/workflows/ci.yml');
+  const soft = [];
+  for (const [jobName, job] of Object.entries(ci.jobs || {})) {
+    if (job['continue-on-error'] === true) soft.push(`${jobName} (whole job)`);
+    for (const step of job.steps || []) {
+      if (step['continue-on-error'] === true) soft.push(`${jobName}: ${step.name || step.uses || step.run}`);
+    }
+  }
+
+  assert.equal(
+    soft.length,
+    2,
+    `ci.yml declares ${soft.length} continue-on-error, expected the two pre-existing ones (the `
+      + 'advisory `npm audit`, and the historically flaky electron-rebuild in `build`). Found: '
+      + `${soft.join(' | ') || 'none'}. Both existing ones are documented inline with the reason `
+      + 'they are advisory; a third is how a gate gets disarmed without anyone deleting it. Count '
+      + 'the PARSED declarations — the raw string appears four times in the file, twice inside '
+      + 'comments explaining why there is no continue-on-error there.'
+  );
+});
+
+test('the ESLint flat config resolves to exactly the two named rules, with a real TypeScript parser', async () => {
+  const configFile = ['eslint.config.mjs', 'eslint.config.js'].find((n) => fs.existsSync(path.join(root, n)));
+  assert.ok(
+    configFile,
+    'there is no flat config at the repo root. `npm run lint` with no config lints nothing and '
+      + 'exits 0 — a green gate over an empty file set.'
+  );
+
+  const { ESLint } = require('eslint');
+  const resolved = await new ESLint({ cwd: root })
+    .calculateConfigForFile(path.join(root, 'src/renderer/src/App.tsx'));
+  const rules = Object.keys(resolved.rules || {}).sort();
+
+  assert.deepEqual(
+    rules,
+    ['react-hooks/exhaustive-deps', 'react-hooks/rules-of-hooks'],
+    `${configFile} resolves to [${rules.join(', ')}]. The surface is deliberately these two rules `
+      + 'and no preset: eslint-plugin-react-hooks v7 ships the React Compiler rule set, and BOTH of '
+      + 'its flat presets carry 16-17 rules, most at "error". Spreading one in — or a future minor '
+      + 'adding to one — would adopt a ruleset this project never agreed to, silently, on an '
+      + 'unrelated `npm update`. Asserted through ESLint\'s own resolver rather than by reading the '
+      + 'file, because that is what a preset spread cannot hide from.'
+  );
+
+  assert.ok(
+    resolved.languageOptions && resolved.languageOptions.parser,
+    `${configFile} configures no parser for src/. ESLint's default parser (espree) cannot parse a `
+      + 'TypeScript type annotation, so without @typescript-eslint/parser every file in src/ fails '
+      + 'to parse and the gate passes over nothing.'
+  );
+});
