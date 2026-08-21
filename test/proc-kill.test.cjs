@@ -27,6 +27,13 @@ fs.writeFileSync(path.join(out, 'procKill.js'), js, 'utf8');
 const { isAlive, hardKillTree, ensureKilled } = require(path.join(out, 'procKill.js'));
 
 if (process.platform === 'win32') {
+  // ASSERT the smoke import this branch claims to be. Without these two lines
+  // the branch exits 0 before a single assertion runs, so on Windows this file
+  // was green forever — green even if procKill.ts stopped exporting anything at
+  // all. That is not a passing test, it is an unrunnable one. Pinned durably by
+  // the poisoned-assert probe in test/repo-claims.test.cjs.
+  assert.strictEqual(typeof ensureKilled, 'function');
+  assert.strictEqual(typeof hardKillTree, 'function');
   console.log('  ok  (win32: smoke import only — POSIX group semantics not applicable)');
   process.exit(0);
 }
