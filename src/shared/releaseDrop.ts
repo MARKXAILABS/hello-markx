@@ -104,7 +104,7 @@ const FRAME_BASE_CSS = `
   .drop { padding: var(--pad); max-width: 780px; margin: 0 auto; }
 
   .eyebrow {
-    font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+    font-size: 14px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
     color: var(--accent); margin: 0 0 14px;
   }
   h1 {
@@ -137,7 +137,7 @@ const FRAME_BASE_CSS = `
     border-radius: var(--radius); border: 1px solid var(--line);
   }
   figure { margin: 0; }
-  figcaption { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
+  figcaption { font-size: 14px; color: var(--ink-soft); margin-top: 10px; }
 
   /* Drop-in placeholder: <div class="placeholder" data-label="Hero"></div>
      Pure CSS, so it needs no asset and cannot 404 in front of a user. */
@@ -147,7 +147,7 @@ const FRAME_BASE_CSS = `
     background:
       repeating-linear-gradient(135deg,
         rgba(20,19,26,0.035) 0 10px, rgba(20,19,26,0.055) 10px 20px);
-    color: var(--ink-soft); font-size: 13px; letter-spacing: .04em;
+    color: var(--ink-soft); font-size: 14px; letter-spacing: .04em;
   }
   .placeholder::after { content: attr(data-label); }
   .placeholder.square { aspect-ratio: 1 / 1; }
@@ -209,14 +209,14 @@ export const DEFAULT_DROP_HTML = `<style>
          cursor: pointer; transition: background .2s, transform .2s; }
   .dot:hover { background: rgba(20,19,26,.34); }
   .dot.on { background: var(--accent); transform: scale(1.25); }
-  .btn { cursor: pointer; border-radius: 999px; font-size: 13.5px; font-weight: 600;
+  .btn { cursor: pointer; border-radius: 999px; font-size: 14px; font-weight: 600;
          padding: 9px 18px; border: 1px solid var(--line); color: var(--ink-soft);
          user-select: none; transition: background .16s, color .16s; }
   .btn:hover { background: rgba(20,19,26,.04); }
   .btn.primary { background: var(--ink); border-color: var(--ink); color: #FBFAF8; }
   .btn.primary:hover { background: #2a2733; }
 
-  .kicker { font-size: 11.5px; font-weight: 700; letter-spacing: .14em;
+  .kicker { font-size: 14px; font-weight: 700; letter-spacing: .14em;
             text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
   h1 { font-size: clamp(1.8rem, 4.4vw, 2.7rem); }
   .lede { margin-bottom: 1.4em; }
@@ -227,23 +227,23 @@ export const DEFAULT_DROP_HTML = `<style>
   .stat { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 24px;
           padding-top: 18px; border-top: 1px solid var(--line); }
   .stat b { display: block; font-size: 1.5rem; letter-spacing: -.03em; font-weight: 680; }
-  .stat span { font-size: 12px; color: var(--ink-soft); }
+  .stat span { font-size: 14px; color: var(--ink-soft); }
 
-  .tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .1em;
+  .tag { display: inline-block; font-size: 14px; font-weight: 700; letter-spacing: .1em;
          text-transform: uppercase; color: var(--accent);
          background: rgba(27,127,90,.09); padding: 4px 9px; border-radius: 999px; }
   .quote { border-left: 2px solid var(--accent); padding-left: 15px; margin: 18px 0 0;
            color: var(--ink-soft); font-size: 14.5px; }
   .rows { list-style: none; padding: 0; margin: 0; }
   .rows li { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: baseline;
-             padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
-  .rows i { font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: .09em;
+             padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+  .rows i { font-style: normal; font-size: 14px; font-weight: 700; letter-spacing: .09em;
             text-transform: uppercase; color: var(--ink-soft); }
   .rows b { font-weight: 620; }
-  .rows p { margin: 1px 0 0; color: var(--ink-soft); font-size: 12.5px; }
+  .rows p { margin: 1px 0 0; color: var(--ink-soft); font-size: 14px; }
   .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
   .card h2 { margin: 10px 0 .2em; font-size: 1.15rem; }
-  .card p { margin: 0; color: var(--ink-soft); font-size: 13.5px; }
+  .card p { margin: 0; color: var(--ink-soft); font-size: 14px; }
   .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
   /* 16:10, not 4:3 — the taller ratio pushed the second row past the fold, and a
      drop page that scrolls cuts a sentence in half at the boundary. */
