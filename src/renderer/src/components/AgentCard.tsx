@@ -111,7 +111,11 @@ export function AgentCard({
   // slack that Talk's info mark (which only appears when the OpenAI key is
   // missing) has somewhere to sit rather than pushing the row apart.
   const width = 220;
-  const height = 78;
+  // FLOOR-12 containment, step 2: the 14px floor grew this card's content from
+  // 63px to 71px (context row 18->20, note row 14->20), measured. The container
+  // moves by the same +8 so the original 3px of slack survives the bump rather
+  // than being spent on it. Nothing was reflowed, moved or dropped to fit.
+  const height = 86;
   const lift = (isGod ? -2 : 0) - (hover ? 1 : 0) - (selected ? 1 : 0);
   /** God's distinction: a tinted surface plus a thin accent border all the way
    *  around — NOT the 3px rule that used to sit on the top edge alone. That rule
@@ -194,12 +198,17 @@ export function AgentCard({
           style={{
             position: 'absolute', right: -4, bottom: -5, zIndex: 2,
             border: 'none', padding: 0,
-            width: 20, height: 18,
+            // Containment: a two-digit count at the 14px floor measures 28px
+            // against 16px at the old 8px size, so the note widens by the same
+            // delta and its height tracks the 20px display line box.
+            width: 30, height: 20,
             background: 'var(--cth-sky)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300), 1px 2px 0 rgba(26,19,32,0.18)',
             transform: 'rotate(4deg)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-900)',
+            fontFamily: 'var(--cth-font-display)',
+            fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+            color: 'var(--cth-ink-900)',
             cursor: 'pointer'
           }}
         >
@@ -242,7 +251,8 @@ export function AgentCard({
                 }}>{name.toUpperCase()}</span>
                 {isGod && (
                   <span style={{
-                    fontFamily: 'var(--cth-font-display)', fontSize: 7, lineHeight: '11px',
+                    fontFamily: 'var(--cth-font-display)',
+                    fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
                     background: `var(--cth-${accent})`, color: 'var(--cth-ink-900)',
                     padding: '1px 4px 0', flexShrink: 0
                   }}>BOSS</span>
@@ -284,7 +294,7 @@ export function AgentCard({
                 title={`${project}${action && status !== 'idle' ? ` — ${action}` : ''}${row?.model ? ` · model: ${row.model}` : ''}${accountLabel ? ` · account: ${accountLabel}` : ''}`}
                 style={{
                   flex: 1, minWidth: 0,
-                  fontSize: 11, lineHeight: '14px',
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-500)',
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                 }}
@@ -314,7 +324,7 @@ export function AgentCard({
                   style={{
                     flexShrink: 0,
                     fontFamily: 'var(--cth-font-mono)',
-                    fontSize: 10, lineHeight: '13px',
+                    fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                     color: 'var(--cth-ink-700)'
                   }}
                 >${usd.toFixed(2)}</span>
@@ -324,7 +334,7 @@ export function AgentCard({
                   title={`Claude account: ${accountLabel}`}
                   style={{
                     flexShrink: 0, maxWidth: 76,
-                    fontSize: 9, lineHeight: '13px', padding: '0 4px',
+                    fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', padding: '0 4px',
                     background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
                     color: 'var(--cth-ink-700)',
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
@@ -377,11 +387,18 @@ export function AgentCard({
                       background: 'transparent', border: 'none', padding: 0,
                       flexShrink: 0, width: 15, height: 14,
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 10, lineHeight: 1, cursor: 'pointer',
+                      lineHeight: 1, cursor: 'pointer',
                       // Quiet until the card is hovered — discoverable, not noisy.
                       color: hover ? 'var(--cth-ink-500)' : 'var(--cth-ink-300)'
                     }}
-                  >✎</button>
+                  >
+                    {/* FLOOR-12 Rule 0: a decorative glyph, exempt from the 14px
+                        floor and hidden from the a11y tree. aria-hidden goes on
+                        the GLYPH, never on the button — the button is focusable,
+                        and hiding a focusable element leaves a screen-reader user
+                        tabbing to a control with no name at all. */}
+                    <span aria-hidden="true" style={{ fontSize: 10 }}>✎</span>
+                  </button>
                 )}
               </div>
             )}

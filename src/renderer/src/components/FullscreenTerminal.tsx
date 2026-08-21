@@ -203,7 +203,8 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
         }}
       >
         <span style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 12, lineHeight: '20px',
+          fontFamily: 'var(--cth-font-display)',
+          fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-900)'
         }}>HELLO MARKX · FULLSCREEN</span>
         {/* Same top-right controls as the main title bar — fullscreen covers
@@ -240,7 +241,7 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
               background: 'var(--cth-paper-100)',
               boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
               border: 'none', borderRadius: 2, cursor: 'pointer',
-              color: 'var(--cth-ink-900)', fontSize: 13, lineHeight: 1
+              color: 'var(--cth-ink-900)', fontSize: 'var(--cth-text-body-md)', lineHeight: 1
             }}
           >
             {appThemeNow === 'dark' ? '☀' : '☾'}
@@ -397,7 +398,8 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 6,
                   padding: '4px 8px',
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                  fontFamily: 'var(--cth-font-ui)',
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-900)',
                   background: 'var(--cth-status-working)',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
@@ -428,7 +430,8 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: 2,
                         height: 20, padding: '0 2px 0 6px',
-                        fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                        fontFamily: 'var(--cth-font-ui)',
+                        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                         color: 'var(--cth-ink-700)', background: 'var(--cth-paper-100)',
                         boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
                       }}
@@ -441,11 +444,15 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                         style={{
                           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                           width: 14, height: 14, padding: 0, lineHeight: 1,
-                          fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                          fontFamily: 'var(--cth-font-ui)',
                           color: 'var(--cth-ink-500)', background: 'transparent',
                           border: 'none', cursor: 'pointer'
                         }}
-                      >✕</button>
+                      >
+                        {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH;
+                            the button keeps its name and stays focusable. */}
+                        <span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>
+                      </button>
                     </span>
                   ))}
                 </div>
@@ -536,7 +543,11 @@ function ContextBar({ tokens, limit, accent }: { tokens?: number; limit?: number
       }}>
         <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: color }} />
       </span>
-      <span style={{ flexShrink: 0, fontSize: 9, color: 'var(--cth-ink-500)' }}>{pct}%</span>
+      <span style={{
+        flexShrink: 0,
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+        color: 'var(--cth-ink-500)'
+      }}>{pct}%</span>
     </div>
   );
 }
@@ -647,7 +658,8 @@ function SidebarRow({
           cursor: drag.dragId ? 'grabbing' : 'grab',
           position: 'relative',
           textAlign: 'left',
-          fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+          fontFamily: 'var(--cth-font-ui)',
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
           color: 'var(--cth-ink-900)',
           transition: 'opacity 120ms ease'
         }}
@@ -707,12 +719,16 @@ function SidebarRow({
                 border: 'none', padding: 0,
                 flexShrink: 0, width: 20, height: 20,
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 12, lineHeight: 1, color: 'var(--cth-ink-500)',
+                lineHeight: 1, color: 'var(--cth-ink-500)',
                 background: notePosition ? 'var(--cth-cream-200)' : 'var(--cth-paper-100)',
                 boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
                 cursor: 'pointer'
               }}
-            >✎</button>
+            >
+              {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH; the button
+                  keeps its accessible name and stays focusable. */}
+              <span aria-hidden="true" style={{ fontSize: 12 }}>✎</span>
+            </button>
           </div>
           {/* WHAT this agent is, at a glance. The roster used to carry only a
               name, a portrait and a status dot — enough to tell rows apart, not
@@ -730,7 +746,7 @@ function SidebarRow({
             }} title={agent.model ? `Model: ${agent.model}` : 'Runs the CLI default model'}>
               {shortModel(agent.model) ?? 'CLI default'}
             </span>
-            <span style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
+            <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
             <span style={{
               flex: 1, minWidth: 0,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
@@ -739,7 +755,7 @@ function SidebarRow({
             </span>
             {!!usd && usd > 0 && (
               <>
-                <span style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
+                <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
                 <span
                   title={`Estimated spend so far: $${usd.toFixed(2)}`}
                   style={{ flexShrink: 0, fontFamily: 'var(--cth-font-mono)' }}
@@ -761,7 +777,7 @@ function SidebarRow({
                   color: 'var(--cth-ink-500)'
                 }}
               >
-                <span style={{ flexShrink: 0, color: 'var(--cth-ink-300)' }}>•</span>
+                <span aria-hidden="true" style={{ flexShrink: 0, color: 'var(--cth-ink-300)' }}>•</span>
                 {/* Exactly one line per bullet — a wrapping row would make the
                     roster's height jump around as notes are typed. The full
                     text is on hover (title, and the editor beside it). */}
@@ -841,7 +857,9 @@ function SidebarRow({
             }}
           />
           <div style={{
-            marginTop: 5, fontSize: 10, color: 'var(--cth-ink-500)'
+            marginTop: 5,
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+            color: 'var(--cth-ink-500)'
           }}>one line = one bullet · esc to close</div>
         </div>
         </>,
@@ -888,16 +906,19 @@ function Header({ agent }: { agent: Agent }) {
       boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)'
     }}>
       <span style={{
-        fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '16px',
+        fontFamily: 'var(--cth-font-display)',
+        fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-900)'
       }}>{agent.name.toUpperCase()}</span>
       <span style={{
-        fontSize: 12, color: 'var(--cth-ink-500)',
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+        color: 'var(--cth-ink-500)',
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         maxWidth: 300
       }}>{agent.cwd}</span>
       <span style={{
-        fontSize: 12, color: 'var(--cth-ink-700)',
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+        color: 'var(--cth-ink-700)',
         fontStyle: 'italic'
       }}>“{agent.description}”</span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>

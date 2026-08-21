@@ -79,7 +79,11 @@ export function ThreadsPanel({ agentId }: ThreadsPanelProps) {
   if (threads.length === 0) {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'var(--cth-paper-200)' }}>
-        <p style={{ margin: 0, fontSize: 13, color: 'var(--cth-ink-700)', textAlign: 'center', maxWidth: 280 }}>
+        <p style={{
+          margin: 0,
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+          color: 'var(--cth-ink-700)', textAlign: 'center', maxWidth: 280
+        }}>
           No conversations yet. Messages this agent receives will appear here as threads.
         </p>
       </div>
@@ -102,11 +106,18 @@ export function ThreadsPanel({ agentId }: ThreadsPanelProps) {
                 lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', boxShadow: 'inset 0 -1px 0 var(--cth-ink-900)'
               }}
             >
-              <span style={{ width: 12, flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+              {/* FLOOR-12 Rule 0 — decorative disclosure glyph. It carries no
+                  fontSize of its own (it inherits the button's, now at the
+                  floor), so it needs no local override and no allowlist entry.
+                  The button's accessible name is its visible subject text. */}
+              <span aria-hidden="true" style={{ width: 12, flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {thread.subject.toUpperCase()}
               </span>
-              <span style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>{thread.messages.length}</span>
+              <span style={{
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                color: 'var(--cth-ink-500)'
+              }}>{thread.messages.length}</span>
             </button>
 
             {open && (
@@ -118,22 +129,43 @@ export function ThreadsPanel({ agentId }: ThreadsPanelProps) {
                   return (
                     <div key={m.id} style={{ borderLeft: '2px solid var(--cth-ink-100)', paddingLeft: 8 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13, fontWeight: 700, color: 'var(--cth-ink-900)' }}>{m.from}</span>
                         <span style={{
-                          fontFamily: 'var(--cth-font-ui)', fontSize: 12, lineHeight: '16px', padding: '0 6px',
+                          fontFamily: 'var(--cth-font-ui)',
+                          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                          fontWeight: 700, color: 'var(--cth-ink-900)'
+                        }}>{m.from}</span>
+                        <span style={{
+                          fontFamily: 'var(--cth-font-ui)',
+                          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                          padding: '0 6px',
                           background: 'var(--cth-cream-100)', boxShadow: `inset 0 0 0 1px ${ACT_COLOR[m.act] ?? 'var(--cth-ink-300)'}`,
                           color: 'var(--cth-ink-900)'
                         }}>{m.act}</span>
-                        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--cth-ink-500)' }}>
+                        <span style={{
+                          marginLeft: 'auto',
+                          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                          color: 'var(--cth-ink-500)'
+                        }}>
                           {new Date(m.created_at).toLocaleString()}
                         </span>
                       </div>
-                      <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13, lineHeight: '18px', color: 'var(--cth-ink-700)', marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      <div style={{
+                        fontFamily: 'var(--cth-font-ui)',
+                        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                        color: 'var(--cth-ink-700)', marginTop: 2,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+                      }}>
                         {shown}
                         {long && (
                           <button
                             onClick={() => setExpanded(s => ({ ...s, [m.id]: !isExp }))}
-                            style={{ marginLeft: 6, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--cth-sky)', fontFamily: 'var(--cth-font-ui)', fontSize: 12, padding: 0 }}
+                            style={{
+                              marginLeft: 6, border: 'none', background: 'transparent',
+                              cursor: 'pointer', color: 'var(--cth-sky)',
+                              fontFamily: 'var(--cth-font-ui)',
+                              fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                              padding: 0
+                            }}
                           >{isExp ? 'less' : 'more'}</button>
                         )}
                       </div>
@@ -149,7 +181,8 @@ export function ThreadsPanel({ agentId }: ThreadsPanelProps) {
                     rows={2}
                     style={{
                       resize: 'vertical', width: '100%', boxSizing: 'border-box', padding: '6px 8px',
-                      fontFamily: 'var(--cth-font-ui)', fontSize: 13, lineHeight: '18px',
+                      fontFamily: 'var(--cth-font-ui)',
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                       color: 'var(--cth-ink-900)', background: 'var(--cth-cream-50)',
                       border: 'none', boxShadow: 'inset 0 0 0 2px var(--cth-ink-700)'
                     }}
