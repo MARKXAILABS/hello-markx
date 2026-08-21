@@ -521,7 +521,8 @@ const delivery = new DeliveryService({
 const hookServer = new HookServer(
   hive, () => liveWebContents(), () => readConfig(), control, breaker,
   (agentId) => delivery.drainAtStop(agentId),
-  (agentId) => focusAgent(agentId)
+  (agentId) => focusAgent(agentId),
+  (s) => telemetry.recordCostSample(s)          // FLOOR-09 (#19) — proxy-tier cost sink
 );
 // GATE-01 — the hook token is minted PER SPAWN and lives in exactly one PTY's
 // env, replacing the single floor-wide secret every PTY used to inherit. Wired

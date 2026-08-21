@@ -169,3 +169,39 @@ test('log.jsonl rotates once past its cap and logTail reads only the tail', (t) 
   // handed back as a {raw:…} shard.
   assert.equal(tail.some((e) => e.raw !== undefined), false);
 });
+
+// ─── FLOOR-09 (#19): the proxy tier's spend reaches getAgentUsage ────────────
+//
+// A SOURCE assertion, following the idiom test/hive-task-mutation.test.cjs
+// already uses for exactly this class of claim ('renderer task actions never
+// send a whole stale ledger back to main', which readFileSync's src/main/index.ts
+// and asserts on its text).
+//
+// It is here because the sink and its call site are owned by different plans:
+// 01-06 minted the optional `recordCost` parameter on HookServer and proved it
+// at runtime through a real hook socket, but could not write index.ts. The
+// parameter is OPTIONAL and LAST, so the tree typechecks perfectly with the
+// argument absent — which is precisely why nothing but an assertion on the
+// composition root can hold it in place.
+test('the composition root passes a cost sink at the sole new HookServer() call (FLOOR-09)', () => {
+  const src = fs.readFileSync(path.resolve(__dirname, '..', 'src/main/index.ts'), 'utf8');
+
+  const at = src.indexOf('new HookServer(');
+  assert.ok(at > 0, 'src/main/index.ts no longer constructs a HookServer at all');
+  assert.equal(src.indexOf('new HookServer(', at + 1), -1,
+    'a SECOND HookServer construction appeared — this pin only guards the first');
+
+  // Sliced to that call's own argument list before matching: index.ts is ~5,600
+  // lines and an unsliced search would be satisfied by any unrelated mention.
+  const args = src.slice(at, src.indexOf('\n);', at));
+  assert.match(args, /recordCostSample/,
+    'proxy-tier spend never reaches getAgentUsage — FLOOR-09 (#19) is open, and the budget cap that reads it is a false cap');
+
+  // ...and it is a real sink, not a placeholder that satisfies the grep while
+  // dropping every sample on the floor.
+  const line = args.split('\n').find((l) => l.includes('recordCostSample'));
+  assert.doesNotMatch(line, /^\s*(\/\/|\/\*)/,
+    'the cost sink is commented out — FLOOR-09 (#19) is open');
+  assert.doesNotMatch(line, /=>\s*(\{\s*\}|undefined|null)/,
+    'the cost sink is a stub — proxy-tier spend is accepted and discarded, which is worse than no cap');
+});
