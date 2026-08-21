@@ -477,6 +477,15 @@ export function useHive(config: HarnessConfig | null): void {
       })();
     }, 1200);
     return () => { cancelled = true; clearTimeout(t); };
+    // `config` in full is deliberately NOT a dependency. This effect SPAWNS
+    // Michael - it clears any stale registry entry, calls spawnPty and types his
+    // orientation prompt. ESLint wants the whole object because
+    // `buildSpawnCommand(config, ...)` takes it; re-running on every config change
+    // would respawn the orchestrator whenever ANY unrelated setting is saved,
+    // throwing away his resumed session and the floor's situational awareness with
+    // it. The two keys that must re-run it are named. The rest are read inside the
+    // 1.2s timeout, at spawn time, which is the moment their values matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config?.onboardingComplete, config?.harnessHome]);
 
   // 2) Drive avatars from real hook events emitted by each agent's shim.

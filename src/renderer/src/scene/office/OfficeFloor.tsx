@@ -1802,6 +1802,14 @@ export function OfficeFloor() {
     });
 
     return () => {
+      // The rule's advice - copy mountIdRef.current to a variable inside the effect
+      // and use the copy in the cleanup - is exactly backwards for this ref. It is
+      // not a DOM handle; it is a MOUNT GENERATION counter, and bumping the LIVE
+      // ref is the whole point: the async init().catch above compares
+      // mountIdRef.current against the mountId it captured and bails when they
+      // differ. Bump a copy instead and a failed init belonging to a torn-down
+      // mount paints its error banner into the new one.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       mountIdRef.current++;
       const a = appRef.current;
       if (a) {
