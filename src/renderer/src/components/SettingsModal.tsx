@@ -1004,8 +1004,20 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                             <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
                               Desktop notifications
                             </span>
+                            {/* The platform qualifier is NOT optional copy. Electron 42 moved
+                                macOS toasts from NSUserNotification to UNNotification, which the
+                                system only draws for a CODE-SIGNED app, and paid signing is out
+                                of scope here — so on an unsigned macOS build this switch can be
+                                on, the app can fire, and nothing appears. README.md:139-147 has
+                                carried that sentence since the notification work landed; this
+                                line did not, and a settings row that promises a capability the
+                                OS will refuse is the defect, not a wording preference.
+                                No fontSize here, deliberately: this file's M1 occurrence count
+                                is pinned at 0 by plan 01-15 and asserted by plan 01-23. */}
                             <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
-                              Native toasts when an agent finishes or needs your input.
+                              Native toasts when an agent finishes or needs your input. On macOS
+                              this needs a code-signed build, and these downloads are unsigned —
+                              the app still fires them, but macOS may not draw them.
                             </span>
                           </div>
                           <PixelButton
