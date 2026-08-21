@@ -755,6 +755,9 @@ $ git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push 
 The same six were green at the base sha `c46393d`, so this plan neither introduced nor inherited a
 red job. No "pre-existing failures" baseline is being claimed anywhere in this summary.
 
+The docs commit `7126b5d` (this SUMMARY + STATE.md + ROADMAP.md) was pushed after and is **also
+green on CI and E2E** — so the branch head this plan leaves behind is verified, not just the code sha.
+
 ---
 
 ## 15. Outstanding
