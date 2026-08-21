@@ -688,11 +688,20 @@ linting cost is incurred (T-P21-06, disposition `accept`, holds as written).
 - **FLOOR-16's requirement checkbox is deliberately left `Pending`** — plans 01-02 … 01-20 all left
   theirs, and plan `01-23` owns the whole traceability pass. The ROADMAP criterion-5 lint clause is
   now TRUE and the evidence for it is this document.
-- **Issue #36** (D-43's per-clause evidence comment) is **NOT posted by this plan** —
-  `MEASUREMENT UNAVAILABLE — a human or a later plan must post the per-clause evidence comment on
-  issue #36 with the acceptance text verbatim, one command per clause, and the pasted outputs above.`
-  Every artifact that comment needs is in this file; the posting itself was not in this plan's task
-  list or its declared file bound, and inventing it here would be scope creep on a gate-wiring plan.
+- **Issue #36 is NOT closed, and the plan's success criterion saying it would be is factually
+  unsatisfiable on correct work.** #36 carries FOUR Fix clauses, not one. Verified live: clause 1
+  (dependabot + an audit step) is CLOSED — `.github/dependabot.yml` exists and `ci.yml:49-54` runs
+  `npm audit --audit-level=high`; clause 2 (adopt ESLint / strip the orphaned disables) is CLOSED by
+  this plan, and both halves were done; clause 3 (delete the duplicate script) is CLOSED —
+  `tools/copy-main-assets.cjs` no longer exists; clause 4 (extract one tunnel helper) is **OPEN** —
+  `slack.ts:191/210` and `webhook.ts:257/276` still each carry a private `listen()` and
+  `openTunnel()`, and both files repeat the same ERR_REQUIRE_ESM note, which is the duplication the
+  clause names. Neither file is in this plan's declared bound and no phase-1 plan owns that work.
+  Per D-42/D-44 — the same call 01-03 made on #18 and 01-11 made on #10 — a **per-clause evidence
+  comment** was posted and the issue was left OPEN rather than closed on 3-of-4:
+  <https://github.com/MARKXAILABS/hello-markx/issues/36#issuecomment-5372297276>. It carries the Fix
+  text clause by clause, one command per clause with pasted output, the measured finding count, the
+  four named tests, and the `node --test` exit line.
 - The ESLint 9 → 10 upgrade path, the six foreign root files, the `src/`-only lint scope and the
   orphaned probe processes are all filed in `deferred-items.md`.
 
