@@ -11,6 +11,8 @@ const { terminalsToEvict, orphanedTerminalIds, TERMINAL_POOL_MAX } =
 const { isAutoModeAgent, agentRowForCard, getLiveAutoMode, setLiveAutoMode, subscribeLiveAutoMode } =
   loadTs('src/renderer/src/store/autoMode.ts');
 const { autoModeFlagForProvider } = loadTs('src/shared/agentProvider.ts');
+const { sidebarLayout, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_OVERLAY_GUTTER } =
+  loadTs('src/renderer/src/store/sidebarLayout.ts');
 
 const agent = () => ({
   id: 'dev1',
@@ -174,4 +176,56 @@ test('the live toggle is published once and every reader is notified', () => {
   setLiveAutoMode(true);   // after unsubscribe: no further notification
   assert.deepEqual(seen, [true, false]);
   setLiveAutoMode(false);  // leave the singleton where the other tests expect it
+});
+
+// ── FLOOR-13: the sidebar collapses below 1024 ──────────────────────────────
+//
+// DESIGN.md:678 promised this and no code ran it. The boundary is a measured
+// width comparison, never a CSS breakpoint - these assertions are the reason it
+// can stay one.
+
+test('above the boundary nothing changes: no collapse, no toggle, splitter stays', () => {
+  const wide = sidebarLayout(1200, 420, false);
+  assert.equal(wide.collapsed, false);
+  assert.equal(wide.showToggle, false, 'the toggle is not in the tree above 1024');
+  assert.equal(wide.showSplitter, true);
+  assert.equal(wide.showOverlay, false);
+  // Exactly at the boundary is still the wide layout - 1024 is the floor of the
+  // desktop range, not the first collapsed pixel.
+  assert.equal(sidebarLayout(SIDEBAR_COLLAPSE_WIDTH, 420, false).collapsed, false);
+});
+
+test('one pixel below the boundary it collapses and the toggle appears', () => {
+  const narrow = sidebarLayout(1023, 420, false);
+  assert.equal(narrow.collapsed, true);
+  assert.equal(narrow.showToggle, true);
+  assert.equal(narrow.showSplitter, false, 'nothing to drag while it is an overlay');
+  // Closed by default: a narrow window opens on a full-width floor.
+  assert.equal(narrow.showOverlay, false);
+  assert.equal(sidebarLayout(1023, 420, true).showOverlay, true);
+});
+
+test('the overlay never covers the whole canvas - it is capped at vpWidth - 48', () => {
+  // A 900px sidebar in an 800px window would be wider than the window itself.
+  assert.equal(sidebarLayout(800, 900, true).overlayWidth, 800 - SIDEBAR_OVERLAY_GUTTER);
+  assert.equal(SIDEBAR_OVERLAY_GUTTER, 48);
+  // Under the cap the user's own width is honoured unchanged.
+  assert.equal(sidebarLayout(1000, 420, true).overlayWidth, 420);
+  // Degenerate window: a negative width would be an invalid CSS length.
+  assert.equal(sidebarLayout(20, 420, true).overlayWidth, 0);
+});
+
+test('crossing the boundary in both directions never mutates the stored width', () => {
+  // The bug this guards: writing the overlay's computed width back through
+  // setSidebarWidth strands the user's chosen width on the next large-window
+  // boot - the exact class SidebarSplitter.tsx:27-34 was written to kill.
+  const stored = { sidebarWidth: 900 };
+  const seen = [];
+  for (const vp of [1400, 800, 1400, 600, 1400]) {
+    seen.push(sidebarLayout(vp, stored.sidebarWidth, true).overlayWidth);
+  }
+  assert.equal(stored.sidebarWidth, 900, 'the persisted width is untouched');
+  // ...and the narrow-window value really WAS different, so "unchanged" is a
+  // result rather than a coincidence.
+  assert.deepEqual(seen, [900, 752, 900, 552, 900]);
 });

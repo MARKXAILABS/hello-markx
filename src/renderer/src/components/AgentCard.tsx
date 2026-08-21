@@ -9,6 +9,7 @@ import { AccentColorName } from '@/design/tokens';
 import { OfficeCharacterName } from '@/scene/office/cast';
 import { useStore } from '@/store/store';
 import { agentRowForCard, isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
+import { shortModel } from './FullscreenTerminal';
 
 export interface AgentCardProps {
   name: string;
@@ -280,7 +281,7 @@ export function AgentCard({
                 Claude pool-account chip when this agent is pinned to one. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
               <div
-                title={`${project}${action && status !== 'idle' ? ` — ${action}` : ''}${accountLabel ? ` · account: ${accountLabel}` : ''}`}
+                title={`${project}${action && status !== 'idle' ? ` — ${action}` : ''}${row?.model ? ` · model: ${row.model}` : ''}${accountLabel ? ` · account: ${accountLabel}` : ''}`}
                 style={{
                   flex: 1, minWidth: 0,
                   fontSize: 11, lineHeight: '14px',
@@ -288,6 +289,22 @@ export function AgentCard({
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                 }}
               >{infoLine}</div>
+              {/* FLOOR-13 field 5 — the model. The fullscreen roster row and the
+                  command-centre row have always shown it and the card has not, so
+                  the three renderings disagreed about what an agent IS. Same
+                  shortModel() the roster row uses, imported rather than copied:
+                  two copies of a formatter are two ways to render one id.
+                  Sized from a token so wave 6's sweep has no literal to chase. */}
+              <span
+                title={row?.model ? `Model: ${row.model}` : 'Runs the CLI default model'}
+                style={{
+                  flexShrink: 0,
+                  fontSize: 'var(--cth-text-body-sm)',
+                  lineHeight: 'var(--cth-lh-body-sm)',
+                  color: 'var(--cth-ink-500)',
+                  whiteSpace: 'nowrap'
+                }}
+              >{shortModel(row?.model) ?? 'CLI default'}</span>
               {/* Cost before the account chip: money is the thing being asked
                   about, the account is context for it. Hidden until telemetry
                   reports a non-zero spend — "$0.00" on a fresh agent is noise. */}
