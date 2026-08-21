@@ -53,7 +53,10 @@ export function ImagePreview({ root, rel, onCopyPath, onViewSource }: ImagePrevi
         {/* Facts about the file, in the same muted register as the diff bar's
             HEAD → working tree label. Dimensions only exist once the image has
             actually decoded, so this stays honest about what is known. */}
-        <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-500)', whiteSpace: 'nowrap' }}>
+        <span style={{
+          fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)',
+          lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-500)', whiteSpace: 'nowrap'
+        }}>
           {dims ? `${dims.w}×${dims.h}` : '—'}
           {img.status === 'ready' ? ` · ${formatBytes(img.size)}` : ''}
         </span>
@@ -132,7 +135,8 @@ function Centered({ children, tone }: { children: React.ReactNode; tone?: 'error
   return (
     <div style={{
       margin: 'auto', padding: 16, textAlign: 'center',
-      fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+      fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+      lineHeight: 'var(--cth-lh-body-md)',
       color: tone === 'error' ? 'var(--cth-coral)' : 'var(--cth-ink-500)'
     }}>{children}</div>
   );

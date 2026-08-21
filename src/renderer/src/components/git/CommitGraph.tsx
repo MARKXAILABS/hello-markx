@@ -167,7 +167,10 @@ export function CommitGraph({ commits, currentBranch, onCommitClick }: CommitGra
               paddingRight: 8,
               minWidth: 0,
               cursor: onCommitClick ? 'pointer' : 'default',
-              fontSize: 12,
+              fontSize: 'var(--cth-text-body-md)',
+              // Structural, not typographic: the row IS `height: ROW_H` and this is
+              // what vertically centres its text. ROW_H (24) already exceeds
+              // --cth-lh-body-md (20), so the 14px face has room.
               lineHeight: `${ROW_H}px`,
               whiteSpace: 'nowrap'
             }}
@@ -187,7 +190,7 @@ export function CommitGraph({ commits, currentBranch, onCommitClick }: CommitGra
               <span style={{
                 flexShrink: 1, minWidth: 0, maxWidth: '38%',
                 overflow: 'hidden', textOverflow: 'ellipsis',
-                padding: '0 5px', fontSize: 11,
+                padding: '0 5px', fontSize: 'var(--cth-text-mono-md)',
                 fontFamily: 'var(--cth-font-mono)',
                 color: isCurrent ? 'var(--cth-ink-900)' : 'var(--cth-ink-700)',
                 background: isCurrent ? 'var(--cth-lemon-light)' : 'transparent',
@@ -195,14 +198,14 @@ export function CommitGraph({ commits, currentBranch, onCommitClick }: CommitGra
               }}>{head}</span>
             )}
             {refs.length > 1 && (
-              <span style={{ flexShrink: 0, fontSize: 11, color: 'var(--cth-ink-500)' }}>
+              <span style={{ flexShrink: 0, fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-500)' }}>
                 +{refs.length - 1}
               </span>
             )}
 
             <span style={{
               flexShrink: 0, fontFamily: 'var(--cth-font-mono)',
-              fontSize: 11, color: 'var(--cth-ink-500)'
+              fontSize: 'var(--cth-text-mono-md)', color: 'var(--cth-ink-500)'
             }}>{relTime(c.time * 1000)}</span>
           </div>
         );
