@@ -37,6 +37,10 @@ export interface LiveAgentPty {
   hasOutput: boolean;
   /** Milliseconds since this PTY last emitted a byte (ptyManager.idleFor). */
   idleMs: number;
+  /** Epoch ms of this PTY's last byte, RAW — `0` means it has never emitted.
+   *  `idleMs` cannot express that: a never-painted PTY and one quiet for an hour
+   *  both read as "a long time", and the quiesce backstop must not flip the first. */
+  lastOutputAt: number;
 }
 
 /** The subset of a hive message the loop cares about. */
@@ -69,6 +73,16 @@ export interface DeliveryDeps {
   drain: (agentId: string) => { block: boolean; reason?: string; delivered?: DeliverableMessage[] };
   /** Kill the agent's PTY and respawn it on `account`, resuming its session. */
   respawn: (agentId: string, account: string) => Promise<{ ok: boolean; error?: string; account?: string }>;
+  /** This agent's circuit-breaker level (CircuitBreaker.levelFor). The quiesce
+   *  backstop must never fight the breaker pin: a constrained/stopped agent is
+   *  deliberately held 'looping', not idle. Optional — a floor with no breaker
+   *  reads every agent as healthy, exactly like `control`/`breaker` on HookServer. */
+  breakerLevel?: (agentId: string) => string;
+  /** The DURABLE half of a quiesce transition: record that this agent's turn is
+   *  over. `emit` reaches a renderer that may not exist; this one has to work with
+   *  the window closed, so index.ts points it at the hive log. Same split as
+   *  `drain` (durable cursor advance) vs `emit('hive:delivered')` above. */
+  setStatus?: (agentId: string, status: 'idle') => void;
   /** Send an event to the renderer (a no-op when no window is attached). */
   emit: (channel: string, payload: unknown) => void;
   log?: (...args: unknown[]) => void;
@@ -86,6 +100,31 @@ const TICK_MS = 4_000;
  *  touched this terminal for 8 s" — the cheapest draft guard there is, and the
  *  one that keeps working when no renderer is attached to veto at all. */
 const IDLE_MS = 8_000;
+/**
+ * PROVIDER-AGNOSTIC PTY-QUIESCENCE IDLE BACKSTOP (#5). Ported from the renderer
+ * (`useHive.ts` effect 2e), which is where it could not do its job: it died with
+ * the window.
+ *
+ * Why it exists at all, carried over verbatim from that effect's own note: hook
+ * events are the authoritative status source, but a bridge whose turn-end signal
+ * (Stop / session.idle / agent_end) never fires leaves the agent pinned 'working'.
+ * `usePtyParser` has a 4 s idle drift that would catch it — but it only parses the
+ * MOUNTED terminal, so a backgrounded (or unmounted, or window-less) agent gets
+ * none. So an agent whose PTY has emitted NOTHING for QUIESCE_IDLE_MS is treated
+ * as turn-done. Safe because a genuinely-working agent — a long streaming tool
+ * included — keeps emitting bytes; a false idle self-corrects on the next hook.
+ *
+ * ADR-0001 (one gate for PTY writes) is untouched by this: the backstop writes
+ * ZERO terminal bytes. It only announces a status transition. The wake nudge below
+ * remains the single writer.
+ */
+const QUIESCE_IDLE_MS = 12_000;
+/** The renderer polled the backstop on its own 4 s timer. Main does NOT get a
+ *  second timer — the quiesce check rides the tick that already exists — so this
+ *  is the cadence the tick must keep up with, not a timer of its own. Raising
+ *  TICK_MS alone would silently stretch the backstop's latency, so `start()`
+ *  clamps to whichever is shorter. */
+const QUIESCE_POLL_MS = 4_000;
 /** After a spawn/respawn, hold every typer off the agent while its TUI boots. */
 const BOOT_GRACE_MS = 35_000;
 /**
@@ -142,6 +181,11 @@ export class DeliveryService {
   private readonly vetoes = new Map<string, { reason: string; ts: number }>();
   /** ptyId → the instant its boot grace ends. */
   private readonly bootGraceUntil = new Map<string, number>();
+  /** agentIds already announced idle for their CURRENT quiet spell, so the
+   *  backstop is edge-triggered: one announcement per quiet spell, not one every
+   *  four seconds for as long as the agent stays quiet. An agent leaves the set
+   *  the moment its PTY emits again, or when it stops being live. */
+  private readonly quiesced = new Set<string>();
   /** agentIds mid-failover. THE re-entrancy guard from issue #5: it used to be a
    *  closure local in a renderer effect, so a reload between kill and respawn lost
    *  it and the agent stayed dead, pinned at "switching…". */
@@ -160,7 +204,9 @@ export class DeliveryService {
 
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => { void this.tick(); }, TICK_MS);
+    // The tick carries BOTH the inbox wake and the quiesce backstop, so it has to
+    // run at least as often as the faster of the two cadences (#5).
+    this.timer = setInterval(() => { void this.tick(); }, Math.min(TICK_MS, QUIESCE_POLL_MS));
     this.timer.unref?.();
   }
 
@@ -230,6 +276,53 @@ export class DeliveryService {
 
   // ─── the inbox wake (#5) ────────────────────────────────────────────────────
 
+  // ─── the idle-quiesce backstop (#5) ───────────────────────────────────
+
+  /**
+   * Flip every agent whose PTY has gone silent past QUIESCE_IDLE_MS to idle.
+   *
+   * This ran in the renderer until now (`useHive.ts` effect 2e) and therefore did
+   * not run at all with the window closed — an agent whose bridge never fires its
+   * turn-end signal stayed pinned 'working' forever, which is exactly the stuck
+   * floor issue #5 is about. It rides the existing tick: no second timer, in this
+   * file or in index.ts.
+   *
+   * Writes NO terminal bytes — ADR-0001's one-gate rule is about typing into a
+   * PTY, and this only announces a status transition, so the wake nudge below
+   * stays the single writer.
+   *
+   * The two announcements mirror the Stop drain's split: `setStatus` is the
+   * durable half (index.ts writes the hive log, which does not need a window) and
+   * `emit` is the live half (a documented no-op when no webContents exists). The
+   * event is Stop-shaped on purpose: a synthesized turn-end is how every bridged
+   * engine already keeps the harness status in step (`hive.ts` agent_end→Stop,
+   * session.idle→Stop), so the renderer needs no new channel and no new code.
+   */
+  private quiesce(live: LiveAgentPty[], now: number): void {
+    const ids = new Set(live.map((a) => a.agentId));
+    // Main outlives every renderer, so bound the set by the live roster — same
+    // reason the wake's seen-set is pruned against the live inbox below.
+    for (const id of this.quiesced) if (!ids.has(id)) this.quiesced.delete(id);
+
+    for (const a of live) {
+      // Never fight the breaker pin: a constrained/stopped agent is deliberately
+      // held 'looping', and calling it idle would re-arm the delivery paths that
+      // the breaker exists to hold off.
+      const level = this.deps.breakerLevel?.(a.agentId);
+      if (level === 'constrained' || level === 'stopped') continue;
+      // A still-booting TUI is mid-type; its silence is the boot sequence, not a
+      // finished turn. Reuses the boot grace this service already tracks.
+      if ((this.bootGraceUntil.get(a.ptyId) ?? 0) > now) continue;
+      // `lastOutputAt === 0` is "never painted a frame", not "quiet for ages".
+      const quiet = a.lastOutputAt > 0 && now - a.lastOutputAt > QUIESCE_IDLE_MS;
+      if (!quiet) { this.quiesced.delete(a.agentId); continue; }
+      if (this.quiesced.has(a.agentId)) continue;   // already announced this spell
+      this.quiesced.add(a.agentId);
+      this.deps.setStatus?.(a.agentId, 'idle');
+      this.deps.emit('hive:hookEvent', { agentId: a.agentId, event: 'Stop', blocked: false });
+    }
+  }
+
   /** One sweep: nudge every quiet agent holding mail it has not been told about.
    *  Agents are handled in PARALLEL — `submit` already serializes per PTY, and a
    *  single wedged TUI must not hold the whole floor's mail behind its timeout. */
@@ -238,8 +331,10 @@ export class DeliveryService {
     this.ticking = true;
     try {
       const now = this.now();
+      const live = this.deps.liveAgents();
+      this.quiesce(live, now);
       const jobs: Array<Promise<void>> = [];
-      for (const a of this.deps.liveAgents()) {
+      for (const a of live) {
         if (this.switching.has(a.agentId)) continue;      // mid-respawn
         if (this.deps.paused(a.agentId)) continue;         // operator pause
         if (this.vetoed(a.agentId)) continue;              // human is typing
@@ -254,8 +349,8 @@ export class DeliveryService {
         // Forget ids that have left the inbox (the agent moved them to .done).
         // Main outlives every renderer, so an append-only set would grow for the
         // life of the app; bounding it to the live inbox costs one pass.
-        const live = new Set(mail.map((m) => m.id));
-        for (const id of seen) if (!live.has(id)) seen.delete(id);
+        const stillUnread = new Set(mail.map((m) => m.id));
+        for (const id of seen) if (!stillUnread.has(id)) seen.delete(id);
         const fresh = mail.filter((m) => m.id && !seen.has(m.id));
         if (!fresh.length) continue;
         // Claim BEFORE the await: the nudge covers everything currently unread, and

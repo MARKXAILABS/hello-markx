@@ -18,12 +18,24 @@ const {
 
 /** A DeliveryService wired to fakes, on a fake clock so a TUI settle + four
  *  post-resume Enter retries cost no wall-clock time. */
+const CLOCK0 = 1_000_000;
+
 function harness(overrides = {}) {
   const state = {
-    clock: 1_000_000,
-    agents: [{ agentId: 'dev1', ptyId: 'pty1', provider: 'claude', hasOutput: true, idleMs: 30_000 }],
+    clock: CLOCK0,
+    // `lastOutputAt` is the raw epoch stamp main reads off the PTY; `idleMs` is the
+    // same fact pre-subtracted. Both are kept coherent here because production
+    // derives one from the other (index.ts `liveAgents`).
+    agents: [{
+      agentId: 'dev1', ptyId: 'pty1', provider: 'claude', hasOutput: true,
+      idleMs: 30_000, lastOutputAt: CLOCK0 - 30_000
+    }],
     inbox: { dev1: [{ id: 'm1', from: 'god' }] },
     paused: new Set(),
+    /** agentId → breaker level; absent = healthy. */
+    breaker: {},
+    /** The DURABLE half of a quiesce flip (index.ts appends it to the hive log). */
+    statuses: [],
     drain: { block: false },
     writeOk: true,
     respawnCalls: [],
@@ -40,6 +52,8 @@ function harness(overrides = {}) {
       return { ok: true };
     },
     paused: (id) => state.paused.has(id),
+    breakerLevel: (id) => state.breaker[id] ?? 'healthy',
+    setStatus: (id, status) => state.statuses.push({ id, status }),
     drain: () => state.drain,
     respawn: (agentId, account) => {
       state.respawnCalls.push({ agentId, account });
@@ -140,6 +154,69 @@ test('an operator auto-delivery pause blocks the Stop drain', () => {
   state.paused.add('dev1');
 
   assert.equal(svc.drainAtStop('dev1').block, false);
+});
+
+// ─── the idle-quiesce backstop, with nothing attached ───────────────────────
+
+test('a silent PTY is flipped idle with NO window attached, once per quiet spell', async () => {
+  // The renderer version of this ran in a React effect, so with the window closed
+  // an agent whose bridge never fires its turn-end signal stayed 'working' forever.
+  // `emit` here is the real no-window behaviour — a no-op, exactly what index.ts's
+  // `liveWebContents()?.send` does with no webContents — so the ONLY thing that can
+  // carry the flip is the durable half. If this passes on `emit` alone it is not
+  // testing the property the move exists for.
+  const { svc, state } = harness({ emit: () => { /* no webContents attached */ } });
+  state.inbox.dev1 = [];               // no mail: this is the quiesce path, not the wake
+
+  await svc.tick();
+  assert.deepEqual(
+    state.statuses,
+    [{ id: 'dev1', status: 'idle' }],
+    'an agent silent for 30 s was not flipped idle with no window attached'
+  );
+
+  await svc.tick();
+  assert.equal(state.statuses.length, 1, 'the flip re-announced on every 4 s tick while the agent stayed quiet');
+
+  // The PTY speaks again, then goes quiet again: a NEW turn, so a new announcement.
+  state.clock += 60_000;
+  state.agents[0].lastOutputAt = state.clock;
+  await svc.tick();
+  assert.equal(state.statuses.length, 1, 'a talking PTY was announced idle');
+  state.clock += 60_000;
+  await svc.tick();
+  assert.equal(state.statuses.length, 2, 'the backstop did not re-arm after the agent worked again');
+});
+
+test('silence that is not a finished turn does not flip: a booting TUI, and a PTY that never painted', async () => {
+  const { svc, state } = harness();
+  state.inbox.dev1 = [];
+  svc.noteSpawn('pty1');               // boot grace: its silence IS the boot sequence
+
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a booting TUI was called idle mid-boot');
+
+  svc.forgetPty('pty1');
+  state.agents[0].lastOutputAt = 0;    // never emitted a byte
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a PTY that has never painted a frame was read as quiet-for-ages');
+});
+
+test('the backstop never fights the breaker pin', async () => {
+  const { svc, state } = harness();
+  state.inbox.dev1 = [];
+  state.breaker.dev1 = 'constrained';
+
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a breaker-constrained agent was flipped idle out from under the pin');
+
+  state.breaker.dev1 = 'stopped';
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a breaker-stopped agent was flipped idle out from under the pin');
+
+  state.breaker.dev1 = 'healthy';
+  await svc.tick();
+  assert.deepEqual(state.statuses, [{ id: 'dev1', status: 'idle' }], 'a healthy silent agent was not flipped');
 });
 
 // ─── failover: the guard that used to die with the window ───────────────────

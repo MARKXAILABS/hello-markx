@@ -434,7 +434,8 @@ const delivery = new DeliveryService({
         ptyId,
         provider: inferAgentProvider(p.command, a.provider),
         hasOutput: p.hasOutput,
-        idleMs: Math.max(0, Date.now() - p.lastOutputAt)
+        idleMs: Math.max(0, Date.now() - p.lastOutputAt),
+        lastOutputAt: p.lastOutputAt
       });
     }
     return out;
@@ -456,6 +457,18 @@ const delivery = new DeliveryService({
     return { ...res, delivered: res.block ? pending.map((m) => ({ id: m.id, from: m.from })) : [] };
   },
   respawn: respawnOnAccount,
+  breakerLevel: (agentId) => breaker.levelFor(agentId),
+  // The DURABLE half of the idle-quiesce backstop (#5). `emit` below reaches a
+  // renderer that may not exist — the whole point of moving the backstop out of
+  // useHive.ts is that it has to work with the window closed — so the transition
+  // is written to the hive log, which main owns and which outlives every window.
+  // Deliberately NOT registry.json: that file's `status` is written 'idle' once at
+  // spawn and never transitions (see isFloorQuiet below), so rewriting it here
+  // would be a no-op against a field nothing advances.
+  setStatus: (agentId, status) => {
+    if (!hive.enabled()) return;
+    hive.appendLog({ kind: 'agent_quiesced', agentId, status, reason: 'pty_silent' });
+  },
   emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } }
 });
 // HookServer needs BOTH: Oscar's control registry (HITL pause/gate/steer/halt via
