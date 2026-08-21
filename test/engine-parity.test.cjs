@@ -20,10 +20,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const loadTs = require('./load-ts.cjs');
 
 const { TelemetryCollector } = loadTs('src/main/telemetry.ts');
 const { CircuitBreaker } = loadTs('src/main/breaker.ts');
+const { HiveManager } = loadTs('src/main/hive.ts');
+const { HookServer } = loadTs('src/main/hooks.ts');
 const { readCodexUsage } = loadTs('src/main/usage.ts');
 const { capabilityLine, providerCapabilities } = loadTs('src/shared/providerAutomation.ts');
 
@@ -97,6 +100,116 @@ test('a CostSample with no session key is dropped rather than mis-attributed', (
   const t = new TelemetryCollector();
   t.recordCostSample(costSample({ sessionId: '' }));
   assert.equal(t.getAgentUsage('qwen-1'), null);
+});
+
+// ── 1b. FLOOR-09: the sink is wired, proven through the REAL server ─────────
+//
+// The six calls above prove the COLLECTOR adds numbers up. They would all stay
+// green if the `CostSample` branch in hooks.ts were deleted outright, because
+// none of them goes anywhere near it. These two do: a payload is posted down the
+// real hook socket, past the real `authorized()` gate, into the real branch, and
+// the assertion reads the number back out of `getAgentUsage`.
+
+/** A real hive root with a real HookServer listening on its real socket.
+ *  `recordCost` is the eighth constructor argument — the same one production
+ *  gets at index.ts's `new HookServer(...)`, so this test and production share
+ *  one wiring shape instead of two. Pass `undefined` to model an UNWIRED floor. */
+function hookFloor(t, recordCost) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-floor09-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const hive = new HiveManager(() => home);
+  hive.ensureHive();
+  const server = new HookServer(
+    hive, () => null, () => ({}), undefined, undefined, undefined, undefined, recordCost
+  );
+  server.start();
+  t.after(() => server.stop());
+  return { home, hive, server, sock: hive.sockPath() };
+}
+
+/** Post one payload down the socket exactly as a shim does, and resolve when the
+ *  server has answered — so the assertion never races the handler. */
+function postToSocket(sock, payload) {
+  return new Promise((resolve, reject) => {
+    const c = net.createConnection(sock, () => c.write(JSON.stringify(payload) + '\n'));
+    let buf = '';
+    c.on('data', (d) => { buf += d; });
+    c.on('close', () => resolve(buf));
+    c.on('error', reject);
+  });
+}
+
+/** The payload PROXY_BRIDGE_SHIM synthesizes for one qwen response. */
+const proxyCostPayload = (token, over = {}) => ({
+  hook_event_name: 'CostSample',
+  sock_token: token,
+  // GATE-01: deliberately a LIE. Identity comes from the token, never from here.
+  agent_id: 'someone-else',
+  session_id: 'proxy-session-1',
+  model: 'qwen3-coder-plus',
+  input: 9_000,
+  output: 5_000,
+  cache_read: 100,
+  cache_creation: 0,
+  ...over
+});
+
+test('FLOOR-09: a CostSample posted at the hook socket reaches getAgentUsage and arms the breaker', async (t) => {
+  const telemetry = new TelemetryCollector();
+  const { server, sock } = hookFloor(t, (s) => telemetry.recordCostSample(s));
+  const token = server.mintToken('qwen-1');
+
+  const b = makeBreaker({ agentTokenCaps: { 'qwen-1': 10_000 } });
+  const now = 1_700_000_000_000;
+  assert.equal(
+    b.tick([{ agentId: 'qwen-1', sample: null, progressing: true }], now)[0].state.level, 'healthy',
+    'the baseline beat must be healthy or the second beat proves nothing'
+  );
+
+  // T-P06-01: the gate stays AHEAD of the cost path. FLOOR-09 must not open a
+  // second, unauthenticated route into the accounting a budget is enforced on.
+  await postToSocket(sock, proxyCostPayload('not-a-real-token'));
+  assert.equal(
+    telemetry.getAgentUsage('qwen-1'), null,
+    'an unauthenticated CostSample was accounted — anything that can reach the socket can '
+    + 'now poison a card\'s spend and trip (or dodge) its cap'
+  );
+
+  await postToSocket(sock, proxyCostPayload(token));
+
+  // THIS ASSERTION IS FLOOR-09. A doc comment cannot satisfy it and neither can
+  // a grep: the number only appears here if hooks.ts's CostSample branch really
+  // called the injected sink.
+  const s = telemetry.getAgentUsage('qwen-1');
+  assert.ok(s, 'the proxy tier is invisible to getAgentUsage — its spend is archived but never budgeted');
+  assert.equal(s.input, 9_000, 'the posted sample\'s input did not reach the collector intact');
+  assert.equal(s.output, 5_000, 'the posted sample\'s output did not reach the collector intact');
+  assert.equal(s.sessionId, 'proxy-session-1');
+
+  const d = b.tick(
+    [{ agentId: 'qwen-1', sample: telemetry.getAgentUsage('qwen-1'), progressing: true }],
+    now + 30_000
+  )[0];
+  assert.equal(d.state.level, 'steering',
+    'the sample reached getAgentUsage but did not move the breaker — a budget that cannot see '
+    + 'the spend is not a budget');
+  assert.match(d.state.reason, /token limit/);
+});
+
+test('FLOOR-09 negative control: with no cost sink injected, the same payload never reaches getAgentUsage', async (t) => {
+  const telemetry = new TelemetryCollector();
+  // Exactly what index.ts constructs TODAY — seven arguments, no sink. This is
+  // the shape that goes red if 01-08 task 6's production injection is dropped.
+  const { server, sock } = hookFloor(t, undefined);
+  const token = server.mintToken('qwen-1');
+
+  await postToSocket(sock, proxyCostPayload(token));
+
+  assert.equal(
+    telemetry.getAgentUsage('qwen-1'), null,
+    'spend appeared with no sink wired, so the positive test above proves nothing about the '
+    + 'wiring — something else is feeding the collector'
+  );
 });
 
 // ── 2. caps measure work, not session length (upstream #189) ─────────────────

@@ -378,33 +378,152 @@ test('a restart against a board full of historic done cards mails nothing, on th
 
 // ─── #34 — per-card cost attribution ────────────────────────────────────────
 
-test('cost rows carry the card they were spent on, and a card knows its cap', (t) => {
+/** A CUMULATIVE ledger row — which, since RECORD-04, is what EVERY row is: the
+ *  running total for one (agentId, sessionId), never one response's delta.
+ *  `src/main/db.ts:44` states the contract; `hooks.ts` used to break it. */
+const cumulative = (agentId, input, output, usd, sessionId = 's1') => ({
+  agentId, sessionId, ts: 1, input, output, cacheRead: 0, cacheCreation: 0, model: 'claude-x', usd
+});
+
+/** Pull the raw ledger rows off disk — the file is the contract, not the API. */
+function ledgerRows(home) {
+  return fs.readFileSync(path.join(home, 'hive', 'cost-ledger.jsonl'), 'utf8')
+    .trim().split('\n').map((l) => JSON.parse(l));
+}
+
+test('cost rows carry the card they were spent on, and a card is billed the DIFFERENCE between snapshots', (t) => {
   const { home, hive } = floor(t);
   hive.writeTasks([
-    card('t-doing', { status: 'doing', assignee: 'jim-1', budgetTokens: 20 }),
+    card('t-doing', { status: 'doing', assignee: 'jim-1', budgetTokens: 70 }),
     card('t-idle', { status: 'todo', assignee: 'pam-1' })
   ]);
 
-  const sample = (agentId, input, output, usd) => ({
-    agentId, sessionId: 's1', ts: 1, input, output, cacheRead: 0, cacheCreation: 0, model: 'claude-x', usd
-  });
-  hive.appendCostLedger(sample('jim-1', 10, 5, 0.01));
-  hive.appendCostLedger(sample('jim-1', 4, 1, 0.02));
-  hive.appendCostLedger(sample('pam-1', 100, 100, 9.99)); // no card in flight
+  hive.appendCostLedger(cumulative('jim-1', 10, 5, 0.01));    // series opens at 15 → +15
+  hive.appendCostLedger(cumulative('jim-1', 40, 20, 0.06));   // 60 − 15          → +45
+  hive.appendCostLedger(cumulative('pam-1', 100, 100, 9.99)); // no card in flight
 
-  const rows = fs.readFileSync(path.join(home, 'hive', 'cost-ledger.jsonl'), 'utf8')
-    .trim().split('\n').map((l) => JSON.parse(l));
-  assert.deepEqual(rows.map((r) => r.task_id), ['t-doing', 't-doing', null]);
+  assert.deepEqual(ledgerRows(home).map((r) => r.task_id), ['t-doing', 't-doing', null],
+    'the row must name the card, or the ledger can only answer "what has this agent ever cost"');
 
   const spend = hive.taskSpend('t-doing');
-  assert.equal(spend.tokens, 20);
-  assert.equal(Number(spend.usd.toFixed(2)), 0.03);
-  assert.equal(spend.budgetTokens, 20);
-  assert.equal(spend.over, false, 'at the cap is not over it');
+  assert.equal(spend.tokens, 60,
+    'the card burned 15, then 45 more: 15 + (60 − 15) = 60. SUMMING those two cumulative '
+    + 'rows gives 15 + 60 = 75, which is the pre-RECORD-04 defect this assertion replaces — '
+    + 'over-counting that grows roughly quadratically with the length of the card');
+  assert.equal(Number(spend.usd.toFixed(2)), 0.06,
+    'usd is diffed the same way; for a single unbroken series it lands on the last snapshot');
+  assert.equal(spend.budgetTokens, 70);
+  assert.equal(spend.over, false,
+    'the card is 10 tokens under a 70-token cap. The old summing answer (75) would have '
+    + 'stopped it early — the exact "generous cap, stopped early by double counting" failure');
 
-  hive.appendCostLedger(sample('jim-1', 1, 0, 0.001));
-  assert.equal(hive.taskSpend('t-doing').over, true);
-  assert.deepEqual(hive.taskSpend('t-idle'), { tokens: 0, usd: 0, budgetTokens: null, over: false });
+  hive.appendCostLedger(cumulative('jim-1', 55, 20, 0.08));   // 75 − 60 → +15 = 75
+  assert.equal(hive.taskSpend('t-doing').over, true,
+    'and now it really is over — 75 against a cap of 70');
+
+  // telemetry.forget() on a respawn resets the collector, so the next snapshot
+  // can be SMALLER than the last. That is not a refund.
+  hive.appendCostLedger(cumulative('jim-1', 1, 0, 0.001));
+  assert.equal(hive.taskSpend('t-doing').tokens, 75,
+    'a rewound snapshot was allowed to subtract from the card — an unclamped diff hands '
+    + 'back spend that was really incurred, and an over-budget card silently comes back under');
+
+  assert.deepEqual(hive.taskSpend('t-idle'), { tokens: 0, usd: 0, budgetTokens: null, over: false },
+    'a card nobody has worked has spent nothing and has no cap');
+});
+
+test('a card is billed its EARLY rows too — spend is read over the whole ledger, not a 1 MB tail', (t) => {
+  const { home, hive } = floor(t);
+  hive.writeTasks([card('t-long', { status: 'doing', assignee: 'dwight-1', budgetTokens: 1000 })]);
+
+  const row = (agentId, sessionId, taskId, tokens, usd) => JSON.stringify({
+    agent_id: agentId, session_id: sessionId, task_id: taskId, ts: 1,
+    input: tokens, output: 0, cache_read: 0, cache_creation: 0, model: 'claude-x', usd
+  }) + '\n';
+
+  // The card's FIRST worker, at the very top of the file: 900 tokens sitting
+  // exactly where a 1 MB tail read drops them.
+  const parts = [row('jim-1', 's1', 't-long', 900, 0.9)];
+  let bytes = Buffer.byteLength(parts[0]);
+  // Enough unrelated traffic to push those bytes out of any 1 MB window. Real
+  // rows, not padding — this is what a busy floor's ledger actually looks like.
+  for (let n = 1; bytes <= 1024 * 1024; n += 1) {
+    const r = row('pam-1', 's2', null, n, 0);
+    parts.push(r);
+    bytes += Buffer.byteLength(r);
+  }
+  // The card's SECOND worker after the handover: 200 more tokens, in its OWN
+  // series. That is what makes the early row load-bearing — dwight-1's
+  // cumulative snapshot carries none of jim-1's spend, so dropping jim-1's row
+  // does not merely lose history, it takes 900 tokens off the answer.
+  parts.push(row('dwight-1', 's3', 't-long', 200, 0.2));
+
+  const ledger = path.join(home, 'hive', 'cost-ledger.jsonl');
+  fs.writeFileSync(ledger, parts.join(''));
+  const size = fs.statSync(ledger).size;
+  assert.ok(size > 1024 * 1024,
+    `the fixture must exceed the old COST_TAIL_BYTES window or it proves nothing (got ${size} bytes)`);
+
+  const spend = hive.taskSpend('t-long');
+  assert.equal(spend.tokens, 1100,
+    'the early 900 fell out of the read. That is RECORD-03: a long card under-reports, '
+    + 'because a total that silently drops its oldest rows is not a total');
+  assert.equal(spend.over, true,
+    'over read FALSE on a card 10% past its cap — a 1 MB tail leaves only dwight-1\'s 200 '
+    + 'against a 1000-token budget, and that is the number FLOOR-10 would enforce against');
+});
+
+/** The child of the restart test: a FRESH process, a FRESH HiveManager, the same
+ *  home on disk. Written to a temp dir and run with `process.execPath`. */
+const RESTART_CHILD = `'use strict';
+const loadTs = require(process.argv[2]);
+const { HiveManager } = loadTs('src/main/hive.ts');
+const hive = new HiveManager(() => process.argv[3]);
+process.stdout.write('SPEND:' + JSON.stringify(hive.taskSpend(process.argv[4])) + '\\n');
+`;
+
+function childSpend(stdout, stderr) {
+  const line = stdout.split('\n').find((l) => l.startsWith('SPEND:'));
+  assert.ok(line, `the child printed no SPEND line.\nstdout: ${stdout}\nstderr: ${stderr}`);
+  return JSON.parse(line.slice('SPEND:'.length));
+}
+
+test('a card in flight does not reset its spend across an app restart — proven in a REAL second process', (t) => {
+  const { home, hive } = floor(t);
+  hive.writeTasks([card('t-restart', { status: 'doing', assignee: 'jim-1', budgetTokens: 500 })]);
+  hive.appendCostLedger(cumulative('jim-1', 100, 20, 0.10));  // +120
+  hive.appendCostLedger(cumulative('jim-1', 200, 30, 0.20));  // 230 − 120 → +110
+
+  // 1. THE FILESYSTEM, before any restart. A separate and earlier failure point
+  //    than the reload, on purpose: the accumulator RECORD-03 introduces lives
+  //    in memory, and an in-memory Map cannot pass this.
+  const ledger = path.join(home, 'hive', 'cost-ledger.jsonl');
+  assert.ok(fs.existsSync(ledger), 'no cost ledger on disk — nothing could survive a restart');
+  assert.match(fs.readFileSync(ledger, 'utf8'), /t-restart/,
+    'the rows on disk do not name the card, so a fresh process cannot attribute them');
+  assert.equal(hive.taskSpend('t-restart').tokens, 230,
+    'the live process disagrees before we even restart');
+
+  // 2. THE RESTART. A real second process — NOT a second HiveManager in this
+  //    one, which a module-level Map satisfies while the durability claim stays
+  //    false. No fork(), no vm, no delete require.cache: all three share state.
+  const childPath = path.join(home, 'spend-child.cjs');
+  fs.writeFileSync(childPath, RESTART_CHILD);
+  const loader = path.join(__dirname, 'load-ts.cjs');
+  const restarted = spawnSync(process.execPath, [childPath, loader, home, 't-restart'], { encoding: 'utf8' });
+  assert.equal(restarted.status, 0, `the restarted process failed: ${restarted.stderr}`);
+  assert.equal(childSpend(restarted.stdout, restarted.stderr).tokens, 230,
+    'a card still in flight came back from a restart reporting different spend. Its cap is '
+    + 'then enforced against a number that resets every time the app is reopened');
+
+  // 3. NEGATIVE CONTROL. With the ledger gone the same fresh process must report
+  //    zero. If it still finds spend, the rescan is serving it from somewhere
+  //    that is not the file — and step 2 proved nothing about durability.
+  fs.rmSync(ledger);
+  const blank = spawnSync(process.execPath, [childPath, loader, home, 't-restart'], { encoding: 'utf8' });
+  assert.equal(blank.status, 0, `the control process failed: ${blank.stderr}`);
+  assert.equal(childSpend(blank.stdout, blank.stderr).tokens, 0,
+    'spend survived deleting the ledger, so it is not being read from the ledger');
 });
 
 // ─── #44 — the capability line rides the cache-safe path ────────────────────
