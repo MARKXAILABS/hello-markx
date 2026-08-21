@@ -267,10 +267,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     <SpritePortrait character="michael" scale={2} />
                   </div>
                   <div>
-                    <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 12, lineHeight: '18px' }}>
+                    <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>
                       A CLONE OF YOU, WORKING 24/7
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '19px' }}>
+                    <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 'var(--cth-lh-body-md)' }}>
                       Hello MarkX turns the CLI agent you already use into a clone of you —
                       one that runs an office of long-running agents and keeps working while
                       you're away. It manages everything around them: context, memory, tasks,
@@ -280,7 +280,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   </div>
                 </div>
 
-                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 10, color: 'var(--cth-ink-700)' }}>
+                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-700)' }}>
                   FIRST — WHO ARE YOU? (we'll tailor the setup)
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -316,9 +316,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   <div>
                     <div style={{
                       fontFamily: 'var(--cth-font-display)',
-                      fontSize: 12, lineHeight: '18px'
+                      fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)'
                     }}>YOUR CLONE AND THE FLOOR IT RUNS</div>
-                    <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '18px' }}>
+                    <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 'var(--cth-lh-body-md)' }}>
                       {plain
                         ? "Your clone runs a small office of AI workers, and you watch it all from one screen. Here's what's inside:"
                         : "Your clone coordinates a hive of AI coding agents — persistent, watchable, all local. Here's what's inside:"}
@@ -345,9 +345,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                       <div style={{ minWidth: 0 }}>
                         <div style={{
                           fontFamily: 'var(--cth-font-display)',
-                          fontSize: 10, lineHeight: '14px', marginBottom: 3
+                          fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', marginBottom: 3
                         }}>{f.label}</div>
-                        <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)' }}>
+                        <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
                           {plain ? f.descPlain : f.desc}
                         </div>
                       </div>
@@ -392,7 +392,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     </span>
                   </PixelButton>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
+                <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                   {plain
                     ? "You won't need to open this folder day-to-day — it's just where the app keeps its notes so nothing is lost when you restart."
                     : 'Think of this as the "town hall." The harness pins agent state there so sessions can be picked back up after a restart.'}
@@ -419,7 +419,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 <div style={{
                   display: 'flex', gap: 8, alignItems: 'flex-start', padding: 10,
                   background: 'var(--cth-lemon-light)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-                  fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-700)'
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
                 }}>
                   <span style={{ flexShrink: 0, marginTop: 1 }}><Icon name="sparkle" /></span>
                   <span>
@@ -471,18 +471,18 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                           <ProviderLogo provider={p.id} size={18} />
                         </span>
                         <span style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{ display: 'block', fontFamily: 'var(--cth-font-display)', fontSize: 11 }}>
+                          <span style={{ display: 'block', fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>
                             {p.label.toUpperCase()}
                           </span>
                           {PROVIDER_BLURB[p.id] && (
-                            <span style={{ display: 'block', fontSize: 11, color: 'var(--cth-ink-500)' }}>
+                            <span style={{ display: 'block', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                               {PROVIDER_BLURB[p.id]}
                             </span>
                           )}
                         </span>
                         {p.id === 'claude' && (
                           <span style={{
-                            fontSize: 10, padding: '1px 5px', lineHeight: '16px',
+                            fontSize: 'var(--cth-text-display-md)', padding: '1px 5px', lineHeight: 'var(--cth-lh-display-md)',
                             background: 'var(--cth-lemon)',
                             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
                             fontFamily: 'var(--cth-font-display)', flexShrink: 0
@@ -493,7 +493,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                             probed — no chip beats a wrong one. */}
                         {engineProbe?.[p.id] !== undefined && (
                           <span style={{
-                            fontSize: 10, padding: '1px 5px', lineHeight: '16px',
+                            fontSize: 'var(--cth-text-display-md)', padding: '1px 5px', lineHeight: 'var(--cth-lh-display-md)',
                             background: engineProbe[p.id] ? 'var(--cth-mint-light)' : 'var(--cth-cream-200)',
                             boxShadow: `inset 0 0 0 1px ${engineProbe[p.id] ? 'var(--cth-mint)' : 'var(--cth-ink-300)'}`,
                             fontFamily: 'var(--cth-font-display)', flexShrink: 0,
@@ -505,7 +505,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   })}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>Model</div>
+                  <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>Model</div>
                   <select
                     value={godModel ?? ''}
                     onChange={(e) => setGodModel(e.target.value || undefined)}
@@ -515,7 +515,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                       <option key={m.label} value={m.id ?? ''}>{m.label}</option>
                     ))}
                   </select>
-                  <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
+                  <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                     This only sets Michael's engine. You can run other providers per agent later.
                   </div>
                   {godEngineMissing && (
@@ -523,7 +523,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                       padding: '6px 10px',
                       background: 'var(--cth-coral-light)',
                       boxShadow: 'inset 0 0 0 1px var(--cth-coral)',
-                      fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-900)'
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
                     }}>
                       <code style={{ fontFamily: 'var(--cth-font-mono)' }}>
                         {providerPreset(godProvider).defaultCommand}
@@ -556,7 +556,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   {repos.length === 0 && (
                     <div style={{
                       padding: 12,
-                      fontSize: 13,
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                       color: 'var(--cth-ink-500)',
                       background: 'var(--cth-paper-200)',
                       textAlign: 'center'
@@ -576,10 +576,17 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                       <Icon name="folder" />
                       <span style={{
                         flex: 1,
-                        fontFamily: 'var(--cth-font-mono)', fontSize: 13,
+                        fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                       }}>{r}</span>
-                      <PixelButton variant="ghost" size="sm" onClick={() => removeRepo(r)}>
+                      {/* The only icon-only control in this wizard, and it had NO
+                          accessible name: <Icon> hardcodes aria-hidden, so the
+                          button announced as a bare "button". PixelButton takes no
+                          aria-label (its props are a closed set, and it is pinned
+                          byte-identical by plan 23), so the name rides `title`,
+                          which IS an accname source. Verified against the real AX
+                          tree, not the DOM attribute. */}
+                      <PixelButton variant="ghost" size="sm" title={`Remove ${r}`} onClick={() => removeRepo(r)}>
                         <Icon name="x" />
                       </PixelButton>
                     </div>
@@ -599,7 +606,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     that maps to each engine's flag (item 6): autoMode → claude
                     bypassPermissions / codex --dangerously-bypass-approvals-and-sandbox,
                     etc.; off → each engine's ask-first default. */}
-                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 10, color: 'var(--cth-ink-700)' }}>
+                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-700)' }}>
                   HOW MUCH CAN AGENTS DO ON THEIR OWN?
                 </div>
                 <label style={{
@@ -616,10 +623,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     style={{ width: 18, height: 18, flexShrink: 0 }}
                   />
                   <div>
-                    <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px' }}>
+                    <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>
                       {plain ? 'LET AGENTS WORK ON THEIR OWN' : 'WORK AUTONOMOUSLY (AUTO MODE)'}
                     </div>
-                    <div style={{ fontSize: 13, color: 'var(--cth-ink-700)' }}>
+                    <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
                       {plain
                         ? (autoMode
                             ? 'On. Agents carry out tasks without stopping to ask — the smoothest experience.'
@@ -630,7 +637,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     </div>
                   </div>
                 </label>
-                <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
+                <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                   {plain
                     ? 'Best when agents work in their own projects. You can change this later, including for individual agents.'
                     : 'The right default for the "control room" experience; a foot-gun on production repos. Override per agent in the Add Agent dialog.'}
@@ -639,10 +646,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 <div style={{ height: 1, background: 'var(--cth-ink-300)', margin: '2px 0' }} />
 
                 {/* RELIABILITY — keeping work firing while you're away. */}
-                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 10, color: 'var(--cth-ink-700)' }}>
+                <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-700)' }}>
                   KEEP THINGS RUNNING WHILE YOU'RE AWAY
                 </div>
-                <p style={{ margin: 0, lineHeight: '20px', fontSize: 12, color: 'var(--cth-ink-700)' }}>
+                <p style={{ margin: 0, lineHeight: 'var(--cth-lh-body-md)', fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)' }}>
                   {plain
                     ? 'Your agents keep working on a schedule and in live terminals, even when you step away. These settings keep you in the loop and keep things running.'
                     : `Your agents keep working on a schedule and in live terminals. If ${IS_MAC ? 'your Mac' : 'this machine'} fully sleeps those timers pause and catch up the moment you're back — nothing is lost, it may just run late.`}
@@ -708,10 +715,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   </span>
                   <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <div>
-                      <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px', marginBottom: 3 }}>
+                      <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', marginBottom: 3 }}>
                         STAY AWAKE ON POWER (MANUAL)
                       </div>
-                      <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)' }}>
+                      <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
                         {IS_MAC ? (
                           <>macOS only lets you set this one yourself. In Battery → Options,
                           turn on “Prevent automatic sleeping when the display is off” (on
@@ -751,7 +758,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 padding: '6px 10px',
                 background: 'var(--cth-coral-light)',
                 boxShadow: 'inset 0 0 0 1px var(--cth-coral)',
-                fontSize: 13,
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                 color: 'var(--cth-ink-900)'
               }}>{error}</div>
             )}
@@ -836,10 +843,10 @@ function PersonaCard({ icon, title, desc, selected, onClick }: {
       }}>
         <Icon name={icon} />
       </span>
-      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 11, lineHeight: '15px', color: 'var(--cth-ink-900)' }}>
+      <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-900)' }}>
         {title}
       </span>
-      <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)' }}>
+      <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
         {desc}
       </span>
     </button>
@@ -876,10 +883,10 @@ function ToggleRow({ icon, label, desc, on, tint, edge, onChange }: {
         <Icon name={icon} />
       </span>
       <span style={{ minWidth: 0 }}>
-        <span style={{ display: 'block', fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px', marginBottom: 3 }}>
+        <span style={{ display: 'block', fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', marginBottom: 3 }}>
           {label}
         </span>
-        <span style={{ display: 'block', fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)' }}>
+        <span style={{ display: 'block', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
           {desc}
         </span>
       </span>
@@ -917,7 +924,7 @@ const inputStyle: React.CSSProperties = {
   border: 'none',
   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
   fontFamily: 'var(--cth-font-mono)',
-  fontSize: 13,
+  fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
   color: 'var(--cth-ink-900)',
   outline: 'none'
 };
