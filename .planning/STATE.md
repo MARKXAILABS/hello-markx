@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-03-PLAN.md (review sweep obligation set). CI green on PR #77 at b09fd74, all six jobs. #18 left open with 3 unmet clauses."
-last_updated: "2026-08-21T01:51:59.545Z"
+stopped_at: "Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). Pushed 89283bb to PR #77. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag."
+last_updated: "2026-08-21T02:15:48.738Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 3 of 23
+Plan: 4 of 23
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [█░░░░░░░░░] 9%
+Progress: [█░░░░░░░░░] 13%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [█░░░░░░░░░] 9%
 *Updated after each plan completion*
 | Phase 01 P02 | 2h10m | 4 tasks | 10 files |
 | Phase 01 P03 | 1h05m | 3 tasks | 3 files |
+| Phase 01 P04 | 1h50m | 4 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,11 @@ Recent decisions affecting current work:
 - [Phase 01]: [Phase 01-03]: owesReview is process-local and is NEVER rebuilt from the persisted board at startup — 01-RESEARCH recommended a startup rebuild; the plan overrode it and the plan is right. The rebuild IS the boot review-storm: sweep 1 returns 0 at the seed guard, sweep 2 mints nothing new, but a rebuilt set already holds every historic done card, so one query is mailed per card. Proven RED, not argued: 3 !== 0, with three [review] queries in the reviewer's inbox.
 - [Phase 01]: [Phase 01-03]: defect 2 is closed by DELETING the previous-snapshot membership guard, not by the obligation set — A card created AND flipped to done inside one 60s SWEEP_INTERVAL_MS window is never observed in a non-done state by any snapshot, so an obligation set gated on previous.has(id) never mints for it and no retry recovers it. The set alone fixes 'nobody was free'; only the deletion fixes 'nobody ever looked'.
 - [Phase 01]: [Phase 01-03]: issue #18 left OPEN — only 1 of its 7 Fix clauses is closed — The reviewer step is closed; spawn-requests is in no agent-facing doc, enrichTaskPrompt still has zero callers, and the work-order string's anchor has drifted. D-42 sets the bar per-acceptance-clause precisely to prevent closing on partial work, so a full per-clause evidence comment was posted instead of a close.
+- [Phase 01-04]: the repo-fact pins PARSE the workflow YAML and js-yaml is now a DECLARED devDependency — proved necessary, not preferred: with the attest step commented out, grep -c attest-build-provenance still returned 1 while the parsed test went red, and ci.yml says 'continue-on-error' twice in prose including once inside the test job itself, so a text search of that job returns a hit when the true answer is zero
+- [Phase 01-04]: CONTRIBUTING.md:82-101 was VERIFIED clause by clause against a parsed ci.yml and NOT rewritten — all three claims (three hard-gate platforms, no continue-on-error in the test matrix, test:focused never a gate) confirmed true, so the correct action was to pin it; deleting and replacing correct prose would have destroyed it
+- [Phase 01-04]: SECURITY.md names the sidecar/pi/opencode token gap out loud rather than omitting it — plan 02's PTY half is verified landed at HEAD, D-13's hive.ts half is verified OPEN (0 hits for HIVE_SOCK_TOKEN in startProxyBridge, shims still 1 1 0 0 0 1), and a doc that runs ahead of the code is the same defect as one that lags it
+- [Phase 01-04]: the hook-token ceiling is stated as D-14's two properties ONLY — no floor-wide key, payload.agent_id untrusted. 'Agent A cannot authenticate as agent B' is deliberately NOT claimed: B's token lives in B's process environment and a same-uid Linux sibling reads /proc/<B-pid>/environ
+- [Phase 01-04]: FLOOR-06's live 'gh attestation verify' sample is OUTSTANDING, not claimed — the publish job is gated on refs/tags/v*, no tag has been pushed since, so provenance is verified structurally (parsed test over step/input/permissions/ordering) and NOT end-to-end. Plan 23 must not tick FLOOR-06 on structural evidence alone
 
 ### Pending Todos
 
@@ -141,6 +147,8 @@ Recent decisions affecting current work:
 
 - QWEN SIDECAR DEAD-HOOKED UNTIL 01-06: hive.ts startProxyBridge carries no HIVE_SOCK_TOKEN, and PI_EXTENSION/OPENCODE_PLUGIN/PROXY_BRIDGE_SHIM send no sock_token at all (dead-hooked at HEAD, pre-existing). Owner: 01-06 task 4, wave 3. Also hand it --no-verify on gitAsync.
 - #18 IS NOT CLOSED and plan 23 must not treat it as closed. Plan 01-03 closed its reviewer clause only. Three Fix clauses remain unmet at b09fd74: (a) spawn-requests is documented in no agent-facing doc — PROTOCOL.md and COMMANDS.md do not exist; (b) the hookless-engine work-order string's audit anchor (useHive.ts:137) has drifted and the clause cannot be adjudicated from source without its own pass; (c) enrichTaskPrompt (src/renderer/src/hooks/useHive.ts:241) still has zero callers, neither wired nor deleted. D-46's phase gate (open floor-inspection issues excluding epics == 0) cannot pass until these land. Per-clause evidence: https://github.com/MARKXAILABS/hello-markx/issues/18#issuecomment-5364189116
+- FLOOR-06's live sample is OUTSTANDING: 'gh attestation verify <artifact> --repo MARKXAILABS/hello-markx' has never been run, because release.yml's publish job is gated on refs/tags/v* and no tag has been pushed since 01-04 landed the step. Provenance is verified STRUCTURALLY only (parsed assertions over the step, subject-checksums, the three job permissions and merge<attest<upload ordering). Plan 23 must not tick FLOOR-06 on that evidence alone — run it against a published artifact after the next v* tag and paste the output.
+- ADR-0006 exists (docs/adr/0006-terminal-pool-lifetime.md) but its TWO source pointers are NOT added: terminalPool.ts and terminalPoolPolicy.ts are plan 01-05's files in this same wave. Until 01-05 adds them, neither source comment links to the record, so FLOOR-17's 'source comments linked rather than deleted' clause is only half true. The ADR-0005 pair (db.ts, telemetry.ts) IS added by 01-04 — plans 06 and 10 own those files in later waves and must not revert the one-line comments.
 
 ## Deferred Items
 
@@ -152,8 +160,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T01:51:59.525Z
-Stopped at: Completed 01-03-PLAN.md (review sweep obligation set). CI green on PR #77 at b09fd74, all six jobs. #18 left open with 3 unmet clauses.
+Last session: 2026-08-21T02:15:48.711Z
+Stopped at: Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). Pushed 89283bb to PR #77. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
