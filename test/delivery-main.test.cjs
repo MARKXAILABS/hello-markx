@@ -197,9 +197,17 @@ test('silence that is not a finished turn does not flip: a booting TUI, and a PT
   assert.deepEqual(state.statuses, [], 'a booting TUI was called idle mid-boot');
 
   svc.forgetPty('pty1');
-  state.agents[0].lastOutputAt = 0;    // never emitted a byte
+  // pty.ts SEEDS lastOutputAt to the spawn instant, so a TUI that never painted
+  // still carries an old-looking stamp — `hasOutput` is the only thing that can
+  // tell the two apart, which is why the guard reads it and not just the clock.
+  state.agents[0].hasOutput = false;
   await svc.tick();
   assert.deepEqual(state.statuses, [], 'a PTY that has never painted a frame was read as quiet-for-ages');
+
+  state.agents[0].lastOutputAt = 0;    // no stamp at all
+  state.agents[0].hasOutput = true;
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a PTY with no output stamp was flipped on a 1970 epoch');
 });
 
 test('the backstop never fights the breaker pin', async () => {

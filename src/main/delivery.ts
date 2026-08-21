@@ -313,8 +313,15 @@ export class DeliveryService {
       // A still-booting TUI is mid-type; its silence is the boot sequence, not a
       // finished turn. Reuses the boot grace this service already tracks.
       if ((this.bootGraceUntil.get(a.ptyId) ?? 0) > now) continue;
-      // `lastOutputAt === 0` is "never painted a frame", not "quiet for ages".
-      const quiet = a.lastOutputAt > 0 && now - a.lastOutputAt > QUIESCE_IDLE_MS;
+      // A TUI that has NEVER painted a frame is not a finished turn — it is a
+      // broken or still-starting child, and calling it idle un-gates the delivery
+      // paths against a terminal that cannot receive. `lastOutputAt` alone cannot
+      // see that: pty.ts:752 SEEDS it to the spawn instant, so it reads as "quiet
+      // for ages" the moment boot grace lapses. `hasOutput` is the flag that can
+      // (pty.ts:753/764). The `> 0` floor stays as a guard against a caller that
+      // supplies neither.
+      const painted = a.hasOutput && a.lastOutputAt > 0;
+      const quiet = painted && now - a.lastOutputAt > QUIESCE_IDLE_MS;
       if (!quiet) { this.quiesced.delete(a.agentId); continue; }
       if (this.quiesced.has(a.agentId)) continue;   // already announced this spell
       this.quiesced.add(a.agentId);
