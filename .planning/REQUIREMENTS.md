@@ -55,16 +55,16 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       "scoped per agent/project" is enforced today by a `--wing` flag the agent supplies and
       could simply omit. **RECALL-02 is the real version of this clause**, and the same applies
       to SCALE-01's isolation criterion.
-- [ ] **FLOOR-08**: "Done" is verified by someone other than the agent that claimed it, and
+- [x] **FLOOR-08**: "Done" is verified by someone other than the agent that claimed it, and
       an unanswered `requires_reply` is chased rather than forgotten — #18
       ⚠️ **Ship with VERDICT-01/02/03 or it means nothing.** As written this is satisfiable by
       code that never looks at a diff — `sweepTaskReviews` mails a peer the `title`,
       `description` and `result` and asks whether it "holds up". Worse, it fires only on the
       transition to done and `continue`s when `leastLoadedIdle` returns nothing, so a card that
       finishes while every other agent is busy is **never reviewed again, silently**.
-- [ ] **FLOOR-09**: Every engine's spend reaches the breaker, and the god is told per-engine
+- [x] **FLOOR-09**: Every engine's spend reaches the breaker, and the god is told per-engine
       capabilities in a prompt-cache-safe position — #19
-- [ ] **FLOOR-10**: A per-task token budget is **enforced**, not merely reported — something
+- [x] **FLOOR-10**: A per-task token budget is **enforced**, not merely reported — something
       consumes `taskSpend().over` — #34
       ⚠️ **Blocked on RECORD-03 + RECORD-04, which must land with it.** `taskSpend()` currently
       computes the wrong number twice over: it sums `AgentUsageSample` rows that are documented
@@ -80,10 +80,10 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       agree on what they show, including cost — #38, #39
 - [ ] **FLOOR-14**: A notification fires when an agent is blocked or finishes a long task,
       and clicking it focuses that agent — #42
-- [ ] **FLOOR-15**: The renderer has real test coverage beyond a boot smoke test — #45
-- [ ] **FLOOR-16**: ESLint (or a deliberate decision not to lint) replaces the 13 orphaned
+- [x] **FLOOR-15**: The renderer has real test coverage beyond a boot smoke test — #45
+- [x] **FLOOR-16**: ESLint (or a deliberate decision not to lint) replaces the 13 orphaned
       `eslint-disable` comments — #36
-- [ ] **FLOOR-17**: The bug template asks for logs that exist, and `docs/adr/` is the home
+- [x] **FLOOR-17**: The bug template asks for logs that exist, and `docs/adr/` is the home
       for rationale currently buried in long source comments — #41
 - [ ] **FLOOR-18**: Codex-on-Windows is either supported or its limitation is stated in
       source, docs and UI — never a bare unexplained `return false` — #61
@@ -189,10 +189,10 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 - [ ] **RECORD-02**: A day that has already happened is still fully readable — a busy day's
       events and cost have not been discarded by an 8 MB rotate-keeping-one-generation window
       *(`LOG_ROTATE_BYTES`, `hive.ts:267` — this is the storage SCALE-03's replay reads)*
-- [ ] **RECORD-03**: `taskSpend()` on a long, expensive card reports `over` true when it is
+- [x] **RECORD-03**: `taskSpend()` on a long, expensive card reports `over` true when it is
       true — spend is computed over all of that card's rows, not a 1 MB tail
       *(`COST_TAIL_BYTES`)* — **prerequisite of FLOOR-10**
-- [ ] **RECORD-04**: A card's spend is not double-counted — cost is derived from the
+- [x] **RECORD-04**: A card's spend is not double-counted — cost is derived from the
       **difference** between cumulative usage snapshots, not their sum *(`AgentUsageSample`
       rows are documented cumulative at `telemetry.ts:11` and `db.ts:44`; `taskSpend()` sums
       them, over-counting roughly quadratically)* — **prerequisite of FLOOR-10**
@@ -227,10 +227,10 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 - [ ] **VERDICT-01**: A review looks at what changed — the reviewer receives the diff between
       base and the claimant's branch plus the result of the repo's own check command, and the
       card afterwards records the check outcome, not only an opinion
-- [ ] **VERDICT-02**: No card reaches `done` unreviewed because nobody happened to be free at
+- [x] **VERDICT-02**: No card reaches `done` unreviewed because nobody happened to be free at
       that instant — a card that flips to done while every other agent is busy is still
       reviewed later — **prerequisite of FLOOR-08**
-- [ ] **VERDICT-03**: ALREADY LIVE IN SOURCE — the `canReceiveInbox` filter inside
+- [x] **VERDICT-03**: ALREADY LIVE IN SOURCE — the `canReceiveInbox` filter inside
       `leastLoadedIdle` (`src/main/hive.ts:1908` at wave 9; it sat at `:1746`, then `:1786`, as
       Phase 1 grew the file — re-derive it by content match, never by line number) means a reviewer that
       cannot receive mail is never selected, so on a mixed-engine floor a review is not routed
@@ -414,16 +414,16 @@ goals and success criteria each requirement rolls up into.
 | FLOOR-05 | Phase 1 | Pending |
 | FLOOR-06 | Phase 1 | Pending |
 | FLOOR-07 | Phase 1 | Pending |
-| FLOOR-08 | Phase 1 | Pending |
-| FLOOR-09 | Phase 1 | Pending |
-| FLOOR-10 | Phase 1 | Pending |
+| FLOOR-08 | Phase 1 | Complete |
+| FLOOR-09 | Phase 1 | Complete |
+| FLOOR-10 | Phase 1 | Complete |
 | FLOOR-11 | Phase 1 | Pending |
 | FLOOR-12 | Phase 1 | Pending |
 | FLOOR-13 | Phase 1 | Pending |
 | FLOOR-14 | Phase 1 | Pending |
-| FLOOR-15 | Phase 1 | Pending |
-| FLOOR-16 | Phase 1 | Pending |
-| FLOOR-17 | Phase 1 | Pending |
+| FLOOR-15 | Phase 1 | Complete |
+| FLOOR-16 | Phase 1 | Complete |
+| FLOOR-17 | Phase 1 | Complete |
 | FLOOR-18 | Phase 1 | Pending |
 | DAEMON-01 | Phase 2 | Pending |
 | DAEMON-02 | Phase 2 | Pending |
@@ -448,16 +448,16 @@ goals and success criteria each requirement rolls up into.
 | GATE-05 | Phase 4 | Pending |
 | RECORD-01 | Phase 4 | Pending |
 | RECORD-02 | Phase 4 | Pending |
-| RECORD-03 | Phase 1 | Pending |
-| RECORD-04 | Phase 1 | Pending |
+| RECORD-03 | Phase 1 | Complete |
+| RECORD-04 | Phase 1 | Complete |
 | RECORD-05 | Phase 4 | Pending |
 | VIGIL-01 | Phase 4 | Pending |
 | VIGIL-02 | Phase 4 | Pending |
 | VIGIL-03 | Phase 4 | Pending |
 | VIGIL-04 | Phase 4 | Pending |
 | VERDICT-01 | Phase 5 | Pending |
-| VERDICT-02 | Phase 1 | Pending |
-| VERDICT-03 | Phase 1 | Pending |
+| VERDICT-02 | Phase 1 | Complete |
+| VERDICT-03 | Phase 1 | Complete |
 | RECALL-01 | Phase 5 | Pending |
 | RECALL-02 | Phase 5 | Pending |
 | RECALL-03 | Phase 5 | Pending |
@@ -514,3 +514,63 @@ cascades (RECALL-02 cannot be built without RECALL-01's server, which would holl
 *Requirements defined: 2026-08-20*
 *Last updated: 2026-08-20 after the roadmap extension - Phases 4-6 added, six prerequisites
 pulled forward, traceability filled in for all 71*
+
+---
+
+## Phase 1 adjudication — all 23 rows, per clause (2026-08-21, plan 01-23)
+
+Every Phase-1 row was deliberately left `Pending` by its own plan so that one adjudicator
+would grade them all against one bar, at the end, with the evidence on the page. This is
+that pass. **10 of 23 close. 13 stay open, each for a named reason.**
+
+The bar, stated so it cannot drift: **a box is ticked only when every clause of the
+requirement's own text has real, named evidence.** One unmet clause is not closed. A
+`MEASUREMENT UNAVAILABLE` is not evidence. An operator check nobody ran is not evidence.
+"CI is green" is not evidence for a clause CI is structurally incapable of testing.
+
+**Requirement checkboxes and GitHub issue closure are two different bars, deliberately.**
+A checkbox says "this requirement's clauses are met in the milestone branch". Closing an
+issue is a public statement about the shipped product, and **none of Phase 1 is on `main`**
+— `main` is at `19dbdfb` with `electron: ^32.2.0`, and all 152 commits sit behind draft
+PR #77. So **zero issues were closed by this plan**, including four whose every Fix clause
+is met. Per-clause evidence was posted to #4, #5, #10 and #34 instead.
+
+### Closed — 10
+
+| Req | Clauses, each with its evidence |
+|-----|--------------------------------|
+| **FLOOR-08** | (a) *done verified by someone other than the claimer* — `owesReview` obligation set (`hive.ts:1890`), `leastLoadedIdle([task.assignee])` (`:1974`) excludes the claimer; the previous-snapshot membership guard was **deleted**, not patched, because a card created and flipped to done inside one 60 s sweep window is never observed non-done by any snapshot. Proven RED (`3 !== 0`, three `[review]` queries in the reviewer's inbox). (b) *an unanswered `requires_reply` is chased* — `pending-replies.json` persists the obligation across restarts (`hive.ts:229`, `:1742`) and a deadline sweep acts on it (`:256`). **Both clauses met. Note two things this does NOT claim:** #18 itself stays open on five other clauses that are not FLOOR-08's, and the reviewer still does not read a diff — that is VERDICT-01, Phase 5, and FLOOR-08's own ⚠️ names it. |
+| **FLOOR-09** | (a) *every engine's spend reaches the breaker* — `telemetry.recordCostSample` is fed from the hook socket at `index.ts:547`, which is the proxy tier's only sink; pinned by `test/repo-claims.test.cjs` *"both composition-root seams are still fed"* and by `test/engine-parity.test.cjs`. That grep read **0** for a whole wave while the sink existed and was unit-tested, which is why it is pinned. (b) *the god is told per-engine capabilities in a prompt-cache-safe position* — `HiveManager.rosterContext()` (`hive.ts:2596`), explicitly NOT `injectedPrompt()`, whose prefix rides `--append-system-prompt` and is kept volatile-free so Anthropic's prompt cache holds across turns (ADR-0002). |
+| **FLOOR-10** | *something consumes `taskSpend().over`* — `hive.budgetForAgent()` (`hive.ts:2953`) → `index.ts:1635` → `breaker.ts:361` trips on `budget.tokens > budget.cap` and warns at `BUDGET_STEER_FRACTION`. Pinned in the same commit as the wiring, RED-controlled against a comment-shaped fake under which a bare `grep -c budgetForAgent` still returns 1. **Stated precisely:** the `.over` boolean has no direct caller; its two inputs do, and the comparison is made one layer down — which is what lets the arm distinguish "over" from "approaching". |
+| **FLOOR-15** | *real renderer coverage beyond the boot smoke test* — `test/renderer-components.test.cjs`, 6 tests, `# fail 0 # skipped 0 # todo 0`, rendering real `.tsx` to real markup through `react-dom/server` under `node --test` with **zero new dependencies**. All 6 driven RED against 10 injected SOURCE defects, never a test edit. Green by name in the Windows CI log. |
+| **FLOOR-16** | *ESLint (or a deliberate decision not to lint) replaces the 13 orphaned `eslint-disable` comments* — `eslint.config.js` + `npm run lint` = `eslint . --max-warnings 0`, wired into CI's `typecheck` job, asserted by three tests in `test/ci-config.test.cjs` (`:314`, `:344`, `:400`) including one that resolves the rule surface through **ESLint's own resolver** rather than grepping the config. All 13 orphans decided by the resolver: 4 `@typescript-eslint/*` deleted (that plugin is not installed, so each was itself an ERROR), 1 dead directive deleted, the rest live with a reviewed reason each. **#36 itself stays open on its clause 4** — `slack.ts:191/210` and `webhook.ts:257/276` still each carry a private `listen()`/`openTunnel()` — which is a clause of the issue, not of this requirement. |
+| **FLOOR-17** | (a) *the bug template asks for logs that exist* — `.github/ISSUE_TEMPLATE/bug_report.yml` asks for `main.log` (which #13's file sink now writes) and routes the reporter through **Settings → General → Log folder → `open logs`** rather than spelling per-platform paths. (b) *`docs/adr/` is the home for rationale* — six numbered records, `docs/adr/README.md` names each, and `grep -rhoE "adr/[0-9]{4}[0-9a-z-]*" src/` resolves to all four contracted call sites (`db.ts`, `telemetry.ts`, `terminalPool.ts`, `terminalPoolPolicy.ts`). Both clauses asserted in `test/ci-config.test.cjs` (`:216`, `:236`). |
+| **RECORD-03** | *`taskSpend()` on a long, expensive card reports `over` true when it is true* — the 1 MB `COST_TAIL_BYTES` window is **deleted**; spend is summed over all of the card's rows through the `costByTask` accumulator, bounded by CARD LIFETIME (`pruneCostByTask`) rather than by a byte count. Runtime-proven over whole-ledger arithmetic. |
+| **RECORD-04** | *cost derived from the difference between cumulative snapshots, not their sum* — `hooks.ts:574` onward; a clamped **consecutive** diff, `max(0, now − previous)`, deliberately not a high-water mark, because after `telemetry.forget()` the collector genuinely restarts at zero and the re-climb IS new spend. The first row of an `(agent_id, session_id)` series bills its own value, not zero. Proven across a real `spawnSync(process.execPath)` restart boundary with a negative control. |
+| **VERDICT-02** | *no card reaches `done` unreviewed because nobody happened to be free at that instant* — the obligation set holds across sweeps (`hive.ts:1972-1973`), so a card that flips while every peer is busy is picked up later instead of silently never. The startup rebuild `01-RESEARCH` recommended was **overridden and the override is the right call**: a set rebuilt from the persisted board holds every historic done card, so one query is mailed per card at boot — the review storm. Proven RED, not argued. |
+| **VERDICT-03** | *a reviewer that cannot receive mail is never selected* — `canReceiveInbox` is enforced at `hive.ts:1908` (inside `leastLoadedIdle`), `:1573` and `:1596`. Pulled forward to be **pinned**, not built: pinned by the named test *"a reviewer whose engine cannot receive mail is never selected"*. |
+
+### Open — 13, with exactly what remains and who owns it
+
+| Req | What is met | What is NOT, and whose |
+|-----|-------------|----------------------|
+| **FLOOR-01** | AUTO chip in all three renderings, derived from the agent's own command string; asserted on **rendered markup** by `test/renderer-components.test.cjs`. | 01-12's seven-step operator checkpoint was never run — nobody launched the dev app, toggled auto mode without restarting, or tabbed at the chip. **Owner: operator.** |
+| **FLOOR-02** | Queue-drain and idle-quiesce backstop both in main's tick; twelve stale HIVE.md denials deleted and pinned; the Stop-drain premise corrected. | Nobody has run `npm run dev`, **closed the window rather than quitting**, and watched an idle agent still get woken. Needs a real hive and a live agent CLI session. **Owner: operator.** |
+| **FLOOR-03** | `electron: ^43.4.1` (Chromium 150, Node 24.18.1), native rebuild, three-platform suite green, `e2e/smoke.spec.ts:188` asserts major ≥ 43. | **D-09's live Windows run has never happened and plan 01-01 has no SUMMARY at all** — 21 SUMMARYs for 22 completed plans. `01-VALIDATION.md` states outright that CI is not acceptable closure evidence here: all 535 unit tests run with `electron` stubbed and are structurally incapable of failing on an Electron-version regression. **Owner: operator** — launch `dist\win-unpacked\Hello MarkX.exe`, confirm a real PTY echo, a persisted setting surviving a relaunch, and a clean visual pass. |
+| **FLOOR-04** | `scrubStagedSecrets` inside `flushCommit`'s retry loop, added lines only, bounded twice, asymmetric failure polarity. Proven over a real temp git repo with a RED control. | The requirement reads unconditionally — *"so it never reaches git history"* — and `redactSecrets` has a **measured ceiling** pinned by a named test: underscore-separated prefixes (`sk_live_`, `sk_ant_`), bare high-entropy strings, and JSON `"token": "..."` all get through. GitHub Push Protection independently caught a fixture this matcher missed. The optional live clause (drop a fake key into a live agent's workspace) is also unrun. **Owner: a plan that widens the matcher, plus the operator.** |
+| **FLOOR-05** | `app:openLogs` live in main, exposed in preload, and reached from `SettingsModal.tsx:945` — present in the shipped bundle. Pinned by `test/repo-claims.test.cjs`. | Nobody has clicked it. The untested link is the click itself: `npm run dev` → Settings → General → `open logs` → the OS file manager opens the folder. **Owner: operator.** |
+| **FLOOR-06** | `actions/attest-build-provenance@v4` on the merged checksums subject with correct permissions and `merge < attest < upload` ordering, all **parsed** rather than grepped; the release-link gate runs as `release.yml`'s `links` job with `build` declaring `needs: links`. | The **live sample has never run**. `gh attestation verify <artifact> --repo MARKXAILABS/hello-markx` needs a published artifact, and the publish job is gated on `refs/tags/v*` with no tag pushed since. Provenance is verified **structurally only**. **Owner: whoever cuts the next `v*` tag.** |
+| **FLOOR-07** | FTS5 `memory_fts` in the already-open `PersistStore` (`db.ts:100`), `search()` falls back to `keywordSearch()` so recall survives a missing mempalace CLI, dead exports deleted, README honest. | **The naming-honesty half has a 7-site residual**: `resources/skills/capabilities/SKILL.md:96` (agent-facing, the highest-value one), `src/main/config.ts:159/:275/:493`, `src/main/hive.ts:1455`, `src/renderer/src/store/config.ts:74/:142` all still say *"Enterprise Knowledge Graph"* over a keyword scorer that `INTEGRATIONS.md` states is **not a graph**. Outside this plan's six sweep surfaces, so named rather than swept. Also: *"scoped per agent/project"* is enforced by an agent-supplied `--wing` flag until **RECALL-02** (Phase 5) makes the server enforce it — the requirement's own ⚠️ says so. **Owner: a plan holding those files; RECALL-02 for the scope clause.** |
+| **FLOOR-11** | Shared `useHiveTasks` poller adopted at all five sites; pool bounded with disposal on every drop path; both pinned by `test/repo-claims.test.cjs`, the poller rule proven RED against two real files. | The *"no visual change"* clause on the migration has never been observed: nobody opened the Tasks board, the detail overlay or the kanban with a live ledger. **Owner: operator.** |
+| **FLOOR-12** | Repo-wide M1 **604 → 16 occurrences**, and all 16 are `<span aria-hidden="true">` decorative glyphs — asserted as a content-keyed multiset that fails on a new site and survives wave 8's line shifts, proven both ways by mutation. Token layer declares nothing below 14px. M1d clean. Every expression-valued size floored at 14. Zero unnamed icon-only controls across 128 `<button>` and 155 `<PixelButton>`. | Three things, none of them claimed: **(a)** the Pixi labels take `FONT_SIZE = 14` but render inside a container held at `RENDER_SCALE = 0.5`, so the designed on-screen size is **7px** — reaching a true 14 needs re-geometrying `MAX_WIDTH`/`MAX_CHARS`/the overlap pass, which is UI-SPEC containment step 3. **(b)** two residual layout clips reported and not fixed: SkillsTab's catalog row (content-sized chips exceed the column on their own) and SidebarTabs' TERMINAL/MESSAGES labels (−17px each at the default 420 rail). Both need `sidebarWidth` in `store/store.ts`, outside every wave-7 plan's file set. **(c)** no human has looked at the swept surfaces. **Owner: a follow-up plan holding `store.ts`, plus the operator.** |
+| **FLOOR-13** | The four renderings agree; the model renders before the cost; the 1024px collapse verified in the shipped app at its exact boundary (absent at 1024, present at 1023). Asserted on rendered markup. | 01-12's operator checkpoint unrun. **And the D-22 residual is adjudicated here rather than left unowned:** `hive.ts:2049-2073` widens every `hive:tasks` row with `{tokens, budgetTokens, pct}` and `grep -rn budgetTokens src/renderer/` returns **nothing** — zero consumers, unchanged since 01-09 minted them. **Verdict: these are NOT a FLOOR-13 clause.** FLOOR-13's text is the sidebar collapse and the four renderings agreeing on cost; the cost clause already ships and rides `useFleetTelemetry`. The fields' real consumer is a per-card budget **meter**, which is FLOOR-10's subject — and FLOOR-10's enforcement landed in **main**, where a renderer meter is not required for the cap to bite. So they are live on the channel with no consumer: carried forward as *either wire a meter or revert the widening*, not as a Phase-1 gap. **Owner: a Phase 2+ plan holding `TasksKanban.tsx`.** |
+| **FLOOR-14** | The blocked→notify path is gated on **provider in main** off the live registry, never in the renderer, RED-controlled 5/5; the OS layer proven live on this win32 host (Electron 43.4.1, `Notification.isSupported()` true, toast constructed and shown, click handler registered). `SettingsModal`'s copy now carries the macOS qualifier (this plan). | Nobody has blocked a real non-Claude agent, seen exactly one Windows toast, and clicked it to confirm the agent is focused. No test can reach "Windows actually DREW it" — Focus Assist and per-app settings can suppress it. macOS delivery is **structurally unverifiable on this project**: `UNNotification` requires a code-signed app and paid signing is out of scope. **Owner: operator for Windows; macOS is stated, never claimed.** |
+| **FLOOR-18** | `capabilityLine('codex')` returns `REMOTE CONTROL unavailable on Windows` on this host; the limitation is in source (`providerAutomation.ts:344`), docs (`README.md:57`) and the UI roster line. The win32 early return is the first statement of `enableCodexRemoteForSpawn`, ahead of both awaited subprocesses. | **No Codex subscription on this machine**, so no live Windows spawn has confirmed the no-subprocess-timeout half end to end. Proven structurally only. **Owner: operator with a Codex account, or accept the structural proof and say so.** |
+| **GATE-01** | Per-agent tokens minted at `PtyManager` — one choke point covering every current and future spawn — bound to `agent_id` server-side and revoked token-exact on PTY exit. The floor-wide assignment is gone (`grep -c "process.env.HIVE_SOCK_TOKEN *=" src/main/index.ts` → `0`). All six shim templates carry the token (`1 1 1 1 1 1`; three of them were **already dead-hooked before this phase**, a pre-existing defect this work closed rather than caused). The PreToolUse deny gate covers all four protected paths, `realpath` included. | The requirement's first clause — *"an agent cannot post a hook payload claiming to be a **different** agent"* — is **not unconditionally true on Linux**: agent B's token lives in B's process environment and a same-uid sibling reads `/proc/<B-pid>/environ`. Plan 01-04 deliberately declined to claim it, and stating the ceiling is the honest position. **Owner: GATE-02 (Phase 4), which is the child-env requirement.** |
+
+### The one-line answer
+
+**Phase 01 is PARTIAL.** Ten requirements close. Thirteen do not, and the pattern is not
+random: **eight of the thirteen are blocked on an operator sitting in front of the running
+app**, one is blocked on a git tag, and four are blocked on work with a named owner. No
+GitHub issue was closed, because none of this is on `main` yet.
