@@ -20,8 +20,8 @@ const TIER_NOTE: Record<McpTier, string> = {
 
 const labelStyle: React.CSSProperties = {
   fontFamily: 'var(--cth-font-display)',
-  fontSize: 8,
-  lineHeight: '12px',
+  fontSize: 'var(--cth-text-display-md)',
+  lineHeight: 'var(--cth-lh-display-md)',
   color: 'var(--cth-ink-500)',
   textTransform: 'uppercase'
 };
@@ -52,7 +52,7 @@ export function McpDefaultsSettings({ config }: McpDefaultsSettingsProps) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div>
         <div style={{ ...labelStyle, marginBottom: 6 }}>Default MCP servers</div>
-        <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+        <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
           These servers are merged into each new agent's session settings. Safe servers are on by
           default; write/secret servers are off until you consent. Changes take effect on the next
           agent spawn — running agents are not affected.
@@ -67,13 +67,13 @@ export function McpDefaultsSettings({ config }: McpDefaultsSettingsProps) {
           <div key={tier} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span style={{
-                fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+                fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
                 color: isConsent ? '#6E1423' : 'var(--cth-ink-500)',
                 textTransform: 'uppercase'
               }}>
                 {TIER_LABEL[tier]}
               </span>
-              <span style={{ fontSize: 11, lineHeight: '15px', color: 'var(--cth-ink-400, var(--cth-ink-500))' }}>
+              <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-400, var(--cth-ink-500))' }}>
                 {TIER_NOTE[tier]}
               </span>
             </div>
@@ -92,17 +92,17 @@ export function McpDefaultsSettings({ config }: McpDefaultsSettingsProps) {
                     }}
                   >
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: 12, lineHeight: '18px', color: 'var(--cth-ink-900)', fontWeight: 600 }}>
+                      <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', fontWeight: 600 }}>
                         {entry.label}
                         <code style={{
                           marginLeft: 6,
                           fontFamily: 'var(--cth-font-mono)',
-                          fontSize: 11,
+                          fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                           color: 'var(--cth-ink-500)',
                           fontWeight: 400
                         }}>{entry.id}</code>
                       </span>
-                      <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)', wordBreak: 'break-word' }}>
+                      <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', wordBreak: 'break-word' }}>
                         {entry.description}
                       </span>
                     </div>
@@ -118,8 +118,8 @@ export function McpDefaultsSettings({ config }: McpDefaultsSettingsProps) {
                         boxShadow: `inset 0 0 0 1px ${on ? 'var(--cth-ink-900)' : 'var(--cth-ink-700)'}`,
                         border: 'none',
                         fontFamily: 'var(--cth-font-display)',
-                        fontSize: 8,
-                        lineHeight: '14px',
+                        fontSize: 'var(--cth-text-display-md)',
+                        lineHeight: 'var(--cth-lh-display-md)',
                         color: 'var(--cth-ink-900)',
                         cursor: 'pointer',
                         textTransform: 'uppercase'
@@ -136,7 +136,7 @@ export function McpDefaultsSettings({ config }: McpDefaultsSettingsProps) {
       })}
 
       {note && (
-        <span style={{ fontSize: 12, color: 'var(--cth-mint)' }}>{note}</span>
+        <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-mint)' }}>{note}</span>
       )}
     </div>
   );

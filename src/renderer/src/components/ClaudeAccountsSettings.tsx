@@ -23,19 +23,19 @@ const inputStyle: CSSProperties = {
   border: 'none',
   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
   fontFamily: 'var(--cth-font-ui)',
-  fontSize: 13,
+  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
   color: 'var(--cth-ink-900)',
   outline: 'none'
 };
 const labelStyle: CSSProperties = {
   fontFamily: 'var(--cth-font-display)',
-  fontSize: 8,
-  lineHeight: '12px',
+  fontSize: 'var(--cth-text-display-md)',
+  lineHeight: 'var(--cth-lh-display-md)',
   color: 'var(--cth-ink-700)',
   textTransform: 'uppercase'
 };
 const headStyle: CSSProperties = {
-  fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+  fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
   color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 2
 };
 const mono: CSSProperties = { fontFamily: 'var(--cth-font-mono)' };
@@ -134,7 +134,7 @@ export function ClaudeAccountsSettings({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
         <div style={headStyle}>CLAUDE ACCOUNTS (SUBSCRIPTION POOL)</div>
-        <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '18px' }}>
+        <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 'var(--cth-lh-body-md)' }}>
           Run different agents on different Claude subscriptions. For each account: run{' '}
           <code style={mono}>claude setup-token</code> in any terminal, sign in with that account in the
           browser, and paste the printed token here (needs Pro/Max/Team/Enterprise). Tokens are stored{' '}
@@ -148,7 +148,7 @@ export function ClaudeAccountsSettings({
       </div>
 
       {accounts.length === 0 && (
-        <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
+        <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
           No accounts yet — every agent runs on the login account.
         </div>
       )}
@@ -164,23 +164,23 @@ export function ClaudeAccountsSettings({
             padding: 8, background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ ...labelStyle, fontSize: 9 }}>{a.label}</span>
-              <span style={{ fontSize: 11, color: hasToken[a.id] ? 'var(--cth-mint)' : 'var(--cth-coral)' }}>
+              <span style={{ ...labelStyle, fontSize: 'var(--cth-text-display-md)' }}>{a.label}</span>
+              <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: hasToken[a.id] ? 'var(--cth-mint)' : 'var(--cth-coral)' }}>
                 {hasToken[a.id] ? 'token stored ✓' : 'no token — pinned agents cannot spawn'}
               </span>
               {(() => {
                 const h = pool?.accounts[a.id]?.health;
                 if (!h || h.state === 'active') return null;
                 return (
-                  <span style={{ fontSize: 11, color: h.state === 'dead' ? 'var(--cth-coral)' : 'var(--cth-ink-700)' }}>
+                  <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: h.state === 'dead' ? 'var(--cth-coral)' : 'var(--cth-ink-700)' }}>
                     · {describeHealth(h, Date.now())}{h.state === 'dead' ? ' — paste a new token below to revive it' : ''}
                   </span>
                 );
               })()}
-              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--cth-ink-300)', ...mono }}>{a.id}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-300)', ...mono }}>{a.id}</span>
             </div>
             {pinnedHere.length > 0 && (
-              <div style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>
+              <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                 in use by {pinnedHere.join(', ')}
               </div>
             )}
@@ -208,7 +208,7 @@ export function ClaudeAccountsSettings({
                   : 'Remove this account and its stored token'}>Remove</span>
               </PixelButton>
             </div>
-            {note[a.id] && <div style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{note[a.id]}</div>}
+            {note[a.id] && <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>{note[a.id]}</div>}
           </div>
         );
       })}
@@ -233,7 +233,7 @@ export function ClaudeAccountsSettings({
           />
           <PixelButton variant="primary" size="sm" onClick={add}>Add</PixelButton>
         </div>
-        {addNote && <div style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{addNote}</div>}
+        {addNote && <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>{addNote}</div>}
       </div>
     </div>
   );

@@ -67,17 +67,17 @@ export function SettingsHeroCard() {
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{
-              fontFamily: 'var(--cth-font-display)', fontSize: 13, lineHeight: '20px',
+              fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
               color: 'var(--cth-ink-900)'
             }}>HELLO MARKX</span>
             {version && (
               <span style={{
-                fontFamily: 'var(--cth-font-mono, monospace)', fontSize: 12,
+                fontFamily: 'var(--cth-font-mono, monospace)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                 color: 'var(--cth-ink-500)'
               }}>v{version}</span>
             )}
             <span style={{
-              fontFamily: 'var(--cth-font-display)', fontSize: 9, letterSpacing: 0.5,
+              fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', letterSpacing: 0.5,
               textTransform: 'uppercase', padding: '2px 7px',
               background: 'var(--cth-mint-light)',
               boxShadow: 'inset 0 0 0 1px var(--cth-mint)',
@@ -85,7 +85,7 @@ export function SettingsHeroCard() {
             }}>{PLAN.label}</span>
           </div>
           <div style={{
-            marginTop: 6, fontSize: 12.5, lineHeight: 1.5, color: 'var(--cth-ink-700)', maxWidth: '58ch'
+            marginTop: 6, fontSize: 'var(--cth-text-body-md)', lineHeight: 1.5, color: 'var(--cth-ink-700)', maxWidth: '58ch'
           }}>{PLAN.blurb}</div>
         </div>
 
@@ -101,7 +101,7 @@ export function SettingsHeroCard() {
       {/* A one-line notice (an incident, a migration heads-up), when set. */}
       {hero.notice && (
         <div style={{
-          padding: '8px 10px', fontSize: 12, lineHeight: 1.5,
+          padding: '8px 10px', fontSize: 'var(--cth-text-body-md)', lineHeight: 1.5,
           color: 'var(--cth-ink-900)',
           background: 'var(--cth-lemon-light)',
           boxShadow: 'inset 0 0 0 1px var(--cth-lemon)'
@@ -117,11 +117,11 @@ export function SettingsHeroCard() {
           boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
         }}>
           <span style={{
-            fontFamily: 'var(--cth-font-display)', fontSize: 9, letterSpacing: 0.5,
+            fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', letterSpacing: 0.5,
             textTransform: 'uppercase', color: 'var(--cth-ink-500)', flexShrink: 0
           }}>Sponsored by</span>
-          <span style={{ fontSize: 13, color: 'var(--cth-ink-900)', flexShrink: 0 }}>{SPONSOR.name}</span>
-          <span style={{ flex: 1, minWidth: 120, fontSize: 12, color: 'var(--cth-ink-700)' }}>{SPONSOR.blurb}</span>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', flexShrink: 0 }}>{SPONSOR.name}</span>
+          <span style={{ flex: 1, minWidth: 120, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>{SPONSOR.blurb}</span>
           <PixelButton variant="ghost" size="sm" onClick={() => void window.cth.openExternal(SPONSOR.url)}>
             visit
           </PixelButton>
@@ -150,7 +150,7 @@ export function SettingsHeroCard() {
         <a
           href={`${GITHUB_REPO_URL}/blob/main/CHANGELOG.md`}
           onClick={(e) => { e.preventDefault(); void window.cth.openExternal(`${GITHUB_REPO_URL}/blob/main/CHANGELOG.md`); }}
-          style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}
+          style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}
         >full changelog →</a>
       </div>
     </div>

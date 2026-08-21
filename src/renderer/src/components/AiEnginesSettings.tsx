@@ -40,19 +40,19 @@ const inputStyle: CSSProperties = {
   border: 'none',
   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
   fontFamily: 'var(--cth-font-ui)',
-  fontSize: 13,
+  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
   color: 'var(--cth-ink-900)',
   outline: 'none'
 };
 const labelStyle: CSSProperties = {
   fontFamily: 'var(--cth-font-display)',
-  fontSize: 8,
-  lineHeight: '12px',
+  fontSize: 'var(--cth-text-display-md)',
+  lineHeight: 'var(--cth-lh-display-md)',
   color: 'var(--cth-ink-700)',
   textTransform: 'uppercase'
 };
 const headStyle: CSSProperties = {
-  fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+  fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
   color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 2
 };
 
@@ -126,7 +126,7 @@ export function AiEnginesSettings({ config }: { config: HarnessConfig }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div>
         <div style={headStyle}>AI ENGINE PROVIDERS (BYOK)</div>
-        <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '18px' }}>
+        <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 'var(--cth-lh-body-md)' }}>
           API keys + local endpoints for the OpenCode, Crush, pi.dev and Qwen engines.
           Keys are stored <strong>write-only</strong> (encrypted at rest; never shown again)
           and used only when those engines spawn. Claude Code and Codex use their own login.
@@ -155,7 +155,7 @@ export function AiEnginesSettings({ config }: { config: HarnessConfig }) {
                 <PixelButton variant="secondary" size="sm" onClick={() => clearKey(b.id)}>Clear</PixelButton>
               )}
             </div>
-            {note[b.id] && <div style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{note[b.id]}</div>}
+            {note[b.id] && <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>{note[b.id]}</div>}
           </div>
         ))}
       </div>
@@ -184,7 +184,7 @@ export function AiEnginesSettings({ config }: { config: HarnessConfig }) {
             </div>
           </div>
         ))}
-        <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '17px' }}>
+        <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 'var(--cth-lh-body-md)' }}>
           Running open models? Start a local server (Ollama, LM Studio or vLLM), paste its base URL
           above, and pick its model in the agent form.
         </div>
@@ -192,7 +192,7 @@ export function AiEnginesSettings({ config }: { config: HarnessConfig }) {
 
       {/* Unsandboxed-in-auto caveat (Pam guardrail #6) */}
       <div style={{
-        fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '17px',
+        fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 'var(--cth-lh-body-md)',
         padding: 8, boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', background: 'var(--cth-paper-100)'
       }}>
         ⚠ In <strong>auto mode</strong> these engines run with full filesystem + shell access
