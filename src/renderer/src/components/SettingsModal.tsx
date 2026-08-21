@@ -171,6 +171,11 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
   const [changeMode, setChangeMode] = useState<'move' | 'fresh'>('move');
   const [changeBusy, setChangeBusy] = useState(false);
   const [changeErr, setChangeErr] = useState('');
+  // FLOOR-05 (#13). The main handler answers with the folder it opened, so the
+  // path is unknown until the first click — which is exactly what the row
+  // renders as an em dash, matching the Home folder row above it.
+  const [logPath, setLogPath] = useState<string | null>(null);
+  const [logErr, setLogErr] = useState('');
 
   // `notifications` is an optional field on the main-process config; the renderer
   // mirror type may not declare it yet, so read it defensively.
@@ -674,6 +679,30 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
   // --- Change home folder ---
   /** Pick a new folder, then open the move-vs-fresh sub-modal. */
+  /** FLOOR-05 (#13) — reveal the log folder in the OS file manager.
+   *
+   *  Inline error, never a modal or a toast: that is the established pattern for
+   *  this tab (setChangeErr, just below). The failure branch of app:openLogs
+   *  returns no path — mkdirSync or shell.openPath threw before there was one to
+   *  report — so the copy names the path when we have one from an earlier call
+   *  and falls back to the handler's own message when we do not. An em dash
+   *  where a path should be would be worse than the reason it failed. */
+  const openLogFolder = async () => {
+    setLogErr('');
+    try {
+      const res = await window.cth.openLogs();
+      if (res.path) setLogPath(res.path);
+      if (!res.ok) {
+        const known = res.path ?? logPath;
+        setLogErr(known
+          ? `Could not open the log folder. The path is ${known} — open it yourself.`
+          : `Could not open the log folder. ${res.error ?? ''}`.trim());
+      }
+    } catch (e) {
+      setLogErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const pickNewHome = async () => {
     setChangeErr('');
     const res = await window.cth.chooseFolder();
@@ -892,6 +921,36 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           }}>{config.harnessHome ?? '—'}</span>
                           <PixelButton variant="secondary" size="sm" onClick={pickNewHome}>change...</PixelButton>
                         </div>
+                      </div>
+
+                      {/* Log folder (#13, FLOOR-05). The main-process handler has been
+                          complete since #13 and had zero callers: no preload export, no UI.
+                          The bug template asks reporters for "Logs", and that ask was
+                          unanswerable without knowing where Electron hides them per OS.
+                          Written at the corrected display size, not copied at the 8px the
+                          rows around it still use (FLOOR-12 sweeps those in wave 6). */}
+                      <div>
+                        <div style={{
+                          fontFamily: 'var(--cth-font-display)',
+                          fontSize: 'var(--cth-text-display-md, 14px)', lineHeight: '20px',
+                          color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 10
+                        }}>
+                          Log folder
+                        </div>
+                        <div style={{ display: 'flex', gap: 12, fontSize: 13, lineHeight: '20px', alignItems: 'center' }}>
+                          <span style={{
+                            flex: 1, color: 'var(--cth-ink-900)', wordBreak: 'break-all',
+                            fontFamily: 'var(--cth-font-mono, monospace)'
+                          }}>{logPath ?? '—'}</span>
+                          <PixelButton variant="secondary" size="sm" onClick={openLogFolder}>open logs</PixelButton>
+                        </div>
+                        {logErr && (
+                          <div style={{
+                            marginTop: 6, color: 'var(--cth-coral)',
+                            fontFamily: 'var(--cth-font-ui)',
+                            fontSize: 'var(--cth-text-body-md, 14px)', lineHeight: '20px'
+                          }}>{logErr}</div>
+                        )}
                       </div>
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />

@@ -342,7 +342,7 @@ export interface HarnessConfig {
   autoDeliveryPausedAgents?: string[];
   maxTurns?: number;
   circuitBreaker?: CircuitBreakerConfig;
-  /** Enterprise Knowledge Graph (multimodal context for agents). Default OFF. */
+  /** Knowledge store — keyword search over your own documents. Default OFF. */
   knowledgeGraph?: KnowledgeGraphConfig;
   /** Terminal theme, mirrored into each agent's per-session Claude settings. */
   terminalTheme?: 'light' | 'dark';
@@ -374,9 +374,14 @@ export interface MemoryStatus {
   palacePath: string | null;
   model: 'minilm' | 'embeddinggemma';
   bin: string | null;
+  /** 'shared' (the default) = every agent can recall every other agent's notes.
+   *  MemoryManager.status() has always returned this (src/main/memory.ts:220-233)
+   *  and this mirror dropped it, so the renderer could not surface the sharing
+   *  model even though main was already reporting it. */
+  scope: 'shared' | 'agent';
 }
 
-/** Enterprise Knowledge Graph — corpus status, one document, and a search hit. */
+/** Knowledge store — corpus status, one document, and a search hit. */
 export interface KnowledgeStatus {
   enabled: boolean;
   root: string;
@@ -825,18 +830,16 @@ const api = {
   /** Show a skill's folder in the OS file manager. */
   skillsReveal: (path: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('skills:reveal', path),
+  /** Reveal the log folder (#13). */
+  openLogs: (): Promise<{ ok: boolean; path?: string; error?: string }> => ipcRenderer.invoke('app:openLogs'),
+  /** Keyword/semantic recall. `wing` is an agent id and it is what scopes the
+   *  answer — see the sharing model at src/main/memory.ts:10-21. The scope is
+   *  AGENT-SUPPLIED until RECALL-02 (Phase 5) makes the server bind it. */
   searchMemory: (query: string, wing?: string): Promise<{ ok: boolean; output: string; error?: string }> =>
     ipcRenderer.invoke('hive:searchMemory', query, wing),
-  memoryWakeUp: (wing?: string): Promise<{ ok: boolean; output: string; error?: string }> =>
-    ipcRenderer.invoke('hive:memoryWakeUp', wing),
   mineNow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('hive:mineNow'),
-  /** Condense agent memory.md files (the janitor's missing half). With an id,
-   *  condense that agent on demand; without, run a full threshold scan. Returns
-   *  the per-agent outcomes ({ id, condensed, reason, oldBytes?, newBytes? }). */
-  reflectNow: (id?: string): Promise<Array<{ id: string; condensed: boolean; reason: string; oldBytes?: number; newBytes?: number }>> =>
-    ipcRenderer.invoke('memory:reflectNow', id),
 
-  // ─── Enterprise Knowledge Graph (multimodal context for agents) ───────────
+  // ─── Knowledge store (keyword search over the user's own documents) ───────
   kgStatus: (): Promise<KnowledgeStatus> => ipcRenderer.invoke('kg:status'),
   kgList: (): Promise<KnowledgeDoc[]> => ipcRenderer.invoke('kg:list'),
   kgSearch: (query: string, limit?: number): Promise<KnowledgeHit[]> =>

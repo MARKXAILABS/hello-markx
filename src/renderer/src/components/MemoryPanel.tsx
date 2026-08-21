@@ -10,6 +10,10 @@ interface MemoryStatus {
   palacePath: string | null;
   model: 'minilm' | 'embeddinggemma';
   bin: string | null;
+  /** 'shared' (the default) means every agent can recall every other agent's
+   *  notes. Surfaced so the panel can SAY that instead of leaving the user to
+   *  infer it from a setting they never opened. */
+  scope: 'shared' | 'agent';
 }
 
 type ModelId = 'minilm' | 'embeddinggemma';
@@ -100,6 +104,28 @@ export function MemoryPanel() {
             <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.5 }}>
               What your agents remember across sessions, shared between them. Search it by meaning, not just exact words.
             </div>
+
+            {/* The sharing model, said out loud. It is spelled out verbatim at
+                src/main/memory.ts:10-21 and was surfaced NOWHERE: the default is the
+                permissive one, so a user who never opened the setting has a hive in
+                which one agent's credential is every agent's search result. */}
+            {status?.scope !== 'agent' && (
+              <div style={{
+                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md, 14px)',
+                lineHeight: '20px', color: 'var(--cth-ink-900)',
+                background: 'var(--cth-cream-100)',
+                boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)', padding: 10
+              }}>
+                ⚠ Memory is shared across the whole hive by default. Every agent can recall
+                every other agent&rsquo;s notes — a credential, a customer name or a private
+                instruction written to one agent&rsquo;s memory is one search away for all of them.
+                <div style={{ marginTop: 6, color: 'var(--cth-ink-700)' }}>
+                  Narrowing a search to one agent is a scope the ASKING agent supplies, so it
+                  limits recall rather than enforcing isolation. Enforcement lands with RECALL-02
+                  in Phase 5. For real isolation today, switch memory scope to per-agent.
+                </div>
+              </div>
+            )}
 
             {/* Status + on/off — the two things the user controls at a glance. */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>

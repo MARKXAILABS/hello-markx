@@ -27,20 +27,15 @@ body:
     attributes:
       # This ask used to say "there is no log file yet", which was true when it
       # was written and is not any more: #13 landed a file sink that tees every
-      # console.* in the main process into main.log. The paths below are spelled
-      # out because the folder is not somewhere anyone would guess, and the
-      # Settings shortcut that makes them unnecessary is FLOOR-05 and has not
-      # shipped — so the by-hand route has to be here until it does. When that
-      # button lands, drop the paths and keep the Settings line.
+      # console.* in the main process into main.log. It then spelled the folder
+      # out per platform, because the Settings shortcut that makes those paths
+      # unnecessary was FLOOR-05 and had not shipped. It has now — plan 01-10
+      # wired the button — so the paths are gone and the route is the plain one.
       label: Logs, console output, screenshots
       description: >-
         **From an installed build:** attach `main.log` (and `main.log.1` if it is
-        there — the log rotates once at 5 MB). It lives in the app's log folder:
-        `%APPDATA%\Hello MarkX\logs\` on Windows,
-        `~/Library/Logs/Hello MarkX/` on macOS,
-        `~/.config/Hello MarkX/logs/` on Linux.
-        A **Settings → open log folder** shortcut is on the way (FLOOR-05) and
-        will save you the path hunt; until it ships, open the folder by hand.
+        there — the log rotates once at 5 MB). Open the folder from the app:
+        **Settings → General → Log folder → `open logs`**.
         **From a dev build:** the terminal output of `npm run dev` is the same
         content and is easier to copy.
         Either way, the DevTools console (View → Toggle Developer Tools) carries

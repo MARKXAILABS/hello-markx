@@ -549,7 +549,7 @@ const memory = new MemoryManager(
   // decoration rather than a filter.
   (agentId) => hive.registry().agents[agentId]?.cwd ?? null
 );
-// Enterprise Knowledge Graph — file-backed store + agent CLI (default OFF).
+// Knowledge store — file-backed corpus + agent CLI, keyword search (default OFF).
 const knowledge = new KnowledgeManager();
 /** Reads the reflect tunables from config each tick (defaults baked in here so a
  *  pre-existing config.json without the keys still gets sane values). */
@@ -4190,15 +4190,9 @@ ipcMain.handle('hive:searchMemory', (_evt, query: unknown, wing: unknown) => {
   if (typeof query !== 'string' || !query.trim()) return { ok: false, output: '', error: 'empty query' };
   return memory.search(query, { wing: typeof wing === 'string' ? wing : undefined });
 });
-ipcMain.handle('hive:memoryWakeUp', (_evt, wing: unknown) =>
-  memory.wakeUp(typeof wing === 'string' ? wing : undefined));
 ipcMain.handle('hive:mineNow', () => { memory.mineNow(); return { ok: true }; });
-// Condense memory.md on demand: an explicit id condenses that one agent (skips
-// the size trigger — a "condense now" button); no id runs a full threshold scan.
-ipcMain.handle('memory:reflectNow', (_evt, id: unknown) =>
-  reflector.reflectNow(typeof id === 'string' && id ? id : undefined));
 
-// ─── IPC: enterprise Knowledge Graph (multimodal context for agents) ─────────
+// ─── IPC: knowledge store (keyword search over the user's own documents) ─────
 ipcMain.handle('kg:status', () => knowledge.status());
 ipcMain.handle('kg:list', () => knowledge.list());
 ipcMain.handle('kg:search', (_evt, query: unknown, limit: unknown) => {

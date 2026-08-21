@@ -97,7 +97,14 @@ tmux-era MVP spec, kept for history — it no longer describes the app.
 - The hive — per-agent memory, atomic-file mailboxes, a shared blackboard, an append-only event
   log, single-committer git.
 - Semantic recall — optional, and only if the MemPalace CLI is on your `PATH`; each call
-  spawns it, so the first one pays an embedding-model load. Markdown memory works without it.
+  spawns it, so the first one pays an embedding-model load. Markdown memory works without it,
+  and keyword recall runs off a SQLite FTS5 index in the harness database either way.
+- **Memory is shared across the hive by default, and the scope is agent-supplied.** Every
+  agent can recall every other agent's notes; that is the feature and it is also the
+  exposure. Recall can be narrowed to one agent, but the agent asking is the one that names
+  the scope, so it limits what comes back rather than enforcing isolation. Server-side
+  enforcement lands with RECALL-02 in Phase 5. For real isolation today, set memory scope to
+  per-agent, which puts each agent in its own index rather than trusting a flag.
 - A knowledge base of your own documents, queryable by any agent. **Off by default**; search
   is keyword scoring over text chunks, not entities or a graph.
 
