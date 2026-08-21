@@ -46,15 +46,31 @@ function tmpHome(t) {
   return home;
 }
 
-/** Run the shim command as a detached child and resolve on exit. Async, never
- *  spawnSync: the shim connects back to a socket THIS process serves, so a sync
- *  call would block our own event loop and deadlock the handshake. */
-function runShim(command, env) {
+/** Run the shim command as a detached child, feed it `payload` on STDIN, and
+ *  resolve on exit. Async, never spawnSync: the shim connects back to a socket
+ *  THIS process serves, so a sync call would block our own event loop and
+ *  deadlock the handshake.
+ *
+ *  The payload goes on the child's stdin, NOT through a `<<<` here-string.
+ *  `shell: true` runs /bin/sh, which on Ubuntu is dash, and dash has no
+ *  here-strings — the here-string form died with "Syntax error: redirection
+ *  unexpected" on every ubuntu runner while passing on macOS (whose /bin/sh is
+ *  bash in sh mode) and skipping on Windows, so the whole file only ever ran
+ *  green where it could not fail. Worse, the second test's assertion is that
+ *  NOTHING was accepted, so a shim that never started satisfied it vacuously.
+ *  stdin is also how the real shim is fed by the engine, so this is the more
+ *  faithful fixture as well as the portable one — and it is the shape
+ *  test/hive-hook-node.test.cjs:83 already uses. */
+function runShim(command, env, payload) {
   return new Promise((resolve) => {
     const c = spawn(command, { shell: true, env });
     let stderr = '';
     c.stderr.on('data', (d) => { stderr += d; });
     c.on('close', (code) => resolve({ code, stderr }));
+    // The no-token case makes the shim exit before it drains stdin; an EPIPE
+    // there is the shim behaving correctly, not a fixture failure.
+    c.stdin.on('error', () => { /* the child never read stdin */ });
+    c.stdin.end(payload);
   });
 }
 
@@ -91,9 +107,9 @@ test('the real shim authenticates to the real hook server', { skip: !POSIX }, as
     AGENT_ID: 'a1',
     CLAUDE_TRANSCRIPT_PATH: transcript,
   };
-  const res = await runShim(`${command} <<< '${JSON.stringify({
+  const res = await runShim(command, env, JSON.stringify({
     hook_event_name: 'Stop', agent_id: 'a1', transcript_path: transcript,
-  })}'`, env);
+  }));
 
   assert.equal(res.code, 0, `shim exited non-zero: ${res.stderr}`);
   await new Promise((r) => setTimeout(r, 300));
@@ -120,9 +136,9 @@ test('a shim with no token is still rejected', { skip: !POSIX }, async (t) => {
   };
   delete env.HIVE_SOCK_TOKEN;
 
-  await runShim(`${command} <<< '${JSON.stringify({
+  await runShim(command, env, JSON.stringify({
     hook_event_name: 'Stop', agent_id: 'a1', transcript_path: transcript,
-  })}'`, env);
+  }));
   await new Promise((r) => setTimeout(r, 300));
 
   assert.equal(
