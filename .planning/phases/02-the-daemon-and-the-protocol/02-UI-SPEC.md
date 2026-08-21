@@ -5,6 +5,7 @@ status: draft
 shadcn_initialized: false
 preset: none
 created: 2026-08-21
+revised: 2026-08-21 — checker round 1 returned BLOCKED; §Revision Log records every change
 mode: auto — every open question resolved by the researcher, logged in §"Auto-Mode Decision Log"
 ---
 
@@ -59,9 +60,12 @@ every Phase 2 plan. Registry safety gate: not applicable. No third-party registr
 | Desktop renderer | `electron.vite.config.ts` → `out/renderer` | `tokens.css` custom properties, inline `style={{}}` | yes — this is where every existing component lives |
 | **Phone PWA** | none — hand-written static files under `resources/phone/` (D-21) | **plain CSS custom properties re-declared inside the bundle** | **NO.** It is served over a tunnel to Chrome on Android; `window.cth` does not exist there and none of the renderer's build applies |
 
-The phone re-declares a **nine-property subset** of the token layer (§Phone Color). It is a copy by
-necessity, not by choice, so the contract pins the provenance of each value: an auditor can diff
-`resources/phone/index.html`'s `:root` against `tokens.css`'s dark block and get an exact match.
+The phone re-declares a **thirteen-property subset** of the token layer (§Phone Color) — nine
+structural, three semantic, one on-accent. It is a copy by necessity, not by choice, so the contract
+pins the provenance of each value: an auditor can diff `resources/phone/index.html`'s `:root`
+against `tokens.css` and get an exact match on every one. Twelve come from the
+`:root[data-cth-theme='dark']` block; `--p-on-accent` copies `--cth-on-accent` (`tokens.css:94`),
+which is deliberately theme-invariant and therefore lives in the base block.
 
 ---
 
@@ -99,7 +103,13 @@ Same base unit, expressed as its own custom properties because the phone cannot 
 | `--p-2` | 8px | between a label and its value |
 | `--p-3` | 12px | inside a card |
 | `--p-4` | 16px | screen gutter, between cards |
-| `--p-6` | 24px | above the pinned action bar |
+| `--p-5` | 24px | above the pinned action bar |
+
+**The index deliberately tracks `--cth-space-N`, so nothing collides.** `--p-1`…`--p-5` are 4, 8,
+12, 16, 24 — byte-identical to `--cth-space-1`…`--cth-space-5` (`tokens.css:41-46`). An earlier
+draft of this contract named the 24px step `--p-6`, which reads as `--cth-space-6` (32px) to anyone
+diffing the two scales. Renamed. The phone simply stops at 5; there is no `--p-6`, `--p-7` or
+`--p-8`, because a single-column phone view has no use for 32/48/64.
 
 **Exception, and it is a real one: touch targets are 48px, which is not on the 4px-step list above
 but IS a multiple of 4.** Every tappable element on the phone has `min-height: 48px`; the primary
@@ -136,10 +146,26 @@ weight beyond reusing 600 for the server label in the consent modal, copying
 Phase 1 spent five plans (`01-14` … `01-18`) and one deleted token (`--cth-text-display-sm`) buying
 that floor. Concrete rules for Phase 2 code:
 
-1. **Never write a numeric `fontSize`.** Use `var(--cth-text-*)` on the desktop and
-   `var(--p-text-*)` on the phone. The only lawful numeric sizes in the renderer are the frozen
-   Rule 0 allowlist (`IdePanel:499`, `GitPanes:138`, `GitPanes:225`) and Monaco's own `fontSize`
-   option — none of which this phase touches.
+1. **Never write a numeric `fontSize` in code this phase adds.** Use `var(--cth-text-*)` on the
+   desktop and `var(--p-text-*)` on the phone.
+
+   *Correction to an earlier draft of this contract.* It claimed the only lawful numeric sizes in
+   the renderer were a three-entry Rule 0 allowlist plus Monaco. **Both halves were wrong against
+   the current tree.** The three-entry list is the *intended end state* of the triggers/git/IDE
+   sub-group after FLOOR-12 completes — `01-18-SUMMARY.md:140-164` freezes it as `IdePanel` 1 +
+   `GitPanes` 2 — and its `IdePanel` entry is
+   **`ide/IdePanel.tsx:491`** (`fontSize: 10, lineHeight: '14px'` on the `aria-hidden`
+   `{gitCollapsed ? '▸' : '▾'}` caret), **not `:499`**, which is `padding: '1px 8px', border:
+   'none', cursor: 'pointer',` and whose `fontSize` on the following line is already
+   `var(--cth-text-display-md)` — a token, not a numeric site. `GitPanes.tsx:138` and `:225`
+   (`fontSize: 11` on the `aria-hidden` `✕` and `⇄`) both verify exactly.
+
+   And the repo-wide allowlist is **not yet frozen** — that is plan 23's deliverable. Numeric
+   `fontSize` sites still live in at least `AgentControlStrip.tsx:60` (9), `BlockedBanner.tsx:23`
+   (8), `CodeEditor.tsx:160` (8), `AgentDetailPanel.tsx:129` and `:281` (10), and
+   `AgentCard.tsx:411` (10), because Phase 1 plans 19/20/23 are still landing the sweep. **This
+   phase adds none and removes none.** The binding rule is about *new* code, and it is absolute.
+
 2. **Every `fontSize` gets a `lineHeight` on the same declaration.** `01-15` found six px
    line-heights orphaned one line below their `fontSize`, which the same-line sweep structurally
    could not see. Write them as a pair or the next sweep will not find them either.
@@ -147,6 +173,10 @@ that floor. Concrete rules for Phase 2 code:
    lawful if it is purely decorative *and* carries `aria-hidden="true"` on its own `<span>` — and
    `01-17` ruled that a variable-rendered glyph takes no exemption at all. Every glyph this phase
    adds (`⚿`, `⚠`, `↻`, the QR) sits at or above the floor. **No new Rule 0 allowlist entries.**
+
+   *(Noted, not resolved: `IdePanel.tsx:491` is a variable-rendered glyph that kept its exemption,
+   which sits in tension with `01-17`'s ruling. That is a Phase 1 inconsistency inside plan 23's
+   scope, and this phase neither relies on it nor corrects it.)*
 
 ### Glyph rendering must be VERIFIED, not assumed
 
@@ -233,8 +263,17 @@ destructive actions in the plain sense of Phase 1's reserved-for wording. No new
 
 Engine capability gaps (`NO MAIL`, `NO SPEND`, `NO COMPACT`, `NO REMOTE`, `NO MCP`) and the MCP
 count element render in **neutral chrome**: `--cth-cream-200` fill, `inset 0 0 0 1px --cth-ink-300`
-hairline, `--cth-ink-700` text. Copied from the account chip at `AgentCard.tsx:343-353`, which is
-the card's existing "here is a fact about this agent" treatment.
+hairline, `--cth-ink-700` text.
+
+**Provenance, stated precisely: this is the account chip's register with two deliberate departures,
+not a verbatim copy.** The account chip (`AgentCard.tsx:344-353`) is the card's existing "here is a
+fact about this agent" treatment and supplies the fill (`--cth-cream-200`) and the text colour
+(`--cth-ink-700`) unchanged. The two departures:
+
+| Property | Account chip | This contract | Why |
+|----------|--------------|---------------|-----|
+| Hairline | `inset 0 0 0 1px var(--cth-ink-100)` (`:349`) | `inset 0 0 0 1px var(--cth-ink-300)` | `--cth-ink-100` is documented in the dark ramp as *"dividers, meant to recede"* at 1.4-1.7:1 (`tokens.css:142`); `--cth-ink-300` is the ≥3:1 **borders** token (`:141`) and the one `--cth-panel-border` uses (`:89`). A capability gap is a fact the operator must be able to *see* — it takes the visible hairline. **A deliberate visibility upgrade, on the record.** |
+| Padding | `'0 4px'` (`:348`) | `'1px 4px 0'` | matches the `BOSS`/`AUTO` chips it sits beside on the same card (`:268`, `:289`) — the optical baseline §Spacing pins |
 
 **Why neutral and not a warning colour.** `capabilityLine`'s own doc states the design intent
 (`providerAutomation.ts:309-311`): *"the MISSING capabilities shout (uppercase) and the present ones
@@ -246,8 +285,10 @@ the security posture: the public tunnel, and a consent grant.
 
 ## Color — phone
 
-Nine properties, re-declared. **Every value is the dark-theme token it copies, byte for byte**, from
-`tokens.css`'s `:root[data-cth-theme='dark']` block. The phone is **dark only** — no theme switch,
+Thirteen properties, re-declared. **Every value is byte-identical to the token it copies.** Twelve
+come from `tokens.css`'s `:root[data-cth-theme='dark']` block; `--p-on-accent` copies
+`--cth-on-accent` from the base block (`tokens.css:94`), which is deliberately theme-invariant and
+therefore has no dark override to copy. The phone is **dark only** — no theme switch,
 `color-scheme: dark` on `:root` so the native textarea, scrollbar and autofill chrome follow.
 
 | Phone property | Value | Copies | Usage |
@@ -264,10 +305,20 @@ Nine properties, re-declared. **Every value is the dark-theme token it copies, b
 | `--p-accent-fill` | `#2B2740` | `--cth-lilac-light` (dark) | ask-card header band |
 | `--p-warn` | `#DF8078` | `--cth-status-blocked` (dark) | error states only |
 | `--p-ok` | `#6FB88B` | `--cth-status-success` (dark) | "sent" confirmation only |
+| `--p-on-accent` | `#1A1320` | `--cth-on-accent` (**theme-invariant**, `tokens.css:94`) | **text ON an accent fill: the `send answer` button label, and any label on `--p-warn` or `--p-ok`** |
 
-*(Twelve rows: nine structural plus three semantic. The "nine-property subset" phrase above refers
-to the structural ramp; the three semantic ones are additionally required by the error/success
-states below.)*
+*(Thirteen rows: nine structural, three semantic, one on-accent.)*
+
+**Why `--p-on-accent` exists, and why its absence was a blocking defect.** The desktop's §S4a chip
+already uses `--cth-on-accent` for exactly this job, and `tokens.css:90-94` says why: the accents
+are **light** surfaces in *both* themes, so text on them must be dark in both, and `--cth-ink-900`
+would invert with the theme and paint near-white on a pale fill. The phone's palette originally
+copied twelve values and dropped this one — leaving `--p-accent` (`#A896E3`) as the `send answer`
+button fill with no declared label colour. The only near-white in the phone ramp is `--p-text`
+(`#DEDBD6`), which measures **1.87:1** on that fill: it fails 4.5:1 for body text and fails even the
+3:1 large-text floor. The phone's single most important control would have been illegible.
+`--p-on-accent` on `--p-accent` measures **7.03:1**, and the same token clears the other two accent
+fills in the ramp — **6.48:1** on `--p-warn` and **7.69:1** on `--p-ok`.
 
 **Why lilac is the phone's accent.** It is already this floor's "a human is needed" hue in two
 shipped places: `AskMeTab.tsx:161` renders every ask-card header on `--cth-lilac-light`, and
@@ -277,14 +328,25 @@ screen before reading a word of it.
 
 **60/30/10 on the phone:** `--p-ground` is ~60% (the page), `--p-card` + `--p-raise` are ~30% (ask
 cards, the pinned bar), `--p-accent` is ~10% (the send button fill and one 2px header rule per
-card). `--p-warn` and `--p-ok` are semantic-only and never decorate.
+card). `--p-warn` and `--p-ok` are semantic-only and never decorate. `--p-on-accent` is **text
+only** — it is never a fill, so it consumes no share of the split.
 
 **Contrast, to be measured not assumed.** Every pairing above is inherited from a ramp
 `tokens.css:120+` documents as WCAG-verified (body text ≥ 4.5, structural borders ≥ 3.0) — but that
 was measured against the *desktop's* surfaces. The plan that lands the phone bundle **must re-check
-`--p-text` on `--p-card`, `--p-text-3` on `--p-ground`, and `--p-line` on `--p-card`**, and record
-the three ratios. Copying a verified value onto a different surface does not inherit the
-verification.
+four pairings and record all four ratios**:
+
+| Pairing | Where it is used | Bar | Why it is on the list |
+|---------|------------------|-----|-----------------------|
+| `--p-on-accent` on `--p-accent` | the `send answer` button label | ≥ 4.5:1 | **the one that fails without the new token** — `--p-text` on this fill is 1.87:1 |
+| `--p-text` on `--p-card` | the question, the answer | ≥ 4.5:1 | body text on a surface it was not measured against |
+| `--p-text-3` on `--p-ground` | meta line, timestamps, hints | ≥ 4.5:1 | the dimmest text in the ramp |
+| `--p-line` on `--p-card` | every 1px hairline | ≥ 3.0:1 | structural border floor |
+
+Copying a verified value onto a different surface does not inherit the verification. An earlier
+draft of this contract listed only the last three — all of which pass — and omitted the only one
+that did not. Recording ratios for pairings that already pass while skipping the failing one is how
+a contrast section becomes decoration; the failing pairing goes first now.
 
 ---
 
@@ -310,6 +372,7 @@ deliberately **not** carried onto the phone.)*
 | Titlebar tunnel chip | `PUBLIC · {host}` | see §S4 |
 | **Phone** — send an answer | `send answer` | the desktop's `respond & unblock` is desk vocabulary; on a phone the operator is answering, and the unblocking is the floor's job |
 | **Phone** — back to the list | `back` | |
+| **Phone** — refresh the list (header, §S5 Screen 1) | `refresh` | **a text button, not an icon.** A `↻` glyph here would be the one untested-glyph risk on a surface with no CDP probe and no fallback path; the word costs nothing and always renders |
 
 ### Empty states
 
@@ -329,7 +392,7 @@ deliberately **not** carried onto the phone.)*
 
 | Surface | Copy |
 |---------|------|
-| Tunnel failed to open | `The tunnel did not open: {reason}. Your floor is still private.` |
+| Tunnel failed to open | `The tunnel did not open: {reason}. Your floor is still private — press expose to the internet to try again.` |
 | Tunnel dropped while up | `The tunnel closed. Your floor is private again — and the phone is paired to an address that no longer exists. Start it and scan the new QR.` |
 | MCP grant failed, no secure storage | `This machine has no secure storage, so the key cannot be saved — {server} is NOT enabled for {name}. An unkeyed server is worse than none.` |
 | MCP grant saved while the agent is running | `Saved. {name} picks up {server} the next time it starts — nothing hot-reloads a server set.` |
@@ -351,7 +414,7 @@ is the honesty rule applied to a status code.
 |--------|--------------|---------------|--------------|
 | **Grant a `secret`-tier MCP server to an agent** | `{name} runs with permissions bypassed, so {server}'s tools run without asking you. It will be able to {description}.` + the literal launch spec + the env var **names** | `grant to {name}` | `cancel` |
 | **Revoke a granted MCP server** | `Revoke {server} from {name}? The stored key is deleted — you will have to paste it again to re-grant.` | `revoke & delete key` | `keep it` |
-| **Expose the floor to the internet** | `This puts an authenticated door to a floor of agents with bypassed permissions on the public internet. The address is public; the token is what keeps it shut.` | `expose to the internet` | `cancel` |
+| **Expose the floor to the internet** | `This puts an authenticated door to a floor of agents with bypassed permissions on the public internet. The address is public; the token is what keeps it shut.` | `expose to the internet` | `keep it private` |
 
 **`stop tunnel` takes NO confirmation.** It is the safe direction, it is reversible, and putting a
 dialog in front of *closing* an internet-facing door is backwards.
@@ -361,14 +424,25 @@ human, takes an answer, and sends it. Anything that removes something is desk wo
 
 ### Notification copy — one product, one voice
 
-Web Push (D-22) reuses FLOOR-14's shape verbatim so a desktop toast and a phone notification read
-identically:
+Web Push (D-22) reuses FLOOR-14's **shape** — bare name as the title, a lowercase verb phrase
+completing it as the body, no exclamation mark — so a desktop toast and a phone notification read
+as one product:
 
 | Field | Copy | Source |
 |-------|------|--------|
-| title | `{name}` | `hooks.ts:801`, `01-UI-SPEC.md:161` |
-| body | `is waiting on you` | `01-UI-SPEC.md:162` |
+| title | `{name}` | `hooks.ts:800`, `01-UI-SPEC.md:161` |
+| body | **`is waiting on you` — unconditionally** | the god branch of `01-UI-SPEC.md:162` |
 | tag | `ask:{taskId}` | one notification per ask; a re-poll replaces rather than stacks |
+
+**The body is unconditional, and "verbatim" was the wrong word.** `01-UI-SPEC.md:162` reads
+`` `is waiting on you` (god) · `is waiting on Michael` (worker) ``, and `hooks.ts:800-801`
+implements exactly that two-branch conditional
+(`isGod ? 'is waiting on you' : 'is waiting on Michael'`). Reusing the *expression* verbatim would
+ship "Ada is waiting on Michael" to a phone whose entire purpose is *what needs a human* — a
+notification about an agent-to-agent handoff, pushed to a person, at night. **Only the god branch is
+reused**, because every ask that reaches this surface is human-blocked by construction: the phone
+lists open asks, and an ask is on the phone precisely because it is waiting on the operator. The
+worker branch has no referent here.
 
 ---
 
@@ -385,8 +459,15 @@ satisfy a count is the anti-pattern, not the goal.)*
 
 **A2 — `aria-label` on a non-interactive `<span>` needs `role="img"` too.** Chromium does not
 expose `aria-label` on `role=generic`, so a bare labelled span announces **nothing** while every
-grep passes. Shipped pattern: `TasksKanban.tsx:262`, `triggers/ui.tsx:348`, `ProviderLogo.tsx:46`.
+grep passes. Shipped pattern, both verified this session: `TasksKanban.tsx:262`
+(`role="img" aria-label="Waiting on your answer"`) and `triggers/ui.tsx:348`
+(`role="img" aria-label="percent"`).
 *(01-17 found this the hard way.)*
+
+**`ProviderLogo.tsx:46` is deliberately NOT cited here** — an earlier draft listed it as a third
+example and it is the *opposite* pattern: it carries `role="img"` together with `aria-hidden="true"`
+and **no** `aria-label` (`:45-47`), i.e. a decorative brand mark hidden from the a11y tree. That is
+correct code and a correct use of A3; it is simply not an example of A2.
 
 **A3 — a decorative glyph takes `aria-hidden="true"` on the glyph's own `<span>`, never on the
 focusable button.** `aria-hidden` on a focusable element removes it from the a11y tree while
@@ -462,15 +543,87 @@ written for "a model skimming a roster" (its own doc, `:309-311`), one clause pe
 including the *present* capabilities. Rendering that on a 322px card would put five clauses of
 mostly-good-news on every agent. **That is the wall of warnings the surface must not become.**
 
-**The renderer consumes `providerCapabilities(provider)`** — the structured record
-`capabilityLine` itself is built from (`providerAutomation.ts:293`) — and renders **only the false
-bits.** `capabilityLine`'s string keeps its one intended job (the god's roster injection, which
-`hive.ts` owns per the function's own doc). Whether that injection lands in this phase is a plan
-decision outside this contract; **it is not a UI surface and this document does not specify it.**
+**The renderer consumes `providerCapabilities(provider, platform)`** — the structured record
+`capabilityLine` itself is built from (`providerAutomation.ts:293-302`) — and renders **only the
+false bits.** `capabilityLine`'s string keeps its one intended job (the god's roster injection,
+which `hive.ts` owns per the function's own doc). Whether that injection lands in this phase is a
+plan decision outside this contract; **it is not a UI surface and this document does not specify
+it.**
 
 This resolves D-30 honestly: PARITY-01b's UI is built on the same source of truth the tested
 function uses, so the two can never disagree, and no second derivation of "what can this engine do"
 enters the codebase.
+
+#### Rule C-1a — how the renderer obtains the platform, named exactly
+
+**This is the correction the first checker round blocked on, and it is load-bearing: as originally
+written, Rule C-1 made the agent card evaluate `process.platform` on first paint.**
+
+Verified this session: `providerCapabilities` calls `remoteControlAvailability(provider)` with the
+platform argument **omitted** (`providerAutomation.ts:300`), and that function's signature is
+`remoteControlAvailability(provider: AgentProvider, platform: string = process.platform)`
+(`:284-287`). A default parameter is evaluated on **every** call where the argument is omitted,
+before any body short-circuit — so `providerCapabilities(provider)` reads `process.platform`
+unconditionally.
+
+The renderer has never taken that path, confirmed three independent ways:
+
+- `useHive.ts:12-16` imports exactly four symbols from `providerAutomation` —
+  `clearCommandForProvider`, `compactionCommandForProvider`, `remoteControlCommandForProvider`,
+  `terminalReadyToReceive`. None of the four reads `process`.
+- `OnboardingWizard.tsx:166` records in a comment that `window.process.env.HOME` *"is ALWAYS
+  undefined here"* — this codebase has already paid for assuming Node globals in the renderer.
+- `src/main/index.ts:289` keeps its own `process.platform === 'win32'` literal *"rather than calling
+  `remoteControlAvailability`"* (`:289-291`). Even **main** deliberately avoids the coupling.
+
+**The mechanism, prescribed — the executor makes no call here:**
+
+1. **`providerCapabilities` gains an optional `platform` and forwards it.**
+   Signature becomes `providerCapabilities(provider: AgentProvider, platform?: string)`, and the
+   `remote` bit becomes
+   `remoteControlAvailability(provider, platform ?? process.platform) === 'ok'`.
+   The `??` is the point: when a platform **is** passed, the right-hand operand is never evaluated,
+   so no renderer call touches `process`. Every existing main-side and test-side caller keeps
+   working unchanged. The file is already inside PARITY-01b's blast radius, and
+   `engine-parity.test.cjs:568-590` already drives `remoteControlAvailability` with an explicit
+   platform on both Codex branches, so the parity test extends to the new parameter without a new
+   harness.
+2. **The platform reaches the renderer over the preload bridge, as a plain string.**
+   `src/preload/index.ts` adds `platform: process.platform` to the `api` object it already hands to
+   `contextBridge.exposeInMainWorld('cth', api)` (`:1533`). Preload runs with Node globals, so this
+   is a synchronous primitive available on first paint — **no IPC round trip, no `useEffect`, no
+   loading state**. `CthApi` is `typeof api` (`:1535`), so the renderer's type comes for free.
+3. **Every renderer call site passes `window.cth.platform`.** No renderer file may call
+   `providerCapabilities` with a single argument. The plan carries a repo-fact test asserting that
+   `grep -rn "providerCapabilities(" src/renderer` returns **only** two-argument calls, so a future
+   edit that drops the argument goes red instead of throwing at paint time.
+
+**Why the bridge and not an IPC `invoke`:** the card must render immediately, and a capability line
+that flickers from "no gaps" to `NO REMOTE` one tick later is a worse surface than no surface.
+**Why the bridge and not a literal in the renderer:** that would create a second declaration of
+"what platform is this", which is exactly the drift `main/index.ts:271-292`'s JSDoc exists to
+prevent.
+
+#### Rule C-1b — where `NO MCP` gets its bit
+
+`ProviderCapabilities` today is `{ provider, mail, spend, compact, remote }`
+(`providerAutomation.ts:248-260`) — **there is no `mcp` bit**, and no field on
+`AgentProviderPreset` answers "can this engine take MCP servers" either (verified this session).
+Rule C-2's `NO MCP` row and S1a's `mail > mcp > spend > compact > remote` ranking therefore had no
+data source. Named now:
+
+**A new required `supportsMcp: boolean` on `AgentProviderPreset`, surfaced as a new `mcp: boolean`
+on `ProviderCapabilities` (`mcp: preset.supportsMcp`).** Required rather than optional, following
+the house pattern `costTracking`'s own doc states — *"Required, deliberately: a new provider must
+state its answer instead of inheriting a flattering default"* (`agentProvider.ts:127-129`). One
+source of truth, and `engine-parity.test.cjs` covers it with the same per-provider loop it already
+runs over `mail`, `spend`, `compact` and `remote`.
+
+**Rejected:** a preset field the renderer reads directly. That gives the card a second derivation
+path for "what can this engine do", which is the thing Rule C-1 exists to forbid.
+
+`capabilityLine`'s **string** is not extended with an MCP clause by this contract. It is a prompt
+line governed by ADR-0002 and changing it is PARITY-01b engineering, not a visual contract.
 
 #### Rule C-2 — the gap vocabulary, locked
 
@@ -605,13 +758,50 @@ MCP {safeCount} safe · {short}{mark} · {short}{mark}
 | Element | `<span>`, `aria-hidden="true"` (A4) |
 | Font | `var(--cth-font-ui)` at `var(--cth-text-body-sm)` / `var(--cth-lh-body-sm)` |
 | Fill / border / colour | identical to the gap chip — `--cth-cream-200` / `inset 0 0 0 1px --cth-ink-300` / `--cth-ink-700` |
-| **Containment** | `maxWidth: 150px; overflow: hidden; textOverflow: ellipsis; whiteSpace: nowrap; flexShrink: 0` |
+| **Containment** | `maxWidth: 152px; overflow: hidden; textOverflow: ellipsis; whiteSpace: nowrap; flexShrink: 0` — 152 is a multiple of 4 and a **starting** value; §S2a is the condition it must satisfy |
 | `title` | the full, unabbreviated truth — every granted server's **full catalog id**, its tier, and for a pending entry the literal string `pending · restart` |
 
-**The `maxWidth: 150px` is the whole containment story and it is not negotiable.** It makes overflow
+**The pinned `maxWidth` is the whole containment story and it is not negotiable.** It makes overflow
 structurally impossible regardless of how many servers are granted, which is the property the card
-needs after `01-14`. `150` is a starting value: the plan **measures** it against a card carrying a
-gap chip + this element + a note and adjusts by the measured delta, per the Containment Protocol.
+needs after `01-14`.
+
+#### S2a — the acceptance criterion for `maxWidth`, declared not delegated
+
+An earlier draft said only *"measure it and adjust by the measured delta"*. That names a method and
+no pass condition, which leaves the executor making a design call in flight — and the arithmetic
+says the starting value does not pass. **The budget, computed from source this session:**
+
+| Term | Value | Source |
+|------|-------|--------|
+| Card width | 322 | `AgentCard.tsx:124` |
+| − inner surface padding | 16 (`'6px 8px'`) | `AgentCard.tsx:231` |
+| − portrait tile | 36 | `AgentCard.tsx:237` |
+| − portrait/content gap | 8 | `AgentCard.tsx:234` |
+| **= content column** | **262** | |
+| Worker third-row gap | 4 per gap | `AgentCard.tsx:378` |
+
+Third row, worst realistic case: gap chip ≈ 64 + MCP element 152 + `✎` button 15 + three 4px gaps
+= 243 → the note, the only flexible item in the row, lands at **≈ 19px**. That is one character and
+an ellipsis: `01-14`'s dropped-field defect relocated from the name to the note.
+
+**Pass condition, binding:**
+
+> With a gap chip present **and** a fully-populated MCP element present, the note must retain
+> **≥ 80px** of rendered width — roughly ten characters at Inter 14px. If it does not, **the MCP
+> element's `maxWidth` is the value that comes down** until it does. The note's `flex: 1, minWidth: 0`
+> (`AgentCard.tsx:384`) is never changed, the card's 322px is never changed, and the row never wraps.
+
+Measured, not derived: the probe set already includes "worker with gaps + MCP" (§Containment
+Protocol), so this is a read off the same run, and the final `maxWidth` lands in its own atomic
+commit with the measurement in the message.
+
+**Known ordering dependency — `AgentCard.tsx:411`.** The `✎` glyph in the exact row this phase edits
+is still `fontSize: 10` inside a `width: 15, height: 14` button, owed to an unlanded Phase 1
+FLOOR-12 plan (19/20/23). Raising it to the 14px floor widens that button and therefore changes the
+budget above. **The measurement must be taken against whichever state of `AgentCard.tsx:411` is on
+`main` when the plan runs, and the plan must record which state that was.** If the raise lands after
+this phase, the `maxWidth` is re-measured then — it is a number with a recorded derivation, not a
+constant.
 
 **D-29's `pending · restart` is honoured in full, in the place it can be read.** The card is 322px
 wide; the phrase plus a server name does not fit beside a note and a gap chip. So the card carries
@@ -713,26 +903,60 @@ after that text, before the `marginLeft: 'auto'` on the theme button.
 | Rendered | **only while the tunnel is up.** When down, nothing — the absence is the signal |
 | Element | a real `<button>`, `className="cth-titlebar-nodrag"` |
 | Content | `PUBLIC` in `var(--cth-font-display)` at `var(--cth-text-display-md)` / `var(--cth-lh-display-md)`, then `·`, then `{host}` in `var(--cth-font-mono)` at `var(--cth-text-mono-md)` / `var(--cth-lh-mono)` |
-| `{host}` | the tunnel URL's hostname — `fox-runs-blue.trycloudflare.com`. The scheme is constant and adds 8 characters of nothing |
+| `{host}` | the tunnel URL's hostname. The scheme is constant and adds 8 characters of nothing. **Worked example, and the binding probe value: `adams-medical-meeting-enormous.trycloudflare.com` — D-14's live-measured random-word label (`02-CONTEXT.md:306`) on cloudflared's fixed suffix. 48 characters, `printf '%s' … | wc -c`** |
 | Fill | `var(--cth-lemon)` |
 | Text colour | `var(--cth-on-accent)` — the token that exists precisely for text on an accent fill and does **not** invert with the theme (`tokens.css:88-94`) |
 | Border | `inset 0 0 0 1px var(--cth-ink-900)` |
-| Padding | `1px 6px 0` |
+| Padding | `1px 4px 0` — the `BOSS`/`AUTO` chip's exact value (`AgentCard.tsx:268`, `:289`), inherited not introduced |
 | Flex | `flexShrink: 0` |
 | Action | opens Settings at the Connections section (`setSettingsSection` + `setSettingsOpen`, the existing `App.tsx:386-387` pattern) |
 | Accessible name | **the visible text.** No `aria-label` (A1) |
 | `title` | `Your floor is reachable at this public address. Click to open the tunnel panel.` |
 
-**Containment, and the one integer this phase must change in the titlebar.** The chip is
-`flexShrink: 0`. To pay for it, the adjacent `auto mode on/off` text (`App.tsx:348-355`) gains
-`minWidth: 0; overflow: hidden; textOverflow: ellipsis` so **it** truncates first. That text is the
-most redundant thing in the titlebar — the same state is on every agent card as the `AUTO` chip
-after FLOOR-01. Measure the titlebar at 1280/1024/800 with a realistic 33-character host, per the
-Containment Protocol; if 800 still spills, the fix is to hide the auto-mode text below a measured
-width, **never** to truncate the host.
+**Containment, and the two degradation steps — because one is not enough and the arithmetic says so.**
 
-**Truncating the host is forbidden.** An ellipsised public address does not satisfy "the live public
-URL is visible".
+**The census, from source this session.** The titlebar (`App.tsx:326-338`) is `paddingLeft: 96`,
+`paddingRight: 12`, `gap: 12`, and today carries **six** children: the logo (`:341`), `UpdateBadge`
+(`:347`), the `auto mode on/off` span (`:348-355`), and three 28px buttons — theme (`:359`),
+settings (`:388`) and fullscreen (`:405`). At an 800px logical width the content box is
+`800 − 96 − 12 =` **692px**; five gaps take 60 and the buttons take 84, leaving **548** for logo +
+`UpdateBadge` + auto-mode text.
+
+Adding the chip makes **seven** children — six gaps (72) and the same 84 of buttons, leaving
+**536**. The host this must survive is
+`adams-medical-meeting-enormous.trycloudflare.com` — D-14's live-measured label
+(`02-CONTEXT.md:306`) on cloudflared's fixed suffix, **48 characters** (`printf '%s' … | wc -c`,
+this session). At `--cth-text-mono-md` that host alone is ≈ 403px; with `PUBLIC` in Press Start 2P
+(6 chars × ~14px = 84), the `·`, and the padding, the chip is **≈ 508px**. That leaves **≈ 28px**
+for the logo, `UpdateBadge` and the auto-mode text combined. Hiding the auto-mode text recovers only
+~103px. **One degradation step is a dead end**, and this contract forbids truncating the host — so
+as originally written the executor had no lawful move. Two steps now:
+
+| # | Trigger | What changes | What is preserved |
+|---|---------|--------------|-------------------|
+| 0 | default | full chip: `PUBLIC · {host}` | everything |
+| 1 | below the **measured** width at which the row first overflows | the `auto mode on/off` text is **hidden** (`display: none`), not ellipsised | the full host, the logo, `UpdateBadge` |
+| 2 | below the **measured** width at which step 1 still overflows | the chip renders **`PUBLIC` alone** — same lemon fill, same border, same click target, same `title` | the chip is still *always visible*; the never-truncated URL is one click away in the panel the chip already opens |
+
+The chip keeps `flexShrink: 0` at every step. Step 1 hides rather than ellipsises because
+`auto mode of…` is noise: the same state is on every agent card as the `AUTO` chip after FLOOR-01,
+so the titlebar copy is already redundant.
+
+**Step 2 keeps DAEMON-05's security property intact, and that is why it is the lawful fallback.**
+The requirement is that *the tunnel can never be up without the operator seeing it*. A solid-lemon
+`PUBLIC` in the titlebar satisfies that completely — presence is the signal — and §S4b
+contractually guarantees the full, never-truncated URL in the tunnel panel, which is exactly where
+this chip navigates. Step 2 gives up convenience, not the property.
+
+**Truncating the host is still forbidden.** An ellipsised public address (`adams-medical-…com`) is worse
+than no address: it *looks* like the URL is visible while being unusable and unverifiable. The chip
+shows the whole host or it shows none of it.
+
+**Probe requirement.** Measure the titlebar at 1280/1024/800 per the Containment Protocol using the
+literal 48-character host above — **not** a shorter invented one. An earlier draft of this contract
+specified a 33-character probe host, fifteen characters shorter than the phase's own research
+measured, which would have passed a probe that the real value fails. The plan records the two widths
+at which steps 1 and 2 fire.
 
 #### S4b — the tunnel panel (Settings → Connections)
 
@@ -766,7 +990,7 @@ dismissal to recover from.
 |-------------|-------|
 | Encodes | `https://{host}/phone/#{enrollment-token}` (D-19) |
 | Renderer | a single inline `<svg>` of module rects — crisp at any size, one element, no canvas, and `global.css:82` already sets `image-rendering: pixelated` on `svg` |
-| Encoder | **vendored single-file MIT implementation** committed into the repo — **not an npm dependency.** `package.json` is frozen (D-06) |
+| Encoder | **vendored single-file MIT implementation** committed into the repo — **not an npm dependency.** `package.json` is frozen (D-06). Candidate named and its vetting bar set in §Registry Safety |
 | Error correction | level **M** — a phone camera in a dim room at arm's length, which is the actual use |
 | Size | **180 × 180 CSS px**, quiet zone of 4 modules included inside the SVG viewBox |
 | Fill | modules `var(--cth-ink-900)` on a `#FFFFFF` plate. **A literal white, not `--cth-paper-100`** — in dark mode every surface token goes near-black and the code stops scanning. The plate gets `padding: var(--cth-space-2)` so the quiet zone survives against a dark panel |
@@ -863,7 +1087,8 @@ address bar, in the app-switcher thumbnail, or in a screenshot.
 │ │ Your answer…                │ │  <textarea>, min 5 rows, --p-card
 │ └─────────────────────────────┘ │
 │ ┌─────────────────────────────┐ │
-│ │        send answer          │ │  56px, full-bleed, --p-accent
+│ │        send answer          │ │  56px, full-bleed, --p-accent fill,
+│ └─────────────────────────────┘ │  --p-on-accent label (7.03:1)
 │ └─────────────────────────────┘ │
 └─────────────────────────────────┘
 ```
@@ -877,7 +1102,9 @@ address bar, in the app-switcher thumbnail, or in a screenshot.
 - The draft is persisted to `localStorage` keyed by task id on every input. The tunnel drops, the
   phone sleeps, Chrome evicts the tab — the answer survives all three. A half-typed answer lost to
   a dropped tunnel is the single most annoying failure this surface can have.
-- `send answer` is disabled while the draft is empty and while a send is in flight.
+- `send answer`: fill `--p-accent`, **label `--p-on-accent`** — never `--p-text`, which measures
+  1.87:1 on that fill. Height 56px, full-bleed within the `--p-4` gutter, `--p-text-md` at weight
+  600. Disabled while the draft is empty and while a send is in flight.
 - After a successful send: the button area is replaced by `sent` in `--p-ok` for 1.5s, then the app
   returns to the list with that ask gone. No modal, no toast.
 
@@ -918,16 +1145,47 @@ No shadcn, no third-party registry. **No npm dependency of any kind is added by 
 CI-breaking change on three hard-gated platforms).
 
 **One vendored source file is introduced: the QR encoder.** It is committed source, not a
-dependency. Vetting requirements before it lands, in the same register the registry gate would
-apply to a third-party block:
+dependency, and it is the only executable code in this phase that this repo did not write.
+
+#### The candidate, named
+
+| Field | Value |
+|-------|-------|
+| Upstream | **Project Nayuki — QR Code generator library**, `github.com/nayuki/QR-Code-generator` |
+| File | `typescript-javascript/qrcodegen.ts` — one file, zero dependencies |
+| Licence | **MIT**, header retained verbatim |
+| Purity | **verified against the live file this session**: no `fetch`, no `XMLHttpRequest`, no `navigator.sendBeacon`, no `process.env`, no `eval`, no `new Function`, no dynamic import, **no `document`/`window`** |
+| Shape | exports `qrcodegen.QrCode` / `QrSegment`; `QrCode.encodeText(text, Ecc.MEDIUM)` then `getModule(x, y)` — it returns a **module matrix** and nothing else. **Our code builds the `<svg>`.** The upstream has no `toSvgString` in this file, which is exactly the boundary this contract wants |
+| Vendored path | `src/renderer/src/vendor/qrcodegen.ts` |
+
+**Required file header, asserted by the plan's own repo-fact test:** upstream URL, the **pinned
+commit or release tag**, the retrieval date, the MIT text, and the **SHA-256 of the exact retrieved
+file**.
+
+**Why the digest is required and not optional.** CONTEXT D-14 already requires cloudflared to *"pin
+a release tag and verify against a SHA-256 committed into this repo, not against a vendor
+checksum"* (`02-CONTEXT.md:319`). Vendoring **executable source that runs inside the renderer** on a
+weaker bar than a downloaded binary is inconsistent, and the earlier draft of this contract named no
+upstream at all. Same bar, both artefacts.
+
+**Standing purity gate**, in the same register the registry gate would apply to a third-party block:
 
 - MIT or equally permissive licence, header retained verbatim
 - **pure computation only** — no `fetch`, no `XMLHttpRequest`, no `navigator.sendBeacon`, no
   `process.env`, no `eval`/`new Function`, no dynamic import, no DOM access. It takes a string and
   returns a module matrix; the SVG is built by our code
-- provenance recorded in the file header: upstream project, version/commit, retrieval date
-- the plan's own repo-fact test asserts the absence of the network/eval patterns above, so a future
-  edit that adds one goes red
+- provenance recorded in the file header: upstream project, pinned version/commit, retrieval date,
+  **SHA-256 of the file as retrieved**
+- the plan's own repo-fact test asserts (a) the absence of every pattern above and (b) that the
+  header's digest matches `sha256sum` of the committed file, so both a hostile edit and a silent
+  drift go red
+
+**One sanctioned adaptation, and only one.** `tsconfig.web.json:12` sets `isolatedModules: true`,
+and the upstream file is a TypeScript `namespace`. If that combination fails to build, the lawful
+change is to append an `export` at the bottom of the file — **no logic edit, no reformatting** —
+recorded as a one-line `LOCAL CHANGE:` note in the header immediately below the digest, with the
+digest still naming the *unmodified* retrieved file. Any other edit voids the vetting and the file
+is re-fetched.
 
 Cost check against the $0 rule: every item in this contract is $0 — system fonts, an existing
 512×512 logo, a vendored MIT source file, and the Google Fonts CDN that the desktop already uses.
@@ -946,6 +1204,8 @@ the checker reads them as scoped-out and the executor does not chase them.
 | `McpDefaultsSettings.tsx:71, :76, :91` | hardcoded `#6E1423` for the consent tier, and `--cth-ink-400` (undefined) | Not corrected. **New** consent UI uses `var(--cth-coral)` and `var(--cth-ink-500)` |
 | `AskMeTab.tsx:143` | `🌿` in the empty state, against `DESIGN.md`'s no-emoji rule | Not corrected on the desktop. **Deliberately not carried onto the phone** |
 | `AskMeTab.tsx:168, :201, :216` | numeric `fontSize: 15` and `lineHeight: '19px'` — below-token literals above the 14px floor | Not this phase's sweep. Phase 1 plans 19/20/23 own the remaining FLOOR-12 surface |
+| `AgentCard.tsx:411` | the `✎` glyph is `fontSize: 10` in a `width: 15, height: 14` button — in the exact row §S1a and §S2 edit | Not corrected here (it belongs to an unlanded Phase 1 plan) but **carried as a named ordering dependency** — raising it to the floor widens the button and changes §S2a's row budget. See §S2a |
+| `AgentControlStrip.tsx:60` (9) · `BlockedBanner.tsx:23` (8) · `CodeEditor.tsx:160` (8) · `AgentDetailPanel.tsx:129`, `:281` (10) | numeric sub-14 `fontSize` sites still in the tree | Not corrected. Phase 1 plans 19/20/23 own them; the repo-wide Rule 0 allowlist is plan 23's deliverable, not this contract's. Listed so the checker does not read §Typography's three-entry list as a whole-renderer claim |
 | `README.md:59-63` | documents a per-engine limitation table describing a UI channel that renders nowhere | **Becomes true when S1 lands.** The plan should re-read it afterwards rather than edit it now |
 | `DESIGN.md:136` | *"All fonts ship in a single weight. Never bold"* vs 24 `fontWeight` declarations | Recorded in `01-UI-SPEC.md:835`; unchanged |
 
@@ -977,14 +1237,14 @@ recorded so a reviewer can overturn one without re-deriving the whole contract.
 | # | Question | Resolved to | Alternative rejected, and why |
 |---|----------|-------------|-------------------------------|
 | 1 | shadcn gate | **NO** | Initialising shadcn contradicts an existing token-based design system *and* requires touching the frozen `package.json` |
-| 2 | Does the UI render `capabilityLine()`'s string? | **No — it renders the false bits of `providerCapabilities()`** | Rendering the string puts five clauses of mostly-good-news on every card; the string is documented as a prompt line for a model skimming a roster |
+| 2 | Does the UI render `capabilityLine()`'s string? | **No — it renders the false bits of `providerCapabilities(provider, platform)`** (see Rule C-1a for how the renderer gets the platform) | Rendering the string puts five clauses of mostly-good-news on every card; the string is documented as a prompt line for a model skimming a roster |
 | 3 | How many gap chips on a card? | **Exactly one, ranked, with `+N`** | All-of-them turns a kimi/copilot card into a wall; ranking by operational cost puts the blocking gap first and the rest one hover away |
 | 4 | Gap chip colour | **Neutral chrome, no accent** | A warning hue on a chip that appears on most non-claude engines makes the floor read as broken; `capabilityLine`'s own design intent puts the shout in the uppercase text |
 | 5 | Gap chip font face | **Inter (`--cth-text-body-sm`)** | Press Start 2P measures ~14px/char (`BOSS` = 64px for 4 chars, measured `01-14`); `NO SPEND` would be ~120px of a ~266px row |
 | 6 | Which of D-31's three PARITY-01b surfaces? | **All three** | Card-only satisfies the requirement's letter and leaves both moments where the operator actually chooses untouched. S1b and S1c are conditional three-line renders over data already in hand |
 | 7 | Is there really no assignment flow? | **There is: `CommandCenterPanel.tsx:679`'s `SUGGESTED OWNER` `<Select>`** | D-31 said the operator never assigns to a worker — true of the final assignment, not of the flow. Verified live this session |
 | 8 | Does the dispatch box block a no-mail target? | **No — it informs, `role="status"`** | The picker is explicitly a suggestion the god may follow (`:595-599`); vetoing it would overrule the orchestrator from the UI |
-| 9 | Where does per-agent MCP live on the card? | **The third row, one element, `maxWidth: 150px`** | A fourth row means card 86→106 and strip 120→140, taken from the office scene |
+| 9 | Where does per-agent MCP live on the card? | **The third row, one element, `maxWidth: 152px` starting value with a declared pass condition (§S2a)** | A fourth row means card 86→106 and strip 120→140, taken from the office scene |
 | 10 | D-29 says "each granted server named" — on a 322px card? | **Named, with a pinned max-width and ellipsis; the `title` + `aria-label` carry the unabbreviated truth including `pending · restart`** | Collapsing to a bare count contradicts a locked decision; letting names run free is `01-14` again |
 | 11 | Marks for MCP state | **`⚿` keyed · `⚠` granted-but-unkeyed · `↻` pending** | One mark for all three would hide D-28's fail-closed state, in which the server never starts |
 | 12 | Untested glyphs (`⚿`, `↻`) | **Must be verified rendering live; substitutions (`key`, `restart`) prescribed in advance** | "It is BMP so it will render" is exactly the assumption this project's rules exist to stop |
@@ -1007,7 +1267,37 @@ recorded so a reviewer can overturn one without re-deriving the whole contract.
 | 29 | `100dvh` vs `100vh` | **`dvh`** | `vh` on Android Chrome ignores the retracting URL bar and hides the send button |
 | 30 | Manifest icon purpose | **`any`, not `maskable`** | The logo has no maskable safe zone; declaring it produces a cropped launcher icon |
 | 31 | Does the phone get a dismiss action? | **No** | It removes something without answering it — desk work, and the desk has it |
-| 32 | Notification copy | **Reuses FLOOR-14's `{name}` / `is waiting on you` verbatim** | Two vocabularies for one event is how a product starts feeling like two products |
+| 32 | Notification copy | **Reuses FLOOR-14's shape; the body is the god branch, `is waiting on you`, unconditionally** | Reusing the two-branch *expression* would push "Ada is waiting on Michael" to a phone whose whole purpose is what needs a human |
+| 33 | How does the renderer get the platform, given `providerCapabilities` evaluates `process.platform`? | **Optional `platform` param forwarded with `??`, sourced from a new `window.cth.platform` on the preload bridge (Rule C-1a)** | An IPC `invoke` makes the card flicker from "no gaps" to `NO REMOTE` a tick later; a renderer-side literal creates a second declaration of the platform, which `main/index.ts:271-292` exists to prevent |
+| 34 | Where does `NO MCP`'s bit come from? | **New required `supportsMcp` on the preset → new `mcp` bit on `ProviderCapabilities` (Rule C-1b)** | A preset field the renderer reads directly gives the card a second derivation path — the thing Rule C-1 forbids |
+| 35 | The phone's label colour on an accent fill | **New `--p-on-accent` `#1A1320`, copying the theme-invariant `--cth-on-accent`** | `--p-text` on `--p-accent` is 1.87:1 — the phone's primary CTA would have been illegible. There was no other near-dark in the ramp |
+| 36 | The titlebar chip at 800px, where one degradation step does not close the gap | **A second step: the chip renders `PUBLIC` alone below a measured width** | Truncating the host defeats DAEMON-05's "the URL is visible"; hiding the chip defeats "the tunnel can never be up unseen". `PUBLIC` alone keeps the security property and moves the address one click away, into the panel that already guarantees it untruncated |
+| 37 | Which QR encoder, specifically | **Project Nayuki `typescript-javascript/qrcodegen.ts` (MIT), pinned by commit + SHA-256 in its header** | An unnamed "some MIT single-file implementation" is not a vetting gate; and D-14 already sets the SHA-256 bar for a downloaded *binary*, so vendored source cannot ship on a weaker one |
+| 38 | The titlebar chip's padding | **`1px 4px 0`, inherited from `BOSS`/`AUTO`** | An earlier draft wrote `1px 6px 0`; 6 is not a multiple of 4 and is inherited from nothing, which contradicts this contract's own one-exception spacing clause |
+
+---
+
+## Revision Log
+
+Round 1 of `gsd-ui-checker` returned **BLOCKED**. Every finding was independently re-verified against
+live source before it was applied; each fix below carries the `file:line` that proves it. Nothing
+outside these items was redesigned.
+
+| Severity | Finding | Fix, and where it landed |
+|----------|---------|--------------------------|
+| **BLOCKING** | Rule C-1 made the renderer evaluate `process.platform` — `providerCapabilities` omits the platform argument (`providerAutomation.ts:300`) and the callee defaults it (`:284-287`), so the default is evaluated on every card render | **§S1 Rule C-1a** names the mechanism end to end: optional `platform` param + `??` short-circuit, sourced from `window.cth.platform` on the preload bridge (`src/preload/index.ts:1533`), with a repo-fact test forbidding one-argument calls from `src/renderer` |
+| **BLOCKING** | The phone palette dropped the on-accent token; `--p-text` on `--p-accent` is **1.87:1**, so `send answer` was illegible. The contrast section named three passing pairings and omitted the failing one | **§Color — phone** adds `--p-on-accent` `#1A1320` (**7.03:1**; 6.48:1 on `--p-warn`, 7.69:1 on `--p-ok`), **§S5 Screen 2** declares it as the button label, and the contrast table now leads with that pairing |
+| **BLOCKING** | §S4a specified `1px 6px 0` — off-grid and inherited from nothing, against this contract's own one-exception spacing clause | **§S4a** is now `1px 4px 0`, the `BOSS`/`AUTO` value (`AgentCard.tsx:268`, `:289`). No second exception was declared |
+| **MUST RESOLVE** | `maxWidth: 150px` had a method and no pass condition; the budget puts the note at ~19px of 262 | **§S2a** declares the criterion (note ≥ 80px with a gap chip and a full MCP element present; the MCP element is what shrinks), moves the start to **152**, and carries `AgentCard.tsx:411` as a named ordering dependency |
+| **MUST RESOLVE** | The titlebar at 800px was a dead end: one degradation step recovers ~103px against a ~508px chip, and the probe host was 33 characters where research measured 48 | **§S4a** publishes the census, sets the probe host to the literal `adams-medical-meeting-enormous.trycloudflare.com`, and adds step 2 — `PUBLIC` alone, security property intact |
+| Factual | `NO MCP` had no data source (`ProviderCapabilities` is `{provider, mail, spend, compact, remote}`) | **Rule C-1b** — new required `supportsMcp` preset field → new `mcp` bit, same parity test |
+| Factual | The Rule 0 allowlist claim was false: `IdePanel.tsx:499` is a padding/border line, and six numeric sites remain repo-wide | **§Typography** corrects the entry to `IdePanel.tsx:491`, restates the three-entry list as the sub-group's intended end state after FLOOR-12, names the six survivors, and drops "the only lawful sizes" |
+| Factual | The notification "verbatim" claim contradicted its source — `hooks.ts:800-801` is a two-branch conditional | **§Notification copy** states the body is *unconditionally* the god branch, and says why the worker branch has no referent on this surface |
+| Factual | The gap chip was described as copied from the account chip but changes its hairline and padding | **§Color — desktop** publishes the two departures as a table and calls `--cth-ink-300` a deliberate visibility upgrade (`tokens.css:141` vs `:142`) |
+| Factual | `ProviderLogo.tsx:46` was cited as an A2 example but is `role="img"` + `aria-hidden` with no label | **§A2** drops it and says why; the other two citations were re-verified exact |
+| Factual | The vendored QR encoder had no named upstream and no digest, on a phase whose D-14 requires a SHA-256 for a binary | **§Registry Safety** names Project Nayuki `qrcodegen.ts` (MIT, purity re-verified against the live file), requires commit pin + SHA-256 in the header asserted by a repo-fact test, and sanctions exactly one adaptation |
+| Factual | `--p-6` (24px) collided with `--cth-space-6` (32px) | **§Spacing — phone** renames it `--p-5`, so `--p-1`…`--p-5` are index-identical to `--cth-space-1`…`--cth-space-5` |
+| Factual | The expose-tunnel cancel was a bare `cancel`; `refresh` was missing from the CTA table; the tunnel-failed row had no next step | **§Copywriting** — `keep it private` (matching the `keep it` pattern set on revoke), a `refresh` row marked as a text button, and a retry clause on the tunnel-failed error |
 
 ---
 
