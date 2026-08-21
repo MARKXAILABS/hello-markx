@@ -11,15 +11,40 @@
  * It also pins the Node story (`engines` + `.nvmrc`), because "works on my Node"
  * is the other way this repo's build has broken: Node 24 has no better-sqlite3
  * prebuild and breaks node-pty's winpty gyp build.
+ *
+ * And it pins a handful of REPO FACTS that documents claim about themselves —
+ * the release workflow's provenance step, the CI gate CONTRIBUTING.md describes,
+ * the ADR index, the bug template. Every one of those is a place where a doc can
+ * quietly start lying about what the code does, which is the specific defect
+ * class the docs here exist to remove. A test is what stops it coming back.
+ *
+ * The workflow assertions PARSE the YAML rather than grepping it, deliberately:
+ *   - a commented-out step still matches a string search, and "the attestation
+ *     step got commented out in a refactor" is exactly the regression to catch;
+ *   - `continue-on-error` appears FOUR times in ci.yml, and two of those are
+ *     prose inside comments — including one inside the `test` job saying there
+ *     is no continue-on-error there. A text search cannot tell that comment from
+ *     the real key two jobs away, so only a parse can answer the question
+ *     CONTRIBUTING.md makes a promise about;
+ *   - step ORDER (attest after the merge, before the upload) is an index
+ *     comparison, which needs a parsed list.
+ * `js-yaml` is therefore a declared devDependency. It was already in the tree
+ * transitively via electron-updater/electron-builder, but depending on someone
+ * else's transitive hoist is how a `npm test` starts failing with
+ * MODULE_NOT_FOUND on a PR that touched nothing.
  */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const yaml = require('js-yaml');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+const readYaml = (rel) => yaml.load(read(rel));
 
 // The only wildcard form this repo uses is a `*` inside one path segment
 // (`test/*.test.cjs`). Node expands these itself, which is why the script works
@@ -83,5 +108,149 @@ test('the supported Node range is pinned in package.json and .nvmrc', () => {
   assert.ok(
     pinned >= lower && pinned < upper,
     `.nvmrc pins Node ${pinned}, which is outside package.json engines.node ${range}`
+  );
+});
+
+// ─── Repo facts the docs make promises about ─────────────────────────────────
+
+test('release.yml attests the artifacts it publishes, with the permissions to do it', () => {
+  const publish = readYaml('.github/workflows/release.yml').jobs.publish;
+
+  // A job-level permissions block REPLACES the workflow-level one rather than
+  // extending it, so all three have to be here. Dropping `contents: write` is
+  // the silent one: attestation keeps working and the upload starts 403ing.
+  for (const [key, value] of [['contents', 'write'], ['id-token', 'write'], ['attestations', 'write']]) {
+    assert.equal(
+      publish.permissions && publish.permissions[key],
+      value,
+      `release.yml's publish job needs "${key}: ${value}". Without contents:write the release `
+        + 'upload 403s; without id-token:write there is no OIDC token for Sigstore to sign '
+        + 'against; without attestations:write the attestation cannot be persisted. A job-level '
+        + 'permissions block replaces the workflow-level one, so all three must be restated here.'
+    );
+  }
+
+  const steps = publish.steps.map((s) => ({ name: s.name || '', uses: s.uses || '', with: s.with || {} }));
+  const attest = steps.findIndex((s) => s.uses.startsWith('actions/attest-build-provenance'));
+  assert.notEqual(
+    attest,
+    -1,
+    "release.yml's publish job no longer attests build provenance. That is FLOOR-06's only "
+      + 'control over a tampered download: Windows and macOS ship unsigned, so provenance plus '
+      + 'the published checksums are the entire answer to "did this really come from this repo".'
+  );
+
+  assert.ok(
+    steps[attest].with['subject-checksums'],
+    'the attestation step must attest via subject-checksums (the merged SHA256SUMS.txt), so one '
+      + 'call covers every artifact on every platform. Switching to subject-path silently narrows '
+      + 'what is attested to whatever that glob happens to match.'
+  );
+
+  const merge = steps.findIndex((s) => /checksums/i.test(s.name));
+  const upload = steps.findIndex((s) => s.uses.startsWith('softprops/action-gh-release'));
+  assert.ok(merge !== -1 && upload !== -1, 'release.yml lost its checksum-merge or release-upload step');
+  assert.ok(
+    merge < attest && attest < upload,
+    `attestation must run AFTER the checksums are merged (index ${merge}) and BEFORE the upload `
+      + `(index ${upload}); it is at ${attest}. Attesting earlier signs digests that are not the `
+      + 'bytes that ship, which looks green and proves nothing.'
+  );
+});
+
+test('the `test` matrix is a hard gate on all three platforms, exactly as CONTRIBUTING.md claims', () => {
+  const ci = readYaml('.github/workflows/ci.yml');
+  const job = ci.jobs.test;
+
+  for (const os of ['ubuntu-latest', 'windows-latest', 'macos-latest']) {
+    assert.ok(
+      job.strategy.matrix.os.includes(os),
+      `${os} left the CI test matrix. CONTRIBUTING.md tells contributors all three platforms are `
+        + 'hard gates; dropping one makes that a false promise, and a permanently-absent platform '
+        + 'is how 7 real Windows source bugs (#57/#58/#60) stayed invisible for months.'
+    );
+  }
+
+  // Parsed, not grepped: ci.yml mentions `continue-on-error` in prose inside
+  // this very job's comment block, and really carries it on two steps in OTHER
+  // jobs (the advisory npm audit, and the flaky native rebuild). Both of those
+  // are deliberate and outside the matrix, which is why CONTRIBUTING.md says
+  // "anywhere in the test matrix" and not "anywhere in ci.yml".
+  assert.equal(
+    job['continue-on-error'],
+    undefined,
+    'the CI test job carries a job-level continue-on-error. A permanently-yellow test job is how '
+      + 'this repo shipped Windows as a headline feature with 7 real source bugs in it, and it '
+      + 'makes CONTRIBUTING.md\'s hard-gate paragraph false.'
+  );
+  const soft = job.steps.filter((s) => s['continue-on-error']).map((s) => s.name || s.uses);
+  assert.deepEqual(
+    soft,
+    [],
+    `these steps in the CI test job would swallow their own failure: ${soft.join(', ')}. A test `
+      + 'step that cannot fail is not a gate, and CONTRIBUTING.md promises it is one.'
+  );
+
+  assert.ok(
+    read('CONTRIBUTING.md').includes('there is no `continue-on-error` anywhere in the test matrix'),
+    'CONTRIBUTING.md lost the hard-gate sentence. The doc and ci.yml are pinned to each other on '
+      + 'purpose: whichever one drifts, this test fails on the PR that drifts it.'
+  );
+});
+
+test('no workflow gates a PR on the hand-picked test subset', () => {
+  const dir = path.join(root, '.github/workflows');
+  const offenders = fs
+    .readdirSync(dir)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .filter((f) => fs.readFileSync(path.join(dir, f), 'utf8').includes('test:focused'));
+  assert.deepEqual(
+    offenders,
+    [],
+    `${offenders.join(', ')} reference test:focused. It is a hand-written file list for tight edit `
+      + 'loops; gating on it is how eight test files went unrun for months (#7), and both '
+      + 'CONTRIBUTING.md and README.md tell contributors it is never a gate.'
+  );
+});
+
+test('docs/adr/ holds the numbered records and README.md indexes every one', () => {
+  const dir = path.join(root, 'docs/adr');
+  const records = fs.readdirSync(dir).filter((f) => /^\d{4}-.+\.md$/.test(f)).sort();
+  assert.ok(
+    records.length >= 6,
+    `expected at least 6 ADRs, found ${records.length}. FLOOR-17's clause is that docs/adr/ is the `
+      + 'home for rationale that was buried in long source comments; losing a record sends that '
+      + 'rationale back to git blame.'
+  );
+
+  const index = read('docs/adr/README.md');
+  for (const file of records) {
+    assert.ok(
+      index.includes(file),
+      `docs/adr/README.md does not link ${file}. An unindexed ADR is one nobody finds, which is the `
+        + 'exact failure that made these records necessary in the first place.'
+    );
+  }
+});
+
+test('the bug template asks only for things a reporter can actually produce', () => {
+  const template = readYaml('.github/ISSUE_TEMPLATE/bug_report.yml');
+  const logs = template.body.find((f) => f.id === 'logs');
+  assert.ok(logs, 'the bug template lost its logs field — the whole point of FLOOR-17\'s template half');
+
+  const description = logs.attributes.description || '';
+  assert.match(
+    description,
+    /Settings/,
+    'the logs field must name the Settings route to the log folder. It used to say "there is no log '
+      + 'file yet", which stopped being true when #13 landed the file sink — an ask pointed at '
+      + 'nothing is the same defect as a doc describing code that does not exist.'
+  );
+  assert.match(
+    description,
+    /main\.log/,
+    'the logs field must name main.log and the platform paths to it. Until FLOOR-05 ships the '
+      + 'Settings button, the by-hand path is the ONLY way a reporter reaches the file, so removing '
+      + 'it makes the ask unanswerable again.'
   );
 });

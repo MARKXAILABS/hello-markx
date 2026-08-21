@@ -46,6 +46,8 @@ export interface CommandHistoryRow {
  *     Rows are CUMULATIVE snapshots (one per agent per heartbeat beat) — diff
  *     consecutive rows for velocity; index (agent_id, session_id, ts). Additive;
  *     lands as a later migration.
+ *     Why that contract is load-bearing, and how it has already been broken:
+ *     docs/adr/0005-cumulative-cost-ledger.md.
  */
 const MIGRATIONS: Array<(db: Database.Database) => void> = [
   // → user_version 1 (Phase A): scalar kv + net-new command history.

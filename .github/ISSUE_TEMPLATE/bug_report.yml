@@ -25,15 +25,27 @@ body:
   - type: textarea
     id: logs
     attributes:
-      # The app writes no log file (#13), so asking for "the logs" just sends
-      # people hunting for a file that does not exist. Say where the output
-      # actually is instead.
-      label: Console output / screenshots
+      # This ask used to say "there is no log file yet", which was true when it
+      # was written and is not any more: #13 landed a file sink that tees every
+      # console.* in the main process into main.log. The paths below are spelled
+      # out because the folder is not somewhere anyone would guess, and the
+      # Settings shortcut that makes them unnecessary is FLOOR-05 and has not
+      # shipped — so the by-hand route has to be here until it does. When that
+      # button lands, drop the paths and keep the Settings line.
+      label: Logs, console output, screenshots
       description: >-
-        There is no log file yet. From a dev build, paste the terminal output of
-        `npm run dev`. From an installed build, open the DevTools console
-        (View → Toggle Developer Tools) and paste anything red. A screenshot or
-        short clip is just as good for anything visual.
+        **From an installed build:** attach `main.log` (and `main.log.1` if it is
+        there — the log rotates once at 5 MB). It lives in the app's log folder:
+        `%APPDATA%\Hello MarkX\logs\` on Windows,
+        `~/Library/Logs/Hello MarkX/` on macOS,
+        `~/.config/Hello MarkX/logs/` on Linux.
+        A **Settings → open log folder** shortcut is on the way (FLOOR-05) and
+        will save you the path hunt; until it ships, open the folder by hand.
+        **From a dev build:** the terminal output of `npm run dev` is the same
+        content and is easier to copy.
+        Either way, the DevTools console (View → Toggle Developer Tools) carries
+        renderer errors that never reach the file, so paste anything red there
+        too. A screenshot or short clip is just as good for anything visual.
       render: shell
   - type: dropdown
     id: os
@@ -56,7 +68,10 @@ body:
     id: node
     attributes:
       label: Node version
-      placeholder: node -v
+      # Answerable on both install routes: a release build bundles its own
+      # runtime, so someone who never built from source has no `node` to run and
+      # would otherwise be stuck on a required field.
+      placeholder: node -v — or "none" if you installed a release build
     validations:
       required: true
   - type: input
@@ -69,7 +84,11 @@ body:
     attributes:
       label: Pre-flight
       options:
-        - label: I re-ran `npm install` so `node-pty` is rebuilt for the current Electron ABI.
+        # Was an unconditional "I re-ran npm install", which nobody on a
+        # downloaded release build can honestly tick — they never run npm at
+        # all — so a required field forced them to lie or give up. Scoped to the
+        # route it actually applies to.
+        - label: If I built from source, I re-ran `npm install` so `node-pty` is rebuilt for the current Electron ABI (n/a for a downloaded release build).
           required: true
         - label: I searched existing issues and this isn't a duplicate.
           required: true

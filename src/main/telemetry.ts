@@ -40,7 +40,11 @@ import { normalizeModel } from './pricing';
  *  Lane A's breaker (#6) and persisted by Lane A's cost-ledger / Lane B's SQLite
  *  (#4). PII-free by construction (see file header). `usd` is Claude's own
  *  per-model cost on the live path, the fallback estimate on the transcript
- *  path — never recomputed downstream. */
+ *  path — never recomputed downstream.
+ *  CUMULATIVE is the contract, not a detail: diff consecutive rows of the same
+ *  (agentId, sessionId), never sum them. Summing over-counts quadratically, and
+ *  it is what RECORD-03/RECORD-04 exist to fix — see
+ *  docs/adr/0005-cumulative-cost-ledger.md. */
 export interface AgentUsageSample {
   agentId: string;
   /** Dedup/accounting key — present on every OTel record; fixes the cwd
