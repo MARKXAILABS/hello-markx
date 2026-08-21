@@ -30,7 +30,8 @@ const { CircuitBreaker } = loadTs('src/main/breaker.ts');
 const { HiveManager } = loadTs('src/main/hive.ts');
 const { HookServer } = loadTs('src/main/hooks.ts');
 const { readCodexUsage } = loadTs('src/main/usage.ts');
-const { capabilityLine, providerCapabilities } = loadTs('src/shared/providerAutomation.ts');
+const { capabilityLine, providerCapabilities, remoteControlAvailability } =
+  loadTs('src/shared/providerAutomation.ts');
 
 /** One proxy-sidecar CostSample, in the shape hooks.ts builds for the ledger. */
 function costSample(over = {}) {
@@ -519,7 +520,10 @@ test('FLOOR-10 / D-18: four beats far over cap and the agent is never stopped, o
 // ── 3. the capability line the god is oriented with ─────────────────────────
 
 test('the capability line is honest about a mail-capable engine', () => {
-  assert.equal(capabilityLine('claude'), 'claude: mail ok, spend tracked (otel), compacts /compact');
+  assert.equal(
+    capabilityLine('claude'),
+    'claude: mail ok, spend tracked (otel), compacts /compact, remote control ok'
+  );
 });
 
 test('the capability line SHOUTS about a mail-incapable engine', () => {
@@ -527,7 +531,8 @@ test('the capability line SHOUTS about a mail-incapable engine', () => {
   // failure #19 opens with (god assigns mail-dependent work to a Kimi worker).
   assert.equal(
     capabilityLine('kimi'),
-    'kimi: NO MAIL (bounces to you), spend UNTRACKED (invisible to every budget), compacts /compact'
+    'kimi: NO MAIL (bounces to you), spend UNTRACKED (invisible to every budget), '
+    + 'compacts /compact, NO REMOTE CONTROL'
   );
 });
 
@@ -535,20 +540,65 @@ test('the capability line names the other two gaps too', () => {
   // crush: proxy-tracked spend but no typeable compaction verb at all.
   assert.equal(
     capabilityLine('crush'),
-    'crush: mail ok, spend tracked (proxy), NO COMPACT (context cannot be reclaimed)'
+    'crush: mail ok, spend tracked (proxy), NO COMPACT (context cannot be reclaimed), '
+    + 'NO REMOTE CONTROL'
   );
   // copilot: print mode exits per turn — no mail, no prompt to compact into.
   assert.match(capabilityLine('copilot'), /NO MAIL .*spend UNTRACKED.*NO COMPACT/);
 });
 
-test('every engine answers all three capability questions', () => {
+test('every engine answers all four capability questions', () => {
   for (const p of ['claude', 'codex', 'grok', 'kimi', 'antigravity', 'qwen',
     'opencode', 'crush', 'pi', 'copilot', 'custom']) {
     const c = providerCapabilities(p);
     assert.equal(typeof c.mail, 'boolean', p);
     assert.ok(['otel', 'proxy', 'transcript', 'none'].includes(c.spend), `${p}: ${c.spend}`);
     assert.ok(c.compact === null || typeof c.compact === 'string', p);
+    // FLOOR-18 — a missing `remote` reads as `undefined`, which is falsy, which
+    // would silently SHOUT the Windows gap at every engine. Type it, don't truth it.
+    assert.equal(typeof c.remote, 'boolean', p);
   }
+});
+
+// FLOOR-18 — Codex-on-Windows is a DECLARED limitation (D-39/D-40), so the
+// declaration itself is the thing under test. Both branches are asserted on every
+// runner: `remoteControlAvailability` takes the platform as a defaulted argument
+// precisely so an ubuntu CI job still proves the Windows string, and a Windows CI
+// job still proves the non-Windows one.
+test('the capability line declares the Codex Windows gap, and only where it is real', () => {
+  assert.equal(remoteControlAvailability('codex', 'win32'), 'windows');
+  assert.equal(remoteControlAvailability('codex', 'darwin'), 'ok');
+  assert.equal(remoteControlAvailability('codex', 'linux'), 'ok');
+
+  // The clause appears for codex when the remote bit is false…
+  const onWindows = capabilityLine('codex').includes('REMOTE CONTROL unavailable on Windows');
+  assert.equal(onWindows, providerCapabilities('codex').remote === false,
+    'the shouted Windows clause and the `remote` bit disagree — capabilityLine is not '
+    + 'reading the bit it claims to read');
+  assert.equal(providerCapabilities('codex').remote, process.platform !== 'win32');
+
+  // …and never for an engine whose remote control is simply absent, which would
+  // blame Windows for a gap that exists on every platform.
+  for (const p of ['grok', 'kimi', 'qwen', 'opencode', 'crush', 'pi', 'copilot',
+    'antigravity', 'custom']) {
+    assert.equal(remoteControlAvailability(p, 'win32'), 'none', p);
+    assert.ok(!capabilityLine(p).includes('unavailable on Windows'), p);
+    assert.ok(capabilityLine(p).includes('NO REMOTE CONTROL'), p);
+  }
+
+  // Claude's remote control is a typed slash command, so it is never platform-gated.
+  assert.equal(remoteControlAvailability('claude', 'win32'), 'ok');
+  assert.ok(capabilityLine('claude').includes('remote control ok'));
+});
+
+test('the shouted gaps stay uppercase and the present capabilities stay quiet', () => {
+  // The copy contract the god is trained on: gaps SHOUT, present capabilities
+  // stay lowercase. A new clause that mixed the two would make every gap harder
+  // to skim, which is the whole reason the convention exists (#19).
+  assert.match(capabilityLine('copilot'),
+    /NO MAIL .*spend UNTRACKED.*NO COMPACT.*NO REMOTE CONTROL/);
+  assert.ok(!capabilityLine('claude').includes('NO '), capabilityLine('claude'));
+  assert.equal(capabilityLine('claude').split(', ').length, 4);
 });
 
 // ── 4. codex spend is readable ───────────────────────────────────────────────

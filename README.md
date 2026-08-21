@@ -48,6 +48,22 @@ in order to get things done.
   when it grows — plus an optional semantic index if you install the MemPalace CLI. Agents
   remember across sessions with or without it.
 
+**Engines are not interchangeable, and the app says so out loud.** Every engine gets one
+capability line, and the orchestrator is handed the same words you see here — a gap is stated,
+never quietly worked around. Missing capabilities SHOUT; present ones stay quiet.
+
+| Engine | What it cannot do |
+|---|---|
+| `codex` **on Windows** | `REMOTE CONTROL unavailable on Windows`. Codex's remote control *is* its app-server daemon, and that daemon's lifecycle is Unix-only upstream — a pidfile plus Unix process/file-locking primitives ([openai/codex#30372](https://github.com/openai/codex/issues/30372)). Codex itself runs completely normally on Windows; only driving it from outside the app is unavailable, and the app does not attempt it rather than failing at it. |
+| every engine except `claude` and `codex` | `NO REMOTE CONTROL`, on every platform — these CLIs expose no remote-control affordance at all. |
+| `kimi`, `copilot`, custom commands | `NO MAIL` — hive mail routed to them bounces back to the orchestrator instead of vanishing. |
+| `antigravity`, `crush`, `copilot`, custom commands | `NO COMPACT` — no typeable compaction verb, so their context cannot be reclaimed in place. |
+| `antigravity`, `grok`, `kimi`, `opencode`, `pi`, `copilot`, custom commands | `spend UNTRACKED` — invisible to every budget and to the floor's cost total. |
+
+Several engine bridges are additionally marked `LIVE-UNVERIFIED` in `src/main/hive.ts` — they have
+never been run against a live account, because doing so needs a paid subscription this project does
+not have. They stay marked until someone runs them.
+
 ## How it works
 
 ```

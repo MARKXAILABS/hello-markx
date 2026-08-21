@@ -262,11 +262,33 @@ function runCodexDaemonCommand(
 
 /** Start/enable one managed remote-control daemon for this isolated Codex home,
  * then point the TUI at its app-server socket. Failure is non-fatal: the worker
- * still starts as a normal local Codex session. */
+ * still starts as a normal local Codex session.
+ *
+ * FLOOR-18 — on Windows this is a DECLARED LIMITATION, not an oversight and not
+ * a best-effort failure. Codex remote control has no Windows implementation to
+ * fall back to, so the floor states the gap instead of pretending: the god's
+ * roster line carries `REMOTE CONTROL unavailable on Windows`
+ * (`shared/providerAutomation.ts` — `remoteControlAvailability`), and README's
+ * engine table says the same sentence. */
 async function enableCodexRemoteForSpawn(
   opts: SpawnOptions & { hive?: AgentMeta },
   agentId: string
 ): Promise<boolean> {
+  // FLOOR-18 / D-39 — Codex's remote control IS its app-server daemon, and that
+  // daemon's lifecycle is Unix-only upstream: it holds a pidfile and relies on
+  // Unix process/file-locking primitives that have no win32 equivalent.
+  // openai/codex#30372, "Codex remote control cannot start on Windows, CLI
+  // reports daemon lifecycle is Unix-only" (open; labelled windows-os /
+  // app-server / remote) — verified with `gh issue view 30372 --repo openai/codex`.
+  //
+  // D-41 — do NOT delete this early return "so the best-effort ladder can try".
+  // Below it are two awaited `codex` subprocesses; on Windows both would time
+  // out on every single spawn, which trades one silent no-op for guaranteed
+  // noise and STILL surfaces nothing to the operator. The honest surface is the
+  // capability line and the README, not a pair of timeouts.
+  // Kept as its own literal rather than calling `remoteControlAvailability`
+  // because this is the spawn-side gate and that is the declaration-side one;
+  // the JSDoc above names both so they cannot drift silently.
   if (process.platform === 'win32') return false;
   const realHome = opts.env?.CODEX_HOME;
   if (!realHome) return false;
