@@ -250,7 +250,10 @@ function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden'
           }}>{task.title}</span>
           {assigneeName && (
-            <span style={{ fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)' }}>
+            <span style={{
+              fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+            }}>
               {assigneeName.toUpperCase()}
             </span>
           )}

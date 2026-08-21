@@ -170,7 +170,7 @@ export function TriggerCard({ title, blurb, summary, defaultOpen = false, childr
           background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)'
         }}
       >
-        <span aria-hidden="true" style={{ flexShrink: 0, width: 8, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
+        <span aria-hidden="true" style={{ flexShrink: 0, width: 12, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
           {open ? '▾' : '▸'}
         </span>
         <span style={{ flex: 1, minWidth: 0 }}>
