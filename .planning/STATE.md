@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). Pushed 89283bb to PR #77. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag."
-last_updated: "2026-08-21T02:15:48.738Z"
+stopped_at: "Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). CI green on PR #77 at e6f9669, all six jobs. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag."
+last_updated: "2026-08-21T02:18:56.408Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
@@ -160,8 +160,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T02:15:48.711Z
-Stopped at: Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). Pushed 89283bb to PR #77. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag.
+Last session: 2026-08-21T02:18:56.386Z
+Stopped at: Completed 01-04-PLAN.md (FLOOR-06 provenance + FLOOR-17 docs/ADRs + GATE-01's SECURITY.md carry). CI green on PR #77 at e6f9669, all six jobs. FLOOR-06 and FLOOR-17 left Pending on purpose — plan 23 owns the checkboxes and FLOOR-06's live attestation sample is outstanding until the next v* tag.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the

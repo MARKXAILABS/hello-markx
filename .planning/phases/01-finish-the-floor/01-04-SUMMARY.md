@@ -559,7 +559,7 @@ wave 9.
 | `npm run check:links` | **exit 0** — `✓ release links consistent at v0.4.4` |
 | release workflow parses as valid YAML | **yes** — parsed with `js-yaml`, and now asserted inside `test/ci-config.test.cjs` rather than by eye |
 | `node --test test/ci-config.test.cjs` | **exit 0 — 9/9** |
-| CI on all three platforms | **pushed to `gsd/v1.0-milestone` at `89283bb`** → PR [#77](https://github.com/MARKXAILABS/hello-markx/pull/77). Result recorded below. |
+| CI on all three platforms | **GREEN, all six jobs, at `89283bb`** (the commit carrying all four tasks) **and again at `e6f9669`** (HEAD, docs) on PR [#77](https://github.com/MARKXAILABS/hello-markx/pull/77) — Typecheck, Test ubuntu, Test windows, Test macOS, Build, Electron smoke. Verified on the remote with `gh run view`, not assumed. |
 
 Local toolchain for anything touching the lockfile: Node **22.23.2** / npm **10.9.8** (portable
 Node 22), matching CI's `setup-node`. System Node is 24.13.0 and was not used for the lockfile
