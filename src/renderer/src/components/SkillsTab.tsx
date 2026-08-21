@@ -239,7 +239,18 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
               {shownLocal.map((s) => (
                 <div key={s.id + s.path} style={rowStyle}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', flex: 1, minWidth: 0 }}>
+                    <span style={{
+                      fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                      lineHeight: 'var(--cth-lh-display-md)', flex: 1, minWidth: 0,
+                      // FLOOR-12 containment. Measured in real Electron at 1280/1024/800:
+                      // at Rule 1's 14px the Press Start 2P name is ~27% wider, and with
+                      // every sibling chip flexShrink:0 the name's ink printed 7px OVER the
+                      // provider chip (installed) and up to 68px over it (catalog). These
+                      // three properties are the house pattern UI-SPEC's containment step 1
+                      // cites (AgentCard.tsx:223-224) - a wider name truncates, it does not
+                      // paint across its neighbour.
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                    }}>
                       {s.name.toUpperCase()}
                     </span>
                     <Chip text={PROVIDER_LABEL[s.provider]} />
@@ -306,7 +317,18 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
               {shownCatalog.map((s) => (
                 <div key={s.url + s.name} style={rowStyle}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', flex: 1, minWidth: 0 }}>
+                    <span style={{
+                      fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                      lineHeight: 'var(--cth-lh-display-md)', flex: 1, minWidth: 0,
+                      // FLOOR-12 containment. Measured in real Electron at 1280/1024/800:
+                      // at Rule 1's 14px the Press Start 2P name is ~27% wider, and with
+                      // every sibling chip flexShrink:0 the name's ink printed 7px OVER the
+                      // provider chip (installed) and up to 68px over it (catalog). These
+                      // three properties are the house pattern UI-SPEC's containment step 1
+                      // cites (AgentCard.tsx:223-224) - a wider name truncates, it does not
+                      // paint across its neighbour.
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                    }}>
                       {s.name.toUpperCase()}
                     </span>
                     <Chip text={s.category} />
