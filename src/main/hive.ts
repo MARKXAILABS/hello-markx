@@ -150,6 +150,32 @@ export interface TaskLedger {
   updatedAt: string;
 }
 
+/** Drop the DERIVED fields `tasks()` adds for the card meter before anything is
+ *  persisted (D-22 / #34).
+ *
+ *  `tasks()` widens each row with `{tokens, budgetTokens, pct}` so the renderer
+ *  gets a meter through the channel it already polls. Two production paths then
+ *  read rows straight out of `tasks()` and hand those SAME objects back to
+ *  `writeTasks()` — the webhook card-creation path in `src/main/index.ts`
+ *  (`const ledger = hive.tasks()` … `hive.writeTasks([...existing, card])`) and
+ *  every voice task action in `src/main/realtimeActions.ts` (`findTasks` →
+ *  `hiveWriteTasks`). Without this, the first webhook card or voice command
+ *  after the widening writes a derived, immediately-stale meter into tasks.json
+ *  as if it were card data.
+ *
+ *  One strip at the single choke point every persist goes through, rather than a
+ *  guard at each call site — `writeTasks` is also what `mutateTasks` (and so
+ *  addTask/patchTask/deleteTask) funnels through. `budgetTokens` is a REAL card
+ *  field and is kept; only the `null` that `tasks()` uses for "no cap" is
+ *  dropped back to absent, so a capless card is not given a null cap field. */
+const stripDerivedTaskFields = (task: HiveTask): HiveTask => {
+  const card: HiveTask & { tokens?: unknown; pct?: unknown } = { ...task };
+  delete card.tokens;
+  delete card.pct;
+  if (typeof card.budgetTokens !== 'number') delete card.budgetTokens;
+  return card;
+};
+
 export interface AgentMeta {
   id: string;
   name: string;
@@ -2004,8 +2030,38 @@ export class HiveManager {
     const root = this.root();
     return root && existsSync(join(root, 'board.md')) ? readFileSync(join(root, 'board.md'), 'utf8') : '';
   }
+  /**
+   * The task ledger for READERS — the `hive:tasks` IPC channel, the renderer's
+   * pollers, the Slack/webhook done-observers and the voice read layer.
+   *
+   * D-22 (#34, FLOOR-10): each row is widened with the card's meter — `tokens`
+   * spent on it, its `budgetTokens` cap (null when it has none) and `pct`, the
+   * ratio of the two (null when there is no cap, so a capless card renders as
+   * "no cap" rather than as a NaN blank or an Infinity full bar). The renderer
+   * already polls this channel every 5 s, so the meter needs no new IPC channel
+   * and no preload change — `src/preload/index.ts` already types the return
+   * `unknown`. The `hive:tasks` handler in index.ts stays a one-liner.
+   *
+   * The `rev` / `updatedAt` envelope is passed straight through: every mutation
+   * path compare-and-swaps on `rev`.
+   *
+   * Reads the per-card accumulator DIRECTLY rather than calling `taskSpend()`
+   * once per card — `taskSpend` re-reads tasks.json to find the cap on every
+   * call, which on a channel this heavily polled would be one file read per card
+   * per poll. Same accumulator, same card-lifetime bound RECORD-03 established;
+   * no second cache is introduced here.
+   */
   tasks(): unknown {
-    return this.ledger();
+    const ledger = this.ledger();
+    const byTask = this.costByTask ?? this.rescanCostLedger();
+    return {
+      ...ledger,
+      tasks: ledger.tasks.map((t) => {
+        const tokens = byTask.get(t.id)?.tokens ?? 0;
+        const cap = typeof t.budgetTokens === 'number' && t.budgetTokens > 0 ? t.budgetTokens : null;
+        return { ...t, tokens, budgetTokens: cap, pct: cap === null ? null : tokens / cap };
+      })
+    };
   }
 
   /** The task ledger with its revision — the typed read every mutation path goes
@@ -2039,7 +2095,7 @@ export class HiveManager {
       this.appendLog({ kind: 'tasks-conflict', expectedRev, rev: current.rev });
       return false;
     }
-    const next: TaskLedger = { tasks, rev: current.rev + 1, updatedAt: new Date().toISOString() };
+    const next: TaskLedger = { tasks: tasks.map(stripDerivedTaskFields), rev: current.rev + 1, updatedAt: new Date().toISOString() };
     this.writeJson(join(root, 'tasks.json'), next);
     this.appendLog({ kind: 'tasks', count: tasks.length, rev: next.rev });
     this.commit(`hive: tasks (${tasks.length})`);
@@ -2859,6 +2915,36 @@ export class HiveManager {
     const cap = this.ledger().tasks.find((t) => t.id === taskId)?.budgetTokens;
     const budgetTokens = typeof cap === 'number' && cap > 0 ? cap : null;
     return { tokens, usd, budgetTokens, over: budgetTokens !== null && tokens > budgetTokens };
+  }
+
+  /**
+   * FLOOR-10 (#34) — the assignee's in-flight card as a breaker budget, or null
+   * when the agent has no card in flight or the card has no cap. ONE call, so
+   * the breaker beat's edit in `src/main/index.ts` is a single line:
+   * `budget: hive.budgetForAgent(id) ?? undefined`.
+   *
+   * The card is resolved through `activeTaskId()` — the SAME resolver
+   * `appendCostLedger` stamps `task_id` with — so the rows a card's spend was
+   * billed to and the card its cap is read from can never disagree.
+   *
+   * Null when `budgetTokens` is unset: no cap means no budget arm, never a
+   * surprise trip.
+   *
+   * Null, too, for a card that has left the board — and that is load-bearing
+   * rather than incidental. RECORD-03's accumulator is bounded by CARD LIFETIME
+   * (`pruneCostByTask`), which is the memory bound that replaced the deleted
+   * 1 MB tail window, so `taskSpend()` on an archived or deleted card answers
+   * ZERO. `activeTaskId()` only ever names a card that is 'doing' on the live
+   * board, so that zero can never reach the arm dressed as a live card sitting
+   * comfortably under its cap — which would recover an agent that had just been
+   * constrained, on a number that only means the card was archived.
+   */
+  budgetForAgent(agentId: string): { taskId: string; tokens: number; cap: number } | null {
+    const taskId = this.activeTaskId(agentId);
+    if (!taskId) return null;
+    const { tokens, budgetTokens } = this.taskSpend(taskId);
+    if (budgetTokens === null) return null;
+    return { taskId, tokens, cap: budgetTokens };
   }
 
   // — json + atomic io —

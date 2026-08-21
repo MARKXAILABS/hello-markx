@@ -81,7 +81,24 @@ test('patch refuses an unknown card without rewriting the ledger', (t) => {
   hive.writeTasks([card('existing')]);
 
   assert.equal(hive.patchTask('missing', { status: 'done' }), false);
-  assert.deepEqual(tasks(hive), [card('existing')]);
+
+  const after = hive.tasks();
+  assert.equal(after.rev, 1,
+    'the ledger revision advanced on a REFUSED patch, so the whole collection was written back '
+    + 'anyway — the #17 clobber this file exists for, and one no card-content check can see');
+  assert.deepEqual(after.tasks.map((c) => c.id), ['existing']);
+
+  // D-22 (#34): rows read back through `hive:tasks` now also carry the card's
+  // meter — `tokens` spent, the `budgetTokens` cap and `pct`. Those three are
+  // DERIVED per read, not card data (`writeTasks` strips them before persisting),
+  // so the card content is compared on its own and the meter is pinned beside it
+  // rather than the whole widened row being compared to a bare card literal.
+  const { tokens, budgetTokens, pct, ...persisted } = after.tasks[0];
+  assert.deepEqual(persisted, card('existing'),
+    'a refused patch changed the card that WAS there');
+  assert.deepEqual({ tokens, budgetTokens, pct }, { tokens: 0, budgetTokens: null, pct: null },
+    'an untouched card with no cap must meter as no spend and no cap — a null cap that reads '
+    + 'as 0 would put every capless card permanently over budget');
 });
 
 test('renderer task actions never send a whole stale ledger back to main', () => {
