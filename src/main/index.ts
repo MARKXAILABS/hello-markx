@@ -476,6 +476,30 @@ const delivery = new DeliveryService({
     const a = hive.registry().agents[agentId];
     return !!a && !a.archived;
   },
+  // Promote a genuine Slack-origin work item to a stamped kanban card the first
+  // time it is delivered, carrying the origin thread so the done-observer can
+  // post its one summary reply in-thread. This ran in the renderer's drain until
+  // FLOOR-02 moved the drain here — and a promotion that only happens when a
+  // window is open is exactly the class of hole this migration closes.
+  //
+  // `addTask` is a no-op on a colliding id, which is the whole reason the
+  // renderer version had to read `hiveTasks()` first. That read is gone with it.
+  // ADDITIVE + best-effort: a failure here must never affect a delivery that
+  // already happened.
+  onQueueDelivered: (item) => {
+    if (!item.slack || !hive.enabled()) return;
+    const title = item.text.length > 80 ? `${item.text.slice(0, 79)}…` : item.text;
+    hive.addTask({
+      id: `slack-${item.slack.thread_ts}-${item.id}`,
+      title,
+      description: item.text,
+      status: 'todo',
+      dependsOn: [],
+      priority: 1,
+      createdAt: new Date().toISOString(),
+      slack: item.slack
+    });
+  },
   breakerLevel: (agentId) => breaker.levelFor(agentId),
   // The DURABLE half of the idle-quiesce backstop (#5). `emit` below reaches a
   // renderer that may not exist — the whole point of moving the backstop out of

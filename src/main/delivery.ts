@@ -139,6 +139,16 @@ export interface DeliveryDeps {
    *  renderer sent (T-P08-05). Optional: a floor with no roster source accepts
    *  any id, exactly like `breakerLevel` reads every agent as healthy. */
   knownAgent?: (agentId: string) => boolean;
+  /**
+   * A queued message just landed in a terminal.
+   *
+   * Exists because the Slack-origin kanban card used to be promoted by the
+   * renderer, in the drain's `.then()` — and a card minted by the renderer is a
+   * card that is not minted with the window closed, which is the state this
+   * whole migration creates. `index.ts` owns the hive, so the promotion is wired
+   * there rather than teaching this file about task cards.
+   */
+  onQueueDelivered?: (item: QueuedDelivery) => void;
   /** Send an event to the renderer (a no-op when no window is attached). */
   emit: (channel: string, payload: unknown) => void;
   log?: (...args: unknown[]) => void;
@@ -549,6 +559,8 @@ export class DeliveryService {
         }
       );
       if (sent) {
+        try { this.deps.onQueueDelivered?.(item); }
+        catch (e) { this.log('post-delivery hook threw for', item.id, String(e)); }
         this.deps.emit('hive:queueDelivered', { to: a.agentId, id: item.id });
         return;
       }

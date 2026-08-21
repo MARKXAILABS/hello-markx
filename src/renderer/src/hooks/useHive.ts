@@ -191,40 +191,14 @@ function autonomyApi(): AutonomyApi {
   return window.cth as unknown as AutonomyApi;
 }
 
-/**
- * Promote a genuine Slack-origin work item to a stamped kanban card the first
- * time main delivers it to the office. The card carries slack:{channel,
- * thread_ts} (origin thread) so the main-process done-observer can post its one
- * summary reply in-thread once the card later reaches 'done'. ADDITIVE +
- * idempotent + best-effort: a failure here never affects the delivery that
- * already happened, and only dispatched work items land here (slash
- * commands/acks never do).
+/* Slack-origin kanban promotion MOVED TO MAIN with the drain (FLOOR-02).
+ * `ensureSlackCard` ran in the drain's `.then()`, so a Slack request delivered
+ * with the window closed would have landed in the terminal with no card behind
+ * it and nothing for the done-observer to reply into. It is now
+ * `onQueueDelivered` in `src/main/index.ts`, where the delivery happens. Its
+ * one-shot task read went with it: `hive.addTask` is already a no-op on a
+ * colliding id, which is the only thing that read was ever checking.
  */
-type SlackTaskCard = Parameters<typeof window.cth.hiveAddTask>[0];
-async function ensureSlackCard(m: QueuedMessage): Promise<void> {
-  const slack = m.slack;
-  if (!slack) return;
-  try {
-    const raw = await window.cth.hiveTasks();
-    const existing: SlackTaskCard[] =
-      raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)
-        ? (raw as { tasks: SlackTaskCard[] }).tasks
-        : [];
-    const id = `slack-${slack.thread_ts}-${m.id}`;
-    if (existing.some((t) => t.id === id)) return; // already promoted — no dup
-    const title = m.text.length > 80 ? `${m.text.slice(0, 79)}…` : m.text;
-    await window.cth.hiveAddTask({
-      id,
-      title,
-      description: m.text,
-      status: 'todo',
-      dependsOn: [],
-      priority: 1,
-      createdAt: new Date().toISOString(),
-      slack
-    });
-  } catch { /* best-effort: card promotion must never sink a delivery */ }
-}
 
 /** Wrap a user message as an enrich task for the assistant. The assistant's
  *  system prompt has the full instructions; this just frames the one task. */
@@ -762,156 +736,38 @@ export function useHive(config: HarnessConfig | null): void {
     });
   }, [config?.onboardingComplete]);
 
-  // 4) Drain each agent's queued messages to its terminal, one at a time, the
-  //    moment the agent goes idle. This is what lets the user keep sending
-  //    messages while the agent's "cloud terminal" is mid-run: the messages
-  //    park in the store and get typed in (and submitted) as soon as it's free.
+  // 4) THE QUEUE AND ITS DRAIN ARE MAIN'S NOW (#5 / FLOOR-02). About 150 lines
+  //    stood here: a `dispatch()` over `messageQueues`, an `inFlight` Set, a
+  //    `sendFailures` map, a per-agent flush cooldown, a send-attempt ceiling,
+  //    a 200 ms debounced store subscription and a 3 s backstop tick. All of it
+  //    died with the window - which is why a message typed into the composer was
+  //    NOT delivered with the floor closed, the exact stall #5 exists to end.
   //
-  //    STILL HERE after #5, on purpose. What moved into main is MAIN's autonomy —
-  //    the inbox wake, the Stop-hook drain and the failover respawn, all of which
-  //    used to die with this window. This queue is the opposite: it holds
-  //    messages the RENDERER produced (the composer, Slack ingress, the context
-  //    triggers, terminal work orders, the voice bridge), it lives in renderer
-  //    state, and main has no view of it — deleting this loop would have meant
-  //    nothing typed into the composer was ever delivered again.
+  //    The loop could never have moved on its own, and its own note here said so:
+  //    "it holds messages the RENDERER produced ... it lives in renderer state,
+  //    and main has no view of it". So the QUEUE moved. It is a file main owns
+  //    (`delivery-queue.json`, beside the hive's other live files), and the drain
+  //    moved with it onto the tick `src/main/delivery.ts` already runs, behind the
+  //    same idle / boot-grace / pause / veto guards and through the same single
+  //    `submit()` PTY gate - ADR-0001 intact, one writer, not two.
   //
-  //    The two writers coexist through the two halves of the #5 contract: this
-  //    loop reports the human's draft UP as a veto (effect 4b) so main's wake
-  //    respects it, and it asks main's own idle clock before typing (below) so it
-  //    never lands on top of what main just wrote — the child echoes those bytes,
-  //    so a PTY main is mid-write on does not read as quiet.
+  //    What is left here is a VIEW. Main pushes the whole queue on every mutation
+  //    and every delivery; the store applies it. The five producers (composer,
+  //    Slack ingress, context triggers, terminal work orders, voice bridge) are
+  //    untouched at their call sites - they still call `enqueueMessage`, which is
+  //    now an IPC forwarder rather than a store write. That is deliberate: the
+  //    store action is the renderer's ONE gate onto this path, exactly as its own
+  //    dedup comment argued, and a per-call-site rewrite would leave the next
+  //    producer someone adds free to write the slice directly again.
   useEffect(() => {
-    if (!config?.onboardingComplete) return;
-    const FLUSH_COOLDOWN_MS = 4500;
-    // A message that fails this many PTY writes (dead/crashed pty that the store
-    // still thinks is idle) is dropped WITH a console.warn — bounded so the drain
-    // never spins forever on a corpse, loud so the loss is diagnosable. (#113)
-    const MAX_SEND_ATTEMPTS = 3;
-    const inFlight = new Set<string>();
-    const sendFailures: Record<string, number> = {};
-
-    // Send the front of `srcId`'s queue into `target`'s pty (verbatim or wrapped),
-    // gated on the target being idle, free of interactive menus, and off
-    // cooldown. The queue item is acknowledged only after BOTH PTY writes
-    // succeed; failures stay visible and retry automatically (bounded by
-    // MAX_SEND_ATTEMPTS so the drain never spins forever on a corpse).
-    const dispatch = async (
-      srcId: string,
-      target: Agent | undefined,
-      wrap?: (m: QueuedMessage) => string
-    ): Promise<{ sent: boolean; message?: QueuedMessage }> => {
-      const { messageQueues, removeQueuedMessage } = useStore.getState();
-      const next = messageQueues[srcId]?.[0];
-      if (!next || !target?.ptyId || target.status !== 'idle') return { sent: false };
-      const now = Date.now();
-      // CLAIMED FIRST, before any await. Two flushes run concurrently by design
-      // (the store subscription and the 3 s backstop), and every await between
-      // "is this message already in flight?" and the claim is a window in which
-      // both pass that check and the head of the queue is typed in twice. Every
-      // exit below therefore goes through the finally that releases it.
-      const flightKey = `${srcId}:${next.id}`;
-      if (inFlight.has(flightKey)) return { sent: false };
-      inFlight.add(flightKey);
-      try {
-        const control = await window.cth.controlSnapshot(target.id);
-        // The pause gate holds everything EXCEPT messages the user explicitly
-        // released with "send now" (m.manual) — otherwise a paused floor leaves
-        // the queue with no escape hatch at all. Idle/draft/picker safety below
-        // still applies to manual messages; only the pause is bypassed.
-        if (control?.autoDeliveryPaused && !next.manual) return { sent: false };
-        // Hold queued messages until the target finishes its boot sequence.
-        if ((bootGraceUntil.current[target.id] ?? 0) >= now) return { sent: false };
-        // The user owns the prompt: a draft they are writing, or a menu they
-        // opened, holds delivery. Both blocks expire after half an hour, and when
-        // one does we simply type after whatever is there — automation never
-        // erases the user's text and never closes the user's menu.
-        if (!isTerminalAutomationSafe(target.ptyId, now)) return { sent: false };
-        if (now - (lastFlush.current[target.id] ?? 0) < FLUSH_COOLDOWN_MS) return { sent: false };
-        // #30 — THE IDLE GATE. `status === 'idle'` is an INFERENCE, and for any
-        // provider without hooks it is inferred from 4 s of terminal silence. Four
-        // seconds of silence in the middle of a long tool call is indistinguishable
-        // from four seconds of silence between turns, so this gate could type a
-        // message into the middle of one. Main tracks what the PTY has really been
-        // doing (`ptyManager.idleFor`) — the same handshake its own delivery loop
-        // gates on — so ask it instead of trusting the guess.
-        //
-        // Fails CLOSED: a missing probe (main's half absent), a rejected call, or
-        // `-1` (no live PTY for this agent) all hold the message. Holding one for
-        // another cooldown costs seconds; typing into a working terminal corrupts a
-        // turn, and the two mistakes are not worth the same.
-        const idleMs = await autonomyApi().ptyIdleFor?.(target.id).catch(() => -1);
-        if (!(typeof idleMs === 'number' && idleMs >= PTY_QUIET_MS)) return { sent: false };
-        lastFlush.current[target.id] = now;
-        const sent = await deliverWithAcknowledgement(
-          // `instruction` (when present) is the authoritative text to type into
-          // the PTY; UI/card surfaces continue to show the readable `text`.
-          () => submitToPty(
-            target.ptyId!,
-            wrap ? wrap(next) : (next.instruction ?? next.text),
-            inferAgentProvider(target.command, target.provider)
-          ),
-          () => {
-            removeQueuedMessage(srcId, next.id);
-            // Zero the gauge on a DELIVERED /clear — the new session's context
-            // isn't known until statusLine fires after the first post-clear
-            // response, so leaving it at the old value shows a stale-full bar.
-            if (next.text.trim().toLowerCase() === '/clear') {
-              useStore.getState().updateAgent(target.id, {
-                contextTokens: 0,
-                contextLimit: undefined,
-                progress: 0
-              });
-            }
-          }
-        );
-        if (sent) {
-          delete sendFailures[next.id];
-          return { sent: true, message: next };
-        }
-        // Failed write (dead/crashed pty the store still thinks is idle): retry
-        // on the next cooldown-spaced flush, but only MAX_SEND_ATTEMPTS times —
-        // then drop LOUDLY so the loss is diagnosable. (#113/#36)
-        const attempts = (sendFailures[next.id] ?? 0) + 1;
-        sendFailures[next.id] = attempts;
-        if (attempts >= MAX_SEND_ATTEMPTS) {
-          delete sendFailures[next.id];
-          removeQueuedMessage(srcId, next.id);
-          console.warn(
-            `[queue-drain] dropping message ${next.id} for ${target.id} after ${attempts} failed pty writes ` +
-            `("${next.text.slice(0, 80)}${next.text.length > 80 ? '…' : ''}")`
-          );
-        }
-        return { sent: false };
-      } finally {
-        inFlight.delete(flightKey);
-      }
-    };
-
-    const flush = () => {
-      const { agents, messageQueues } = useStore.getState();
-      const byId = (id: string) => agents.find((a) => a.id === id);
-
-      for (const a of agents) {
-        if (!a.ptyId || a.status !== 'idle') continue;
-        if (!messageQueues[a.id]?.length) continue;
-        void dispatch(a.id, a).then(({ sent, message }) => {
-          if (sent && message?.slack) void ensureSlackCard(message);
-        });
-      }
-    };
-
-    // Run on every store change (status flips, new queue items) — debounced so a
-    // burst of pty-stream updates coalesces — plus a periodic backstop.
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    const schedule = () => {
-      if (debounce) return;
-      debounce = setTimeout(() => { debounce = null; flush(); }, 200);
-    };
-    const unsub = useStore.subscribe(schedule);
-    const iv = setInterval(flush, 3000);
-    schedule();
-    return () => { unsub(); if (debounce) clearTimeout(debounce); clearInterval(iv); };
-  }, [config?.onboardingComplete]);
+    const off = window.cth.onHiveQueue?.((queues) => { useStore.getState().setQueues(queues); });
+    // Pull once as well: a reloaded window subscribes AFTER main may already have
+    // pushed, and a timer that re-asks is the thing #20/FLOOR-11 just deleted.
+    void window.cth.hiveQueue?.({ op: 'list' }).then((r) => {
+      if (r.queues) useStore.getState().setQueues(r.queues);
+    }).catch(() => { /* main's half absent - the view stays empty, nothing breaks */ });
+    return off;
+  }, []);
 
   // 4b) THE VETO (#5). The renderer keeps its draft/picker gate — it is the only
   //     party that can see the xterm buffer and the user's keystrokes — but only

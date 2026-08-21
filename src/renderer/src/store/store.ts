@@ -6,7 +6,7 @@ import type { StatusKind } from '@/components/PixelBadge';
 import type { AgentProvider } from '@shared/agentProvider';
 import type { HireManifest } from '@shared/hire';
 import { DEFAULT_ORG_TRIGGER, type OrgTriggerConfig, type WebhookTrigger } from '@shared/triggers';
-import { isCompactionCommand } from '@shared/providerAutomation';
+import type { QueueOp } from '@shared/queueDelivery';
 import { patchChangesAgent, touchesDurableAgentField } from './agentPatch';
 
 export type ToolKind =
@@ -288,6 +288,10 @@ interface State {
   releaseQueuedMessage: (agentId: string, messageId: string) => void;
   /** Clear an agent's entire pending queue. */
   clearQueue: (agentId: string) => void;
+  /** Apply main's queue snapshot. FLOOR-02: main owns the delivery queue, this
+   *  slice is a VIEW, and this is the only writer of it. Fed by the push on
+   *  `hive:queue` and by the one-shot pull in useHive effect #4. */
+  setQueues: (queues: Record<string, QueuedMessage[]>) => void;
   setAddAgentOpen: (open: boolean) => void;
   /** A validated hire manifest waiting to pre-fill the Add-Agent modal. */
   pendingHire: HireManifest | null;
@@ -500,6 +504,34 @@ function loadPersistedRestorable(): Agent[] {
   }
 }
 
+/**
+ * Ask MAIN to mutate the delivery queue, and apply the snapshot it hands back.
+ *
+ * FLOOR-02 — the queue is main's now (`delivery-queue.json` beside the hive) and
+ * so is the drain, which is what makes a message composed here reach its
+ * recipient with the window closed. The renderer's copy is a VIEW: this is the
+ * ONE place it asks for a change, and `setQueues` is the one place it accepts
+ * one, from this reply or from main's push (`hive:queue`).
+ *
+ * Fire-and-forget on purpose. Every caller is a UI action whose only failure
+ * mode is "main declined" (an unknown agent, a full queue, no harness home) and
+ * whose recovery is the next push, so a rejected promise must not become an
+ * unhandled rejection inside a click handler.
+ */
+function queueOp(op: QueueOp): void {
+  try {
+    void window.cth?.hiveQueue?.(op)
+      .then((r) => { if (r?.queues) useStore.setState({ messageQueues: r.queues }); })
+      .catch(() => { /* main's half absent — the next push corrects the view */ });
+  } catch { /* no preload (unit tests) */ }
+}
+
+/** DEAD on the delivery path since FLOOR-02, and deliberately left that way
+ *  rather than deleted: `rosterMirror.queues` is still seeded from the persisted
+ *  copy at boot, so `roster.json` keeps the messages parked before the migration
+ *  until main adopts them (`adoptRendererQueues` in index.ts). Writing it again
+ *  from here would give one fact two owners, which is the failure the migration
+ *  exists to end. */
 function persistQueues(queues: Record<string, QueuedMessage[]>): void {
   try {
     // Only keep non-empty queues so the key stays small.
@@ -605,7 +637,11 @@ export const useStore = create<State>((set) => ({
   sidebarWidth: initialSidebarWidth,
   sidebarTab: initialSidebarTab,
   godStatus: 'booting',
-  messageQueues: initialQueues,
+  // A VIEW of main's queue, filled by `setQueues` from main's push and from the
+  // one-shot pull in useHive effect #4. Deliberately NOT seeded from
+  // localStorage: main is the owner, and a stale local copy would render
+  // messages it has already delivered.
+  messageQueues: {},
   toolCounts: {},
   bumpToolCount: (id) =>
     set((s) => ({ toolCounts: { ...s.toolCounts, [id]: (s.toolCounts[id] ?? 0) + 1 } })),
@@ -687,7 +723,7 @@ export const useStore = create<State>((set) => ({
       const { [id]: _queueGone, ...messageQueues } = s.messageQueues;
       const selectedId = s.selectedId === id ? (agents[0]?.id ?? null) : s.selectedId;
       persistAgents(agents, selectedId);
-      if (_queueGone) persistQueues(messageQueues);
+      if (_queueGone) queueOp({ op: 'clear', agentId: id }); // main owns the queue
       return { agents, feeds, selectedId, messageQueues };
     }),
   archiveAgent: (id) =>
@@ -711,7 +747,7 @@ export const useStore = create<State>((set) => ({
       const selectedId = s.selectedId === id ? (agents[0]?.id ?? null) : s.selectedId;
       persistAgents(agents, selectedId);
       persistArchived(archivedAgents);
-      if (_queueGone) persistQueues(messageQueues);
+      if (_queueGone) queueOp({ op: 'clear', agentId: id }); // main owns the queue
       return { agents, archivedAgents, feeds, selectedId, messageQueues };
     }),
   removeArchivedAgent: (id) =>
@@ -769,63 +805,34 @@ export const useStore = create<State>((set) => ({
   // one careless mutation rewrites the default for everyone.
   orgTrigger: { ...DEFAULT_ORG_TRIGGER },
   setOrgTrigger: (cfg) => set({ orgTrigger: cfg }),
-  enqueueMessage: (agentId, text, meta) =>
-    set((s) => {
-      const trimmed = text.trim();
-      if (!trimmed) return s;
-      // ONE PENDING COMPACT PER AGENT. Compaction is idempotent in the worst way:
-      // the first `/compact` does the work and every one behind it answers
-      // "nothing to compact", so a queue that accumulates them spends a delivery
-      // slot and a model round-trip per copy to achieve nothing, and buries the
-      // operator's real backlog behind them.
-      //
-      // The invariant lives HERE rather than at the call sites because there are
-      // several — the context trigger, god dispatching a work order, Slack, the
-      // composer — and each one that grew its own check could still be bypassed
-      // by the next path someone adds. The context trigger's own check stays as
-      // cheap defence in depth, but this is the one that cannot be routed around.
-      const queued = s.messageQueues[agentId] ?? [];
-      if (isCompactionCommand(trimmed) && queued.some((m) => isCompactionCommand(m.text))) {
-        return s;
-      }
-      const msg: QueuedMessage = {
-        id: newQueuedId(), text: trimmed, ts: Date.now(),
-        ...(meta?.slack ? { slack: meta.slack } : {}),
-        ...(meta?.instruction ? { instruction: meta.instruction } : {})
-      };
-      const messageQueues = { ...s.messageQueues, [agentId]: [...(s.messageQueues[agentId] ?? []), msg] };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
-  removeQueuedMessage: (agentId, messageId) =>
-    set((s) => {
-      const current = s.messageQueues[agentId];
-      if (!current) return s;
-      const next = current.filter((m) => m.id !== messageId);
-      const messageQueues = { ...s.messageQueues, [agentId]: next };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
-  releaseQueuedMessage: (agentId, messageId) =>
-    set((s) => {
-      const current = s.messageQueues[agentId];
-      const target = current?.find((m) => m.id === messageId);
-      if (!current || !target) return s;
-      const next = [
-        { ...target, manual: true },
-        ...current.filter((m) => m.id !== messageId)
-      ];
-      const messageQueues = { ...s.messageQueues, [agentId]: next };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
-  clearQueue: (agentId) =>
-    set((s) => {
-      if (!s.messageQueues[agentId]?.length) return s;
-      const messageQueues = { ...s.messageQueues, [agentId]: [] };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
+  // ─── The delivery queue: MAIN owns it, these ASK (FLOOR-02) ──────────────
+  //
+  // These four were the renderer's writes into its own `messageQueues` slice,
+  // which is exactly what made them die with the window. They are forwarders
+  // now, and every producer call site is untouched on purpose: the store action
+  // has always been the renderer's ONE gate onto this path — the reason its own
+  // one-pending-compact invariant lived here rather than at the several
+  // producers — so repointing the gate repoints every producer, including the
+  // next one someone adds.
+  //
+  // That invariant went WITH the queue, to `DeliveryService.enqueue`. Leaving it
+  // here would have made it advisory: two producers can both read a stale view
+  // in the window between their enqueue and main's push back.
+  enqueueMessage: (agentId, text, meta) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    queueOp({
+      op: 'enqueue',
+      agentId,
+      text: trimmed,
+      ...(meta?.slack ? { slack: meta.slack } : {}),
+      ...(meta?.instruction ? { instruction: meta.instruction } : {})
+    });
+  },
+  removeQueuedMessage: (agentId, messageId) => queueOp({ op: 'remove', agentId, id: messageId }),
+  releaseQueuedMessage: (agentId, messageId) => queueOp({ op: 'release', agentId, id: messageId }),
+  clearQueue: (agentId) => queueOp({ op: 'clear', agentId }),
+  setQueues: (queues) => set({ messageQueues: queues }),
   reconcileWithLivePtys: (livePtyIds) =>
     set((s) => {
       const live = new Set(livePtyIds);

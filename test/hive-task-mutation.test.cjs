@@ -106,5 +106,20 @@ test('renderer task actions never send a whole stale ledger back to main', () =>
   assert.match(sources[0], /hivePatchTask\s*\(/);
   assert.match(sources[1], /hivePatchTask\s*\(/);
   assert.match(sources[2], /hiveDeleteTask\s*\(/);
-  assert.match(sources[3], /hiveAddTask\s*\(/);
+  // FLOOR-02 moved the Slack-origin kanban promotion OUT of useHive.ts — it
+  // lived in the drain's `.then()`, and the drain is main's now — into main's
+  // `onQueueDelivered`. A card minted by the renderer is a card that is NOT
+  // minted with the window closed, which is the exact hole that migration exists
+  // to close, so the anchor follows the behaviour rather than being dropped.
+  // The contract this test guards is untouched: nothing writes a whole ledger.
+  assert.doesNotMatch(sources[3], /hiveAddTask\s*\(/,
+    'the Slack-origin card promotion belongs to main now; a renderer that mints it does not mint it with the window closed');
+  const hook = main.indexOf('onQueueDelivered:');
+  assert.ok(hook > 0,
+    'main lost its post-delivery hook — Slack-origin work would stop becoming a kanban card at all');
+  // Sliced to that hook's own block: index.ts is ~5,600 lines and already calls
+  // hive.addTask inside the `hive:addTask` IPC handler, so an unsliced match
+  // here would stay green with the promotion deleted.
+  assert.match(main.slice(hook, main.indexOf('\n  },', hook)), /hive\.addTask\(/,
+    "main's Slack-origin promotion must go through the atomic addTask, never a whole-ledger rewrite");
 });

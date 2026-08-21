@@ -6,7 +6,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const loadTs = require('./load-ts.cjs');
+
+const { MAX_QUEUED_PER_AGENT } = loadTs('src/shared/queueDelivery.ts');
 
 const {
   DeliveryService,
@@ -346,6 +352,195 @@ test('a failed PTY write leaves the message unclaimed so the next sweep retries'
   state.writeOk = true;
   await svc.tick();
   assert.ok(writes.length > 0, 'a message lost to a dead PTY was never retried');
+});
+
+// ─── the MD queue, with no window attached (FLOOR-02) ───────────────────────
+//
+// ROADMAP criterion 1's headline clause: "with the app window closed, a message
+// composed in the UI still reaches its recipient's inbox and is typed into that
+// agent's terminal". Before this migration the queue and its drain lived in
+// `useHive.ts` and every one of these tests was unwritable — there was nothing
+// in main to drive.
+//
+// `emit` is a genuine no-op in these tests, which is what main's emit IS with no
+// webContents: `try { liveWebContents()?.send(...) } catch {}`. Nothing below may
+// depend on a renderer receiving anything.
+
+/** A queue rooted in its own temp dir, torn down whatever the body does. */
+function withQueueDir(body) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-delivery-queue-'));
+  try {
+    return body({ dir, queuePath: path.join(dir, 'delivery-queue.json') });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The child that plays "the app restarted": a genuinely separate
+ *  `process.execPath`, a FRESH DeliveryService over the same file, its own fakes,
+ *  and the pending message ids on stdout as JSON. A `fork()`ed worker sharing
+ *  module state, a `vm` context or `delete require.cache` would prove nothing —
+ *  the point is that the bytes, not the process, carry the queue. */
+const RESTART_CHILD = `
+const loadTs = require(${JSON.stringify(path.join(__dirname, 'load-ts.cjs'))});
+const { DeliveryService } = loadTs('src/main/delivery.ts');
+const svc = new DeliveryService({
+  liveAgents: () => [],
+  inbox: () => [],
+  write: () => ({ ok: true }),
+  paused: () => true,
+  drain: () => ({ block: false }),
+  respawn: () => Promise.resolve({ ok: true }),
+  queuePath: () => process.argv[2],
+  emit: () => {},
+  log: () => {}
+});
+const pending = Object.values(svc.queueSnapshot()).flat().map((m) => m.id);
+process.stdout.write(JSON.stringify(pending));
+`;
+
+test('a message enqueued through main is typed into the recipient PTY with NO window attached', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];   // isolate: no unread mail, so the wake nudge cannot be the writer
+
+    const res = svc.enqueue({ agentId: 'dev1', text: 'ship the release notes' });
+    assert.equal(res.ok, true, res.error);
+    await svc.tick();
+
+    assert.match(typed(writes), /ship the release notes/, 'the queued message never reached the PTY');
+    assert.equal(writes.at(-1).data, '\r', 'the message was typed but never submitted');
+  });
+});
+
+test("the human's draft still vetoes a queued delivery — the renderer keeps exactly that job", async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'do not land on my half-typed line' });
+
+    svc.setVeto('dev1', 'user is mid-draft');
+    await svc.tick();
+    assert.equal(writes.length, 0, 'a queued message landed on top of the human draft');
+
+    svc.setVeto('dev1', null);
+    bump(10_000);
+    await svc.tick();
+    assert.match(typed(writes), /half-typed line/, 'clearing the veto did not release the queued message');
+  });
+});
+
+test('enqueue-and-tick twice writes ONCE — a delivered message leaves the queue', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'exactly once please' });
+
+    await svc.tick();
+    const after1 = writes.length;
+    assert.ok(after1 > 0, 'nothing was delivered at all');
+
+    // Past the per-agent cooldown, so a second write is genuinely un-gated here:
+    // without the queue removal this tick WOULD type the message again.
+    bump(10_000);
+    await svc.tick();
+    assert.equal(writes.length, after1, 'the same queued message was typed in twice');
+    assert.deepEqual(svc.queueSnapshot(), {}, 'a delivered message was left in the queue');
+  });
+});
+
+test('an operator pause holds a queued message, and "send now" releases it', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    state.paused.add('dev1');
+    const { id } = svc.enqueue({ agentId: 'dev1', text: 'held by the floor switch' });
+
+    await svc.tick();
+    assert.equal(writes.length, 0, 'a paused floor delivered anyway');
+
+    svc.releaseQueued('dev1', id);
+    bump(10_000);
+    await svc.tick();
+    assert.match(typed(writes), /held by the floor switch/, '"send now" did not bypass the pause');
+  });
+});
+
+test('the enqueue boundary refuses what it cannot trust', () => {
+  withQueueDir(({ queuePath }) => {
+    const { svc } = harness({
+      queuePath: () => queuePath,
+      emit: () => {},
+      knownAgent: (id) => id === 'dev1'
+    });
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: '   ' }).ok, false, 'an empty message was parked');
+    assert.equal(svc.enqueue({ agentId: '', text: 'hi' }).ok, false, 'a blank agent id was accepted');
+    // T-P08-05: the recipient is resolved against MAIN's roster, not the id a
+    // renderer happened to send.
+    assert.equal(svc.enqueue({ agentId: 'not-on-this-floor', text: 'hi' }).ok, false,
+      'a renderer named an agent that is not on this floor and main typed at it');
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'hi' }).ok, true);
+  });
+});
+
+test('a message enqueued and not yet delivered survives a REAL process restart', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    // 1. Parent: park a message and hold it (the floor is paused, so nothing
+    //    delivers), then assert on the BYTES before any restart. This is the
+    //    assertion a module-level Map cannot pass, and it is deliberately a
+    //    separate, earlier failure point than the reload below.
+    const { svc, state } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    state.paused.add('dev1');
+    const { ok, id } = svc.enqueue({ agentId: 'dev1', text: 'survive the restart' });
+    assert.equal(ok, true);
+
+    assert.equal(fs.existsSync(queuePath), true, 'the queue wrote no bytes to disk at all');
+    const onDisk = fs.readFileSync(queuePath, 'utf8');
+    assert.ok(onDisk.includes(id), `the queue file does not contain ${id}: ${onDisk}`);
+
+    // 2. Restart: a genuinely separate process, a fresh service, the same file.
+    const child = path.join(dir, 'restart-child.cjs');
+    fs.writeFileSync(child, RESTART_CHILD, 'utf8');
+    const res = spawnSync(process.execPath, [child, queuePath], { encoding: 'utf8' });
+    assert.equal(res.status, 0, `restart child exited ${res.status}: ${res.stderr}`);
+
+    // 3. The SPECIFIC message, not merely "the queue is non-empty".
+    assert.deepEqual(JSON.parse(res.stdout), [id],
+      `a fresh process did not read back the parked message (stdout: ${res.stdout})`);
+
+    // NEGATIVE CONTROL. Delete the file and run the same child again: if the
+    // message is still there, it is being served from somewhere that is not the
+    // bytes, and this test has been proving nothing.
+    fs.rmSync(queuePath);
+    const gone = spawnSync(process.execPath, [child, queuePath], { encoding: 'utf8' });
+    assert.equal(gone.status, 0, `negative-control child exited ${gone.status}: ${gone.stderr}`);
+    assert.deepEqual(JSON.parse(gone.stdout), [],
+      'the queue survived deletion of its own file — it is not reading the disk');
+  });
+});
+
+test('the queue is durable across a changed harness home, and bounded per agent', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    let target = queuePath;
+    const { svc, state } = harness({ queuePath: () => target, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'hive one' });
+
+    // The thunk is the point: a path captured at construction would keep writing
+    // the first hive's queue into the second hive's file.
+    target = path.join(dir, 'other-hive-queue.json');
+    assert.deepEqual(svc.queueSnapshot(), {}, 'a second hive was handed the first hive\'s queue');
+    svc.enqueue({ agentId: 'dev1', text: 'hive two' });
+    assert.ok(fs.readFileSync(target, 'utf8').includes('hive two'));
+    assert.ok(fs.readFileSync(queuePath, 'utf8').includes('hive one'), 'the first hive\'s file was clobbered');
+
+    // T-P08-04: an agent with no live PTY must not accumulate forever.
+    for (let i = 0; i < MAX_QUEUED_PER_AGENT; i++) svc.enqueue({ agentId: 'dev1', text: `spam ${i}` });
+    const full = svc.enqueue({ agentId: 'dev1', text: 'one too many' });
+    assert.equal(full.ok, false, 'the queue grew past its ceiling');
+    assert.match(full.error, /queue full/);
+  });
 });
 
 // ─── board.md size policy (#35) ─────────────────────────────────────────────
