@@ -1,30 +1,32 @@
-# CodeFlow Snapshot — pre-exec
+# CodeFlow Snapshot — baseline
 
 - **Project:** `e:\munder-difflin`
-- **Captured:** 2026-08-20T22:33:10.068Z
+- **Captured:** 2026-08-21T12:01:17.708Z
 
 ## Health
 
-- **Score:** 63/100 (Grade D)
-- **Files analyzed:** 326 (273 code, 53 other)
-- **Functions:** 1329
+- **Score:** 62/100 (Grade D)
+- **Files analyzed:** 337 (283 code, 54 other)
+- **Functions:** 1393
 - **Unused functions:** 15
-- **Connections:** 2302
+- **Connections:** 2487
 
 ## Architecture Issues
 
 - **Circular dependencies:** 0
-- **Layer violations:** 255
-- **Duplicate / similar blocks:** 10
+- **Layer violations:** 272
+- **Duplicate / similar blocks:** 12
 - **Dead functions:** 15
 
 ## Security
 
-- **HIGH:** 32
-- **MEDIUM:** 36
-- **LOW / other:** 16
+- **HIGH:** 36
+- **MEDIUM:** 41
+- **LOW / other:** 18
 
 ### HIGH severity findings (top 10)
+- `e2e/p18-harness/entry.tsx:77` — finding
+- `e2e/p18-harness/entry.tsx:84` — finding
 - `resources/skills/md-hive-sync/SKILL.md` — finding
 - `src/main/config.ts:523` — finding
 - `src/main/config.ts:524` — finding
@@ -33,8 +35,6 @@
 - `src/main/hive.ts` — finding
 - `src/main/hive.ts` — finding
 - `src/main/memory.ts` — finding
-- `src/main/pty.ts` — finding
-- `src/main/shellEnv.ts` — finding
 
 ## Patterns in use
 
