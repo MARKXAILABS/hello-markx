@@ -78,3 +78,29 @@ Out-of-scope discoveries found while executing a plan. Logged, not fixed.
   the flag's behaviour is unchanged and `notify()` is still the single gate — but the comment now
   under-describes its reach. `src/main/config.ts` is not in 01-13's `files_modified` and is owned by
   other plans. Owner: whichever plan next holds `src/main/config.ts`.
+
+- **The two Pixi canvas labels clear `FONT_SIZE = 14` but render at 7px on screen.** Found by 01-14
+  while executing UI-SPEC's Rule 3. `ThoughtBubble.ts` and `ToolBubble.ts` both render their `Text`
+  inside a container held at `RENDER_SCALE = 0.5` (`ThoughtBubble.ts:76`, `ToolBubble.ts:71`) — the
+  classic render-at-2x-and-scale-down supersampling trick — and every on-screen dimension in those
+  files is computed as `bgW * RENDER_SCALE` (`ThoughtBubble.ts:163-165`). So the DESIGNED on-screen
+  text size is `FONT_SIZE * RENDER_SCALE`: **6px before 01-14, 7px after**. UI-SPEC's Rule 3 and
+  01-14's own criterion both pin the literal `FONT_SIZE = 14`, and 01-14 landed exactly that — but
+  the requirement behind it ("at or above 14 on screen") is NOT met at these two sites.
+  **Why 01-14 did not just set 28.** A true 14px on-screen label needs `FONT_SIZE / RENDER_SCALE`
+  = 28 in inner space, which at the current `WRAP_WIDTH` (288) drops the bubble from ~40 characters
+  per line to ~17 and turns `MAX_CHARS = 160` into a ten-line cloud floating over an 18x28 sprite.
+  Making that legible means re-geometrying `MAX_WIDTH`, `MAX_CHARS` and the overlap-resolution pass
+  — a redesign of the office floor's bubbles, which UI-SPEC's containment rule calls step 3 ("stop
+  and report") and which the phase contract's "no new visual language, no redesign" forbids.
+  Owner: a plan that may change the floor's bubble geometry. **Plan 23 must NOT read FLOOR-12's
+  clause-4 as unconditionally true on the strength of `grep -c "FONT_SIZE = 14"`.**
+
+- **`ToolBubble`'s exported class has zero consumers and is tree-shaken out of the shipped bundle.**
+  Verified at 01-14: `grep -rn "ToolBubble" src --include=*.ts --include=*.tsx` outside the file
+  itself returns only `ThoughtBubble.ts:3`, which imports `toolIcon` alone. `class ToolBubble` does
+  not appear in `out/renderer/assets/index-*.js` after `npm run build`. So `ToolBubble.ts`'s
+  `FONT_SIZE` is dead at runtime and its FLOOR-12 sweep is correct-but-inert. Deleting the class is
+  not one of the six requirements and is outside 01-14's authorised action, so it was swept as
+  specified and recorded here instead. Owner: a later cleanup plan, or leave it — but do not cite it
+  as evidence that a 14px label ships on the floor.
