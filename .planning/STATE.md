@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-05-PLAN.md (FLOOR-11: five hiveTasks pollers collapsed onto useHiveTasks; the roster-re-render and bounded-pool clauses verified already-shipped and audited, not rebuilt; test/repo-claims.test.cjs created with 3 RED-proven clauses; proc-kill's win32 silent pass closed). CI green on PR #77 at 0579387, all six jobs. B-repo-claims = 3. FLOOR-11's 'looks identical' half is NOT operator-verified — see Blockers."
-last_updated: "2026-08-21T02:42:24.735Z"
+stopped_at: "Completed 01-06-PLAN.md (RECORD-03/04 arithmetic + FLOOR-09 sink + GATE-01 sidecar). CI green on PR #77 at 840c36e, all six jobs; ubuntu/macos 454 tests 454 pass 0 skipped, windows 454/450/4 skipped. B-pass-hp 17->19, B-pass-ep 14->19, B-gau 6->15. Shim coverage 1 1 0 0 0 1 -> 1 1 1 1 1 1. FLOOR-09 NOT closed - 01-08 task 6 owns the index.ts line."
+last_updated: "2026-08-21T03:32:10.689Z"
 last_activity: 2026-08-21
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 23
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 01 (finish-the-floor) — EXECUTING
-Plan: 5 of 23
+Plan: 6 of 23
 Status: Ready to execute
 Last activity: 2026-08-21
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [██░░░░░░░░] 17%
+Progress: [██░░░░░░░░] 22%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [██░░░░░░░░] 17%
 | Phase 01 P03 | 1h05m | 3 tasks | 3 files |
 | Phase 01 P04 | 1h50m | 4 tasks | 13 files |
 | Phase 01 P05 | 55m | 3 tasks | 10 files |
+| Phase 01 P06 | 3h15m | 4 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,10 @@ Recent decisions affecting current work:
 - [Phase 01-04]: FLOOR-06's live 'gh attestation verify' sample is OUTSTANDING, not claimed — the publish job is gated on refs/tags/v*, no tag has been pushed since, so provenance is verified structurally (parsed test over step/input/permissions/ordering) and NOT end-to-end. Plan 23 must not tick FLOOR-06 on structural evidence alone
 - [Phase 01-05]: the hook header's 'delete the local useState' was followed in 1 of 5 files, not 5 — AskMeTab/TaskDetailOverlay/TasksKanban each write to local tasks optimistically before the disk round trip (dismiss, sendAnswer, move), so deriving straight off the shared payload would leave a dismissed card on the board for up to 5s. That is a rendered-output change and UI-SPEC's FLOOR-11 contract calls it a regression. Timers deleted, state kept. AgentStrip has no local mutation, so there the header was followed literally
 - [Phase 01-05]: the durable FLOOR-11 guard in test/repo-claims.test.cjs is NOT the literal 'setInterval in the same effect as hiveTasks()' check the plan specifies — a textual same-effect test would have missed 3 of the 5 real sites, because AskMeTab/TaskDetailOverlay/TasksKanban each defined refresh in a useCallback OUTSIDE the effect and passed the identifier in. Implemented instead as a per-file rule with one reasoned allowlist entry (hooks/useHive.ts) whose hiveTasks() call-site COUNT is pinned. Proven by driving it RED against two of those exact three files
+- [Phase 01-06]: FLOOR-09 is a SPLIT and 01-06 is the OPENING half only — the recordCost sink is minted on HookServer and proven at runtime through a real hook socket, but grep -c recordCostSample src/main/index.ts is still 0. The one-argument injection is 01-08 TASK 6's, in wave 4, recorded verbatim in 01-06-SUMMARY.md under the heading 'T-INDEX HANDOFF → 01-08 (FLOOR-09)'. Not plan 07, not plan 09.
+- [Phase 01-06]: the first ledger row of an (agent_id, session_id) series bills its OWN value, not zero — the series began at zero so all of it was spent after that zero, and zeroing it silently loses every card that starts and finishes inside one ~30s beat. Later rows are max(0, now - previous); the clamp is a consecutive diff and NOT a high-water mark, because after telemetry.forget() the collector genuinely restarts at zero and the re-climb IS new spend.
+- [Phase 01-06]: HookServer's own constructor registers itself as HiveManager's hook-token source (setHookTokenSource), rather than handing a SECOND line to whoever owns index.ts — the sidecar is not a PTY so PtyManager's mint never sees it, and HiveManager's constructor takes only getHome and emit. This keeps the FLOOR-09 argument as the only T-INDEX handoff from this plan.
+- [Phase 01-06]: the hive's git suppression is core.hooksPath on BOTH wrappers, not --no-verify on commit — --no-verify covers only pre-commit/commit-msg, leaves post-commit running, and would need repeating at seven call sites. Proven behaviourally (a sentinel-writing .git/hooks/pre-commit must not fire) rather than by asserting the flag, because /dev/null is airtight on POSIX and weaker on win32.
 
 ### Pending Todos
 
@@ -155,6 +160,10 @@ Recent decisions affecting current work:
 - FLOOR-11's 'no visual change' clause is verified by SOURCE REASONING plus a green E2E Electron smoke (which mounts AgentStrip and asserts the MICHAEL card renders) — NOT by watching the app. Nobody opened the Tasks board, the detail overlay or the kanban with a live ledger. Plan 23 must not tick FLOOR-11 on that alone: run 'npm run dev', open the Tasks board and the office floor, and confirm task data still updates and looks identical. Owner: operator, before plan 23.
 - ADR-0006 pointer blocker filed by 01-04 is CLOSED: both source comments landed in 01-05 (terminalPool.ts header, terminalPoolPolicy.ts header). terminalPoolPolicy.ts received EXACTLY one line and nothing else. Later owners of these two files must not revert either comment.
 - FLOOR-11 deliberately left PENDING in REQUIREMENTS.md, not Complete — matching 01-02 (GATE-01) and 01-04 (FLOOR-06/17): plan 23 owns the checkboxes. All three of its clauses have real evidence (roster-re-render and bounded-pool verified already-shipped + audited + pinned by test/renderer-runstate.test.cjs; the N-pollers clause closed by adoption and pinned by test/repo-claims.test.cjs, green on three platforms at 0579387). The one thing NOT observed is the 'no visual change' contract on the migration. Tick it after the operator run named in the blocker above.
+- FLOOR-09 IS NOT CLOSED. 01-06 minted the recordCost sink on HookServer and proved it at runtime (a CostSample posted at the real hook socket read back out of a real TelemetryCollector's getAgentUsage, with a red negative control), but grep -c recordCostSample src/main/index.ts is 0 at 840c36e. The one-line production injection is 01-08 TASK 6's, wave 4 — reproduced verbatim in 01-06-SUMMARY.md under the exact heading 'T-INDEX HANDOFF → 01-08 (FLOOR-09)'. Plan 10 task 5 hard-gates it in wave 5; plan 23 pins it in wave 9. It is NOT plan 07's and NOT plan 09's.
+- RECORD-03/RECORD-04/FLOOR-09/GATE-01 deliberately left Pending in REQUIREMENTS.md by 01-06, matching the 01-02/01-04/01-05 precedent: plan 23 owns the checkboxes. RECORD-03 and RECORD-04 have full runtime evidence (whole-ledger clamped-diff arithmetic; a restart proven across a real spawnSync(process.execPath) boundary with a negative control). GATE-01's sidecar hole is closed and shim coverage is 1 1 1 1 1 1. FLOOR-09 must NOT be ticked until 01-08 task 6 lands.
+- QWEN SIDECAR DEAD-HOOKED UNTIL 01-06 is CLOSED at 840c36e: startProxyBridge carries a per-agent token minted through HookServer's registry (not process.env), and PROXY_BRIDGE_SHIM/PI_EXTENSION/OPENCODE_PLUGIN now send sock_token — coverage 1 1 0 0 0 1 -> 1 1 1 1 1 1, proven in the BYTES by running the bootstrapped shim file against a socket. Those three were dead-hooked AT HEAD, before this phase: a pre-existing defect this task closed, not one the phase introduced. Plan 23 needs that attribution.
+- cost-ledger.jsonl is NOT rotated. 01-06-PLAN's T-P06-05 accepts the startup rescan on the premise the file is 'already bounded by LOG_ROTATE_BYTES' — measured false: LOG_ROTATE_BYTES applies only to log.jsonl. The scan is over an unbounded file, once per process. Recorded alternative: PersistStore's cost_ledger table, one SUM(...) GROUP BY task_id. RECORD-02 (Phase 4) owns ledger retention. Also: taskSpend() on a card no longer on the board now returns 0, because pruneCostByTask bounds the accumulator by card lifetime.
 
 ## Deferred Items
 
@@ -166,8 +175,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-21T02:41:27.218Z
-Stopped at: Completed 01-05-PLAN.md (FLOOR-11: five hiveTasks pollers collapsed onto useHiveTasks; the roster-re-render and bounded-pool clauses verified already-shipped and audited, not rebuilt; test/repo-claims.test.cjs created with 3 RED-proven clauses; proc-kill's win32 silent pass closed). CI green on PR #77 at 0579387, all six jobs. B-repo-claims = 3. FLOOR-11's 'looks identical' half is NOT operator-verified — see Blockers.
+Last session: 2026-08-21T03:31:59.042Z
+Stopped at: Completed 01-06-PLAN.md (RECORD-03/04 arithmetic + FLOOR-09 sink + GATE-01 sidecar). CI green on PR #77 at 840c36e, all six jobs; ubuntu/macos 454 tests 454 pass 0 skipped, windows 454/450/4 skipped. B-pass-hp 17->19, B-pass-ep 14->19, B-gau 6->15. Shim coverage 1 1 0 0 0 1 -> 1 1 1 1 1 1. FLOOR-09 NOT closed - 01-08 task 6 owns the index.ts line.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the

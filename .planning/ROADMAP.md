@@ -136,7 +136,7 @@ Plans:
 - [x] 01-03-PLAN.md — FLOOR-08 / VERDICT-02 / VERDICT-03 — the review obligation set; the refuse→redo hole; canReceiveInbox pinned
 - [x] 01-04-PLAN.md — FLOOR-06 / FLOOR-17 — Sigstore attestation, the SmartScreen honesty sentence, bug template, two ADRs
 - [x] 01-05-PLAN.md — FLOOR-11 — adopt the shared hiveTasks poller; pool drop-path audit; create test/repo-claims.test.cjs
-- [ ] 01-06-PLAN.md — RECORD-03 / RECORD-04 / FLOOR-09 — one ledger row semantics, clamped-diff spend over all rows, proxy-tier cost to the breaker
+- [x] 01-06-PLAN.md — RECORD-03 / RECORD-04 / FLOOR-09 — one ledger row semantics, clamped-diff spend over all rows, proxy-tier cost to the breaker
 - [ ] 01-07-PLAN.md — FLOOR-02a — the idle-quiesce backstop into main's delivery tick; HIVE.md's four stale denials deleted
 - [ ] 01-08-PLAN.md — FLOOR-02b — main owns the delivery queue and its drain; producers enqueue over IPC
 - [ ] 01-09-PLAN.md — FLOOR-10 — one budget arm in the existing breaker ladder; hive:tasks widened with the meter
@@ -546,7 +546,7 @@ after Phase 5 rather than closed in Phase 3.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Finish the Floor | 4/23 | In Progress|  |
+| 1. Finish the Floor | 5/23 | In Progress|  |
 | 2. The Daemon and the Protocol | 0/TBD | Not started | - |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |
