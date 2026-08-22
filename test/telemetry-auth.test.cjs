@@ -115,6 +115,21 @@ function send(collector, { method = 'POST', urlPath = '/v1/metrics', body, rawBo
       port: url.port,
       path: url.pathname,
       method,
+      // A FRESH connection per request, never the pool.
+      //
+      // `http.globalAgent` keep-alives by default on Node >= 19, and the
+      // oversize case in this file makes the server `req.destroy()` a socket
+      // mid-upload ON PURPOSE. That socket returns to the pool poisoned, and the
+      // NEXT request reuses it and errors before it reaches the listener —
+      // reported as `status: 0`. Measured on ubuntu-latest: the follow-up
+      // "listener is still serving" assertion failed with 0 while every other
+      // case in this file passed against the same live collector, i.e. the
+      // listener was fine and the POOL was not. win32 did not reuse the socket
+      // and the bug was invisible there.
+      //
+      // Without this the assertion silently tests "a destroyed keep-alive socket
+      // survived", which is not what it claims and is not what we want pinned.
+      agent: false,
       headers: {
         'content-type': 'application/json',
         'content-length': String(payload.length),
