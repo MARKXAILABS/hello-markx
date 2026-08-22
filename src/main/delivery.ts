@@ -283,6 +283,12 @@ export class DeliveryService {
   /** The path `this.queue` was loaded from, so a changed harness home reloads
    *  rather than writing one hive's queue into another's file. */
   private queueFile: string | null = null;
+  /** Non-null while the last load failed for a reason that is NOT "absent": the
+   *  honest text `enqueue` refuses with, so nobody is told there is no harness
+   *  home during an antivirus hold. Plan 01-28 renders main's `error` to the
+   *  operator verbatim, which is why the string matters. Cleared on every
+   *  successful load, on ENOENT, and when there is genuinely no home. */
+  private queueReadError: string | null = null;
   /** agentId → the instant of its last queue delivery (the FLUSH_COOLDOWN_MS
    *  gate the renderer drain kept in a ref). */
   private readonly lastFlushAt = new Map<string, number>();
@@ -364,22 +370,58 @@ export class DeliveryService {
   // MAX_QUEUED_PER_AGENT, and pruning is free: a delivered item is simply not in
   // the next write.
 
-  /** The queue as it is on disk, read once per path. Anything unreadable or
-   *  malformed degrades to an EMPTY queue rather than throwing out of a timer —
-   *  and, because a load failure must not then be written back over a file that
-   *  might be fine, `queueFile` is only armed once a load has actually landed. */
+  /** The queue as it is on disk, read once per path. Nothing here throws out of
+   *  a timer; what changes is what an empty result MEANS. THREE outcomes, not two:
+   *
+   *  - ABSENT (`ENOENT`) — a first boot. Empty queue, and the write path is
+   *    ARMED: there is nothing on disk to protect.
+   *  - UNREADABLE (any other fs error — an antivirus or indexer hold on Windows,
+   *    `EMFILE` under load) — empty for THIS call, and the write path stays
+   *    DISARMED so `saveQueue`'s `if (!path) return` short-circuits and the next
+   *    mutation cannot write that emptiness over a file that is fine. The reason
+   *    is kept in `queueReadError` for `enqueue` to refuse with, and the next
+   *    call retries the read.
+   *  - LOADED — armed, as always. A file that READ fine and parsed badly counts
+   *    as loaded: that is genuine corruption rather than a transient hold, and a
+   *    floor that could never overwrite it would be wedged forever. The
+   *    distinction being drawn is readable-vs-unreadable, never valid-vs-invalid.
+   *
+   *  This is the invariant the previous comment already claimed. The code armed
+   *  `queueFile` on every path including the swallowed failure (review a/CR-05). */
   private loadQueue(): QueuedDelivery[] {
     const path = this.deps.queuePath();
-    if (!path) { this.queue = null; this.queueFile = null; return []; }
+    if (!path) { this.queue = null; this.queueFile = null; this.queueReadError = null; return []; }
     if (this.queue && this.queueFile === path) return this.queue;
     let items: QueuedDelivery[] = [];
     try {
       const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
       const raw = (parsed as { items?: unknown })?.items;
-      if (Array.isArray(raw)) items = raw.filter(isQueuedDelivery);
-    } catch { /* absent or corrupt — an empty queue, not a crashed tick */ }
+      if (Array.isArray(raw)) {
+        items = raw.filter(isQueuedDelivery);
+        // The row filter is a SILENT deleter: a shape change to QueuedDelivery
+        // drops every persisted row on the first launch after an upgrade, and the
+        // operator learns of it only from messages that never arrive. Counting it
+        // does not save the rows — it stops the loss being invisible.
+        if (items.length !== raw.length) {
+          this.log(`queue load dropped ${raw.length - items.length} of ${raw.length} rows — wrong shape`);
+        }
+      }
+    } catch (e) {
+      const code = (e as { code?: string } | null)?.code;
+      if (code && code !== 'ENOENT') {
+        const why = `queue temporarily unreadable (${code}) — holding the parked messages rather than overwriting them`;
+        if (this.queueReadError !== why) this.log('queue read failed, staying disarmed —', String(e));
+        this.queue = null;
+        this.queueFile = null;
+        this.queueReadError = why;
+        return [];
+      }
+      // ENOENT (first boot) or a JSON.parse failure on a file that DID read —
+      // an empty queue, not a crashed tick, and safe to arm.
+    }
     this.queue = items;
     this.queueFile = path;
+    this.queueReadError = null;
     return items;
   }
 
@@ -441,7 +483,11 @@ export class DeliveryService {
       return { ok: false, error: `unknown agent: ${agentId}` };
     }
     const queue = this.loadQueue();
-    if (!this.queueFile) return { ok: false, error: 'no harness home — nowhere durable to park this' };
+    // A transient read fault and a genuinely homeless floor are BOTH disarmed
+    // here, and they are not the same news. 01-28 puts this sentence on screen.
+    if (!this.queueFile) {
+      return { ok: false, error: this.queueReadError ?? 'no harness home — nowhere durable to park this' };
+    }
     if (queue.filter((m) => m.agentId === agentId).length >= MAX_QUEUED_PER_AGENT) {
       return { ok: false, error: `queue full for ${agentId} (${MAX_QUEUED_PER_AGENT})` };
     }
@@ -668,7 +714,18 @@ export class DeliveryService {
       if (this.quiesced.has(a.agentId)) continue;   // already announced this spell
       this.quiesced.add(a.agentId);
       this.deps.setStatus?.(a.agentId, 'idle');
-      this.deps.emit('hive:hookEvent', { agentId: a.agentId, event: 'Stop', blocked: false });
+      // `synthesized` is the discriminator, and it has to come from HERE because
+      // the renderer provably cannot derive it. `hooks.ts`'s real Stop emit sends
+      // the same three populated keys and `undefined` for `tool`,
+      // `notificationType`, `source` and `message` — the payloads are
+      // byte-equivalent — so a renderer-side heuristic on shape, or on the agent's
+      // status alone, would swallow Claude Code's genuine turn-end too.
+      //
+      // What reads it: `stopArmDecision` in `useHive.ts`. Silence is not a
+      // finished turn for an agent parked at a permission prompt: that prompt
+      // paints a static frame and emits nothing further, so this backstop fires
+      // and used to erase the one cue that the agent needs a human.
+      this.deps.emit('hive:hookEvent', { agentId: a.agentId, event: 'Stop', blocked: false, synthesized: true });
     }
   }
 

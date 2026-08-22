@@ -884,10 +884,15 @@ const api = {
   hiveSend: (msg: Partial<HiveMessage>, from?: string): Promise<{ ok: boolean; error?: string; message?: HiveMessage }> =>
     ipcRenderer.invoke('hive:send', msg, from),
 
+  /** `synthesized` marks main's own idle-quiesce backstop (delivery.ts `quiesce`)
+   *  apart from a turn-end the harness actually reported (hooks.ts). Both send the
+   *  same three populated keys, so this discriminator is the only thing that tells
+   *  them apart on this side. BOTH signatures below carry it — widening only the
+   *  callback would leave the boundary half-typed. */
   onHiveHookEvent: (
-    cb: (e: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean }) => void
+    cb: (e: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean; synthesized?: boolean }) => void
   ): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean }) => cb(payload);
+    const listener = (_e: IpcRendererEvent, payload: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean; synthesized?: boolean }) => cb(payload);
     ipcRenderer.on('hive:hookEvent', listener);
     return () => ipcRenderer.removeListener('hive:hookEvent', listener);
   },

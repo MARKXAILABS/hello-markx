@@ -105,13 +105,13 @@ Module._load = function (request, ...rest) {
   return origLoad.call(this, request, ...rest);
 };
 
-let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider;
+let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ BlockedBanner } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
   ({ AgentCard } = loadTs('src/renderer/src/components/AgentCard.tsx'));
   ({ useStore } = loadTs('src/renderer/src/store/store.ts'));
-  ({ autoModeFlagForProvider } = loadTs('src/shared/agentProvider.ts'));
+  ({ autoModeFlagForProvider, AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -294,4 +294,53 @@ test('FLOOR-13: the card shows the model, and shows it before the cost', (t) => 
   const noModel = html(React.createElement(AgentCard, cardProps({ usd: 1.23, ptyId: 'pty-absent' })));
   assert.match(visibleText(noModel), /CLI default/,
     'an agent with no resolvable store row renders a blank where the model goes, instead of saying it runs the CLI default — a blank reads as "unknown" and hides that the card failed to find its own row');
+});
+
+test('FLOOR-13: the model chip is bounded, so it cannot drop the card\'s project line', (t) => {
+  // The card was widened 220 -> 322 (AgentCard.tsx's own arithmetic comment)
+  // because an unshrinkable `flexShrink: 0` sibling drove the row's only flexible
+  // item to ZERO width, and that comment calls the result "not truncation, it is
+  // a dropped field". The model chip is `flexShrink: 0` and was added two rows
+  // below that fix with none of its three guards, so it reintroduces the defect.
+  //
+  // A real preset value, not a hypothetical: 21 unshrinkable characters that
+  // shortModel() passes through untouched.
+  const LONGEST_MODEL = 'Gemini 3.1 Pro (High)';
+  assert.ok(AGENT_PROVIDER_PRESETS.some((p) => p.recommendedOrchestratorModel === LONGEST_MODEL),
+    `no preset offers '${LONGEST_MODEL}' any more — this test is measuring a model name the app can no longer produce, so it proves nothing about the longest real one`);
+
+  seedServerSnapshot(t, { agents: [agentRow({ model: LONGEST_MODEL })] });
+  const markup = html(React.createElement(AgentCard, cardProps()));
+
+  // Located by the chip's OWN title, never by counting `text-overflow` in the
+  // document: this card emits FOUR other elements that already carry all three
+  // properties (the name, `infoLine`, the account chip, the note), so a
+  // document-wide count cannot tell the chip apart from its siblings and would
+  // stay green with the chip unbounded.
+  const chipStyle = (m, title) => {
+    const hit = new RegExp(`<span title="${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" style="([^"]*)"`).exec(m);
+    assert.ok(hit, `no <span> carries title="${title}" — the model chip's title is what makes an ellipsis lossless, so losing it is not a fix`);
+    return hit[1];
+  };
+
+  const style = chipStyle(markup, `Model: ${LONGEST_MODEL}`);
+  assert.match(style, /max-width:/,
+    `the model chip has no max-width (style: ${style}) — 21 unshrinkable characters take the width out of infoLine, the row's only flexible item, and the card drops its project/action line`);
+  assert.match(style, /overflow:hidden/,
+    `the model chip does not clip (style: ${style}) — a max-width with no overflow guard spills the chip over the card's border instead of containing it`);
+  assert.match(style, /text-overflow:ellipsis/,
+    `the model chip truncates with no ellipsis (style: ${style}) — the operator cannot tell a clipped model id from a short one`);
+
+  // The `CLI default` fallback is the same element and takes the same guards.
+  const fallback = html(React.createElement(AgentCard, cardProps({ ptyId: 'pty-absent' })));
+  const fbStyle = chipStyle(fallback, 'Runs the CLI default model');
+  for (const decl of [/max-width:/, /overflow:hidden/, /text-overflow:ellipsis/]) {
+    assert.match(fbStyle, decl,
+      `the 'CLI default' chip is bounded differently from the model chip (style: ${fbStyle}) — one span, one set of guards`);
+  }
+
+  // CEILING, stated so nobody reads more into a green tick than is there:
+  // `renderToStaticMarkup` is a server render with NO LAYOUT. This proves the
+  // guards are PRESENT. Whether the row actually composes without clipping at
+  // 322px is an operator observation and is not claimed here.
 });

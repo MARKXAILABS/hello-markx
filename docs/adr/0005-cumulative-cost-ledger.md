@@ -48,8 +48,8 @@ backlog carries the bill.
 **A second appender writes deltas into the same file.** `HookServer` handles the `CostSample`
 event the qwen proxy-bridge sidecar emits on every response with usage, and appends it through
 the same `appendCostLedger()` — but its `input`/`output` come off *one response's* usage
-block, so those rows are **per-response deltas**. The Claude/OTel path
-(`src/main/index.ts:1524`) appends genuine cumulative snapshots on the ~30s beat. One file now
+block, so those rows are **per-response deltas**. The Claude/OTel path — the breaker beat's
+`index.ts appendCostLedger()` call — appends genuine cumulative snapshots on the ~30s beat. One file now
 interleaves both, with nothing in the row saying which is which, and the reader cannot tell
 them apart.
 

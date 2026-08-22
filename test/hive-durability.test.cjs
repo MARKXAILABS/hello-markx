@@ -232,8 +232,12 @@ const gitIn = (root, ...args) => {
 /** Matches redactSecrets pattern 3 (the sk-ant- provider prefix). */
 const CAUGHT_SECRET = 'sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';
 /** The SAME key material as CAUGHT_SECRET with `_` where it has `-`. Pattern 3
- *  anchors on a literal `sk-`, so this is missed: one character is the whole
- *  gap. Underscore-separated keys are not hypothetical — Stripe ships
+ *  anchors on a literal `sk-`, so this used to be missed — one character was the
+ *  whole gap. It is CAUGHT now, by pattern 6's two arms, which run after pattern
+ *  5 so they cannot subtract from anything patterns 1-5 already redacted. The
+ *  name is kept: it is what the ceiling test below asserts about, and renaming it
+ *  would break the only line that records why this shape has a test at all.
+ *  Underscore-separated keys are not hypothetical — Stripe ships
  *  `sk_live_…`. Do NOT "improve" this into a literal Stripe key: a realistic one
  *  here trips GitHub push protection (measured — it blocked this very file with
  *  `GH013 … Stripe API Key`) and the only ways forward are weakening the repo's
@@ -302,34 +306,82 @@ test('a scrubbed commit is announced on the durable hive log, not silently alter
     'the log names no path, so the operator is told something was scrubbed but not what');
 });
 
-test('FLOOR-04 ceiling: redactSecrets is best-effort, and these shapes get through (FLOOR-04)', async (t) => {
+test('FLOOR-04 ceiling: the control is BOUNDED — what it catches, and the shapes it provably does not (FLOOR-04)', async (t) => {
   const { hive, root } = floor(t);
   await hive.ensureAgent(agent('dwight'));
   const dir = path.join(root, 'agents', 'dwight');
 
-  // This pins the HONEST LIMIT of a best-effort matcher, so the ceiling is a
-  // measured fact rather than a promise in a doc. It is deliberately NOT a bug
-  // report: the project trusts exactly ONE pattern set (redactSecrets, shared
-  // with the mail path under a LOCKSTEP contract with test/voice-messages.test.cjs),
-  // and two matchers that disagree is a worse position than one imperfect one
-  // because the disagreement is silent. Widening the battery is a decision for
-  // whoever owns that contract; if this test ever goes red because a pattern grew
-  // to cover one of these, that is an IMPROVEMENT — update it, do not revert it.
+  // This pins the HONEST LIMIT of a bounded matcher, so the ceiling is a measured
+  // fact rather than a promise in a doc. It is deliberately NOT a bug report: the
+  // project trusts exactly ONE pattern set (redactSecrets, shared with the mail path
+  // under a LOCKSTEP contract with test/voice-messages.test.cjs), and two matchers
+  // that disagree is a worse position than one imperfect one because the disagreement
+  // is silent. If this test goes red because a pattern grew to cover one of these,
+  // that is the ceiling moving UP — update it, do not narrow the matcher back.
+  //
+  // MEASUREMENT UNAVAILABLE without an operator: FLOOR-04's optional live clause —
+  // a fake key dropped into a LIVE agent's workspace and committed by the running
+  // hive. Everything below drives a real git against a real temp repo, which is not
+  // the same thing and is not claimed to be.
+
+  // (1) The unlabelled UNDERSCORE-spelled vendor key. It used to reach history; the
+  //     two arms that run after pattern 5 catch it now.
   fs.writeFileSync(path.join(dir, 'underscore-key.md'), `${MISSED_SECRET}\n`, 'utf8');
-  // JSON is the operationally sharpest miss: pattern 5 needs the `:`/`=` directly
-  // after the key name and the closing quote is in the way — and the hive commits
-  // registry.json, tasks.json and every per-agent settings.json.
+  // (2) Quoted-key JSON — a RECORDED RESIDUAL, not an oversight. Pattern 5 needs the
+  //     `:`/`=` directly after the key name and the closing quote is in the way. An
+  //     arm for it was built and MEASURED: it gains 2 detections and costs 2 of the
+  //     12 demonstrated false positives (`"api_key": "$OPENAI_API_KEY"` and
+  //     `"secret": "REPLACE_ME"`), and a false positive here is not over-redaction —
+  //     scrubStagedSecrets calls unstagePath, so the file never reaches history at
+  //     all and the log line is indistinguishable from a real catch. +2 detections do
+  //     not buy 2 permanent unstages. This arm exists so nobody can re-add it quietly.
   fs.writeFileSync(path.join(dir, 'creds.json'), '{"token": "abcdef123456789"}\n', 'utf8');
+  // (3) POSITIVE CONTROL — a benign marker in the same commit. Without it this test
+  //     could pass by the scrub suppressing the commit or flushCommit becoming a no-op.
+  fs.writeFileSync(path.join(dir, 'marker.md'), 'ceiling positive control marker\n', 'utf8');
+  // (4) SPECIFICITY — ordinary tracked source that the matcher must NOT touch. The
+  //     two desk ids are byte-copied from tools/mapgen/build_map.py, which the old
+  //     matcher unstaged from every commit that touched it. Without this arm the file
+  //     measures specificity zero times, and every regression this change risks is a
+  //     specificity failure.
+  fs.writeFileSync(path.join(dir, 'ordinary.md'),
+    'const task_scheduler_interval_ms = 5;\n'
+    + '{"maxTokens": 200000, "debug": true}\n'
+    + "    'desk-team-lead': grid[6], 'desk-backend-engineer': grid[7],\n"
+    + "    'desk-project-manager': grid[10], 'desk-market-researcher': grid[11],\n", 'utf8');
   await hive.flushCommit(root);
 
   const history = gitIn(root, 'log', '-p');
-  assert.ok(history.includes(MISSED_SECRET),
-    'redactSecrets now catches underscore-separated credential prefixes. That is a WIDENING of the '
-    + 'shared battery — mirror it in test/voice-messages.test.cjs and update this ceiling rather '
-    + 'than narrowing it back');
-  assert.match(history, /"token": "abcdef123456789"/,
-    'redactSecrets now catches JSON-quoted key/value pairs — same as above, this is the '
-    + 'ceiling moving up, not a regression');
+  // Every arm is evaluated before anything throws. A ceiling test that stops at its
+  // first failure reports one number when four moved, and the three it hides are
+  // exactly the ones a reviewer needs to see.
+  const problems = [];
+  const check = (ok, msg) => { if (!ok) problems.push(msg); };
+
+  check(!history.includes(MISSED_SECRET),
+    'SENSITIVITY: an UNLABELLED underscore-spelled vendor key reached git history. The two arms '
+    + 'that run after pattern 5 are what catch it — if they were narrowed or moved, mirror the '
+    + 'change in test/voice-messages.test.cjs and re-run the whole REGRESSION battery first');
+  check(/"token": "abcdef123456789"/.test(history),
+    'CEILING: redactSecrets now catches quoted-key JSON. Before treating that as a win, re-measure '
+    + 'the 12 demonstrated false positives — the arm that does this was rejected because it '
+    + 'unstages "api_key": "$OPENAI_API_KEY" and "secret": "REPLACE_ME" FOREVER, not because it '
+    + 'did not work');
+  check(/ceiling positive control marker/.test(history),
+    'POSITIVE CONTROL: the marker never reached history — the commit itself did not land, so '
+    + 'every other assertion in this test would have passed vacuously');
+  for (const survivor of [
+    'const task_scheduler_interval_ms = 5;',
+    '{"maxTokens": 200000, "debug": true}',
+    'desk-backend-engineer',
+    'desk-market-researcher'
+  ]) {
+    check(history.includes(survivor),
+      `SPECIFICITY: ordinary source was unstaged: ${survivor}. scrubStagedSecrets does not `
+      + 'over-redact on a false positive — it drops the whole path from the commit, permanently, '
+      + "and the agent's work never reaches history");
+  }
+  assert.deepEqual(problems, [], `FLOOR-04 ceiling, ${problems.length} arm(s) moved:\n  - ${problems.join('\n  - ')}`);
 
   // ...and the shape it DOES know still does not get through, in the same commit,
   // so this test can never pass by the scrub being switched off wholesale.

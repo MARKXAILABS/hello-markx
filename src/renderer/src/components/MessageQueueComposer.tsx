@@ -33,6 +33,9 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
   const removeQueuedMessage = useStore((s) => s.removeQueuedMessage);
   const releaseQueuedMessage = useStore((s) => s.releaseQueuedMessage);
   const clearQueue = useStore((s) => s.clearQueue);
+  /** Main's last refusal for this agent. Store state, so it survives the remount
+   *  an agent switch causes and is reachable from a server render. */
+  const queueError = useStore((s) => s.queueError[agent.id]);
 
   // Draft lives in the store, keyed by agent — switching agents remounts this
   // component, and component-local state would silently eat the typed text.
@@ -134,7 +137,7 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
 
   const canSend = !!text.trim() || attachments.length > 0;
 
-  const queueIt = () => {
+  const queueIt = async () => {
     if (!canSend) return;
     // Prepend an "Attached files:" block using the same path-based convention as
     // the Slack inbound path (useHive.ts) so agents Read the files directly.
@@ -143,7 +146,11 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
           ? `${text}\n\nAttached files:\n`
           : 'Attached files:\n') + attachments.map((a) => `- ${a.path} (${a.name})`).join('\n')
       : text;
-    enqueueMessage(agent.id, body);
+    // Main owns the queue and refuses on five reachable paths (queue full, unknown
+    // agent, no harness home, invalid id, empty body) plus a transient read fault.
+    // Clearing before it answers is how a typed message vanishes with nothing said.
+    const res = await enqueueMessage(agent.id, body);
+    if (!res.ok) return;                 // the reason renders through statusHint
     setText('');
     setAttachments([]);
   };
@@ -151,7 +158,9 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      queueIt();
+      // Floating on purpose: queueIt awaits a promise that never rejects, and a
+      // keydown handler cannot be async without swallowing preventDefault's timing.
+      void queueIt();
     }
   };
 
@@ -165,7 +174,15 @@ export function MessageQueueComposer({ agent }: MessageQueueComposerProps) {
   // look permanently stuck with no explanation and no escape hatch.
   const deliveryPaused = useDeliveryPaused(agent.id, queue.length > 0);
 
-  const statusHint = queue.length === 0
+  // A refusal comes FIRST, ahead of the queue-length short-circuit: a refused
+  // FIRST message is the empty-queue case, and gating it on queue.length is how
+  // the composer rendered no status line at all for exactly the message that was
+  // just thrown away. Attributed to main rather than adopted as the app's own
+  // diagnosis — 01-27 makes "no harness home" reachable on a transient FS fault,
+  // and an operator mid-virus-scan should not be told their harness home is gone.
+  const statusHint = queueError
+    ? `main declined: ${queueError}`
+    : queue.length === 0
     ? null
     : !idle
     ? `${agent.name} is busy — ${queue.length} queued`

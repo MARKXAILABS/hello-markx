@@ -128,7 +128,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
      is either supported or its limitation is stated in source, docs and UI — never a bare
      `return false`. `gh issue list --state open --label floor-inspection` returns only the
      four epics. — FLOOR-07, FLOOR-08, FLOOR-15, FLOOR-16, FLOOR-17, FLOOR-18, VERDICT-02, VERDICT-03
-**Plans**: 23 plans across 9 waves
+**Plans**: 31 plans — the original 23 across 9 waves, plus 8 gap-closure plans (`/gsd:plan-phase 1 --gaps`) numbered in their own waves 1-4, run with `/gsd:execute-phase 1 --gaps-only`
 
 Plans:
 - [ ] 01-01-PLAN.md — Electron 32 → 43.x runtime bump (gates every other plan) + the load-ts.cjs wave-0 loader fixes
@@ -154,6 +154,14 @@ Plans:
 - [x] 01-21-PLAN.md — FLOOR-16 — ESLint flat config, two named rules, 8 suppressions made live and 5 dead disables deleted (the resolver moved one of the nine into the delete column), CI gate at zero warnings
 - [x] 01-22-PLAN.md — FLOOR-15 — renderToStaticMarkup component tests under node --test, zero new dependencies
 - [x] 01-23-PLAN.md — D-45 / D-46 — the repo-fact accumulator asserted whole, the adversarial re-verify, and the mechanical phase gate
+- [x] 01-24-PLAN.md — GAP: the hook socket's path gate resolves relative targets; one payload handled once; a public token→agent lookup; the win32 watchdog non-run becomes a real skip
+- [x] 01-25-PLAN.md — GAP: the OTLP collector authenticates and derives agent identity; composite (agent, session) cost key; SPAWN_SAFE_SESSION_ID at four argv/storage sinks (VALID_SESSION_ID left intact — the argv rule is a second, strictly narrower constant); MIN_WIN lowered below the 1024 collapse breakpoint
+- [x] 01-26-PLAN.md — GAP: redactSecrets gains unlabelled `sk_`/`rk_` prefixes and loses 0 of a 38-row battery; pattern 5 byte-FROZEN and the JSON arm DELIBERATELY DROPPED (measured: +2 detections against 2 permanent unstages); `desk-`/`task-`/`risk-` stop being read as vendor keys; FLOOR-04's ceiling restated as bounded with five ACTIVE bypasses and one declared loss; the sidecar exit revokes its OWN token; the retired KG name leaves hive.ts
+- [x] 01-27-PLAN.md — GAP: the budget soft band stops masking every arm below it; a failed queue read no longer arms the write path
+- [x] 01-28-PLAN.md — GAP: the composer clears only when main accepts; a blocked agent is not idled by silence; three comments stop naming the deleted renderer drain
+- [x] 01-29-PLAN.md — GAP: the AUTO chip reads a bypass the operator typed on a custom agent, through one tokenized matcher shared by every arm (both sides of an `=`, explicit empty-flag guard) — measured 6 of 12 rows failing before, 0 of 12 after, with the enshrining assertion INVERTED and the over-report pinned as a decision; the model chip bounded behind a named MODEL_CHIP_MAX_W with its gate on the chip’s OWN title, because the card emits four other elements already carrying all three guards; the MIN_WIN / SIDEBAR_COLLAPSE_WIDTH / DESIGN.md pin SEEN failing against an inline fixture of the pre-fix declaration (not a `git show` — every checkout in ci.yml is a depth-1 clone), with src/main/index.ts and DESIGN.md provably untouched; and splitterReachableMax taking the 1024–1279 band from 236 persisting writes to 0 while keeping #38’s rescue and the 664 drag bound
+- [x] 01-30-PLAN.md — GAP: two win32 non-runs become CONDITIONAL runner skips (one converted, one SPLIT — the mirror polarity — each proven conditional by poisoning its own assertion); the shim sock_token pin is comment-stripped and assignment-shaped, red for all six templates against the real hive.ts; `npm test` pinned byte-exact and red under four disarm shapes; the electron-updater feed and blockmaps brought inside the attestation with the built-nothing tripwire re-split so a feed with no installers fails the job. proc-kill's five invisible cases and engine-parity's byte-level drive handed to 01-31's register by name
+- [x] 01-31-PLAN.md — GAP: all THIRTEEN doc anchors re-derived at wave-4 HEAD and thirteen found stale — including the four an earlier sweep certified correct, because 01-24/01-25/01-26 each insert above them — so they are now written as `<file>.ts <symbol>()` and frozen by a `STALE_ANCHORS` denial table run RED 6/6 against the pre-fix blobs; the last six "Enterprise Knowledge Graph" sites renamed over a **shipped-surface** walker (explicit roots + extension allow-list, 315 files, `dist`/`out`/`.planning` outside by construction) PROVED to contain `SKILL.md`/`README.md`/`DESIGN.md` and demonstrated RED against `SKILL.md` specifically — not the `.ts`-only renderer walker, which would have missed it; a cross-file pin that no shipped doc states a 1280 minimum, confirming 01-25's `DESIGN.md` hand-off is discharged; the requirement rows restated at source with **GATE-01 adjudicated DOWN** against 01-25's `requirements-completed` (clause 2 is still false via `/proc/<pid>/environ`, and 01-24 declined it for the same reason) and **no box ticked** — 10/61 before and after; the win32 skip ceiling DERIVED from the TAP at **7**, all members named by title, re-frozen at `≤` with the move justified as relabelled non-runs (`pass = 531 − 2 + N_run`); and one register with **48 rows** (35 code, 5 recorded behaviour changes, 8 operator-blocked), derived by sweeping all seven landed SUMMARYs, nine owners re-homed off already-landed plans, three rows the seed did not carry
 **UI hint**: yes
 
 ### Phase 2: The Daemon and the Protocol
@@ -546,7 +554,7 @@ after Phase 5 rather than closed in Phase 3.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Finish the Floor | 22/23 | In Progress|  |
+| 1. Finish the Floor | 30/31 | **PARTIAL — all 8 gap-closure plans landed (01-24 … 01-31), phase NOT complete.** 10 of 23 requirements close, 13 do not; 0 of 20 floor-inspection issues closable while `origin/main` still pins `electron ^32.2.0` behind draft PR #77. 01-01 has no SUMMARY — its D-09 gate is unrun. Re-run `/gsd:verify-work 1`; the verdict is the verifier's |  |
 | 2. The Daemon and the Protocol | 0/TBD | Not started | - |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |

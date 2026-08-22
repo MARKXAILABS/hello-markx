@@ -339,15 +339,34 @@ export class CircuitBreaker {
     // read from can never disagree. Absent when there is no card or no cap.
     //
     // Placed after the (b) storm arms and before the (a) floor-wide caps: a
-    // looping agent is a more urgent diagnosis than an expensive one, and a
-    // per-card cap is a more specific answer than a floor total. Order decides
-    // which `reason` the operator reads when two conditions hold at once.
+    // looping agent is a more urgent diagnosis than an expensive one. Those two
+    // arms above still return IMMEDIATELY and are untouched by any of this.
     //
-    // Two bands, because evaluate() returns a BOOLEAN and the ladder moves one
-    // rank per beat: >= 80% trips with `ceiling: 'steering'` (warn the assignee,
-    // then hold), past 100% trips with no ceiling of its own and so reaches
-    // `constrained` on the following beat — the level that stops active work and
-    // needs god's sign-off.
+    // THE >= 80% BAND IS ADVISORY. It is remembered in `softTrip` and returned
+    // only at the BOTTOM of this function, once every arm below has had its say.
+    // It used to `return` on the spot, and because `evaluate()` returns on the
+    // first match that also SKIPPED the per-agent cap, both floor-wide caps,
+    // velocity and no-progress — while pinning the ladder at rank 1 with
+    // `ceiling: 'steering'`. An agent at 85% of its card cap that was also the
+    // floor's biggest spender over `costCapUsd` therefore could not be
+    // constrained at all: the arm added to ENFORCE a budget made the ceiling
+    // WEAKER (review a/CR-04). Specificity — "a per-card cap is a more specific
+    // answer than a floor total" — decides which `reason` the operator reads
+    // when the band is the ONLY thing holding. It must never decide whether
+    // enforcement happens, so when two conditions hold at once the operator now
+    // reads the HARDER arm's reason and the ladder moves to that arm's ceiling.
+    //
+    // Past 100% is a different thing and still returns immediately: a hard trip
+    // with no ceiling of its own, so it reaches `constrained` on the following
+    // beat — the level that stops active work and needs god's sign-off.
+    //
+    // CONSEQUENCE, deliberate and pinned by a test: the no-progress arm below is
+    // STATEFUL (`s.noProgressBeats += 1`), and the early return kept that counter
+    // from ever advancing for a carded agent. It advances now, so a band card
+    // that also stops coordinating for NO_PROGRESS_BEATS consecutive beats trips
+    // no-progress with no ceiling and escalates past `steering`. That is not a
+    // new trip: the arm predates FLOOR-10, FLOOR-10 masked it, and this restores
+    // it. Suppressing it here would re-create the same mask one arm lower.
     //
     // D-18, and do NOT "finish" this into a kill: the config's hard-stop flag is
     // off by default, which caps the whole ladder at `constrained` — paused and
@@ -355,13 +374,14 @@ export class CircuitBreaker {
     // failure this product exists to prevent, so this arm adds no guard of its
     // own and no kill path; it inherits the ceiling like every other arm, and a
     // real kill stays behind that explicit opt-in.
+    let softTrip: { tripping: boolean; reason: string; ceiling?: BreakerLevel } | null = null;
     const budget = input.budget;
     if (budget && budget.cap > 0 && budget.tokens >= budget.cap * BUDGET_STEER_FRACTION) {
       const pct = Math.round((budget.tokens / budget.cap) * 100);
       if (budget.tokens > budget.cap) {
         return { tripping: true, reason: `over budget: card ${budget.taskId} spent ${budget.tokens.toLocaleString()} tokens, ${(budget.tokens - budget.cap).toLocaleString()} over its cap of ${budget.cap.toLocaleString()} (${pct}%)` };
       }
-      return { tripping: true, ceiling: 'steering', reason: `budget: card ${budget.taskId} at ${budget.tokens.toLocaleString()} of ${budget.cap.toLocaleString()} tokens (${pct}% of its cap)` };
+      softTrip = { tripping: true, ceiling: 'steering', reason: `budget: card ${budget.taskId} at ${budget.tokens.toLocaleString()} of ${budget.cap.toLocaleString()} tokens (${pct}% of its cap)` };
     }
     // (a) per-agent token limit — this agent's own total over its configured cap
     const perAgentCap = cfg.agentTokenCaps?.[input.agentId];
@@ -407,6 +427,9 @@ export class CircuitBreaker {
         }
       }
     }
-    return { tripping: false, reason: '' };
+    // Nothing harder fired. The advisory band, if it did, is what is left — and
+    // it carries its own `ceiling: 'steering'` so a card that is merely near its
+    // cap still warns and HOLDS instead of climbing.
+    return softTrip ?? { tripping: false, reason: '' };
   }
 }

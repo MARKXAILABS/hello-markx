@@ -59,6 +59,27 @@ export interface AgentCardProps {
 const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
 
 /**
+ * The widest the model chip may be, in px.
+ *
+ * A NAMED constant rather than a fifth anonymous literal in the same span,
+ * because the chip's own comment says it is "sized from a token so wave 6's
+ * sweep has no literal to chase" — and because this file's four other bounded
+ * elements already carry `maxWidth`/`overflow`/`textOverflow`, so only a name
+ * says which one was the fix.
+ *
+ * The subtraction, against this card's own arithmetic (see `const width = 322`
+ * below): the right column is 322 − 16 (panel padding) − 36 (portrait) − 8 (gap)
+ * ≈ 262px. The context row spends that on the flexible `infoLine`
+ * (`flex: 1, minWidth: 0`), this chip, an optional cost chip, the account chip
+ * (`maxWidth: 76`) and `gap: 5` between them. Worst case with an account pinned:
+ * 262 − 76 − 15 (three gaps) = 171px shared by `infoLine` and this chip, so 96
+ * here leaves `infoLine` ~75px — a truncated project name, which is the designed
+ * response to horizontal growth. Not `'52%'`: that value was copied from
+ * `FullscreenTerminal.tsx`'s roster row, where 52% is 52% of a much wider box.
+ */
+const MODEL_CHIP_MAX_W = 96;
+
+/**
  * v0.3.4 compact redesign: one identity row (name + status), one context line
  * (action while working, repo while idle — both in the tooltip), one note row,
  * and a slim gauge pinned to the bottom edge. Nothing overlaps anything.
@@ -315,15 +336,24 @@ export function AgentCard({
                   the three renderings disagreed about what an agent IS. Same
                   shortModel() the roster row uses, imported rather than copied:
                   two copies of a formatter are two ways to render one id.
-                  Sized from a token so wave 6's sweep has no literal to chase. */}
+                  Sized from a token so wave 6's sweep has no literal to chase.
+                  Bounded on all three axes its sibling row is bounded on
+                  (FullscreenTerminal.tsx's roster row, where this chip came
+                  from, and infoLine six lines above): the chip is flexShrink: 0
+                  and 'Gemini 3.1 Pro (High)' is 21 unshrinkable characters, so
+                  without a maxWidth it takes the width out of infoLine — the
+                  row's only flexible item — and reproduces the exact defect this
+                  card was widened 220->322 to fix. The title carries the full
+                  model id, so the ellipsis loses nothing. */}
               <span
                 title={row?.model ? `Model: ${row.model}` : 'Runs the CLI default model'}
                 style={{
                   flexShrink: 0,
+                  maxWidth: MODEL_CHIP_MAX_W,
                   fontSize: 'var(--cth-text-body-sm)',
                   lineHeight: 'var(--cth-lh-body-sm)',
                   color: 'var(--cth-ink-500)',
-                  whiteSpace: 'nowrap'
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                 }}
               >{shortModel(row?.model) ?? 'CLI default'}</span>
               {/* Cost before the account chip: money is the thing being asked

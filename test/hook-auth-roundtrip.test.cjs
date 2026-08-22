@@ -151,6 +151,45 @@ test('a shim with no token is still rejected', { skip: !POSIX }, async (t) => {
   );
 });
 
+/** Strip comments from a shim template BEFORE matching it, so a commented-out
+ *  assignment cannot satisfy a pin. Block comments whole, then `//` to end of
+ *  line.
+ *
+ *  A naive `//` strip truncates a URL. That is not left to a comment here:
+ *  assertNoUrlsInShims() asserts, over the same derived templates, that no body
+ *  contains a `://` — measured 0 across all six — so a future shim that gains
+ *  one fails loudly instead of being silently cut in half. */
+function stripLineComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
+/** `sock_token` in an ASSIGNMENT position, which is the only position that does
+ *  anything: optional quote, `:` or `=`, then a value that actually starts
+ *  something. Both live shapes match — `payload.sock_token = process.env.…` and
+ *  `sock_token: process.env.…` inside an object literal — while a bare mention
+ *  does not. The pin this replaces was `/sock_token/` over RAW source, which a
+ *  commented-out `// payload.sock_token = …` satisfied, and it was the ONLY pin
+ *  on five of the six shims. */
+const ASSIGNS_SOCK_TOKEN = /(^|[^\w$])["']?sock_token["']?\s*[:=]\s*["'`\w$(]/;
+
+/** The other half: the value has to come from the environment main populates on
+ *  the agent's PTY, read the way JavaScript reads it — not merely named. */
+const READS_SOCK_TOKEN_ENV = /process\.env\s*(\.HIVE_SOCK_TOKEN\b|\[\s*['"]HIVE_SOCK_TOKEN['"]\s*\])/;
+
+/** Comment-stripping is only sound while no shim body carries a `://`. Asserted
+ *  rather than recorded, so the guarantee cannot expire silently. */
+function assertNoUrlsInShims(shims) {
+  for (const [name, body] of shims) {
+    assert.equal(
+      (body.match(/:\/\//g) || []).length,
+      0,
+      `${name} contains a \`://\`. stripLineComments() cuts from \`//\` to the end of the line, so `
+      + 'a URL in a shim body would take the rest of its line with it — possibly the sock_token '
+      + 'assignment these tests pin. Teach the stripper about string literals before adding one.'
+    );
+  }
+}
+
 /** Every shim template in hive.ts, sliced by its REAL delimiters. The old
  *  version took `start + 6000` chars, which overruns the first template into the
  *  second — so ONE of them carrying the field would have passed for both. And it
@@ -190,15 +229,78 @@ test('every shim template in hive.ts is enumerated, and the wired ones send sock
   // engine that goes silently dead: no live status, no Stop→drain, no cost.
   // A future exemption must first show a second connection handler or an
   // unauthenticated branch in hooks.ts. There is neither.
+  // Comments are stripped before either match, so the pin cannot be satisfied by
+  // a mention. The strip's own precondition is asserted first.
+  assertNoUrlsInShims(shims);
+
   for (const [name, body] of shims) {
     assert.ok(body, `${name} not found — did a shim get renamed?`);
+    const code = stripLineComments(body);
     assert.match(
-      body, /sock_token/,
-      `${name} builds a payload without sock_token — every hook it fires will be rejected`
+      code, ASSIGNS_SOCK_TOKEN,
+      `${name} builds a payload without ASSIGNING sock_token — every hook it fires will be `
+      + 'rejected. Matched against the template with its comments stripped and requiring a value, '
+      + 'because the pin this replaced was a bare /sock_token/ over raw source: a commented-out '
+      + '`// payload.sock_token = …` satisfied it, and it was the only pin on five of six shims.'
     );
     assert.match(
-      body, /HIVE_SOCK_TOKEN/,
-      `${name} does not read HIVE_SOCK_TOKEN from its environment`
+      code, READS_SOCK_TOKEN_ENV,
+      `${name} does not READ HIVE_SOCK_TOKEN from its environment (comments stripped). That env `
+      + 'var is the only place the per-agent token main minted for this PTY exists.'
     );
   }
+});
+
+/** The pin above is only worth having if it FIRES. Proven for every template
+ *  rather than for a chosen sample: comment out each body's assignment line in
+ *  turn, rebuild that body, and assert the pin goes red — while the bare-symbol
+ *  pin it replaced still passes on the very same mutant, which is the whole
+ *  reason it was replaced.
+ *
+ *  The iteration count is asserted against the derived `shims.size` (itself
+ *  floored at 6 in both tests) so that a shimTemplates() which silently started
+ *  returning one template could not turn "6 green then 6 red" into "1 green then
+ *  1 red" while the output still read like a universal. */
+test('commenting out the sock_token assignment turns the pin RED, in every shim', (t) => {
+  const shims = shimTemplates();
+  assert.ok(shims.size >= 6, `only ${shims.size} shim templates found — see the floor above`);
+  assertNoUrlsInShims(shims);
+
+  let mutated = 0;
+  for (const [name, body] of shims) {
+    const green = ASSIGNS_SOCK_TOKEN.test(stripLineComments(body));
+    assert.ok(green, `${name}: nothing to mutate — the pin is already red at HEAD`);
+
+    const line = body.split('\n').find((l) => ASSIGNS_SOCK_TOKEN.test(stripLineComments(l)));
+    assert.ok(
+      line,
+      `${name}: the assignment does not live on one line, so this mutation cannot be built and `
+      + 'this loop would prove nothing for it. Split the assignment or teach this loop the shape.'
+    );
+
+    // The mutation, exactly as a careless refactor would leave it.
+    const commented = body.replace(line, () => `// ${line.trim()}`);
+    const red = !ASSIGNS_SOCK_TOKEN.test(stripLineComments(commented));
+    assert.ok(
+      red,
+      `${name}: commenting out its sock_token assignment did NOT make the pin fail. The pin is `
+      + 'vacuous for this shim — every hook it fires would be dropped by authorized() and this '
+      + 'file would still be green.'
+    );
+    assert.match(
+      commented, /sock_token/,
+      `${name}: the bare-symbol pin this replaced is expected to still match the mutant. It not `
+      + 'matching means the mutation removed more than the assignment, so the RED above proves less '
+      + 'than it claims.'
+    );
+    t.diagnostic(`${name.padEnd(18)} pin-green-at-HEAD=${green}  pin-red-when-commented=${red}`);
+    mutated++;
+  }
+
+  assert.equal(
+    mutated, shims.size,
+    `the mutation loop ran ${mutated} times for ${shims.size} derived templates — a loop that `
+    + 'skips a shim proves nothing about that shim'
+  );
+  assert.ok(mutated >= 6, `the mutation loop covered only ${mutated} shims; hive.ts has at least 6`);
 });

@@ -75,6 +75,53 @@ function sourceFiles(dir) {
 
 const readStripped = (rel) => stripComments(fs.readFileSync(path.join(root, rel), 'utf8'));
 
+/**
+ * The SHIPPED-SURFACE corpus: every text file this repo ships, as repo-relative
+ * POSIX paths.
+ *
+ * Deliberately NOT `sourceFiles()` above. That walker matches `.ts`/`.tsx`
+ * ONLY, so a "tree-wide" scan built on it would never read
+ * `resources/skills/capabilities/SKILL.md` — the single highest-value site for
+ * the naming claim below, because that file is installed into every agent's
+ * skills directory and so the agents themselves consume whatever it says — and
+ * it would DROP `README.md`, which the two-file loop it replaces already
+ * covered. It would ship strictly weaker while reporting wider.
+ *
+ * Scope is an explicit ROOT LIST plus tracked top-level `*.md`. `dist/`, `out/`
+ * and `.planning/` therefore fall outside by CONSTRUCTION, not by exclusion: an
+ * exclusion list is a thing to forget, a root list is a thing to read, and a
+ * scan with no build-output exclusion is permanently red on any machine that
+ * has run `npm run build`. `node_modules` and `.git` are denied by name because
+ * they can appear BELOW a listed root.
+ *
+ * Measured when written: 315 files, of which 43 are `.md`/`.html`.
+ */
+const SHIPPED_ROOTS = ['src', 'resources', 'docs', 'test', 'scripts', 'e2e'];
+const SHIPPED_EXT = /\.(tsx?|cjs|mjs|jsx?|md|html|ya?ml)$/;
+const SHIPPED_DIR_DENY = new Set(['node_modules', '.git']);
+
+function shippedTextFiles() {
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SHIPPED_DIR_DENY.has(entry.name)) walk(full);
+      } else if (SHIPPED_EXT.test(entry.name)) {
+        out.push(path.relative(root, full).split(path.sep).join('/'));
+      }
+    }
+  };
+  for (const rel of SHIPPED_ROOTS) {
+    const full = path.join(root, rel);
+    if (fs.existsSync(full)) walk(full);
+  }
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() && /\.md$/.test(entry.name)) out.push(entry.name);
+  }
+  return out.sort();
+}
+
 // The one file allowed to own a hiveTasks timer: it IS the shared poller.
 const POLLER = 'src/renderer/src/hooks/useHiveTasks.ts';
 
@@ -228,7 +275,7 @@ const STALE_STOP_DRAIN_DENIALS = [
 
 test('HIVE.md no longer promises the Stop-drain does not run (#5, FLOOR-02)', () => {
   // Trimming this list is the obvious way to make the loop below pass, so the
-  // length is asserted too: eleven fails here instead of passing there.
+  // length is asserted too: twelve fails here instead of passing there.
   assert.equal(
     STALE_STOP_DRAIN_DENIALS.length, 12,
     'the freeze list has been shortened. Five of the twelve denials live in §2 decision 5, one in '
@@ -249,6 +296,111 @@ test('HIVE.md no longer promises the Stop-drain does not run (#5, FLOOR-02)', ()
     + 'no doc promising a code path that does not run". The drain is live and guarded: '
     + 'hooks.ts calls DeliveryService.drainAtStop at the Stop boundary and returns '
     + "{decision:'block', reason} when the agent has unread mail"
+  );
+});
+
+/**
+ * The six anchor SITES that pointed at unrelated code, frozen ON the wrong
+ * string in the same shape as STALE_STOP_DRAIN_DENIALS above — and for the same
+ * reason. Each was measured non-zero in its own document immediately before
+ * plan 01-31 corrected it (`grep -c` read 4 lines in HIVE.md and 1 in
+ * docs/adr/), so every row here could actually fail.
+ *
+ * Why a DENIAL table and not a pin on the correct line: a `:NNN` pin is red on
+ * every unrelated refactor, which is how a pin ends up disabled. These name
+ * strings that were WRONG IN THE PAST, so this test can never go red for a
+ * refactor reason — only for the anchors coming back.
+ *
+ * Why it was needed at all: `01-23-SUMMARY.md` reported this exact sweep as
+ * APPLIED when six of thirteen anchors had not been touched, and when 01-31
+ * re-derived all thirteen at wave 4 it found 13 of 13 stale — 01-24, 01-25 and
+ * 01-26 each insert above the four the earlier sweep had called correct. A
+ * line number is a claim that expires on the next edit.
+ */
+const STALE_ANCHORS = [
+  { doc: 'HIVE.md', wrong: 'hive.ts:1338', where: '§2.5 dedup paragraph',
+    shouldSay: 'hive.ts drainForStop()', pointedAt: 'private startProxyBridge(' },
+  { doc: 'HIVE.md', wrong: 'hive.ts:1338', where: "§3 on-disk layout, cursor.json block",
+    shouldSay: 'hive.ts drainForStop()', pointedAt: 'private startProxyBridge(' },
+  { doc: 'HIVE.md', wrong: 'hooks.ts:662', where: '§3 on-disk layout, cursor.json block',
+    shouldSay: "hooks.ts's Stop arm", pointedAt: 'this.server = null;' },
+  { doc: 'HIVE.md', wrong: 'hooks.ts:662', where: '§7 phased plan, Stop-loop paragraph',
+    shouldSay: "hooks.ts's Stop arm", pointedAt: 'this.server = null;' },
+  { doc: 'HIVE.md', wrong: 'delivery.ts:262', where: '§7 phased plan, Stop-loop paragraph',
+    shouldSay: 'delivery.ts drainAtStop()', pointedAt: 'a VETO_TTL_MS comment' },
+  { doc: 'docs/adr/0005-cumulative-cost-ledger.md', wrong: 'index.ts:1524',
+    where: 'the "second appender" paragraph',
+    shouldSay: 'index.ts appendCostLedger()', pointedAt: "the god-beat prompt builder's byteLength" },
+];
+
+test('no doc restores an anchor that pointed at unrelated code (FLOOR-02, FLOOR-17, c/WR-07)', () => {
+  assert.equal(
+    STALE_ANCHORS.length, 6,
+    'the denial table has been shortened. Six SITES across five doc lines were wrong; dropping a '
+    + 'row lets that anchor come back while this test stays green'
+  );
+
+  const offenders = [];
+  for (const row of STALE_ANCHORS) {
+    const text = fs.readFileSync(path.join(root, row.doc), 'utf8');
+    if (text.includes(row.wrong)) {
+      offenders.push(
+        `${row.doc} (${row.where}) cites ${row.wrong}, which pointed at ${row.pointedAt}; `
+        + `it should name ${row.shouldSay}`
+      );
+    }
+  }
+
+  assert.deepEqual(
+    offenders, [],
+    `a corrected anchor is back:\n  ${offenders.join('\n  ')}\n`
+    + 'ROADMAP criterion 1 is "grep finds no doc promising a code path that does not run", and an '
+    + 'anchor pointing at the wrong function routes the next change into the wrong file. Write '
+    + '`<file>.ts <symbol>()`; if a line number genuinely helps navigation, put it BESIDE the '
+    + 'symbol and only after re-deriving it.'
+  );
+});
+
+/**
+ * `DESIGN.md` stated a 1280 × 800 window minimum in two places. Plan 01-25
+ * lowered `MIN_WIN.width` to 960 so FLOOR-13's sub-1024 sidebar collapse is
+ * reachable in the shipped app at all, and 01-25 owns and edits `DESIGN.md`.
+ *
+ * `DESIGN.md` is NOT in plan 01-31's files_modified. This pin exists precisely
+ * so the correction cannot fall BETWEEN the two plans: if 01-25 had missed it,
+ * this is red and says which file and line.
+ */
+const PRE_FIX_DESIGN_MINIMUM = '- Main window minimum: 1280 × 800.';
+const STATES_1280_MINIMUM = /1280\s*[×x]\s*800|minimum:?\s*1280/i;
+
+test('no shipped doc still states a 1280 window minimum (FLOOR-13, cross-checks 01-25)', () => {
+  // Non-vacuity first: the matcher must fire on the sentence the tree actually
+  // shipped before 01-25. A pin nobody has seen failing is a comment.
+  assert.ok(
+    STATES_1280_MINIMUM.test(PRE_FIX_DESIGN_MINIMUM),
+    'the matcher no longer recognises the pre-01-25 DESIGN.md sentence, so a green result below '
+    + 'would mean the regex broke rather than the docs being right'
+  );
+
+  const docs = shippedTextFiles().filter((rel) => /\.(md|html)$/.test(rel));
+  assert.ok(
+    docs.length > 30,
+    `expected the shipped doc corpus, found ${docs.length} files (43 measured when written)`
+  );
+  assert.ok(docs.includes('DESIGN.md'), 'DESIGN.md is not in the doc corpus — the walker is wrong');
+
+  const offenders = [];
+  for (const rel of docs) {
+    fs.readFileSync(path.join(root, rel), 'utf8').split(/\r?\n/).forEach((line, i) => {
+      if (STATES_1280_MINIMUM.test(line)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+    });
+  }
+
+  assert.deepEqual(
+    offenders, [], `a shipped doc still promises a 1280px window minimum:\n  ${offenders.join('\n  ')}\n`
+    + 'src/main/index.ts MIN_WIN.width is 960 (plan 01-25), which is what makes '
+    + "sidebarLayout.ts's SIDEBAR_COLLAPSE_WIDTH = 1024 branch reachable in the shipped app. A doc "
+    + 'stating 1280 describes a window the app no longer enforces.'
   );
 });
 
@@ -335,20 +487,58 @@ test('the two dead memory exports and their handlers stay deleted (#16, FLOOR-07
   }
 });
 
-test('the keyword store is not described as an "Enterprise Knowledge Graph" (#31, FLOOR-07)', () => {
+/**
+ * The two paths held OUT of the naming scan, each carrying its reason here
+ * rather than in a comment somewhere else, because an unexplained exclusion is
+ * the shape a weakened pin takes.
+ */
+const EKG_SCAN_EXCLUDED = {
+  'docs/floor-inspection.html':
+    'the audit RECORD, which quotes the defect in order to report it — erasing the quotation '
+    + 'would delete the finding rather than fix it',
+  'test/repo-claims.test.cjs':
+    'this file: a pin must be allowed to contain its own needle, or it can never pass '
+    + '(01-REDTEAM-5 R-32 demonstrated exactly that)',
+};
+
+test('no shipped surface describes the keyword store as an "Enterprise Knowledge Graph" (#31, FLOOR-07)', () => {
   // NOT comment-stripped, deliberately, and it is the one place in this file
   // that is: the claim is made IN prose and IN doc comments, so stripping them
-  // would delete the very text under test.
-  for (const rel of ['README.md', 'src/preload/index.ts']) {
-    const text = fs.readFileSync(path.join(root, rel), 'utf8');
+  // would delete the very text under test. That reasoning survived the widening
+  // from two files to the whole shipped surface. It is also NOT routed through
+  // `stripComments` for a second reason — that helper carries an unfixed
+  // string-truncation defect (review c/WR-13), outside this plan's scope.
+  const files = shippedTextFiles().filter((rel) => !(rel in EKG_SCAN_EXCLUDED));
+
+  // Assert the CORPUS before asserting the corpus is clean: a broken walker and
+  // a clean tree must never be indistinguishable. 315 measured when written.
+  assert.ok(
+    files.length > 200,
+    `expected the shipped tree, found ${files.length} files — shippedTextFiles() is broken, `
+    + 'so a green result below would mean nothing was read rather than nothing was found'
+  );
+  for (const needed of ['resources/skills/capabilities/SKILL.md', 'README.md', 'DESIGN.md']) {
     assert.ok(
-      !/enterprise knowledge graph/i.test(text),
-      `${rel} calls the knowledge store an "Enterprise Knowledge Graph". `
-      + 'src/main/kg-core.cjs:3-8 says what it actually is — keyword scoring over text chunks, '
-      + 'term frequency plus a title boost, no entities and no edges — and V2-05 (the entity '
-      + 'graph) was formally RETIRED, not deferred. The name promises the retired thing.'
+      files.includes(needed),
+      `${needed} is NOT in the scanned corpus. It is the reason this scan does not reuse `
+      + "sourceFiles(), which matches .ts/.tsx only — a corpus that excludes this file's own "
+      + 'highest-value site reports a guarantee it does not hold.'
     );
   }
+
+  const offenders = files.filter(
+    (rel) => /enterprise knowledge graph/i.test(fs.readFileSync(path.join(root, rel), 'utf8'))
+  );
+
+  assert.deepEqual(
+    offenders, [],
+    `these shipped files call the keyword store an "Enterprise Knowledge Graph": ${offenders.join(', ')}. `
+    + 'src/main/kg-core.cjs says what it actually is — keyword scoring over text chunks, term '
+    + 'frequency plus a title boost, no entities and no edges — and V2-05 (the entity graph) was '
+    + 'formally RETIRED, not deferred. The name promises the retired thing. '
+    + 'resources/skills/capabilities/SKILL.md is the one that matters most: it is installed into '
+    + "every agent's skills directory, so a false capability claim there is consumed by the models."
+  );
 });
 
 test('the FTS5 migration the docs promise is in the schema (#32, FLOOR-07)', () => {

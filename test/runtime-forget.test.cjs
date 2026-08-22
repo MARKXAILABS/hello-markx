@@ -18,7 +18,7 @@ const assert = require('node:assert/strict');
 const loadTs = require('./load-ts.cjs');
 
 const { ControlRegistry } = loadTs('src/main/control.ts');
-const { TelemetryCollector } = loadTs('src/main/telemetry.ts');
+const { TelemetryCollector, sessionKey } = loadTs('src/main/telemetry.ts');
 const { PtyManager } = loadTs('src/main/pty.ts');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -96,16 +96,19 @@ test('session accumulators older than 24 h leave the live aggregate', () => {
 
   // Age the dead one. Reaching into the private map is the house shortcut for
   // "pretend a day passed" (the collector has no injected clock).
-  collector.sessions.get('old').ts = Date.now() - DAY_MS - 1000;
+  // That map is keyed by the (agentId, sessionId) PAIR now (01-25, T-P25-04), so
+  // the probe goes through the exported `sessionKey` instead of spelling the
+  // separator here — one definition of the key, never two.
+  collector.sessions.get(sessionKey('jim', 'old')).ts = Date.now() - DAY_MS - 1000;
 
   const live = collector.getAgentUsage('jim');
   assert.equal(live.input, 10, 'the breaker must diff live spend only');
   assert.equal(live.sessionId, 'live');
-  assert.equal(collector.sessions.has('old'), false, 'expired accumulator is swept, not just skipped');
+  assert.equal(collector.sessions.has(sessionKey('jim', 'old')), false, 'expired accumulator is swept, not just skipped');
 
   // Every session expired → null (a transcript fallback / no data), never an
   // all-zero sample the breaker would read as a spend reset.
-  collector.sessions.get('live').ts = Date.now() - DAY_MS - 1000;
+  collector.sessions.get(sessionKey('jim', 'live')).ts = Date.now() - DAY_MS - 1000;
   assert.equal(collector.getAgentUsage('jim'), null);
 });
 

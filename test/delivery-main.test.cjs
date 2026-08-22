@@ -199,6 +199,25 @@ test('a silent PTY is flipped idle with NO window attached, once per quiet spell
   assert.equal(state.statuses.length, 2, 'the backstop did not re-arm after the agent worked again');
 });
 
+test('the quiesce Stop is marked SYNTHESIZED, so the renderer can tell it from a real turn-end', async () => {
+  // Asserted where the emit lives. The renderer cannot derive this: hooks.ts's
+  // real Stop sends { agentId, event:'Stop', blocked:false } with every other key
+  // undefined — byte-equivalent to this one without the discriminator — so a
+  // renderer-side heuristic would have to guess, and guessing wrong either erases
+  // a permission-prompted agent's "needs you" or swallows Claude Code's own
+  // turn-end. useHive.ts's `stopArmDecision` is the consumer.
+  const { svc, state, emitted } = harness();
+  state.inbox.dev1 = [];               // no mail: this is the quiesce path, not the wake
+
+  await svc.tick();
+
+  const stops = emitted.filter((m) => m.channel === 'hive:hookEvent' && m.payload.event === 'Stop');
+  assert.equal(stops.length, 1, 'the quiesce backstop did not emit exactly one Stop for a silent PTY');
+  assert.deepEqual(stops[0].payload, {
+    agentId: 'dev1', event: 'Stop', blocked: false, synthesized: true
+  }, 'the synthesized turn-end is indistinguishable from a real one on the wire');
+});
+
 test('silence that is not a finished turn does not flip: a booting TUI, and a PTY that never painted', async () => {
   const { svc, state } = harness();
   state.inbox.dev1 = [];
@@ -558,6 +577,169 @@ test('the queue is durable across a changed harness home, and bounded per agent'
     const full = svc.enqueue({ agentId: 'dev1', text: 'one too many' });
     assert.equal(full.ok, false, 'the queue grew past its ceiling');
     assert.match(full.error, /queue full/);
+  });
+});
+
+// ─── a queue that cannot be READ is not a queue that is EMPTY (a/CR-05) ──────
+//
+// `loadQueue` armed the write path on EVERY path, including after its `catch`
+// swallowed a failure — while the doc comment three lines above stated the
+// opposite invariant. One EBUSY/EPERM (Windows AV, an indexer) or one EMFILE
+// under load replaced the queue with `[]`, and the next mutation wrote that
+// emptiness over a file that was fine.
+//
+// The disk is the observable throughout. The armed-path field is private and
+// no test below reads it: a service that "looks disarmed" while still writing
+// is exactly the failure being closed.
+
+/** The portable read fault: a DIRECTORY where the queue file should be. EISDIR
+ *  is the win32, linux and darwin answer alike, so one fixture drives the
+ *  non-ENOENT branch on every CI runner. ASSERTED, not assumed — if a platform
+ *  ever answers something else this fails HERE, loudly, instead of silently
+ *  turning every case below into a no-op. */
+function unreadableQueuePath(dir, name) {
+  const p = path.join(dir, name);
+  fs.mkdirSync(p);
+  let code = null;
+  try { fs.readFileSync(p, 'utf8'); } catch (e) { code = e.code; }
+  assert.equal(code, 'EISDIR',
+    `a directory at the queue path did not throw EISDIR on ${process.platform} (got ${code}) — `
+    + 'this fixture no longer drives the non-ENOENT branch and the tests below prove nothing');
+  return p;
+}
+
+test('a queue whose read FAILS leaves the write path disarmed and the persisted bytes intact', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    let target = queuePath;
+    const { svc, state } = harness({ queuePath: () => target, emit: () => {} });
+    state.inbox.dev1 = [];
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'parked before the fault' }).ok, true);
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'parked before the fault as well' }).ok, true);
+    const good = fs.readFileSync(queuePath, 'utf8');
+
+    // The antivirus hold: the next read of the queue throws, and it is NOT ENOENT.
+    target = unreadableQueuePath(dir, 'held-by-the-scanner.json');
+
+    const refused = svc.enqueue({ agentId: 'dev1', text: 'arrived during the hold' });
+    assert.equal(refused.ok, false,
+      'an enqueue was ACCEPTED against a queue whose read had just failed. The write path was armed '
+      + 'BY the failure, so the caller is told its message is parked and the next mutation writes an '
+      + 'empty queue over a file that was fine');
+    assert.match(refused.error, /temporarily unreadable/,
+      `the refusal must name the real cause: ${refused.error}`);
+    assert.equal(/no harness home/.test(refused.error), false,
+      'the operator is told there is no harness home during a transient read fault — plan 01-28 '
+      + 'renders this exact string to the screen unaltered');
+
+    // Nothing was staged or written at the path that could not be read.
+    assert.deepEqual(fs.readdirSync(target), [],
+      'the failed load wrote into the very path it could not read');
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.tmp-')), [],
+      'a persist was staged off a load that never landed');
+
+    // The bytes that WERE durable are untouched, read straight back off disk.
+    assert.equal(fs.readFileSync(queuePath, 'utf8'), good,
+      'the persisted queue was rewritten after a failed read');
+
+    // And the refused message was refused, not buffered for the next mutation.
+    target = queuePath;
+    assert.equal(JSON.stringify(svc.queueSnapshot()).includes('during the hold'), false,
+      'a refused message survived in memory and will be written on the next successful mutation');
+  });
+});
+
+// POSITIVE CONTROL. Without this a loader that NEVER arms passes everything above.
+
+test('a transient read fault is TRANSIENT: the next good read re-arms and one enqueue reaches disk', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    let target = queuePath;
+    const { svc, state } = harness({ queuePath: () => target, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'one' });
+    svc.enqueue({ agentId: 'dev1', text: 'two' });
+    const before = JSON.parse(fs.readFileSync(queuePath, 'utf8')).items.length;
+    assert.equal(before, 2);
+
+    target = unreadableQueuePath(dir, 'held-open.json');
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'during the hold' }).ok, false);
+
+    target = queuePath; // the scanner lets go
+    const res = svc.enqueue({ agentId: 'dev1', text: 'three' });
+    assert.equal(res.ok, true, `the loader never re-armed — a transient fault became permanent: ${res.error}`);
+
+    const items = JSON.parse(fs.readFileSync(queuePath, 'utf8')).items;
+    assert.equal(items.length, before + 1, 'a healthy enqueue after the fault never reached disk');
+    assert.equal(items.filter((m) => m.text === 'during the hold').length, 0,
+      'a message that was refused during the fault was written to disk anyway');
+    assert.ok(items.some((m) => m.text === 'three'));
+    assert.ok(items.some((m) => m.text === 'one'), 'the pre-fault queue was lost on re-arm');
+  });
+});
+
+// NEGATIVE CONTROLS — the ordinary operations that must still work.
+
+test('ENOENT is a first boot, not a fault: an absent queue still arms and the first enqueue writes it', () => {
+  withQueueDir(({ dir }) => {
+    const fresh = path.join(dir, 'never-written-yet.json');
+    const { svc, state } = harness({ queuePath: () => fresh, emit: () => {} });
+    state.inbox.dev1 = [];
+    assert.equal(fs.existsSync(fresh), false);
+
+    const res = svc.enqueue({ agentId: 'dev1', text: 'first message on a fresh floor' });
+    assert.equal(res.ok, true, `a first boot was treated as a read fault: ${res.error}`);
+
+    const items = JSON.parse(fs.readFileSync(fresh, 'utf8')).items;
+    assert.equal(items.length, 1, 'the first message on a fresh floor never reached disk');
+    assert.equal(items[0].text, 'first message on a fresh floor');
+  });
+});
+
+test('no harness home at all still returns the harness-home refusal — that string stays right for its own case', () => {
+  const { svc, state } = harness(); // queuePath: () => null, the default
+  state.inbox.dev1 = [];
+  const res = svc.enqueue({ agentId: 'dev1', text: 'nowhere durable to put this' });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /no harness home/,
+    `a genuinely homeless floor must still say so: ${res.error}`);
+});
+
+test('a corrupt file is still replaceable: unparseable JSON is an empty queue, and it ARMS', () => {
+  withQueueDir(({ queuePath }) => {
+    fs.writeFileSync(queuePath, '{ not json at all', 'utf8');
+    const { svc, state } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+
+    // Readable-vs-unreadable is the distinction being drawn, NOT valid-vs-invalid:
+    // a file that read fine and parsed badly is genuinely corrupt, and a floor that
+    // could never overwrite it would be wedged forever.
+    const res = svc.enqueue({ agentId: 'dev1', text: 'past the corruption' });
+    assert.equal(res.ok, true, `a corrupt queue file wedged the floor permanently: ${res.error}`);
+    assert.equal(JSON.parse(fs.readFileSync(queuePath, 'utf8')).items.length, 1);
+  });
+});
+
+// VISIBILITY — the row filter is a silent deleter on the first launch after a
+// shape change. It stays a deleter; it stops being silent.
+
+test('rows dropped by the shape filter are COUNTED and logged, not deleted in silence', () => {
+  withQueueDir(({ queuePath }) => {
+    fs.writeFileSync(queuePath, JSON.stringify({
+      version: 1,
+      items: [
+        { id: 'q-1', agentId: 'dev1', text: 'survives', ts: 1 },
+        { id: 'q-2', agentId: 'dev1', ts: 2 },   // a `text` that a shape change renamed
+        { id: 'q-3', agentId: 'dev1', text: 'no ts' }
+      ]
+    }), 'utf8');
+    const logs = [];
+    const { svc, state } = harness({
+      queuePath: () => queuePath, emit: () => {}, log: (...a) => logs.push(a.map(String).join(' '))
+    });
+    state.inbox.dev1 = [];
+
+    assert.equal(Object.values(svc.queueSnapshot()).flat().length, 1);
+    assert.ok(logs.some((l) => /drop/i.test(l) && /2/.test(l)),
+      `a shape change deleted 2 parked messages leaving no trace at all: ${JSON.stringify(logs)}`);
   });
 });
 

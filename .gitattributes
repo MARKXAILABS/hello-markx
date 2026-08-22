@@ -1,0 +1,50 @@
+# Line-ending policy.
+#
+# This host has core.autocrlf=true. Git therefore rewrites LF -> CRLF on every
+# checkout, worktree add, stash and stash pop. For most files that is harmless.
+# For .planning/ it is not, and the failure is SILENT.
+#
+# GSD's frontmatter reader (get-shit-done/bin/lib/frontmatter.cjs) is a
+# hand-rolled line parser, not a YAML parser, and it does not strip \r.
+# Measured on this repo, same bytes, only the line endings differing:
+#
+#   01-26-PLAN.md as LF    -> {"all_passed": false, "passed": 0, "total": 5}
+#   01-26-PLAN.md as CRLF  -> {"error": "No must_haves.artifacts found in frontmatter"}
+#
+# That is not a failing gate. It is NO gate — every artifact check and key-link
+# check in the plan silently stops existing, and an executor can read the error
+# as "nothing to verify" and proceed. It is the same class as a trailing '#'
+# comment on a value line making the parser emit `undefined` so verify.cjs skips
+# the check, which cost this phase two full red-team rounds to find.
+#
+# Pinning LF here is the permanent fix: it survives a fresh clone, a worktree,
+# and anyone else's autocrlf setting.
+.planning/** text eol=lf
+
+# The repo's own tooling parses these with hand-rolled or line-oriented readers
+# too (test/ci-config.test.cjs, test/repo-claims.test.cjs, the shim templates in
+# src/main/hive.ts). Keep them LF for the same reason.
+*.md        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.cjs       text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.json      text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+
+# Binary — never touch these.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.node      binary
+*.asar      binary
+*.exe       binary
+*.dll       binary
+*.tmj       text eol=lf

@@ -159,12 +159,28 @@ test('interpreter flags between program and script are refused, never dropped', 
   assert.equal(parseNpmCmdShim(SHIM, withFlags), null);
 });
 
-test('the win32 branch is genuinely platform-gated', () => {
-  // Proves the macOS/Linux spawn path is untouched: on any non-win32 host the shim
-  // probe short-circuits before it ever looks at the filesystem.
+// Proves the macOS/Linux spawn path is untouched: on any non-win32 host the shim
+// probe short-circuits before it ever looks at the filesystem. That is the whole
+// case, so on win32 — where the branch it names is the LIVE one — there is
+// nothing left here to assert.
+//
+// The platform decision therefore belongs to the RUNNER. It used to be a bare
+// `if (process.platform === 'win32') return;` inside the callback, and a
+// node:test callback that returns normally is counted as a PASS: on win32 this
+// case reported `ok` having executed not one assertion.
+//
+// The skip is CONDITIONAL on purpose. An UNCONDITIONAL skip option would also be
+// "counted by the runner" and would delete the POSIX coverage outright — a real
+// non-run on every platform, strictly worse than the false pass it replaces.
+// test/transcript-project-dir.test.cjs carries the mirror of this case, and both
+// are proven conditional the same way: poison the assertion and the poison must
+// fire on the polarity that runs while staying invisible on the one that skips.
+test('the win32 branch is genuinely platform-gated', {
+  skip: process.platform === 'win32'
+    && 'this case asserts the NON-win32 short-circuit; on win32 the branch it names is the live one'
+}, () => {
   const mgr = new PtyManager();
   const probe = mgr['resolveWindowsShimSpawn'].bind(mgr);
-  if (process.platform === 'win32') return; // the guard under test is the negative one
   assert.equal(probe(SHIM), null);
   assert.equal(probe(`${NPM_DIR}\\opencode`), null);
 });

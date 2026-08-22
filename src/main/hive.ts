@@ -395,11 +395,38 @@ export function redactSecrets(text: unknown): string {
   s = s.replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, '[redacted]');
   // 2. JSON Web Tokens — three base64url segments separated by dots.
   s = s.replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g, '[redacted]');
-  // 3. Known credential prefixes: OpenAI/Anthropic (sk-, sk-ant-), Slack
-  //    (xoxb/xoxp/xoxa/xoxr/xoxs-, xapp-), GitHub (ghp_/gho_/ghu_/ghs_/ghr_,
-  //    github_pat_), AWS access-key ids (AKIA…), Google API keys (AIza…).
+  // 3. Known credential prefixes: OpenAI/Anthropic (sk-ant-, sk-proj-,
+  //    sk-svcacct-, bare sk-), Slack (xoxb/xoxp/xoxa/xoxr/xoxs-, xapp-),
+  //    GitHub (ghp_/gho_/ghu_/ghs_/ghr_, github_pat_), AWS access-key ids
+  //    (AKIA…), Google API keys (AIza…).
+  //
+  //    THE sk- ARM IS SPLIT, AND THE SPLIT IS MEASURED, NOT TIDY. A vendor
+  //    segment (ant-, proj-, svcacct-) discriminates on its own, so those
+  //    three stay UNBOUNDED: a word boundary on them loses `q=key%3Dsk-proj-`
+  //    + a key — a URL-encoded `=` in a curl line, a log or a stack trace —
+  //    and `xsk-ant-…`, both of which redact without it.
+  //    The BARE sk- body is ambiguous by construction and is the ONLY
+  //    alternative with a measured false positive, so it alone carries the \b.
+  //    It is what stops `desk-backend-engineer`, `desk-market-researcher`,
+  //    `task-kanban-work-as-a-board-not-a-chat-log` and
+  //    `risk-assessment-matrix-builder-v2` being read as vendor keys — four
+  //    tracked files were dropped from every commit that touched them.
+  //
+  //    DECLARED TRADE, because an undeclared one is worse than the bug: that
+  //    \b costs a LEGACY bare sk-<alnum> OpenAI key glued to a preceding word
+  //    character. Five measured shapes, pinned as DECLARED LOSSES in
+  //    test/voice-messages.test.cjs. A lookbehind — (?<![a-z])sk- — was
+  //    measured and recovers two of the five with the same zero newly-unstaged
+  //    paths over 481 tracked text files and 400 commits; it is the recorded
+  //    upgrade path, not a hypothetical.
+  //
+  //    The other six alternatives are left EXACTLY as they were, with NO
+  //    boundary. They have zero measured false positives across those same 481
+  //    files and 400 commits, and a boundary on them loses `AWS` + `AKIA…` and
+  //    `MY` + `github_pat_…`, both redacted today. One uniform rule is only
+  //    smaller than six exceptions when the uniform rule is free; it is not.
   s = s.replace(
-    /(?:sk-(?:ant-)?[A-Za-z0-9_-]{16,}|xox[bpaors]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|gh[posru]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{20,})/g,
+    /(?:sk-ant-[A-Za-z0-9_-]{16,}|sk-proj-[A-Za-z0-9_-]{16,}|sk-svcacct-[A-Za-z0-9_-]{16,}|\bsk-[A-Za-z0-9_-]{16,}|xox[bpaors]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|gh[posru]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{20,})/g,
     '[redacted]'
   );
   // 4. Bearer tokens — keep the label, drop the credential.
@@ -414,6 +441,26 @@ export function redactSecrets(text: unknown): string {
     /\b((?:[a-z0-9]+[_-])*(?:api[_-]?key|secret[_-]?access[_-]?key|secret|token|password|passwd|pwd|access[_-]?token|refresh[_-]?token|client[_-]?secret|signing[_-]?secret|webhook[_-]?secret|auth[_-]?token|bot[_-]?token|private[_-]?key))(\s*[:=]\s*)(["']?)[^\s"',}]{6,}\3/gi,
     (_m, k) => `${k}=[redacted]`
   );
+  // 6. Unlabelled vendor keys spelled with an UNDERSCORE vendor segment.
+  //    THESE RUN AFTER PATTERNS 1-5 DELIBERATELY, AND THE ORDER IS THE WHOLE
+  //    DESIGN. A greedy [A-Za-z0-9_]{10,} body placed INSIDE pattern 3's
+  //    alternation matches at an EARLIER position than the sk- arm and eats the
+  //    leading "sk" of a following sk-ant- key, leaking the rest of it —
+  //    measured, 20 bytes, on `sk_live_AAAAAAAAAAsk-ant-BBBBBBBBBBBBBBBB`.
+  //    "Appending a branch to an alternation cannot subtract" is FALSE: it
+  //    cannot subtract AT A POSITION, and it does subtract DOWNSTREAM.
+  //    Running as their own statements, these two can only redact MORE, because
+  //    every earlier pattern has already finished with the string. That is a
+  //    property of STATEMENT ORDER you can check by reading the function,
+  //    rather than of a lookahead enumerating every prefix a greedy body might
+  //    swallow — an enumeration that is wrong the day a vendor prefix is added.
+  //    A vendor segment is REQUIRED after the underscore so a bare long
+  //    snake_case identifier can never satisfy the body. It is not free:
+  //    `sk_test_helper_function` and `rk_live_stream_handler` DO match. That
+  //    residual family is recorded in the ceiling on scrubStagedSecrets, and it
+  //    unstages zero paths across 481 tracked text files and 400 commits.
+  s = s.replace(/\bsk_(?:ant|live|test|proj)_[A-Za-z0-9_]{10,}/g, '[redacted]');
+  s = s.replace(/\brk_(?:live|test)_[A-Za-z0-9_]{10,}/g, '[redacted]');
   return s;
 }
 
@@ -723,9 +770,19 @@ export class HiveManager {
     return token;
   }
 
-  /** Revoke token-exact, never by agent: a sidecar restart is stop()+start()
-   *  under the same id, and revoking by agent could kill the live replacement's
-   *  token (the same race pty.ts documents). */
+  /** Revoke whatever token is currently registered for an agent. This is BY AGENT,
+   *  and that is safe ONLY where the caller has established that the map entry
+   *  belongs to the thing being torn down.
+   *
+   *  Who owns that invariant, exactly:
+   *   - `stopProxyBridge` and `mintProxyToken` call it BEFORE any re-mint, so the
+   *     entry is still the outgoing generation's. Correct as written.
+   *   - `startProxyBridge`'s exit handler CANNOT assume that — a restart mints the
+   *     replacement synchronously and the dying sidecar's exit event lands after —
+   *     so it guards on `this.proxyTokens.get(agentId) === token` against the token
+   *     its own spawn was given, the way pty.ts's releaseHookToken releases the
+   *     credential the session holds. It used to call this unguarded, which
+   *     dead-hooked every proxy-tier agent from its second spawn onward. */
   private revokeProxyToken(agentId: string): void {
     const token = this.proxyTokens.get(agentId);
     if (!token) return;
@@ -1335,7 +1392,16 @@ export class HiveManager {
       child.on('error', () => settle(0));
       child.on('exit', () => {
         if (this.proxyChildren.get(agentId) === child) this.proxyChildren.delete(agentId);
-        this.revokeProxyToken(agentId);
+        // Revoke THE TOKEN THIS SPAWN WAS GIVEN, never whatever the map currently
+        // holds. A restart is stopProxyBridge -> mintProxyToken -> spawn ->
+        // proxyChildren.set, all synchronously in one tick, and this exit event is
+        // asynchronous — so it ALWAYS lands after the replacement has minted. An
+        // unguarded revokeProxyToken(agentId) here therefore kills generation 2's
+        // credential every single time, not occasionally. Mirrors pty.ts's
+        // releaseHookToken, which releases the credential the SESSION holds.
+        // When a replacement already owns the entry, this generation's token was
+        // revoked by stopProxyBridge on the way in — nothing is left to leak.
+        if (this.proxyTokens.get(agentId) === token) this.revokeProxyToken(agentId);
         settle(0); // never hang the spawn if the sidecar dies before reporting
       });
       // Hard ceiling: if the sidecar never reports a port, degrade rather than hang.
@@ -1452,10 +1518,15 @@ export class HiveManager {
       // (or an empty expansion) for a Windows agent that tried to use it literally.
       ? `Semantic memory: the whole hive shares a searchable MemPalace at the path in your MEMPALACE_PALACE_PATH environment variable. To recall relevant past knowledge across the team, run \`"${mem}" search "<query>"\`; run \`"${mem}" wake-up\` at the start of a task for a memory digest. (That is the absolute path to the mempalace CLI — use it instead of a bare \`mempalace\`, which may not be on your PATH.) Your notes in memory.md are mined into the palace automatically — write durable facts there.`
       : '';
-    // Enterprise Knowledge Graph (opt-in). Volatile-free: the bundled-node launcher
-    // and the KG CLI are both fixed absolute paths for an install, so baking them
-    // keeps the prefix prompt-cache-stable while making the command runnable in
-    // cmd.exe/PowerShell as well as a POSIX shell.
+    // The local document store (opt-in). To be exact about what it is, in the words
+    // of its own core: retrieval is KEYWORD SCORING OVER TEXT CHUNKS — term
+    // frequency plus a title/phrase boost — not entities, edges, or a graph
+    // (src/main/kg-core.cjs). A retired capability name presented as live is a
+    // false claim the agents themselves consume.
+    // Volatile-free: the bundled-node launcher and the store's CLI are both fixed
+    // absolute paths for an install, so baking them keeps the prefix
+    // prompt-cache-stable while making the command runnable in cmd.exe/PowerShell
+    // as well as a POSIX shell.
     const hiveNode = this.nodeCommand();
     const kgCli = kgCliPath || (process.platform === 'win32' ? '%KG_CLI%' : '$KG_CLI');
     const knowledgeLine = knowledgeGraph
@@ -3156,6 +3227,16 @@ export class HiveManager {
    * hive deliberately suppresses hooks with core.hooksPath so an agent cannot
    * plant one (see git/gitAsync).
    *
+   * THE SINGLE-COMMITTER PREMISE ABOVE IS FALSE AS WRITTEN, and this is the
+   * place to say so rather than the place to assume it. AGENT_DENY_RULES has no
+   * `git add` rule, no `git commit` rule and no `git -C` rule — measured — so an
+   * agent can run `git -C "$HIVE_ROOT" add -A && git -C "$HIVE_ROOT" commit -m x`
+   * and never reach flushCommit or this scrub at all. Closing it is a deny-rule
+   * change with a blast radius this comment cannot measure (agents legitimately
+   * commit in their OWN worktrees, and a deny rule that wedges every agent's git
+   * is a worse failure than the one it prevents), so it is RECORDED here and
+   * owned by the residual register, not silently patched.
+   *
    * WHY redactSecrets AND NOT A SECOND MATCHER. The project trusts exactly one
    * pattern set; the mail path already runs every subject and body through it.
    * Two matchers that disagree is worse than one imperfect matcher, because the
@@ -3163,14 +3244,87 @@ export class HiveManager {
    * redacts. This call site does not change the battery, which is under a
    * LOCKSTEP contract with test/voice-messages.test.cjs.
    *
-   * WHAT IT DOES NOT CATCH — measured, not assumed, and pinned by a test in
-   * test/hive-durability.test.cjs rather than promised here: credential shapes
-   * with no pattern (`sk_live_…`, since pattern 3 wants `sk-` and not `sk_`),
-   * bare high-entropy strings carrying neither a prefix nor a label, and JSON —
-   * `"token": "…"` does NOT match pattern 5, which needs the `:`/`=` directly
-   * after the key name and finds the closing quote in the way. Binary blobs
-   * produce no `+` lines and are never scanned. This is defence in depth, not a
-   * guarantee, and no doc may claim more of it.
+   * THE CEILING — BOUNDED, MEASURED, AND NOT NEGOTIABLE DOWNWARD.
+   *
+   * FLOOR-04's own wording is *"so it never reaches git history"*. No regex
+   * delivers "never", and this control has now been measured twice proving it.
+   * WHAT IT DOES DELIVER, exactly: labelled `key=value` / `key: value` pairs,
+   * plus ten vendor prefixes (the eight in pattern 3 after the sk- split and
+   * the two underscore-spelled ones in pattern 6), matched on ADDED lines only,
+   * ON ONE LINE, under two size caps. Everything below is what that leaves open.
+   * Each item is pinned by a test in test/hive-durability.test.cjs and
+   * test/voice-messages.test.cjs rather than promised here.
+   *
+   * FIVE ACTIVE BYPASSES. Each is an ACTION AN AGENT TAKES, not a passive limit.
+   *
+   *  1. LINE-CHUNKING, and WHERE THE CUT FALLS DECIDES IT. addedLines joins `+`
+   *     lines with `\n`, so no pattern spans a line break. Measured, labelled:
+   *       `const KEY = "sk_live_EX_Hxxxxxxxxxxxxyyyyzzzzwwww";`     -> 1 hit here
+   *       `const A = "sk_live_" + "51Hxxxxxxxxxxxx";`              -> 0 hits
+   *     A cut INSIDE the vendor prefix is never scanned, at any size, on any
+   *     line count. A cut AFTER the prefix plus ten body characters is caught in
+   *     the head and leaks the tail. Closing this needs a whole-blob scanner,
+   *     which is a different design.
+   *  2. THE LINE CAP, disabled by one command. `seq 20001 > pad.txt` in the same
+   *     debounce window pushes --numstat past SECRET_SCAN_MAX_LINES and sends
+   *     the WHOLE commit, secret included, down the `committing UNSCANNED` path.
+   *  3. THE BYTE CAP. Past SECRET_SCAN_MAX_BYTES the diff is slice()d and
+   *     everything after the cut is never scanned. Same shape, one level up.
+   *  4. QUOTED-KEY JSON. `{"token": "…"}` and `obj["token"] = "…"` are both
+   *     unmatched — the closing quote and the `]` break key-to-delimiter
+   *     adjacency. An arm for it was BUILT, MEASURED and REJECTED ON ITS COST:
+   *     it gains 2 detections and costs 2 of the 12 demonstrated false positives
+   *     (`"api_key": "$OPENAI_API_KEY"` and `"secret": "REPLACE_ME"` — a config
+   *     template and a scaffold placeholder, both shapes agents write
+   *     constantly), and over 400 commits it costs 0 additional paths, so those
+   *     2 ARE the cost. +2 detections do not buy 2 permanent unstages. That is
+   *     the whole reason. It is NOT rejected because a value-shape predicate on
+   *     it would re-open the door that lost 15 detections — it would not; those
+   *     were lost to a predicate on PATTERN 5, the only arm covering labelled
+   *     key=value, where a predicate subtracts from live detections.
+   *  5. `printf '* -diff' > .gitattributes` — ONE LINE, PERSISTENT, AND THE ONLY
+   *     ONE THAT LOGS NOTHING AT ALL. Every diff then reads `Binary files …
+   *     differ`; --numstat reports `-`/`-`, so `Number('-') || 0` makes `changed`
+   *     0 and the SECRET_SCAN_MAX_LINES branch never fires; addedLines is empty
+   *     and this function returns true having scanned nothing. Both size caps at
+   *     least print `committing UNSCANNED` and append a log row; this one writes
+   *     no warning and no log row, and unlike `seq 20001 > pad.txt` it persists
+   *     for every future commit until a human reads .gitattributes. It is the
+   *     agent-controllable escalation of the sentence that follows.
+   *
+   * Binary blobs produce no `+` lines and are never scanned.
+   *
+   * DECLARED LOSS, carried here so it is not discoverable only by reading a
+   * regex: the \b on pattern 3's BARE sk- arm means a LEGACY bare sk-<alnum>
+   * OpenAI key glued to a preceding word character (`q=key%3Dsk-A1B2…`) is no
+   * longer redacted — 5 measured shapes, pinned as declared losses in
+   * test/voice-messages.test.cjs. `sk-ant-`, `sk-proj-` and `sk-svcacct-` are
+   * unbounded and keep matching in every one of those contexts. Separately,
+   * pattern 6's two arms redact ordinary identifiers of the form
+   * `sk_test_helper_function` / `rk_live_stream_handler`; measured over 481
+   * tracked text files and 400 commits that family unstages nothing here, which
+   * is a property of THIS corpus and not of the arms.
+   *
+   * THE FALSE-POSITIVE RATE, AS A NUMBER, AND IT IS THE BIGGER FACT. Replayed
+   * over the last 400 commits with this function's own algorithm — the window
+   * is COMMIT-RELATIVE, so the tip and the variant are part of the number:
+   * `git log -n 400 0b3d631`, with addedLines keeping the leading `+` exactly
+   * as it does above (strip it and the same data answers 67/66). Under the
+   * matcher this replaced, 50 of those commits (12.5%) would have had at least
+   * one path silently dropped, across 66 distinct paths. Under the matcher in
+   * this commit: 48 (12.0%) across 65. The DISTINCT-PATH count is the stable
+   * half; the percentage moves as the window rolls.
+   * The dominant shapes are `token: string):`, `secret: string` and
+   * `botToken: string` — ordinary TypeScript, not credentials. WHAT THAT COSTS:
+   * unstagePath drops the file from the commit, the `secret-scrubbed` log line
+   * is indistinguishable from a real credential catch, and the agent's work
+   * never reaches history. This commit rescues `desk-backend-engineer` and
+   * `desk-market-researcher` (four tracked files) and, in the replay window,
+   * `docs/blog/command-center-guide/index.html`. THE REST ARE OPEN, owned by the
+   * residual register, and NOT closable by tightening pattern 5 — that is the
+   * mechanism that lost 4 credential classes in one attempt and 11 in the next.
+   *
+   * This is defence in depth, not a guarantee, and no doc may claim more of it.
    *
    * ADDED LINES ONLY. A removed line is content git already has, so flagging it
    * would mean unstaging a DELETION — which cannot unpublish anything and would

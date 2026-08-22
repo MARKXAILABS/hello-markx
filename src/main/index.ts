@@ -41,7 +41,9 @@ import { MemoryManager } from './memory';
 import { KnowledgeManager } from './knowledge';
 import { MemoryReflector, type ReflectSettings } from './reflect';
 import { PersistStore } from './db';
-import { readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd } from './transcript';
+import {
+  readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd, SPAWN_SAFE_SESSION_ID
+} from './transcript';
 import { listIssues, listCIRuns } from './github';
 import { SlackWebhookServer, SlackReplyServer, postSlackReply, type SlackEventFile } from './slack';
 import {
@@ -556,6 +558,17 @@ const hookServer = new HookServer(
 ptyManager.setHookTokenSource(
   (agentId) => hookServer.mintToken(agentId),
   (token) => hookServer.revokeToken(token)
+);
+// 01-25 — the same wiring for the collector's own, SEPARATE telemetry
+// capability. Placed here rather than at the collector's construction because
+// both `ptyManager` (above) and `telemetry` are already initialised at this
+// point: no temporal dead zone, and no startup window in which a legitimately
+// authenticated OTLP batch would be refused. A telemetry token is not a hook
+// token: leaking one buys "post telemetry as the agent that already holds it",
+// never the hook socket.
+ptyManager.setOtelTokenSource(
+  (agentId) => telemetry.mintAgentToken(agentId),
+  (token) => telemetry.revokeAgentToken(token)
 );
 const memory = new MemoryManager(
   () => readConfig().harnessHome,
@@ -1580,6 +1593,12 @@ function breakerToast(title: string, body: string): void {
   catch { /* unsupported platform */ }
 }
 
+/** Throttle for the beat's argv-safety refusal below (plan 01-25 sink 3), in the
+ *  same shape `hooks.ts` throttles its own reject log: one line per interval, so
+ *  a single poisoned session id cannot fill the log from a ~30s loop. */
+const UNSAFE_SID_LOG_INTERVAL_MS = 60_000;
+let lastUnsafeSidWarn = 0;
+
 /** One circuit-breaker beat: pull a fresh usage sample per active agent, append
  *  it to the durable cost ledger (the SOLE durable cost store), tick the breaker,
  *  emit each BreakerState on control:breakerState (Seam 2), and enforce any
@@ -1618,7 +1637,22 @@ function runBreakerBeat(progressWindowMs: number): void {
     // (it was already being written to the cost ledger one line above). Same id,
     // same liveness gate; recordSession writes only on change, so this is a
     // no-op once the hooks are flowing.
-    if (sample?.sessionId) hive.recordSession(id, sample.sessionId);
+    //
+    // Sink 3 of 4 (plan 01-25). `sample.sessionId` is read off an OTLP batch, so
+    // it is only as trustworthy as the collector's own gate — and recordSession
+    // git-COMMITS it into registry.json, from where `hive.lastSession()` feeds it
+    // straight back into argv on the next restart. Refuse the same shape the two
+    // spawn sinks refuse, at the writer, so a poisoned id never becomes durable
+    // state. Throttled: this runs on the ~30s breaker beat, and an unthrottled
+    // line would repeat forever for one bad id.
+    if (sample?.sessionId) {
+      if (SPAWN_SAFE_SESSION_ID.test(sample.sessionId)) hive.recordSession(id, sample.sessionId);
+      else if (Date.now() - lastUnsafeSidWarn >= UNSAFE_SID_LOG_INTERVAL_MS) {
+        lastUnsafeSidWarn = Date.now();
+        console.warn(`[resume] refusing to record a session id that is not argv-safe for ${id} `
+          + `(length ${sample.sessionId.length}) — telemetry is reporting an id no CLI can be handed`);
+      }
+    }
     if (id === reg.godId) continue;            // breaker skips god
     // Progress = fresh coordination files OR a recent OTel tool span. The span
     // leg closes the background-work blind spot: subagent/Workflow tool calls
@@ -2513,7 +2547,17 @@ function stopWebhookServer(): void {
 interface WindowBounds { x?: number; y?: number; width: number; height: number }
 
 const DEFAULT_WIN = { width: 1440, height: 900 };
-const MIN_WIN = { width: 1280, height: 800 };
+/** FLOOR-13. The minimum the operator may DRAG to — not what the app opens as,
+ *  which is DEFAULT_WIN above and unchanged. It was 1280, and that was the
+ *  accident: `sidebarLayout()` collapses the sidebar to a right-edge overlay
+ *  below 1024 so a narrow window stays usable, that collapse has passing tests,
+ *  and a 1280 floor made every width it covers unreachable in the shipped app —
+ *  a built, tested, documented feature that no operator could ever see. The
+ *  breakpoint is the designed behaviour; the floor was the contradiction, so the
+ *  floor moves. 960 also keeps the app usable on the 1366×768 laptops this tool
+ *  ships to. DESIGN.md's two statements of the minimum are corrected in the same
+ *  commit; plan 01-29 carries the splitter-persistence fix this makes reachable. */
+const MIN_WIN = { width: 960, height: 800 };
 
 /** Validate + clamp restored bounds: enforce the minimum size, and drop a
  *  position that no longer lands on any connected display (monitor unplugged) so
@@ -3255,7 +3299,19 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // session rather than launching a `--resume` against a missing id.
     const explicitSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
     const sid = explicitSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
-    if (sid && !args.includes('--resume')) {
+    // Sink 1 of 4 (plan 01-25). This id becomes ARGV — `--resume <sid>` — and a
+    // `--`-prefixed value is read by claude's parser as a FLAG, not as this
+    // option's argument: `--resume --dangerously-skip-permissions` turns
+    // permission gating off on a session the operator started without it. The id
+    // can arrive from `hive.lastSession()`, i.e. from whatever a hook payload
+    // once stored, so it is attacker-reachable. seedSessionTranscript()'s "the
+    // .jsonl must exist" is an accidental control, not a designed one — an agent
+    // with a Bash tool can create that file. Never echo the id itself.
+    if (sid && !SPAWN_SAFE_SESSION_ID.test(sid)) {
+      console.warn(`[resume] refusing a session id that is not argv-safe for ${opts.hive.id} `
+        + `(length ${sid.length}, opens "${sid.slice(0, 2)}") — starting a fresh session`);
+      if (explicitSid) resumeNotFound = true;
+    } else if (sid && !args.includes('--resume')) {
       if (seedSessionTranscript(opts.cwd, sid)) {
         args.push('--resume', sid);
         didResume = true;
@@ -3288,7 +3344,16 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // silently ignored it and started a brand-new empty session.
     const typedSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
     const sid = typedSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
-    if (sid && rf) {
+    // Sink 2 of 4 (plan 01-25) — a DIFFERENT function scope with its own `sid`,
+    // which is why one guard in the Claude branch above does not cover it. Placed
+    // above `if (sid && rf)` so it also fronts the `else if (sid && rsub)` arm:
+    // both the flag form (`--resume`/`--conversation`/`--session`) and Codex's
+    // subcommand form push this value into argv.
+    if (sid && !SPAWN_SAFE_SESSION_ID.test(sid)) {
+      console.warn(`[resume] refusing a session id that is not argv-safe for ${opts.hive.id} `
+        + `(length ${sid.length}, opens "${sid.slice(0, 2)}") — starting a fresh session`);
+      if (typedSid) resumeNotFound = true;
+    } else if (sid && rf) {
       const args = opts.args ?? [];
       if (!args.includes(rf)) { args.push(rf, sid); opts.args = args; didResume = true; }
     } else if (sid && rsub) {

@@ -158,6 +158,89 @@ test('release.yml attests the artifacts it publishes, with the permissions to do
   );
 });
 
+/** Everything a release UPLOADS has to be named in the file the attestation
+ *  signs. Whatever is not in SHA256SUMS.txt is outside the only supply-chain
+ *  control this project has — and `latest*.yml` is the electron-updater feed:
+ *  the path every installed copy actually takes an update through, carrying the
+ *  sha512 the updater validates the downloaded installer against, and the one
+ *  file no human ever runs `gh attestation verify` against by hand.
+ *
+ *  Two extractions, of two different kinds, deliberately. The UPLOADED list is
+ *  PARSED — `with.path` is real YAML. The HASHED list cannot be: it lives inside
+ *  a shell `ls` line in a `run:` block scalar, so only a regex over that string
+ *  reaches it. The regex's own match is asserted, and that is this pin's
+ *  CEILING: a legitimate reformat of that block (a `for` loop, a `PATTERNS=`
+ *  variable, a heredoc) turns this test red on a correct change. Loud-and-wrong
+ *  is the right failure mode here; silently-green is the one this phase exists
+ *  to remove. */
+test('every glob a release uploads is inside the file the attestation signs', () => {
+  const build = readYaml('.github/workflows/release.yml').jobs.build;
+  const steps = build.steps || [];
+  const genStep = steps.find((s) => s.name === 'Generate checksums');
+  const uploadStep = steps.find((s) => s.name === 'Upload build artifacts');
+  assert.ok(genStep, 'release.yml\'s build job lost its `Generate checksums` step — nothing is '
+    + 'hashed, so the attestation has no subject and FLOOR-06 has no control at all');
+  assert.ok(uploadStep, 'release.yml\'s build job lost its `Upload build artifacts` step');
+
+  const genRun = String(genStep.run || '');
+  const lsLine = /^\s*files=\$\(ls\s+(.+?)\s+2>\/dev\/null/m.exec(genRun);
+  assert.ok(
+    lsLine,
+    'could not find the `files=$(ls … 2>/dev/null` line inside `Generate checksums`. The hashed '
+      + 'set is not reachable by a YAML parse, so this pin extracts it by regex; a reformat of that '
+      + 'shell block breaks the extraction and this assertion is what makes that loud instead of '
+      + 'turning the whole coverage check silently vacuous.'
+  );
+  const hashedGlobs = lsLine[1].trim().split(/\s+/).filter(Boolean);
+  assert.ok(hashedGlobs.length > 0, 'the hashed glob list extracted empty');
+
+  // The hashed globs are RELATIVE because the step cd's into dist/ first. That is
+  // the entire justification for stripping one `dist/` below, so it is asserted
+  // from the file rather than asserted in a comment.
+  assert.match(
+    genRun,
+    /^\s*cd dist\s*$/m,
+    '`Generate checksums` no longer cd\'s into dist/, so its globs are no longer relative to it '
+      + 'and the dist/ normalisation below is no longer sound'
+  );
+
+  const uploadedGlobs = String(uploadStep.with.path).split('\n').map((s) => s.trim()).filter(Boolean);
+
+  // The checksums file cannot hash itself. This is the ONLY exclusion, named so
+  // that adding a second one — which means deciding some artifact ships
+  // unattested — is visible in a diff.
+  const NOT_HASHABLE = ['SHA256SUMS-*.txt'];
+
+  const normalised = uploadedGlobs.map((g) => g.replace(/^dist\//, ''));
+  const missing = normalised.filter((g) => !NOT_HASHABLE.includes(g) && !hashedGlobs.includes(g));
+  assert.deepEqual(
+    missing,
+    [],
+    `these globs are UPLOADED to the release but never hashed into SHA256SUMS.txt: `
+      + `${missing.join(', ')}. The attestation's subject is that file, so anything missing from it `
+      + 'ships with no provenance at all while SECURITY.md tells users a tampered artifact fails '
+      + 'verification. `latest*.yml` is the worst case: it is the electron-updater feed, so it is '
+      + 'the file every installed copy trusts automatically and the one nobody checks by hand.'
+  );
+  // Both cardinalities, so a silently SHORTENED upload list cannot make this pin
+  // pass by having less to cover.
+  assert.equal(
+    uploadedGlobs.length,
+    7,
+    `the release uploads ${uploadedGlobs.length} globs, not 7: `
+      + `${JSON.stringify(uploadedGlobs)}. Adding or removing one is a deliberate change to what `
+      + 'ships, and it has to be made in the hashing step at the same time — which is what the '
+      + 'count below enforces.'
+  );
+  assert.equal(
+    hashedGlobs.length,
+    uploadedGlobs.length - NOT_HASHABLE.length,
+    `Generate checksums hashes ${hashedGlobs.length} globs (${JSON.stringify(hashedGlobs)}) for `
+      + `${uploadedGlobs.length} uploaded ones, of which exactly ${NOT_HASHABLE.length} `
+      + `(${NOT_HASHABLE.join(', ')}) cannot hash itself`
+  );
+});
+
 test('the `test` matrix is a hard gate on all three platforms, exactly as CONTRIBUTING.md claims', () => {
   const ci = readYaml('.github/workflows/ci.yml');
   const job = ci.jobs.test;
@@ -189,6 +272,30 @@ test('the `test` matrix is a hard gate on all three platforms, exactly as CONTRI
     [],
     `these steps in the CI test job would swallow their own failure: ${soft.join(', ')}. A test `
       + 'step that cannot fail is not a gate, and CONTRIBUTING.md promises it is one.'
+  );
+
+  // `continue-on-error` is not the only door out of this gate, and it is not the
+  // important one. `run: npm test || echo "flaky, see #NNN"` swallows the runner's
+  // exit code while every assertion above still passes and all three hard-gate
+  // rows go permanently green. So the command is pinned BYTE-EXACT, the same way
+  // the lint gate is pinned further down this file.
+  const mentionsSuite = job.steps.filter((s) => /npm test/.test(String(s.run || '')));
+  const runsSuite = job.steps.filter((s) => String(s.run || '').trim() === 'npm test');
+  assert.equal(
+    mentionsSuite.length,
+    1,
+    `the CI test job must invoke the suite exactly once; ${mentionsSuite.length} step(s) mention `
+      + '`npm test`. A matrix job that never runs it is three green rows that tested nothing, and '
+      + 'nothing else in this file would notice.'
+  );
+  assert.equal(
+    runsSuite.length,
+    1,
+    'the CI test job\'s suite step must be exactly `npm test`, byte for byte. Found: '
+      + `${JSON.stringify(mentionsSuite.map((s) => String(s.run || '').trim()))}. A trailing `
+      + '`|| true`, a `; exit 0`, or a pipe swallows the runner\'s exit code: the job goes green on '
+      + 'a red suite with continue-on-error still absent and every other assertion here still '
+      + 'passing — and CONTRIBUTING.md promises this is a hard gate on all three platforms.'
   );
 
   assert.ok(

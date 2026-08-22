@@ -87,12 +87,13 @@ stream, retrieval, reflection, and planning.
    working, guarded by `stop_hook_active` to prevent infinite loops. **Ships, and
    it ships GUARDED** — the guards are the decision, not a reversal of it.
 
-   > The Stop boundary calls the drain (`hooks.ts:663` → `DeliveryService.drainAtStop`,
-   > `delivery.ts:604`, wired at `index.ts:545`) and returns
+   > The Stop boundary calls the drain — `hooks.ts`'s Stop arm reaches
+   > `delivery.ts drainAtStop()`, wired where `index.ts` constructs `HookServer` — and returns
    > `{decision:'block', reason}` when the agent has unread mail — a forced
    > continuation, which is the documented Claude/Codex contract. With no mail, or
    > with a guard standing, it answers `{}`. `stop_hook_active` is screened first
-   > (`hooks.ts:646`), so a continuation can never re-enter its own boundary.
+   > (`hooks.ts`, the first statement of that arm), so a continuation can never
+   > re-enter its own boundary.
    >
    > The version that was removed was the UNGUARDED one, for a real reason: turning
    > unread mail into a forced next turn bypassed the terminal-draft and HITL gates
@@ -113,7 +114,7 @@ stream, retrieval, reflection, and planning.
    >
    > Dedup is durable and lives in main: `delivery.ts`'s `seenSet` (pruned against
    > the live inbox each tick) plus `cursor.json`, advanced by the drain
-   > (`hive.ts:1338`). Neither dies with the window — see §3 and §8.
+   > (`hive.ts drainForStop()`). Neither dies with the window — see §3 and §8.
 
 ---
 
@@ -135,8 +136,9 @@ hive/
     inbox/.done/         # processed messages (kept for audit, not deleted)
     outbox/              # messages I want to SEND — router drains these
     cursor.json          # { lastProcessed: <msgid> } — seeded at spawn and
-                         #   ADVANCED by drainForStop() (hive.ts:1338), which the
-                         #   Stop boundary calls (hooks.ts:662). The durable
+                         #   ADVANCED by hive.ts drainForStop(), which the Stop
+                         #   boundary in hooks.ts reaches through delivery.ts
+                         #   drainAtStop(). The durable
                          #   exactly-once record for the drain (§2.5)
 ```
 
@@ -247,7 +249,7 @@ is the primary control surface — tune the prompt, not the code.
   their own translating hook bridges; engines with no hook system at all (Crush,
   qwen) get a loopback proxy sidecar that derives the same events from the model
   response. The **`Stop`-loop ships too, guarded**: the Stop boundary calls the
-  drain (`hooks.ts:662` → `delivery.ts:262`) and hands unread mail back as
+  drain (`hooks.ts`'s Stop arm → `delivery.ts drainAtStop()`) and hands unread mail back as
   `{decision:'block', reason}` unless the operator's pause or the renderer's
   draft veto stands. Both guards are checked in MAIN, so the loop runs with no
   window attached. The renderer's idle nudge is a second path, not the only one.
@@ -290,9 +292,9 @@ is the primary control surface — tune the prompt, not the code.
 | Risk | Mitigation |
 | --- | --- |
 | `index.lock` corruption | Single committer (main process), retry+backoff, stale-lock cleanup |
-| Infinite Stop-hook loop | Live risk, actively guarded (§2.5): a drain with mail returns `{decision:'block', reason}`. `stop_hook_active` is screened first (`hooks.ts:646`) so a continuation cannot re-enter its own boundary, and the `hops` cap bounds the chain |
+| Infinite Stop-hook loop | Live risk, actively guarded (§2.5): a drain with mail returns `{decision:'block', reason}`. `stop_hook_active` is screened first (`hooks.ts`, the first statement of the Stop arm) so a continuation cannot re-enter its own boundary, and the `hops` cap bounds the chain |
 | Two agents ping-ponging | Only request/query/propose obligate replies; hop cap → god escalates |
-| Reprocessing messages | Agents move handled messages to `inbox/.done/` — instructed in the prompt, not enforced. Dedup does not depend on that: `cursor.json` is advanced by the drain (`hive.ts:1375`) and main holds `delivery.ts`'s `seenSet`, pruned against the live inbox each tick — neither dies with the window |
+| Reprocessing messages | Agents move handled messages to `inbox/.done/` — instructed in the prompt, not enforced. Dedup does not depend on that: `cursor.json` is advanced by the drain (`hive.ts drainForStop()`, at its `cursor.lastProcessed` write) and main holds `delivery.ts`'s `seenSet`, pruned against the live inbox each tick — neither dies with the window |
 | `memory.md` unbounded growth | `reflect.ts` condensation (shipped). `log.jsonl` rotates one generation at 8 MB, `backups/` keeps the newest 20 — both gitignored. The **semantic palace** is still unbounded: nothing prunes it ([#16](https://github.com/MARKXAILABS/hello-markx/issues/16)) |
 | Modifying the user's repo with hooks | Write hooks to `<cwd>/.claude/settings.local.json` (gitignored convention) |
 

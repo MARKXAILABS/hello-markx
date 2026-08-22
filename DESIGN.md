@@ -166,7 +166,7 @@ Base unit: **4 px**. Every margin, padding, gap, position must be a multiple of 
 
 ### Layout
 
-- Main window minimum: 1280 × 800.
+- Main window minimum: 960 × 800.
 - Standard gutter: 16 px (`space-4`).
 - Panel internal padding: 12 px (`space-3`).
 - Floor canvas: dynamically sized, but tile grid is 32 × 32 px (one game tile).
@@ -674,7 +674,7 @@ Friendly, brief, factual. Imagine an Animal Crossing villager who happens to be 
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-Min window: 1280 × 800. Right panel collapses below 1024 to bottom drawer.
+Min window: 960 × 800. Right panel collapses below 1024 to a right-edge overlay.
 
 ### 15.2 Z-index layers
 

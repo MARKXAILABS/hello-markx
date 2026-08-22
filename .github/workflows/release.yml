@@ -144,9 +144,26 @@ jobs:
         shell: bash
         run: |
           cd dist
-          # hash only the distributable artifacts, not blockmaps/yml
-          files=$(ls *.dmg *.zip *.exe *.AppImage 2>/dev/null || true)
-          [ -z "$files" ] && { echo "no artifacts to hash"; exit 0; }
+          # Hash EVERYTHING this job uploads, not only the installers. `latest*.yml`
+          # is the electron-updater feed: it carries the sha512 the updater validates
+          # the downloaded installer against, which makes it the highest-value tamper
+          # target on the release page and the one artifact no human ever verifies by
+          # hand. The blockmaps drive differential download off that same feed.
+          # Anything not named in SHA256SUMS.txt is outside the attestation, and
+          # test/ci-config.test.cjs pins this list against the upload list below.
+          #
+          # The INSTALLERS are checked separately, and their absence FAILS the job.
+          # Widening the glob disarms the old "this build produced nothing" tripwire:
+          # electron-builder writes latest*.yml on any run that gets this far, so a
+          # single non-empty check would pass for a build that produced a feed and no
+          # installer at all — and the job would go on to publish an attested update
+          # feed with nothing to install, every check green.
+          installers=$(ls *.dmg *.zip *.exe *.AppImage 2>/dev/null || true)
+          if [ -z "$installers" ]; then
+            echo "::error::no installers (*.dmg *.zip *.exe *.AppImage) in dist/ — refusing to publish an attested update feed with nothing to install"
+            exit 1
+          fi
+          files=$(ls *.dmg *.zip *.exe *.AppImage *.blockmap latest*.yml 2>/dev/null || true)
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum $files > "SHA256SUMS-${{ matrix.os }}.txt"
           else
