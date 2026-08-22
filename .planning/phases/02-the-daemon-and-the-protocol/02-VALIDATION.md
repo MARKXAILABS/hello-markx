@@ -1,10 +1,11 @@
 ---
 phase: 2
 slug: the-daemon-and-the-protocol
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-08-21
+signed_off: 2026-08-23 — 54/54 tasks carry <automated> verify; all 11 Wave 0 surfaces owned by plans; no watch-mode flags; full suite 18.5s
 ---
 
 # Phase 2 — Validation Strategy
@@ -129,12 +130,18 @@ account?" — mechanically, in a diff, rather than by remembering to.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all ❌ references above
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 19s
-- [ ] Every skipped live test announces its skip; none skips silently
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or a Wave 0 dependency — **54 tasks, 54 `<automated>` blocks**, measured across all twelve plans
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify — satisfied trivially, every task carries one
+- [x] Wave 0 covers all ❌ references above — all 11 surfaces (`boot-floor`, `agent-lifecycle`, `hive-router`, `tunnel`, `mcp-per-agent`, plus the six extensions) appear in some plan's `files_modified`, sequenced across waves with zero same-wave collisions
+- [x] No watch-mode flags — grep for `--watch` / `nodemon` / `jest --watch` across the plan set returns nothing
+- [x] Feedback latency < 19s — full suite measured at **18.5s** (515 tests) this session
+- [x] Every skipped live test announces its skip; none skips silently — bound in the plans via the `test/net-binding.test.cjs` announced-skip pattern
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-08-23 at plan time.
+
+**What this sign-off does NOT claim.** `wave_0_complete` stays `false` — nothing has executed yet;
+this certifies the validation *architecture*, not its results. The manual-only and
+operator-supplied rows above are unchanged and remain the honest ceiling: DAEMON-01's live headless
+run, DAEMON-05's tunnel close, the Android device, the Telegram/Discord tokens, and the four
+`LIVE-UNVERIFIED` bridges are not automatable here and must be recorded as such rather than ticked.
