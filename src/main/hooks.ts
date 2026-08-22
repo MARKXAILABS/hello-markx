@@ -161,6 +161,29 @@ function fold(s: string): string {
 }
 
 /**
+ * Case-fold a name that is about to be compared against a PROTECTED LITERAL.
+ *
+ * Unlike `fold`, this folds on EVERY platform, and the difference is the
+ * direction the comparison points. `fold` is used where a match GRANTS access
+ * (an agent's own directory), so folding on a case-SENSITIVE filesystem would
+ * hand agent `a-1` the genuinely-different directory `agents/A-1`. Here a match
+ * DENIES, so the risk runs the other way.
+ *
+ * Measured on CI, which is why this exists: `<hive>/BIN/cth-hook.cjs` on a FRESH
+ * hive was ALLOWED on ubuntu-latest AND macos-latest while denying on win32.
+ * macOS is the real hole — APFS is case-INSENSITIVE by default, so `BIN` and
+ * `bin` are the SAME directory and the write lands in the protected one. On
+ * ext4 they are different directories, so folding there over-denies — but the
+ * only paths this reaches are `<hive>/BIN`, `<hive>/.GIT`, `<hive>/AGENTS` and
+ * the socket's own name at the hive root, none of which an agent has any
+ * legitimate reason to create. Over-denying four names at the hive root is the
+ * correct trade against a live bypass on macOS.
+ */
+function foldProtected(s: string): string {
+  return s.toLowerCase();
+}
+
+/**
  * Normalise every path COMPONENT the way Win32 itself does, or null if a
  * component normalises to nothing.
  *
@@ -1131,10 +1154,10 @@ export class HookServer {
     rootDir: string, child: string, grandchild: string, ids: HiveIdentities, agentId: string
   ): Containment {
     if (!child) return { deny: null };
-    const c = fold(child);
+    const c = foldProtected(child);
     if (c === 'bin') return { deny: DENY_BIN };
     if (c === '.git') return { deny: DENY_GIT };
-    if (ids.sockName && c === fold(ids.sockName)) return { deny: DENY_SOCK };
+    if (ids.sockName && c === foldProtected(ids.sockName)) return { deny: DENY_SOCK };
     if (c === 'agents') return this.ownerVerdict(join(rootDir, child), grandchild, ids, agentId);
     return { deny: null };
   }
