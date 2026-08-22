@@ -249,7 +249,24 @@ authenticated door in front of a floor whose internal identity must already be r
      are unmarked only after a real session against a real account, and otherwise remain
      marked — never silently unmarked.
      — PARITY-01a, PARITY-01b, PARITY-02, PARITY-03
-**Plans**: TBD
+**Plans**: 12 plans across 9 waves. **Waves 1-2 are criterion 1's internal gate and nothing else may
+start until they are green**: 02-01 (STRUCT-02, splits `hive.ts`) → 02-02 (STRUCT-01, `src/main/floor/`
++ `bootFloor()`, gate proof = a passing `test/boot-floor.test.cjs`). Then 02-03 (DAEMON-01, headless) →
+02-04 (DAEMON-05, the killable tunnel) ‖ 02-07 (PARITY-01a/02/03, the engine ledger) → 02-11 (DAEMON-04,
+per-agent MCP) → 02-05 (DAEMON-02/03, the door) ‖ 02-06 (PARITY-01b, what the card admits) ‖ 02-08
+(GSD-06) → 02-09 (DAEMON-02, the phone bundle) → 02-10 (DAEMON-05, the PUBLIC chip) → 02-12 (PARITY-03,
+the honesty ledger, which also corrects this file — see below).
+**Cross-phase constraint:** seven plans declare `01-21` in `depends_on`. Phase 1's plan 21 owns
+`eslint.config.js`, `package.json`, `package-lock.json`, `.github/workflows/ci.yml`,
+`test/ci-config.test.cjs`, `src/main/{knowledge,nodeInstall,slack}.ts` and the wildcard
+`src/renderer/src/**/*.{ts,tsx}`. `index.ts` and `hive.ts` are disjoint from it, so the extraction is
+safe to start first; everything touching those paths waits.
+**Standing constraint carried into every plan:** no Phase 2 plan may modify `package.json` or
+`package-lock.json` — this machine has npm 11.6.2 and no npm 10 (02-CONTEXT.md D-06).
+**Note:** the Success Criteria above still contain six claims this phase disproves (stale line counts,
+the `electron`-import untestability mechanism, "could not be written before the split", "that worker's
+terminal", "URL always visible", "all eleven report cost"). Plan 02-12 corrects them in wave 9 — see
+02-CONTEXT.md D-01/D-02/D-05/D-34/D-38/D-41.
 **UI hint**: yes
 
 ### Phase 3: Scale and Observability
@@ -555,7 +572,7 @@ after Phase 5 rather than closed in Phase 3.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Finish the Floor | 30/31 | **PARTIAL — all 8 gap-closure plans landed (01-24 … 01-31), phase NOT complete.** 10 of 23 requirements close, 13 do not; 0 of 20 floor-inspection issues closable while `origin/main` still pins `electron ^32.2.0` behind draft PR #77. 01-01 has no SUMMARY — its D-09 gate is unrun. Re-run `/gsd:verify-work 1`; the verdict is the verifier's |  |
-| 2. The Daemon and the Protocol | 0/TBD | Not started | - |
+| 2. The Daemon and the Protocol | 0/12 | Planned | - |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |
 | 5. The Floor Gets Better at Its Own Job | 0/TBD | Not started | - |
