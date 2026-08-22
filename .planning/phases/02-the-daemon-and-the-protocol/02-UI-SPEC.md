@@ -1,10 +1,11 @@
 ---
 phase: 2
 slug: the-daemon-and-the-protocol
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: 2026-08-21
+reviewed_at: 2026-08-23 — gsd-ui-checker APPROVED after revision round 1 (Color/Typography/Spacing/Registry PASS, Copywriting/Visuals FLAG, 0 blocking)
 revised: 2026-08-21 — checker round 1 returned BLOCKED; §Revision Log records every change
 mode: auto — every open question resolved by the researcher, logged in §"Auto-Mode Decision Log"
 ---
