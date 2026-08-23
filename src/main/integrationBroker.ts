@@ -95,10 +95,22 @@ export class IntegrationBroker {
     return new Promise((resolve) => {
       if (this.server) { resolve({ ok: true, port: this.port }); return; }
       const server = createServer((req, res) => this.handle(req, res));
-      const onError = (e: Error): void => { server.off('listening', onListening); resolve({ ok: false, error: e.message }); };
+      // Assigned BEFORE listen(), not inside the 'listening' callback: a
+      // `stop()` racing ahead of an in-flight bind (bootFloor's start() is
+      // fire-and-forget, so a caller that shuts down within the same tick —
+      // exactly what test/boot-floor.test.cjs does — used to find `this.server`
+      // still null and no-op, leaking the real listener and its bound port
+      // forever, which is a `node --test` hang, not just a resource leak).
+      // `server.close()` on a not-yet-listening server is a safe, standard
+      // Node pattern — it aborts the pending bind instead of throwing.
+      this.server = server;
+      const onError = (e: Error): void => {
+        server.off('listening', onListening);
+        this.server = null;
+        resolve({ ok: false, error: e.message });
+      };
       const onListening = (): void => {
         server.off('error', onError);
-        this.server = server;
         const addr = server.address();
         this.port = addr && typeof addr === 'object' ? addr.port : preferredPort;
         resolve({ ok: true, port: this.port });
