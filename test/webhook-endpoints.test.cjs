@@ -29,9 +29,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const loadTs = require('./load-ts.cjs');
 
-const { WebhookServer, LEGACY_ENDPOINT_ID } = loadTs('src/main/webhook.ts');
+const { WebhookServer, LEGACY_ENDPOINT_ID, PHONE_ASSETS, PHONE_PREFIX } = loadTs('src/main/webhook.ts');
 
 const SECRET_A = 'a'.repeat(64);
 const SECRET_B = 'b'.repeat(64);
@@ -66,7 +69,10 @@ function makeServer(overrides = {}) {
   return { server, seen };
 }
 
-/** Fire one request through the handler and resolve with `{status, body}`. */
+/** Fire one request through the handler and resolve with `{status, body, headers}`.
+ *  `res._headers` records whatever `writeHead` was given so a static-asset
+ *  test can assert on cache-control/CSP/etc without changing the resolution
+ *  shape every other case in this file already relies on. */
 function request(server, { method = 'POST', url = '/', headers = {}, body = undefined }) {
   return new Promise((resolve) => {
     const req = new EventEmitter();
@@ -75,11 +81,15 @@ function request(server, { method = 'POST', url = '/', headers = {}, body = unde
     req.headers = headers;
     req.destroy = () => { /* no socket to tear down */ };
     const res = {
-      writeHead(status) { res._status = status; return res; },
+      writeHead(status, hdrs) { res._status = status; res._headers = hdrs ?? {}; return res; },
       end(payload) {
         let parsed = null;
-        try { parsed = payload ? JSON.parse(payload) : null; } catch { parsed = payload; }
-        resolve({ status: res._status, body: parsed });
+        if (Buffer.isBuffer(payload)) {
+          try { parsed = JSON.parse(payload.toString('utf8')); } catch { parsed = payload; }
+        } else {
+          try { parsed = payload ? JSON.parse(payload) : null; } catch { parsed = payload; }
+        }
+        resolve({ status: res._status, body: parsed, headers: res._headers ?? {} });
       }
     };
     server.handleRequest(req, res);
@@ -92,6 +102,32 @@ function request(server, { method = 'POST', url = '/', headers = {}, body = unde
 
 const auth = (secret) => ({ 'x-md-webhook-secret': secret });
 const post = (msg) => JSON.stringify(msg);
+
+/** A throwaway fixture directory holding a two-byte `index.html`, mirroring
+ *  what `resources/phone/` will hold once plan 02-09 lands. `t` is the test's
+ *  own context — cleanup rides `t.after`, the house `tempDir` pattern
+ *  (test/main-hardening.test.cjs). `realpathSync` matters here too: macOS
+ *  resolves `/var` to `/private/var`, which would otherwise make every
+ *  assertion look like a symlink test. */
+function makeFixtureRoot(t) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'md-phone-fixture-')));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); } catch { /* noop */ } });
+  fs.writeFileSync(path.join(dir, 'index.html'), 'hi');
+  return dir;
+}
+
+/** A server with the phone armed (via a real `mintEnrollment()` call — the
+ *  same seam `phone:pairing` uses) and `staticRoot` pointed at a fixture
+ *  directory. */
+function makePhoneServer(t, overrides = {}) {
+  const root = overrides.noRoot ? null : makeFixtureRoot(t);
+  const { server, seen } = makeServer({
+    ...overrides,
+    opts: { staticRoot: () => root, ...overrides.opts }
+  });
+  if (!overrides.unarmed) server.mintEnrollment();
+  return { server, seen, root };
+}
 
 test('each endpoint is gated by its OWN secret', async () => {
   const { server, seen } = makeServer();
@@ -277,6 +313,114 @@ test('phone is reserved and can never be minted as an operator endpoint id', asy
   // negative half alone (D-40).
   assert.ok(ids.includes('alpha'));
   assert.ok(ids.includes(LEGACY_ENDPOINT_ID));
+});
+
+/* ─────────────────────────── /phone/** static shell ─────────────────────── */
+
+test('PHONE_ASSETS is an exact-filename allowlist, exported', () => {
+  const keys = Object.keys(PHONE_ASSETS);
+  assert.ok(keys.length >= 5);
+  for (const k of keys) assert.match(k, /^[a-z0-9][a-z0-9.-]*$/);
+  assert.equal(PHONE_PREFIX, 'phone');
+});
+
+test('the dark state: an unarmed phone answers exactly like an unknown endpoint', async (t) => {
+  const { server } = makePhoneServer(t, { unarmed: true });
+  const dark = await request(server, { method: 'GET', url: '/phone/index.html' });
+  const unknownEndpoint = await request(server, {
+    method: 'GET', url: '/ghost', headers: { 'x-md-webhook-token': 'bogus' }
+  });
+  assert.equal(dark.status, 404);
+  assert.deepEqual(dark.body, unknownEndpoint.body);
+  assert.deepEqual(dark.body, { ok: false, error: 'not found' });
+});
+
+test('an armed phone serves index.html at both /phone and /phone/index.html, with the security headers', async (t) => {
+  const { server, root } = makePhoneServer(t);
+  for (const url of ['/phone', '/phone/', '/phone/index.html']) {
+    const res = await request(server, { method: 'GET', url });
+    assert.equal(res.status, 200, url);
+    assert.equal(Buffer.isBuffer(res.body) ? res.body.toString('utf8') : res.body, 'hi');
+    assert.equal(res.headers['content-type'], 'text/html; charset=utf-8');
+    assert.equal(res.headers['cache-control'], 'no-store');
+    assert.equal(res.headers['x-content-type-options'], 'nosniff');
+    assert.equal(res.headers['referrer-policy'], 'no-referrer');
+    assert.match(res.headers['content-security-policy'], /default-src 'self'/);
+  }
+  assert.ok(fs.existsSync(path.join(root, 'index.html')));
+});
+
+test('a filename outside the allowlist 404s, and staticRoot() returning null never throws', async (t) => {
+  const { server } = makePhoneServer(t);
+  const nope = await request(server, { method: 'GET', url: '/phone/nope.txt' });
+  assert.equal(nope.status, 404);
+
+  const { server: rootless } = makePhoneServer(t, { noRoot: true });
+  const res = await request(rootless, { method: 'GET', url: '/phone/index.html' });
+  assert.equal(res.status, 404, 'a missing resources/phone/ (pre-02-09) must 404, never throw/500');
+});
+
+test('six traversal shapes are refused, none returning file bytes', async (t) => {
+  const { server } = makePhoneServer(t);
+  // The pre-task 401 body, captured for the two cases URL normalisation lifts
+  // clean out of the /phone/** branch entirely (readEndpointId then sees a
+  // single unknown segment).
+  const unknownGetWithToken = await request(server, {
+    method: 'GET', url: '/ghost', headers: { 'x-md-webhook-token': 'bogus' }
+  });
+  assert.equal(unknownGetWithToken.status, 404);
+
+  const cases = [
+    ['/phone/../config.json', 'GET', { 'x-md-webhook-token': 'bogus' }],
+    ['/phone/..%2fconfig.json', 'GET', {}],
+    ['/phone/%2e%2e/config.json', 'GET', { 'x-md-webhook-token': 'bogus' }],
+    ['/phone/sub/dir/index.html', 'GET', {}],
+    ['/phone/./../../package.json', 'GET', { 'x-md-webhook-token': 'bogus' }],
+    ['/phone/index.html%00.png', 'GET', {}]
+  ];
+  const statuses = [];
+  for (const [url, method, headers] of cases) {
+    const res = await request(server, { method, url, headers });
+    statuses.push(res.status);
+    assert.equal(res.status, 404, url);
+    assert.ok(!Buffer.isBuffer(res.body) || res.body.length === 0 || res.body.toString('utf8') !== 'hi', url);
+  }
+  assert.deepEqual(statuses, [404, 404, 404, 404, 404, 404]);
+});
+
+test('a nested static path is not servable', async (t) => {
+  const { server, root } = makePhoneServer(t);
+  fs.mkdirSync(path.join(root, 'sub', 'dir'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'sub', 'dir', 'index.html'), 'nope');
+  const res = await request(server, { method: 'GET', url: '/phone/sub/dir/index.html' });
+  assert.equal(res.status, 404);
+});
+
+test('a single-segment unknown id is UNCHANGED by the phone route: same 401 as before', async (t) => {
+  const { server } = makePhoneServer(t);
+  const res = await request(server, {
+    url: '/does-not-exist', headers: auth(SECRET_A), body: post({ message: 'hi' })
+  });
+  assert.equal(res.status, 401);
+  assert.deepEqual(res.body, { ok: false, error: 'unauthorized' });
+});
+
+test('the two normal endpoints keep working with the phone armed', async (t) => {
+  const { server } = makePhoneServer(t);
+  const res = await request(server, {
+    url: '/alpha', headers: auth(SECRET_A), body: post({ message: 'still fine' })
+  });
+  assert.equal(res.status, 200);
+});
+
+test("the phone has its own rate bucket, strictly below the global cap, and it binds", async (t) => {
+  const { server } = makePhoneServer(t);
+  let limited = 0;
+  for (let i = 0; i < 50; i++) {
+    const res = await request(server, { method: 'GET', url: '/phone/index.html' });
+    if (res.status === 429) limited++;
+  }
+  assert.ok(limited > 0, "the phone's own bucket must trip well before the global 120/window cap");
 });
 
 test('start() alone opens no tunnel — DAEMON-05\'s off-by-default clause, proven as behaviour not grep', async (t) => {

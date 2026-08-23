@@ -42,6 +42,8 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   isReservedEndpointId, RESERVED_ENDPOINT_IDS, validateAgainstSchema,
   type InboundKind, type WebhookVerifier
@@ -101,6 +103,16 @@ export interface WebhookTaskStatus {
   result?: string;
 }
 
+/** One open human-feedback ask, shaped for the phone's "ASK ME" screen
+ *  (UI-SPEC S5 screen 1). Newest first. */
+export interface PhoneAsk {
+  taskId: string;
+  title: string;
+  question: string;
+  agent?: string;
+  askedAt?: string;
+}
+
 export interface WebhookServerOptions {
   /** Local TCP port the HTTP server binds to (and the tunnel forwards to). */
   port: number;
@@ -118,6 +130,26 @@ export interface WebhookServerOptions {
    * never reveal or enumerate any other task.
    */
   lookupStatus: (token: string) => WebhookTaskStatus | null;
+  /**
+   * Where the built phone PWA bundle lives on disk, or null when it isn't
+   * available (dev before plan 02-09 lands, or a broken install). INJECTED,
+   * never resolved in this file (D-23) — resolving `app.isPackaged` /
+   * `process.resourcesPath` here would give this transport-only, electron-free
+   * file its first `electron` import, the exact anti-pattern this phase exists
+   * to remove. `index.ts` resolves it the same way `slackReplyScriptPath()`
+   * already does and passes the closure in.
+   */
+  staticRoot?: () => string | null;
+  /** The floor's currently open human-feedback asks, for `GET /phone/api/asks`.
+   *  Injected so no `hive` type ever has to enter this transport file. Absent
+   *  or throwing → an empty list, never a 500. */
+  openAsks?: () => PhoneAsk[];
+  /** Answer one open ask from the phone. Returns false on any failure so the
+   *  caller can report honestly (the draft stays, the button re-enables). */
+  answerAsk?: (taskId: string, answer: string) => boolean;
+  /** Injectable clock — tests move the enrollment TTL and the auth lockout
+   *  forward without sleeping a real unit test. Defaults to `Date.now`. */
+  now?: () => number;
 }
 
 /** Reject bodies larger than this before buffering — callers send tiny JSON; the
@@ -147,6 +179,81 @@ export const PHONE_PREFIX = RESERVED_ENDPOINT_IDS[0];
  *  limit while real ones do. Sharing one bucket makes the two indistinguishable. */
 const UNKNOWN_BUCKET = ':unknown';
 
+/* ─────────────────────────────── the phone ────────────────────────────────
+ * `/phone/**` is routed AHEAD of readEndpointId (D-23) — it is inherently
+ * multi-segment (`/phone/index.html`, `/phone/api/asks`), and readEndpointId's
+ * own contract answers anything deeper than one segment like an unknown
+ * endpoint. The phone gets its OWN rate bucket, strictly below the global cap
+ * for the identical reason PER_ENDPOINT_RATE_LIMIT is: UI-SPEC's 10s poll is
+ * ~6 requests/minute plus a ~5-request cold load, so this cap bounds the phone
+ * without the phone ever being able to consume the whole global budget and
+ * starve webhook callers (T-P02-05-08). The global cap above is neither
+ * raised nor bypassed by any of this. */
+const PHONE_BUCKET = ':phone';
+const PHONE_RATE_LIMIT = 40;
+
+/** A second, tighter bucket + lockout guard the auth-bearing routes
+ *  (`/phone/api/enroll`, `/asks`, `/answer`) share — this is where DAEMON-05's
+ *  "rate limiting and lockout on the auth endpoint" bullet is actually
+ *  satisfied. Strictly below PHONE_RATE_LIMIT for the same reason that is
+ *  strictly below RATE_LIMIT. */
+const PHONE_AUTH_BUCKET = ':phone:auth';
+const PHONE_AUTH_RATE_LIMIT = 20;
+/** How long a minted enrollment token stays exchangeable. Minting REPLACES any
+ *  unburned predecessor (a QR left on screen from a previous press is dead the
+ *  moment a new one is drawn — UI-SPEC: "No stale QR is ever left on screen"). */
+const PHONE_ENROLL_TTL_MS = 10 * 60_000;
+/** Consecutive auth failures on `/phone/api/**` before the lockout engages,
+ *  and how long it holds. SHORT and PROVABLY CLEARING — this lockout is
+ *  GLOBAL, not per-client (every caller behind the tunnel presents the
+ *  tunnel's own IP, webhook.ts's own long-standing comment above), so it is
+ *  remotely DoS-able by anyone who knows the URL. Accepted and bounded
+ *  (T-P02-05-09), never described as per-client. Resets to zero on any
+ *  successful credential presentation. */
+const PHONE_LOCKOUT_FAILURES = 5;
+const PHONE_LOCKOUT_MS = 30_000;
+/** The answer body is capped far below the general MAX_BODY_BYTES — this text
+ *  becomes an instruction inside an agent's terminal (T-P02-05-11), and the
+ *  boundary is the only place it is bounded at all (no content filtering
+ *  exists past this cap). */
+const PHONE_MAX_BODY_BYTES = 8 * 1024;
+/** A `taskId` presented from the phone must match a boring charset — it is
+ *  used only to look up an existing card, never joined into a path or query,
+ *  but a free-form string here would still be an unnecessary surface. */
+const PHONE_TASK_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
+/**
+ * The phone's static shell — an EXACT-FILENAME allowlist, frozen, exported so
+ * a test can assert its shape and plan 02-09 can check its own build output
+ * against this SAME list rather than a second copy. The allowlist IS the
+ * traversal defence: no request-derived string is ever joined into a
+ * filesystem path (see `handlePhoneStatic` below), so there is nothing here
+ * for `src/main/fs.ts`'s `safeJoin` to add — this file has zero request-derived
+ * path segments reaching a `join()` call at all.
+ */
+export const PHONE_ASSETS: Readonly<Record<string, { file: string; type: string }>> = Object.freeze({
+  'index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
+  'sw.js': { file: 'sw.js', type: 'text/javascript; charset=utf-8' },
+  'manifest.webmanifest': { file: 'manifest.webmanifest', type: 'application/manifest+json' },
+  'icon-192.png': { file: 'icon-192.png', type: 'image/png' },
+  'icon-512.png': { file: 'icon-512.png', type: 'image/png' }
+});
+
+/** The Content-Security-Policy every static phone response carries.
+ *  `'unsafe-inline'` is a deliberate, stated trade: UI-SPEC S5 locks the phone
+ *  to one hand-written `index.html` with an inline `<style>` and `<script>` —
+ *  there is no build step to hash or externalise them against. */
+const PHONE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+  + "style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; "
+  + "base-uri 'none'; form-action 'none'";
+
+/** Every failure on `/phone/api/**` — an absent header, a wrong bearer, a
+ *  burned or expired enrollment token, an unknown route — answers with this
+ *  SAME body, byte-identical to the main endpoint gate's 401 (D-19/D-24): the
+ *  auth surface keeps the no-enumeration property even though the static
+ *  shell above it necessarily gives it up. */
+const PHONE_AUTH_FAIL_BODY = { ok: false, error: 'unauthorized' } as const;
+
 export class WebhookServer {
   private server: Server | null = null;
   private tunnel: TunnelHandle | null = null;
@@ -154,6 +261,11 @@ export class WebhookServer {
   private endpoints = new Map<string, WebhookEndpoint>();
   private readonly onMessage: (msg: WebhookInbound, endpoint: WebhookEndpointRef) => WebhookDispatch | null;
   private readonly lookupStatus: (token: string) => WebhookTaskStatus | null;
+  private readonly staticRootFn?: () => string | null;
+  private readonly openAsksFn?: () => PhoneAsk[];
+  private readonly answerAskFn?: (taskId: string, answer: string) => boolean;
+  /** Injectable clock (tests only — defaults to `Date.now`). */
+  private readonly now: () => number;
   /** Compared against when the requested id doesn't exist, purely so the failure
    *  path does the same work as a wrong-secret failure. Random per process and
    *  never exported, so it cannot be matched even by accident. */
@@ -164,10 +276,25 @@ export class WebhookServer {
   // the global lockout below is remotely DoS-able by anyone who knows the URL (D-23).
   private windows = new Map<string, { start: number; count: number }>();
 
+  /** The current single-use enrollment token's digest + expiry, or null once
+   *  burned/never minted. Neither this nor a bearer is EVER persisted (D-19):
+   *  the bearer is origin-scoped and the tunnel origin dies with the process,
+   *  so a persisted credential could never be presented again. */
+  private phoneEnrollment: { hash: Buffer; expiresAt: number } | null = null;
+  /** SHA-256 digests of every issued, still-live bearer — never the raw
+   *  bearer, which is returned to the caller exactly once and forgotten. */
+  private readonly phoneBearerDigests = new Set<string>();
+  private phoneAuthFailures = 0;
+  private phoneLockedUntil = 0;
+
   constructor(opts: WebhookServerOptions) {
     this.port = opts.port;
     this.onMessage = opts.onMessage;
     this.lookupStatus = opts.lookupStatus;
+    this.staticRootFn = opts.staticRoot;
+    this.openAsksFn = opts.openAsks;
+    this.answerAskFn = opts.answerAsk;
+    this.now = opts.now ?? Date.now;
     this.setEndpoints(opts.endpoints);
   }
 
@@ -228,7 +355,14 @@ export class WebhookServer {
    */
   async start(): Promise<{ ok: boolean; url?: string; error?: string }> {
     if (this.server) return { ok: false, error: 'already running' };
-    if (this.endpoints.size === 0) return { ok: false, error: 'no enabled webhook endpoints' };
+    // The phone needs the server up with no webhook trigger configured at
+    // all. Breaking the circularity in the direction that keeps the door off
+    // by default: `phoneArmed()` is only ever true after an operator action
+    // (phone:pairing) mints an enrollment token, so this guard still refuses
+    // to bind on a stone-cold-default install with nothing configured.
+    if (this.endpoints.size === 0 && !this.phoneArmed()) {
+      return { ok: false, error: 'no enabled webhook endpoints' };
+    }
     try {
       await this.listen();
     } catch (e) {
@@ -295,9 +429,31 @@ export class WebhookServer {
     });
   }
 
+  /**
+   * Mint a fresh 192-bit enrollment token (the size the file's own capability
+   * token already uses), TTL-bounded. REPLACES any unburned predecessor — a QR
+   * left on screen from a previous press is dead the instant a new one is
+   * drawn. Arms the phone (see {@link phoneArmed}); never persisted (D-19).
+   */
+  mintEnrollment(): { token: string; expiresAt: number } {
+    const token = randomBytes(24).toString('hex');
+    const expiresAt = this.now() + PHONE_ENROLL_TTL_MS;
+    this.phoneEnrollment = { hash: sha256(token), expiresAt };
+    return { token, expiresAt };
+  }
+
+  /** True while an unexpired enrollment token or at least one issued bearer
+   *  exists. `/phone/**`'s dark-state branch and `start()`'s zero-endpoint
+   *  guard both read this — the phone route stays a 404 exactly like an
+   *  unknown endpoint until the operator deliberately pairs. */
+  phoneArmed(): boolean {
+    if (this.phoneEnrollment && this.now() <= this.phoneEnrollment.expiresAt) return true;
+    return this.phoneBearerDigests.size > 0;
+  }
+
   /** Fixed-window limiter — bounds total work before any parse/crypto runs. */
   private allowRequest(bucket: string, limit: number): boolean {
-    const now = Date.now();
+    const now = this.now();
     const w = this.windows.get(bucket);
     if (!w || now - w.start > RATE_WINDOW_MS) {
       this.windows.set(bucket, { start: now, count: 1 });
@@ -310,6 +466,13 @@ export class WebhookServer {
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     // Rate limit first — cheapest possible rejection, ahead of any work.
     if (!this.allowRequest('', RATE_LIMIT)) { json(res, 429, { ok: false, error: 'rate limited' }); return; }
+    // The phone is judged HERE, ahead of readEndpointId (D-23) — never inside
+    // handleStatus/handleCreate. `/phone/**` is inherently multi-segment, and
+    // readEndpointId's own contract (below) answers anything deeper than one
+    // segment like an unknown endpoint; without this branch the phone would
+    // never be reachable at all.
+    const segments = pathSegments(req);
+    if (segments[0] === PHONE_PREFIX) { this.handlePhone(req, res, segments.slice(1)); return; }
     const id = readEndpointId(req);
     const endpoint = id !== null ? this.endpoints.get(id) ?? null : null;
     // Per-endpoint budget, with every unknown id sharing one bucket (see UNKNOWN_BUCKET).
@@ -320,6 +483,67 @@ export class WebhookServer {
     if (method === 'GET') { this.handleStatus(req, res, endpoint); return; }
     if (method === 'POST') { this.handleCreate(req, res, endpoint); return; }
     res.writeHead(405); res.end();
+  }
+
+  /**
+   * `/phone/**` — the phone's own rate bucket, then the dark-state gate: until
+   * the operator pairs, this answers exactly like an unknown endpoint (same
+   * 404 body), so the origin does not self-identify as a Hello MarkX floor
+   * (RESEARCH §4.3 item 3, narrowed to "after pairing, for the life of the
+   * process" — T-P02-05-10).
+   */
+  private handlePhone(req: IncomingMessage, res: ServerResponse, rest: string[]): void {
+    if (!this.allowRequest(PHONE_BUCKET, PHONE_RATE_LIMIT)) {
+      json(res, 429, { ok: false, error: 'rate limited' }); return;
+    }
+    if (!this.phoneArmed()) { json(res, 404, { ok: false, error: 'not found' }); return; }
+    this.handlePhoneStatic(req, res, rest);
+  }
+
+  /**
+   * Serve the phone PWA shell off `PHONE_ASSETS` — an EXACT-FILENAME allowlist
+   * lookup, never a joined path. `rest` is everything after `/phone/`; an
+   * empty or missing second segment means `index.html` (`/phone` and
+   * `/phone/` both work). Anything deeper than one segment, or not a key in
+   * the allowlist, is a 404 — including a nested path, a `..`-shaped key that
+   * survived URL normalisation, and a NUL-embedded name.
+   */
+  private handlePhoneStatic(req: IncomingMessage, res: ServerResponse, rest: string[]): void {
+    if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+    if (rest.length > 1) { json(res, 404, { ok: false, error: 'not found' }); return; }
+    let key = rest[0] ?? '';
+    if (key) {
+      try { key = decodeURIComponent(key); } catch { json(res, 404, { ok: false, error: 'not found' }); return; }
+    } else {
+      key = 'index.html';
+    }
+    const asset = PHONE_ASSETS[key];
+    if (!asset) { json(res, 404, { ok: false, error: 'not found' }); return; }
+    const root = this.staticRootFn ? this.staticRootFn() : null;
+    if (!root) { json(res, 404, { ok: false, error: 'not found' }); return; }
+    let body: Buffer;
+    try {
+      // The ONLY path join in this file, and its joined component is the
+      // ALLOWLIST ENTRY'S OWN `.file` — never `key`, never anything derived
+      // from the request. The allowlist is the mechanism, not a supplement
+      // to `src/main/fs.ts`'s `safeJoin`: by this line there is no
+      // request-derived segment left to traverse with. A missing
+      // `resources/phone/` (dev, before plan 02-09 lands) is a normal state
+      // and answers 404, never a 500.
+      body = readFileSync(join(root, asset.file));
+    } catch { json(res, 404, { ok: false, error: 'not found' }); return; }
+    res.writeHead(200, {
+      'content-type': asset.type,
+      // Load-bearing on sw.js specifically: a cached service worker outliving
+      // a rotated tunnel origin is a zombie (D-19).
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      // The enrollment token rides in the URL fragment (never sent in a
+      // Referer by browsers, but stated as policy rather than left implicit).
+      'referrer-policy': 'no-referrer',
+      'content-security-policy': PHONE_CSP
+    });
+    res.end(body);
   }
 
   /**
@@ -424,16 +648,24 @@ export class WebhookServer {
   }
 }
 
+/** Split a request's URL into non-empty path segments. Shared by
+ *  `readEndpointId` and `handleRequest`'s phone-prefix check, which runs
+ *  BEFORE `readEndpointId` is ever called — `/phone/**` never reaches it. */
+function pathSegments(req: IncomingMessage): string[] {
+  let pathname: string;
+  try { pathname = new URL(req.url ?? '/', 'http://localhost').pathname; }
+  catch { return []; }
+  return pathname.split('/').filter((s) => s.length > 0);
+}
+
 /**
  * The endpoint id from the request path: `/foo` → `foo`, bare `/` → `legacy`.
  * A deeper path (`/a/b`) resolves to null = "no such endpoint", which is then
- * answered exactly like a wrong secret / unknown token.
+ * answered exactly like a wrong secret / unknown token. `/phone/**` no longer
+ * reaches this function at all — `handleRequest` judges that prefix first.
  */
 function readEndpointId(req: IncomingMessage): string | null {
-  let pathname: string;
-  try { pathname = new URL(req.url ?? '/', 'http://localhost').pathname; }
-  catch { return null; }
-  const segments = pathname.split('/').filter((s) => s.length > 0);
+  const segments = pathSegments(req);
   if (segments.length === 0) return LEGACY_ENDPOINT_ID;
   if (segments.length > 1) return null;
   try { return decodeURIComponent(segments[0]); } catch { return segments[0]; }
