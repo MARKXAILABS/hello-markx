@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-11-PLAN.md
-last_updated: "2026-08-23T14:40:10.306Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-08-23T17:34:01.634Z"
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 37
+  completed_plans: 38
   percent: 0
 ---
 
@@ -25,26 +25,40 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plans complete: **6 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+Plans complete: **7 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
       The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
-      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-07, 02-11**.
-      Outstanding: 02-05, 02-06, 02-08, 02-09, 02-10, 02-12.
-      Next wave: **wave 6 = 02-05, 02-06, 02-08** (all three depend on 02-11's just-landed MCP data
-      contract — `mcp:agentState`/`mcp:grant`/`mcp:revoke` + preload `platform`).
+      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-07, 02-11**.
+      Outstanding: 02-06, 02-08, 02-09, 02-10, 02-12.
+      Next wave: **the rest of wave 6 = 02-06, 02-08** (both depend on 02-11's MCP data contract;
+      02-05 — the phone's door — has now also landed in this same wave).
 
 Execution facts as of this line:
 
 - Branch `gsd/v1.0-floor-closure`; NOT `gsd/v1.0-milestone` (that branch is content-behind and would
   regress two phase-1 source fixes plus all 12 phase-2 plans). Nothing is pushed — `gh pr checks` is
-  therefore MEASUREMENT UNAVAILABLE for every plan so far, recorded as such, never faked.
+  therefore MEASUREMENT UNAVAILABLE for every plan so far, recorded as such, never faked. (`gh pr
+  checks` DOES return rows for PR #78, but its head sha `bb1ad70` is `origin`'s current tip — 53
+  commits behind this session's `HEAD` and every unpushed 02-01..02-11 commit too. Stale, not fresh.)
 
 - `workflow.use_worktrees=false`, so every plan runs sequentially on the main tree. No worktree
   merges, no post-merge reconciliation.
 
 - Whole-suite figure re-measured by the ORCHESTRATOR after every plan, never SUMMARY-trusted:
-  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> **728/721/0 fail/7 skipped** now.
-  `npm run typecheck` and `npm run build` exit 0 at every checkpoint. 0 failures is the bar; there is
+  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> 728/721/0/7 after 02-11 -> **753/746/0
+  fail/7 skipped** now (02-05's own +25 cases). `npm run typecheck`, `npm run build` and
+  `npm run lint` (`--max-warnings 0`) all exit 0 at every checkpoint. 0 failures is the bar; there is
   no pre-existing-failure allowance on this phase.
+
+- **02-05 landed the phone's whole server-side door.** `/phone/**` routed ahead of `readEndpointId`
+  off a five-file exact-filename allowlist; a single-use enrollment token (burned before its
+  response) exchanged for a generated 192-bit bearer; a shared auth bucket + lockout across
+  `/phone/api/**` that engages and provably clears; and a per-endpoint verifier dispatch admitting
+  Telegram's header compare and Discord's Ed25519 signature (live-verified this session through
+  `node:crypto` alone, zero new dependencies). `webhook.ts` still imports nothing from `electron`.
+  Curl-verified for real on loopback with the tunnel off (`scripts/phone-curl-check.cjs`, 6/6 OK).
+  **None of DAEMON-02/03/05 marked complete** — DAEMON-02/05 are shared with 02-09/02-10 (not yet
+  landed); DAEMON-03's live half is operator-supplied (no bot token, no Discord application tested)
+  and its own stated purpose has no phone UI to exercise until 02-09/02-10 land either.
 
 - **02-11 landed DAEMON-04's mechanism for claude only.** `scripts/mcp-live-probe.cjs` live-reconfirmed
   `--mcp-config` spawns a server and `--settings`' `mcpServers` key does not (claude 2.1.236, run twice
@@ -58,17 +72,27 @@ Requirements deliberately still OPEN, with the reason (none of these is an overs
 - **DAEMON-01** — unit half green (02-03). `02-VALIDATION.md` requires BOTH `node --test` AND a live
   Electron run with real PTYs; the live run has not happened. Tracked as a phase-close gate.
 
+- **DAEMON-02** — 02-05 landed the server's auth path, curl-verified on loopback; 02-09 (the phone
+  bundle/`resources/phone/**`) and 02-10 (the pairing UI/QR) both remain, and DAEMON-02's own text
+  names a real Android device as the honest completion bar, not yet attempted.
+
+- **DAEMON-03** — the verifier + payload-adapter mechanism is real and localhost-verified (02-05); the
+  live half (a real Telegram bot token, a real Discord application) is operator-supplied and was not
+  available this session.
+
 - **DAEMON-04** — mechanism landed (02-11) for the one live-verified engine (claude); the consent-modal
   UI is 02-06's (wave 6), which also declares this requirement in its own frontmatter.
 
-- **DAEMON-05** — spans 02-04/02-05/02-10/02-12. Live close attempted for real this session, twice,
-  including outside the sandbox: exit 3, ANNOUNCED skip. Root cause is ENVIRONMENTAL, not code —
-  the LAN resolver (JioFiber router 192.168.31.1) returns NXDOMAIN for freshly-minted
-  `*.trycloudflare.com` subdomains while the apex resolves and general egress is fine. A public
-  resolver (8.8.8.8 / 1.1.1.1) would likely let this verification actually pass.
+- **DAEMON-05** — spans 02-04/02-05/02-10/02-12. 02-05 closed two of its five bullets (generated
+  token, rate limiting + lockout on the auth endpoint) — both proven engaging and clearing. Live close
+  attempted for real this session (02-04), twice, including outside the sandbox: exit 3, ANNOUNCED
+  skip. Root cause is ENVIRONMENTAL, not code — the LAN resolver (JioFiber router 192.168.31.1)
+  returns NXDOMAIN for freshly-minted `*.trycloudflare.com` subdomains while the apex resolves and
+  general egress is fine. A public resolver (8.8.8.8 / 1.1.1.1) would likely let this verification
+  actually pass.
 
 - **STRUCT-01** — 02-02 and 02-03 closed the boot and agent-lifecycle seams; `spawnAgentCore`
-  (~480 lines, imports electron at module scope) and ~152 IPC handlers remain in `index.ts`.
+  (~480 lines, imports electron at module scope) and ~159 IPC handlers remain in `index.ts`.
 
 - **PARITY-03** — shared with 02-12, which owns the final honesty-ledger pin. 02-07 correctly
   declined to flip it.
@@ -134,6 +158,7 @@ is installed on this machine, so this is the expected outcome under the zero-rec
 | Phase 02 P04 | 55min | 5 tasks | 14 files |
 | Phase 02 P07 | 50min | 4 tasks | 12 files |
 | Phase 02 P11 | 55min | 4 tasks | 9 files |
+| Phase 02 P05 | 57min | 5 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -421,6 +446,9 @@ Recent decisions affecting current work:
 - [Phase 02]: DAEMON-05: the tunnel closes via a spawned cloudflared child + procKill.hardKillTree, not the deleted tunnelmole library call — tunnelmole exposed no process handle to close; running the tunnel as a child process makes the OS process handle the disposer the library never gave
 - [Phase 02]: DAEMON-05's off-by-default clause is structural, not a config check: start() opens no tunnel at all — a tunnel exists only where an operator action passes an opener into startTunnel(), so no other feature can bring the public origin up as a side effect
 - [Phase 02]: PARITY-01a's kimi bridge ships LIVE-UNVERIFIED (no Moonshot account on this machine); zero engines converted for PARITY-02 (BridgeDescriptor is mutually exclusive, hooks XOR proxy dispatch); PARITY-03's marker ledger pinned exactly at 14 sites across 5 files, driven red four ways. — D-33/D-34/D-35/D-40 all required the ruling and the pin to be written in source and driven red before being trusted, not merely asserted in the plan.
+- [Phase 02-05]: phoneArmed()/mintEnrollment() landed in task 2's commit (not task 3's) — task 2's own acceptance criteria need an armed state to test the 200/dark-404 split, and the plan's own action text already says task 2's branch reads phoneArmed().
+- [Phase 02-05]: The /phone/api/** auth lockout is one shared counter across enroll+asks+answer, not scoped to /enroll alone — a brute-force attacker can guess bearers exactly as cheaply as enrollment tokens.
+- [Phase 02-05]: None of DAEMON-02/03/05 marked complete in REQUIREMENTS.md: DAEMON-02/05 are shared with 02-09/02-10 (not landed); DAEMON-03's live half is operator-supplied and its stated purpose has no phone UI to exercise until 02-09/02-10 land.
 
 ### Pending Todos
 
@@ -542,8 +570,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-23T14:40:10.287Z
-Stopped at: Completed 02-11-PLAN.md
+Last session: 2026-08-23T17:34:01.620Z
+Stopped at: Completed 02-05-PLAN.md
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
