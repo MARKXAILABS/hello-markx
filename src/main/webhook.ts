@@ -43,11 +43,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { validateAgainstSchema, type InboundKind } from '../shared/triggers';
-// NOTE: `tunnelmole` is an ESM-only package. The Electron main process is bundled
-// as CommonJS, so a static `import` gets externalized into `require('tunnelmole')`
-// and throws ERR_REQUIRE_ESM at load. It is imported dynamically inside
-// `openTunnel()` instead — Rollup preserves dynamic import() in CJS output, which
-// can load ESM. Do not hoist this back to a top-level import.
+import type { TunnelHandle, TunnelOpener } from './tunnel';
 
 /** One servable endpoint — the structural subset of `WebhookTrigger` this class
  *  needs. A whole `WebhookTrigger` is assignable, so callers pass config rows
@@ -122,8 +118,6 @@ export interface WebhookServerOptions {
 /** Reject bodies larger than this before buffering — callers send tiny JSON; the
  *  cap stops an unauthenticated peer forcing unbounded memory use pre-auth. */
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
-/** Cap how long we wait for the public tunnel before giving up (server stays up). */
-const TUNNEL_START_TIMEOUT_MS = 10_000;
 /** Basic abuse guard: at most this many requests per fixed window, globally. */
 const RATE_LIMIT = 120;
 /** …and this many per endpoint, so one noisy caller burns its own budget first
@@ -143,7 +137,7 @@ const UNKNOWN_BUCKET = ':unknown';
 
 export class WebhookServer {
   private server: Server | null = null;
-  private tunnelUrl: string | null = null;
+  private tunnel: TunnelHandle | null = null;
   private readonly port: number;
   private endpoints = new Map<string, WebhookEndpoint>();
   private readonly onMessage: (msg: WebhookInbound, endpoint: WebhookEndpointRef) => WebhookDispatch | null;
@@ -153,7 +147,9 @@ export class WebhookServer {
    *  never exported, so it cannot be matched even by accident. */
   private readonly decoySecret = randomBytes(32).toString('hex');
   // Fixed-window rate limiters keyed by bucket ('' = global, else the endpoint id).
-  // The remote IP is the tunnel's, so per-IP would be meaningless behind tunnelmole.
+  // The remote IP is the tunnel's, so per-IP would be meaningless behind cloudflared
+  // — every caller presents cloudflared's own IP, so per-IP limiting buys nothing and
+  // the global lockout below is remotely DoS-able by anyone who knows the URL (D-23).
   private windows = new Map<string, { start: number; count: number }>();
 
   constructor(opts: WebhookServerOptions) {
@@ -192,7 +188,7 @@ export class WebhookServer {
 
   /** The public tunnel URL, or null when no tunnel is up. */
   publicUrl(): string | null {
-    return this.tunnelUrl;
+    return this.tunnel?.url ?? null;
   }
 
   /** Is the local HTTP server bound? `start()` reports ok:false for a tunnel
@@ -203,10 +199,15 @@ export class WebhookServer {
   }
 
   /**
-   * Bind the local HTTP server, then open a public tunnel to it. The HTTP handler
-   * (the security boundary) is live the instant `listen` resolves; the tunnel is
-   * opened afterwards and is non-fatal — if it can't be established the server
-   * keeps running and we report the tunnel error without a URL.
+   * Bind the local HTTP server. That is ALL this does now — DAEMON-05's
+   * off-by-default clause made structural, not a config check: no public
+   * tunnel opens as a side effect of starting this server, ever. A tunnel
+   * exists only where an operator action calls {@link startTunnel} afterwards.
+   * The local handler is the security boundary and is live the instant this
+   * resolves `{ ok: true }`. `url` stays in the return shape (always absent
+   * here — never set by this method) so `index.ts`'s call sites keep
+   * typechecking across the plan's own task boundary; plan 02-04 task 4 is
+   * where the caller-side wiring onto {@link startTunnel} actually lands.
    */
   async start(): Promise<{ ok: boolean; url?: string; error?: string }> {
     if (this.server) return { ok: false, error: 'already running' };
@@ -217,41 +218,43 @@ export class WebhookServer {
       this.stop();
       return { ok: false, error: `failed to bind port ${this.port}: ${errMsg(e)}` };
     }
+    return { ok: true };
+  }
+
+  /**
+   * Open a public tunnel over the already-listening local server, via an
+   * injected {@link TunnelOpener}. Never called by `start()` itself — an
+   * operator action supplies `open`. Non-fatal: the local handler stays live
+   * even when this fails, and the caller is told why.
+   */
+  async startTunnel(open: TunnelOpener): Promise<{ ok: boolean; url?: string; error?: string }> {
+    if (!this.server) return { ok: false, error: 'local server is not running' };
+    if (this.tunnel) return { ok: true, url: this.tunnel.url };
     try {
-      const url = await this.openTunnel();
-      if (!url) throw new Error('tunnelmole returned empty URL');
-      this.tunnelUrl = url;
-      // tunnelmole() resolves with a URL STRING and nothing else — no websocket,
-      // no disposer (see tunnelmole/dist/src/tunnelmole.js). There is genuinely
-      // no handle to capture, so `stop()` reports the leftover rather than
-      // pretending it tore the tunnel down. See `stop()`.
-      return { ok: true, url };
+      this.tunnel = await open(this.port);
+      return { ok: true, url: this.tunnel.url };
     } catch (e) {
-      // Surface the tunnel failure rather than silently returning ok:true with no url.
       return { ok: false, error: `tunnel unavailable: ${errMsg(e)}` };
     }
   }
 
+  /** Close the tunnel this server opened, if any. Idempotent — it is a call
+   *  into the tunnel handle's own idempotent `stop()`, never re-implemented. */
+  stopTunnel(): void {
+    this.tunnel?.stop();
+    this.tunnel = null;
+  }
+
   /**
-   * Close the HTTP server. Idempotent and best-effort.
-   *
-   * HONEST ABOUT THE TUNNEL: tunnelmole exposes no close handle, so the public
-   * hostname stays REGISTERED to this process until the process exits. What stop
-   * actually buys is that the hostname now forwards to a closed port (502s), and
-   * that the secret gate is gone with it — so the window that matters is another
-   * process grabbing this port before we quit. Returned AND logged rather than
-   * swallowed, so a caller can tell the operator the URL is still resolvable.
+   * Close the HTTP server AND the tunnel over it, if one is open. Idempotent
+   * and best-effort. The tunnel actually closes now: it is a child process
+   * this app spawned, and `stopTunnel()` -> `hardKillTree(child.pid)` is the
+   * OS reclaiming a process handle, not anything special about `stop()`.
    */
-  stop(): { tunnelStillOpen: string | null } {
-    const orphan = this.tunnelUrl;
-    this.tunnelUrl = null;
+  stop(): void {
+    this.stopTunnel();
     try { this.server?.close(); } catch { /* noop */ }
     this.server = null;
-    if (orphan) {
-      console.warn(`[webhook] local server closed, but the public tunnel ${orphan} stays registered `
-        + 'until the app quits (tunnelmole exposes no close handle). It now forwards to a closed port.');
-    }
-    return { tunnelStillOpen: orphan };
   }
 
   private listen(): Promise<void> {
@@ -260,28 +263,18 @@ export class WebhookServer {
       const onError = (e: Error): void => reject(e);
       server.once('error', onError);
       // '127.0.0.1' ONLY. The public reach of this server is the tunnel, and
-      // tunnelmole forwards to `localhost` from THIS machine — binding every
-      // interface additionally hands the whole LAN an un-tunneled copy of a
+      // cloudflared forwards to the explicit literal `http://127.0.0.1:PORT` —
+      // never a `localhost` resolution the OS could send elsewhere, which is a
+      // STRONGER guarantee than the previous tunnel vendor's own rationale gave
+      // (that one forwarded to a resolved `localhost`). Binding every interface
+      // would additionally hand the whole LAN an un-tunneled copy of a
       // public-secret-gated surface, for nothing. Matches SlackReplyServer and
-      // IntegrationBroker. (Node ≥20 resolves `localhost` happy-eyeballs-style,
-      // so the tunnel still reaches us on an IPv6-preferring box.)
+      // IntegrationBroker.
       server.listen(this.port, '127.0.0.1', () => {
         server.off('error', onError);
         this.server = server;
         resolve();
       });
-    });
-  }
-
-  private async openTunnel(): Promise<string> {
-    // TODO: optional persistent domain — pass `domain` here when config carries one.
-    // Dynamic import keeps the ESM-only `tunnelmole` out of the CJS require graph.
-    const { tunnelmole } = await import('tunnelmole');
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('timed out')), TUNNEL_START_TIMEOUT_MS);
-      tunnelmole({ port: this.port })
-        .then((url) => { clearTimeout(timer); resolve(url); })
-        .catch((e) => { clearTimeout(timer); reject(e); });
     });
   }
 
