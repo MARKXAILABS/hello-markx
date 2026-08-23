@@ -1,35 +1,35 @@
 # CodeFlow Snapshot — final
 
 - **Project:** `E:\munder-difflin`
-- **Captured:** 2026-08-20T16:50:12.433Z
+- **Captured:** 2026-08-22T23:17:30.430Z
 
 ## Health
 
-- **Score:** 63/100 (Grade D)
-- **Files analyzed:** 326 (273 code, 53 other)
-- **Functions:** 1329
-- **Unused functions:** 15
-- **Connections:** 2302
+- **Score:** 62/100 (Grade D)
+- **Files analyzed:** 340 (286 code, 54 other)
+- **Functions:** 1449
+- **Unused functions:** 16
+- **Connections:** 2598
 
 ## Architecture Issues
 
 - **Circular dependencies:** 0
-- **Layer violations:** 255
-- **Duplicate / similar blocks:** 10
-- **Dead functions:** 15
+- **Layer violations:** 281
+- **Duplicate / similar blocks:** 9
+- **Dead functions:** 16
 
 ## Security
 
-- **HIGH:** 32
-- **MEDIUM:** 36
+- **HIGH:** 37
+- **MEDIUM:** 46
 - **LOW / other:** 16
 
 ### HIGH severity findings (top 10)
 - `resources/skills/md-hive-sync/SKILL.md` — finding
-- `src/main/config.ts:523` — finding
-- `src/main/config.ts:524` — finding
-- `src/main/config.ts:525` — finding
 - `src/main/config.ts:526` — finding
+- `src/main/config.ts:527` — finding
+- `src/main/config.ts:528` — finding
+- `src/main/config.ts:529` — finding
 - `src/main/hive.ts` — finding
 - `src/main/hive.ts` — finding
 - `src/main/memory.ts` — finding
