@@ -41,7 +41,10 @@
  * the secret gate, schema validation, rate limiting, and the tunnel.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual, verify as edVerify,
+  type KeyObject
+} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -133,11 +136,11 @@ export interface WebhookServerOptions {
   /**
    * Where the built phone PWA bundle lives on disk, or null when it isn't
    * available (dev before plan 02-09 lands, or a broken install). INJECTED,
-   * never resolved in this file (D-23) — resolving `app.isPackaged` /
-   * `process.resourcesPath` here would give this transport-only, electron-free
-   * file its first `electron` import, the exact anti-pattern this phase exists
-   * to remove. `index.ts` resolves it the same way `slackReplyScriptPath()`
-   * already does and passes the closure in.
+   * never resolved in this file (D-23) — resolving the packaged-vs-dev
+   * resource path split here would give this transport-only, electron-free
+   * file its first import of the desktop-shell module, the exact anti-pattern
+   * this phase exists to remove. `index.ts` resolves it the same way
+   * `slackReplyScriptPath()` already does and passes the closure in.
    */
   staticRoot?: () => string | null;
   /** The floor's currently open human-feedback asks, for `GET /phone/api/asks`.
@@ -153,10 +156,14 @@ export interface WebhookServerOptions {
 }
 
 /** Reject bodies larger than this before buffering — callers send tiny JSON; the
- *  cap stops an unauthenticated peer forcing unbounded memory use pre-auth. */
-const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
-/** Basic abuse guard: at most this many requests per fixed window, globally. */
-const RATE_LIMIT = 120;
+ *  cap stops an unauthenticated peer forcing unbounded memory use pre-auth.
+ *  Exported so the phone/Discord caps below can be asserted strictly BELOW it
+ *  from the module's own constants, not a quoted number. */
+export const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
+/** Basic abuse guard: at most this many requests per fixed window, globally.
+ *  Exported for the same reason — PHONE_RATE_LIMIT is asserted strictly
+ *  below it from here, not from a comment. */
+export const RATE_LIMIT = 120;
 /** …and this many per endpoint, so one noisy caller burns its own budget first
  *  instead of everyone's. Strictly below the global cap, or it would never bind. */
 const PER_ENDPOINT_RATE_LIMIT = 60;
@@ -190,7 +197,7 @@ const UNKNOWN_BUCKET = ':unknown';
  * starve webhook callers (T-P02-05-08). The global cap above is neither
  * raised nor bypassed by any of this. */
 const PHONE_BUCKET = ':phone';
-const PHONE_RATE_LIMIT = 40;
+export const PHONE_RATE_LIMIT = 40;
 
 /** A second, tighter bucket + lockout guard the auth-bearing routes
  *  (`/phone/api/enroll`, `/asks`, `/answer`) share — this is where DAEMON-05's
@@ -210,17 +217,29 @@ const PHONE_ENROLL_TTL_MS = 10 * 60_000;
  *  remotely DoS-able by anyone who knows the URL. Accepted and bounded
  *  (T-P02-05-09), never described as per-client. Resets to zero on any
  *  successful credential presentation. */
-const PHONE_LOCKOUT_FAILURES = 5;
-const PHONE_LOCKOUT_MS = 30_000;
+export const PHONE_LOCKOUT_FAILURES = 5;
+export const PHONE_LOCKOUT_MS = 30_000;
 /** The answer body is capped far below the general MAX_BODY_BYTES — this text
  *  becomes an instruction inside an agent's terminal (T-P02-05-11), and the
  *  boundary is the only place it is bounded at all (no content filtering
- *  exists past this cap). */
-const PHONE_MAX_BODY_BYTES = 8 * 1024;
+ *  exists past this cap). Exported so the cap can be asserted strictly below
+ *  MAX_BODY_BYTES from the module's own constants. */
+export const PHONE_MAX_BODY_BYTES = 8 * 1024;
 /** A `taskId` presented from the phone must match a boring charset — it is
  *  used only to look up an existing card, never joined into a path or query,
  *  but a free-form string here would still be an unnecessary surface. */
 const PHONE_TASK_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
+/** Discord's inversion is capped far tighter than the general MAX_BODY_BYTES —
+ *  RESEARCH §4.4's instruction is "state it, cap it tightly, and keep it
+ *  endpoint-scoped." Exported so the cap can be asserted strictly below
+ *  MAX_BODY_BYTES from the module's own constants. */
+export const DISCORD_MAX_BODY_BYTES = 64 * 1024;
+/** Discord's own replay window on `x-signature-timestamp`. Cites slack.ts's
+ *  own constant (`REPLAY_WINDOW_SECONDS = 60 * 5`, slack.ts:106) rather than
+ *  deriving a second number — the identical guard, applied to a different
+ *  provider's timestamp header. */
+const DISCORD_REPLAY_WINDOW_SECONDS = 60 * 5;
 
 /**
  * The phone's static shell — an EXACT-FILENAME allowlist, frozen, exported so
@@ -270,6 +289,11 @@ export class WebhookServer {
    *  path does the same work as a wrong-secret failure. Random per process and
    *  never exported, so it cannot be matched even by accident. */
   private readonly decoySecret = randomBytes(32).toString('hex');
+  /** Discord's decoy: an unknown id still runs a REAL Ed25519 verify against
+   *  this per-process key (minted beside `decoySecret`, same register) rather
+   *  than short-circuiting — the identical no-enumeration discipline the
+   *  shared-secret path already uses. */
+  private readonly decoyEdPublicKey: KeyObject = generateKeyPairSync('ed25519').publicKey;
   // Fixed-window rate limiters keyed by bucket ('' = global, else the endpoint id).
   // The remote IP is the tunnel's, so per-IP would be meaningless behind cloudflared
   // — every caller presents cloudflared's own IP, so per-IP limiting buys nothing and
@@ -719,28 +743,88 @@ export class WebhookServer {
     json(res, 200, { ok: true, status: status.status, title: status.title, result: status.result ?? null });
   }
 
-  /** POST — verify this endpoint's secret, then buffer + validate + dispatch. */
+  /**
+   * POST — verify, then buffer + validate + dispatch. Discord's Ed25519
+   * scheme signs `timestamp + rawBody`, so IT CANNOT authenticate before
+   * buffering like every other strategy does (D-24). The inversion is scoped
+   * to requests carrying DISCORD'S OWN signature headers — never to the
+   * endpoint record — so a prober cannot learn a Discord endpoint exists at
+   * an id by observing that its request was drained before the 401
+   * (T-P02-05-07).
+   */
   private handleCreate(req: IncomingMessage, res: ServerResponse, endpoint: WebhookEndpoint | null): void {
-    // Authenticate BEFORE reading the body so an unauthenticated peer can't even
-    // make us buffer (within the size cap). 401 on any failure — no detail leaked,
-    // and an unknown id lands here too so it is answered identically.
-    if (!this.verifySecret(req, endpoint) || !endpoint) { json(res, 401, { ok: false, error: 'unauthorized' }); return; }
+    const looksLikeDiscord = typeof req.headers['x-signature-ed25519'] === 'string'
+      && typeof req.headers['x-signature-timestamp'] === 'string';
+    if (looksLikeDiscord) { this.handleDiscordCreate(req, res, endpoint); return; }
 
+    // Default order, UNCHANGED: authenticate BEFORE reading the body so an
+    // unauthenticated peer can't even make us buffer (within the size cap).
+    // 401 on any failure — no detail leaked, and an unknown id lands here too
+    // so it is answered identically.
+    if (!this.verifySecret(req, endpoint) || !endpoint) { json(res, 401, { ok: false, error: 'unauthorized' }); return; }
+    this.readBody(req, res, MAX_BODY_BYTES, (raw) => this.finishCreate(req, res, endpoint, raw));
+  }
+
+  /** Discord's inverted order: buffer under a TIGHT, endpoint-scoped cap
+   *  (`DISCORD_MAX_BODY_BYTES`, far below `MAX_BODY_BYTES` — the deliberate
+   *  weakening RESEARCH §4.4 calls for, stated and bounded), THEN verify over
+   *  the raw body, THEN dispatch. An unknown id still runs a real verify
+   *  against a per-process decoy Ed25519 key and then fails unconditionally —
+   *  the same shape `verifySecret` already uses for the default strategy. */
+  private handleDiscordCreate(req: IncomingMessage, res: ServerResponse, endpoint: WebhookEndpoint | null): void {
+    this.readBody(req, res, DISCORD_MAX_BODY_BYTES, (raw) => {
+      if (!this.verifySecret(req, endpoint, raw) || !endpoint) {
+        json(res, 401, { ok: false, error: 'unauthorized' }); return;
+      }
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { json(res, 400, { ok: false, error: 'bad json' }); return; }
+      const body = (parsed && typeof parsed === 'object') ? parsed as { type?: unknown } : {};
+      // Discord's PING handshake — required to register the interactions
+      // endpoint at all. Answered AFTER verification (Discord signs the PING
+      // like any other interaction, so this earns no auth bypass).
+      if (body.type === 1) { json(res, 200, { type: 1 }); return; }
+      this.finishCreate(req, res, endpoint, raw, 'discord');
+    });
+  }
+
+  /** Buffer a POST body under a byte cap, then hand the raw string to `cb`.
+   *  Shared by the default order and the Discord-inverted order so the
+   *  abort/413/`req.destroy()`/`error` discipline is identical everywhere it
+   *  appears, never a near-copy. */
+  private readBody(req: IncomingMessage, res: ServerResponse, limit: number, cb: (raw: string) => void): void {
     const chunks: Buffer[] = [];
     let size = 0;
     let aborted = false;
     req.on('data', (c: Buffer) => {
       if (aborted) return;
       size += c.length;
-      if (size > MAX_BODY_BYTES) { aborted = true; json(res, 413, { ok: false, error: 'too large' }); req.destroy(); return; }
+      if (size > limit) { aborted = true; json(res, 413, { ok: false, error: 'too large' }); req.destroy(); return; }
       chunks.push(c);
     });
-    req.on('end', () => {
-      if (aborted) return;
-      let parsed: unknown;
-      try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-      catch { json(res, 400, { ok: false, error: 'bad json' }); return; }
+    req.on('end', () => { if (!aborted) cb(Buffer.concat(chunks).toString('utf8')); });
+    req.on('error', () => { if (!aborted) { try { res.writeHead(400); res.end(); } catch { /* socket gone */ } } });
+  }
 
+  /** The shared tail of a verified POST: parse, adapt-or-validate, dispatch,
+   *  respond. `forcedVerifier` is set by the Discord path (whose verifier is
+   *  selected by the REQUEST's headers, not the endpoint record — see
+   *  `handleCreate`), so an unknown-id Discord POST still adapts correctly. */
+  private finishCreate(
+    req: IncomingMessage, res: ServerResponse, endpoint: WebhookEndpoint, raw: string, forcedVerifier?: WebhookVerifier
+  ): void {
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { json(res, 400, { ok: false, error: 'bad json' }); return; }
+
+    const verifier: WebhookVerifier = forcedVerifier ?? endpoint.verifier ?? 'shared-secret';
+    const adapted = adaptInbound(verifier, parsed);
+
+    let inbound: WebhookInbound;
+    if (adapted) {
+      // An adapted message SKIPS the endpoint's own schema (D-24): that
+      // schema describes the OPERATOR's own caller's shape, and applying it
+      // to Telegram's/Discord's envelope would reject every real update.
+      inbound = adapted;
+    } else {
       // The endpoint's own schema decides what a valid body is. Echoing the
       // validator's message is safe: it describes the CALLER's payload and can
       // never contain our secret (the schema is the operator's own document).
@@ -752,34 +836,49 @@ export class WebhookServer {
       // the one field the router cannot work without, so a schema edited to drop
       // it fails here rather than producing an empty card.
       const message = typeof body.message === 'string' ? body.message.trim() : '';
-      if (!message) { json(res, 400, { ok: false, error: 'message required' }); return; }
-      const inbound: WebhookInbound = { message };
+      const built: WebhookInbound = { message };
       const title = typeof body.title === 'string' ? body.title.trim() : '';
-      if (title) inbound.title = title;
-      if (body.kind === 'directive' || body.kind === 'communication') inbound.kind = body.kind;
+      if (title) built.title = title;
+      if (body.kind === 'directive' || body.kind === 'communication') built.kind = body.kind;
       const from = typeof body.from === 'string' ? body.from.trim() : '';
-      if (from) inbound.from = from;
+      if (from) built.from = from;
+      inbound = built;
+    }
+    // Mandatory non-empty `message`, regardless of path — the router cannot
+    // work without it, adapted or not.
+    if (!inbound.message) { json(res, 400, { ok: false, error: 'message required' }); return; }
 
-      let out: WebhookDispatch | null = null;
-      try { out = this.onMessage(inbound, { id: endpoint.id, name: endpoint.name }); }
-      catch { json(res, 500, { ok: false, error: 'could not create task' }); return; }
-      if (!out) { json(res, 500, { ok: false, error: 'could not create task' }); return; }
-      // 202, not 200: the message was accepted but no work has started. The caller
-      // still gets its token so it can poll the hold, and the GET reports the hold
-      // honestly rather than pretending a task is queued.
-      if (out.pending) {
-        json(res, 202, {
-          ok: true,
-          pending: true,
-          status: 'awaiting-approval',
-          token: out.token,
-          detail: 'accepted — waiting for the operator to approve it before the hive sees it'
-        });
-        return;
-      }
-      json(res, 200, { ok: true, token: out.token, taskId: out.taskId });
-    });
-    req.on('error', () => { if (!aborted) { try { res.writeHead(400); res.end(); } catch { /* socket gone */ } } });
+    let out: WebhookDispatch | null = null;
+    try { out = this.onMessage(inbound, { id: endpoint.id, name: endpoint.name }); }
+    catch { json(res, 500, { ok: false, error: 'could not create task' }); return; }
+    if (!out) { json(res, 500, { ok: false, error: 'could not create task' }); return; }
+    // 202, not 200: the message was accepted but no work has started. The caller
+    // still gets its token so it can poll the hold, and the GET reports the hold
+    // honestly rather than pretending a task is queued.
+    if (out.pending) {
+      json(res, 202, {
+        ok: true,
+        pending: true,
+        status: 'awaiting-approval',
+        token: out.token,
+        detail: 'accepted — waiting for the operator to approve it before the hive sees it'
+      });
+      return;
+    }
+    json(res, 200, { ok: true, token: out.token, taskId: out.taskId });
+  }
+
+  /**
+   * Per-endpoint verifier dispatch (D-24). Every strategy funnels through the
+   * same fixed-width, constant-time discipline the original shared-secret
+   * compare established — the credential SOURCE changes per strategy, the
+   * length-oracle defence and the decoy discipline never do.
+   */
+  private verifySecret(req: IncomingMessage, endpoint: WebhookEndpoint | null, rawBody?: string): boolean {
+    const strategy: WebhookVerifier = endpoint?.verifier ?? 'shared-secret';
+    if (strategy === 'telegram') return this.verifyTelegram(req, endpoint);
+    if (strategy === 'discord') return this.verifyDiscord(req, endpoint, rawBody ?? '');
+    return this.verifySharedSecret(req, endpoint);
   }
 
   /**
@@ -791,13 +890,59 @@ export class WebhookServer {
    *
    * A null endpoint (unknown id) still runs the comparison, against a decoy no
    * caller can hold, and then fails unconditionally — so "no such webhook" costs
-   * the same as "wrong secret" and answers with the same 401.
+   * the same as "wrong secret" and answers with the same 401. BYTE-FOR-BYTE
+   * unchanged from before D-24 generalised `verifySecret` into a dispatch — a
+   * missing `verifier` field means this strategy, so every existing endpoint
+   * keeps working with no migration.
    */
-  private verifySecret(req: IncomingMessage, endpoint: WebhookEndpoint | null): boolean {
+  private verifySharedSecret(req: IncomingMessage, endpoint: WebhookEndpoint | null): boolean {
     const provided = req.headers['x-md-webhook-secret'];
     if (typeof provided !== 'string') return false;
     const equal = timingSafeEqual(sha256(provided), sha256(endpoint ? endpoint.secret : this.decoySecret));
     return endpoint ? equal : false;
+  }
+
+  /** Telegram's own header, same fixed-width constant-time compare — what
+   *  `setWebhook`'s `secret_token` arrives as. `endpoint.secret` holds that
+   *  token for a `telegram` endpoint. */
+  private verifyTelegram(req: IncomingMessage, endpoint: WebhookEndpoint | null): boolean {
+    const provided = req.headers['x-telegram-bot-api-secret-token'];
+    if (typeof provided !== 'string') return false;
+    const equal = timingSafeEqual(sha256(provided), sha256(endpoint ? endpoint.secret : this.decoySecret));
+    return endpoint ? equal : false;
+  }
+
+  /**
+   * Ed25519 over `timestamp + rawBody`, live-verified this planning/execution
+   * session (D-01) through `node:crypto` alone — zero new dependencies.
+   * `endpoint.secret` holds Discord's 64-character hex application public
+   * key, imported through the SPKI DER prefix. A malformed key throws
+   * "Failed to read asymmetric key" — CAUGHT here and answered as the uniform
+   * 401, never a 500. Applies slack.ts's own replay window
+   * (`REPLAY_WINDOW_SECONDS = 60 * 5`, slack.ts:106) to
+   * `x-signature-timestamp` rather than deriving a second number. An unknown
+   * id verifies against a per-process DECOY Ed25519 key, then fails
+   * unconditionally — the same shape every other strategy uses.
+   */
+  private verifyDiscord(req: IncomingMessage, endpoint: WebhookEndpoint | null, rawBody: string): boolean {
+    const sig = req.headers['x-signature-ed25519'];
+    const ts = req.headers['x-signature-timestamp'];
+    if (typeof sig !== 'string' || typeof ts !== 'string') return false;
+    const tsNum = Number(ts);
+    if (!Number.isFinite(tsNum)) return false;
+    if (Math.abs(this.now() / 1000 - tsNum) > DISCORD_REPLAY_WINDOW_SECONDS) return false;
+    let sigBuf: Buffer;
+    try { sigBuf = Buffer.from(sig, 'hex'); } catch { return false; }
+    const pub = endpoint ? discordPublicKeyFrom(endpoint.secret) : this.decoyEdPublicKey;
+    if (!pub) return false;
+    try {
+      const ok = edVerify(null, Buffer.from(ts + rawBody), pub, sigBuf);
+      return endpoint ? ok : false;
+    } catch {
+      // "Failed to read asymmetric key" (a malformed stored public key) or a
+      // malformed signature buffer both land here — the uniform 401, never a 500.
+      return false;
+    }
   }
 }
 
@@ -830,6 +975,64 @@ function readEndpointId(req: IncomingMessage): string | null {
 function parseSchema(schema: string): unknown {
   if (typeof schema !== 'string' || !schema.trim()) return undefined;
   try { return JSON.parse(schema); } catch { return undefined; }
+}
+
+/** Re-import Discord's 64-character hex application public key as an SPKI
+ *  DER key object, via the fixed 12-byte prefix Ed25519 raw keys carry
+ *  (`302a300506032b6570032100`). LIVE-VERIFIED this session (D-01): a
+ *  malformed hex string throws "Failed to read asymmetric key" here, caught
+ *  by every caller and answered as the uniform 401, never a 500. */
+function discordPublicKeyFrom(hex: string): KeyObject | null {
+  try {
+    return createPublicKey({
+      key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(hex, 'hex')]),
+      format: 'der',
+      type: 'spki'
+    });
+  } catch { return null; }
+}
+
+/**
+ * Map Telegram's/Discord's own payload shape into a `WebhookInbound` — the
+ * router's mandatory non-empty `message` string rule rejects both providers'
+ * bodies exactly as they arrive. `null` means "not adapted" (shared-secret):
+ * the operator's own schema and extraction stay exactly as they are.
+ *
+ * LIVE-UNVERIFIED (D-01): neither adapter has been run against a real bot
+ * token or a real Discord application — localhost round-trips (this file's
+ * own test) are the automated half; the live half is operator-supplied
+ * (02-VALIDATION.md).
+ */
+function adaptInbound(verifier: WebhookVerifier, parsed: unknown): WebhookInbound | null {
+  if (verifier === 'shared-secret') return null;
+  const body = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : {};
+
+  if (verifier === 'telegram') {
+    // LIVE-UNVERIFIED: Telegram's Bot API update shape.
+    const msg = (body.message ?? body.channel_post) as Record<string, unknown> | undefined;
+    const text = typeof msg?.text === 'string' ? msg.text.trim() : '';
+    const fromObj = msg?.from as Record<string, unknown> | undefined;
+    const from = typeof fromObj?.username === 'string' ? fromObj.username : undefined;
+    const out: WebhookInbound = { message: text };
+    if (from) out.from = from;
+    return out;
+  }
+
+  // discord — LIVE-UNVERIFIED: Discord's interaction payload shape.
+  const data = body.data as Record<string, unknown> | undefined;
+  const options = Array.isArray(data?.options) ? data.options as Record<string, unknown>[] : [];
+  const firstStringOption = options.find((o) => typeof o?.value === 'string')?.value as string | undefined;
+  const name = typeof data?.name === 'string' ? data.name : '';
+  const message = firstStringOption ?? name;
+  const memberObj = body.member as Record<string, unknown> | undefined;
+  const memberUser = memberObj?.user as Record<string, unknown> | undefined;
+  const userObj = body.user as Record<string, unknown> | undefined;
+  const from = (typeof memberUser?.username === 'string' && memberUser.username)
+    || (typeof userObj?.username === 'string' && userObj.username)
+    || undefined;
+  const out: WebhookInbound = { message: message.trim() };
+  if (from) out.from = from;
+  return out;
 }
 
 /** Pull the capability token from the `x-md-webhook-token` header, falling back

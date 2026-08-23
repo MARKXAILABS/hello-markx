@@ -599,6 +599,173 @@ test('the lockout engages after PHONE_LOCKOUT_FAILURES and clears after PHONE_LO
   assert.equal(cleared.status, 200, 'the lockout provably clears');
 });
 
+/* ───────────────────── per-endpoint verifier strategy (D-24) ────────────── */
+
+const crypto = require('node:crypto');
+
+function makeDiscordKeypair() {
+  return crypto.generateKeyPairSync('ed25519');
+}
+
+/** The 64-character hex application public key Discord publishes — the SAME
+ *  shape as the plan's own live round trip: export SPKI DER, drop the
+ *  12-byte header, hex-encode the 32 raw bytes. */
+function discordPublicKeyHex(publicKey) {
+  const spki = publicKey.export({ format: 'der', type: 'spki' });
+  return spki.subarray(spki.length - 32).toString('hex');
+}
+
+function signDiscord(privateKey, ts, rawBody) {
+  return crypto.sign(null, Buffer.from(ts + rawBody), privateKey).toString('hex');
+}
+
+function discordHeaders(sig, ts) {
+  return { 'x-signature-ed25519': sig, 'x-signature-timestamp': ts };
+}
+
+test('Discord: valid signature accepted, tampered body rejected, stale timestamp rejected, malformed key never 500s', async () => {
+  const { privateKey, publicKey } = makeDiscordKeypair();
+  const pubHex = discordPublicKeyHex(publicKey);
+  const { server, seen } = makeServer({
+    opts: { endpoints: [{ id: 'dsc', name: 'Discord', secret: pubHex, verifier: 'discord', schema: SCHEMA }] }
+  });
+
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({ type: 2, data: { name: 'ping', options: [{ value: 'hello from discord' }] } });
+  const sig = signDiscord(privateKey, ts, body);
+
+  const ok = await request(server, { url: '/dsc', headers: discordHeaders(sig, ts), body });
+  assert.equal(ok.status, 200);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].msg.message, 'hello from discord');
+
+  const tampered = body + ' ';
+  const tamperedRes = await request(server, { url: '/dsc', headers: discordHeaders(sig, ts), body: tampered });
+  assert.equal(tamperedRes.status, 401);
+
+  const staleTs = String(Math.floor(Date.now() / 1000) - 60 * 10);
+  const staleSig = signDiscord(privateKey, staleTs, body);
+  const stale = await request(server, { url: '/dsc', headers: discordHeaders(staleSig, staleTs), body });
+  assert.equal(stale.status, 401);
+
+  const { server: badKeyServer } = makeServer({
+    opts: { endpoints: [{ id: 'dsc', name: 'Discord', secret: 'not-a-key', verifier: 'discord', schema: SCHEMA }] }
+  });
+  const badKey = await request(badKeyServer, { url: '/dsc', headers: discordHeaders(sig, ts), body });
+  assert.equal(badKey.status, 401, 'a malformed stored public key must 401, never 500');
+
+  assert.equal(seen.length, 1, 'only the one valid request ever reached onMessage');
+});
+
+test('Discord: a body over DISCORD_MAX_BODY_BYTES is refused with 413, onMessage never called', async () => {
+  const { privateKey, publicKey } = makeDiscordKeypair();
+  const pubHex = discordPublicKeyHex(publicKey);
+  const { server, seen } = makeServer({
+    opts: { endpoints: [{ id: 'dsc', name: 'Discord', secret: pubHex, verifier: 'discord', schema: SCHEMA }] }
+  });
+  const ts = String(Math.floor(Date.now() / 1000));
+  const oversized = JSON.stringify({ type: 2, data: { name: 'x'.repeat(70 * 1024) } });
+  const sig = signDiscord(privateKey, ts, oversized);
+  const res = await request(server, { url: '/dsc', headers: discordHeaders(sig, ts), body: oversized });
+  assert.equal(res.status, 413);
+  assert.equal(seen.length, 0);
+});
+
+test("Discord's PING is answered after verification; a bad signature on a PING still 401s", async () => {
+  const { privateKey, publicKey } = makeDiscordKeypair();
+  const pubHex = discordPublicKeyHex(publicKey);
+  const { server } = makeServer({
+    opts: { endpoints: [{ id: 'dsc', name: 'Discord', secret: pubHex, verifier: 'discord', schema: SCHEMA }] }
+  });
+  const ts = String(Math.floor(Date.now() / 1000));
+  const ping = JSON.stringify({ type: 1 });
+  const sig = signDiscord(privateKey, ts, ping);
+
+  const ok = await request(server, { url: '/dsc', headers: discordHeaders(sig, ts), body: ping });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body, { type: 1 });
+
+  const bad = await request(server, { url: '/dsc', headers: discordHeaders('00'.repeat(64), ts), body: ping });
+  assert.equal(bad.status, 401);
+});
+
+test('the Discord inversion is keyed on the REQUEST, not on config: unknown id and known discord endpoint answer the identical 401', async () => {
+  const { privateKey, publicKey } = makeDiscordKeypair();
+  const pubHex = discordPublicKeyHex(publicKey);
+  const { server } = makeServer({
+    opts: { endpoints: [{ id: 'dsc', name: 'Discord', secret: pubHex, verifier: 'discord', schema: SCHEMA }] }
+  });
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({ type: 2, data: { name: 'x' } });
+  const badSig = '00'.repeat(64);
+
+  const unknownId = await request(server, { url: '/not-discord-at-all', headers: discordHeaders(badSig, ts), body });
+  const knownWrongSig = await request(server, { url: '/dsc', headers: discordHeaders(badSig, ts), body });
+  assert.equal(unknownId.status, 401);
+  assert.equal(knownWrongSig.status, 401);
+  assert.deepEqual(unknownId.body, knownWrongSig.body);
+});
+
+test('default order did not move: a shared-secret POST with a wrong secret 401s WITHOUT the body ever being read', async () => {
+  const { server, seen } = makeServer();
+  let dataEventFired = false;
+  await new Promise((resolve) => {
+    const req = new EventEmitter();
+    req.method = 'POST';
+    req.url = '/alpha';
+    req.headers = auth(SECRET_B); // wrong secret for /alpha
+    req.destroy = () => { /* no socket to tear down */ };
+    req.on('newListener', (event) => { if (event === 'data') dataEventFired = true; });
+    const res = {
+      writeHead(status) { res._status = status; return res; },
+      end() { resolve(); }
+    };
+    server.handleRequest(req, res);
+  });
+  assert.equal(dataEventFired, false, 'readBody must never be reached — verifySecret runs first and fails synchronously');
+  assert.equal(seen.length, 0);
+});
+
+test('Telegram: correct secret_token adapts the update, a wrong one 401s identically to shared-secret', async () => {
+  const { server, seen } = makeServer({
+    opts: { endpoints: [{ id: 'tg', name: 'Telegram', secret: 'tg-secret-token', verifier: 'telegram', schema: SCHEMA }] }
+  });
+  const update = JSON.stringify({
+    update_id: 1,
+    message: { text: 'hello from telegram', from: { username: 'someuser' } }
+  });
+  const ok = await request(server, {
+    url: '/tg', headers: { 'x-telegram-bot-api-secret-token': 'tg-secret-token' }, body: update
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(seen[0].msg.message, 'hello from telegram');
+  assert.equal(seen[0].msg.from, 'someuser');
+
+  const wrong = await request(server, {
+    url: '/tg', headers: { 'x-telegram-bot-api-secret-token': 'nope' }, body: update
+  });
+  const sharedWrong = await request(server, { url: '/alpha', headers: auth(SECRET_B), body: post({ message: 'x' }) });
+  assert.equal(wrong.status, 401);
+  assert.deepEqual(wrong.body, sharedWrong.body);
+});
+
+test('the mode gate still applies to an adapted Telegram directive: strict mode holds it at 202, not 200', async () => {
+  const { server } = makeServer({
+    opts: {
+      endpoints: [{
+        id: 'tg', name: 'Telegram', secret: 'tg-secret-token', verifier: 'telegram', schema: SCHEMA
+      }]
+    },
+    pending: true
+  });
+  const update = JSON.stringify({ update_id: 1, message: { text: 'deploy the release now', from: { username: 'x' } } });
+  const res = await request(server, {
+    url: '/tg', headers: { 'x-telegram-bot-api-secret-token': 'tg-secret-token' }, body: update
+  });
+  assert.equal(res.status, 202);
+  assert.equal(res.body.pending, true);
+});
+
 test('start() alone opens no tunnel — DAEMON-05\'s off-by-default clause, proven as behaviour not grep', async (t) => {
   const { server } = makeServer();
   t.after(() => server.stop());
