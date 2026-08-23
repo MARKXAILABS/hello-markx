@@ -239,7 +239,7 @@ jobs:
           subject-checksums: release/SHA256SUMS.txt
 
       - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # RELEASE.md is the human-facing notes; GitHub shows it as the body.
           body_path: RELEASE.md
