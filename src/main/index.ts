@@ -108,7 +108,7 @@ import {
   hive, delivery, control, telemetry, breaker, accountPool, hookServer, memory, reflector,
   persist, ptyManager, integrationBroker, roster,
   ptyToAgent, worktreePaths, worktreeOrigins, worktreeBases, spawnRecipes, liveWorkers, preservedWorktrees,
-  teardownPty, respawnOnAccount, informGod, syncMissions, syncContextTriggers,
+  respawnOnAccount, informGod, syncMissions, syncContextTriggers,
   archiveOrphanedAgents, ensureDefaultMissions, breakerToast, condenseBoardIfOversized,
   ptyForAgent, isFloorQuiet, lastCoordinationAt, looksStuck, readDeliveryCursor,
   notifyTriggerHistoryUpdated, savePreservedWorktrees, clearMissionTimers, clearContextTimers,
@@ -450,7 +450,7 @@ function wirePtyExitHandler(): void {
       }
       // Non-zero exit = install failed; leave its honest manual-fix message on screen.
     }
-    teardownPty(id);
+    floor?.teardownPty(id);
   });
 }
 
@@ -2268,7 +2268,7 @@ ipcMain.handle('pty:kill', (_evt, id: string) => {
   // remove its isolated worktree, drop the maps). teardownPty is idempotent, so
   // node-pty firing onExit once the child actually dies is a harmless no-op.
   const res = ptyManager.kill(id);
-  teardownPty(id);
+  floor?.teardownPty(id);
   return res;
 });
 ipcMain.handle('pty:list', () => ptyManager.list());
@@ -3735,7 +3735,7 @@ registerRealtimeActionIpc({
   controlSnapshot: (id) => control.snapshot(id),
   killAgent: (id) => {
     const r = ptyManager.kill(id);
-    teardownPty(id);
+    floor?.teardownPty(id);
     // A voice (MAIN-initiated) kill: the renderer never removed the card itself
     // (unlike a UI kill), so tell the floor to archive it. Mirrors hive:agentSpawned.
     try { liveWebContents()?.send('hive:agentArchived', { id }); } catch { /* window torn down */ }

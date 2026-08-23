@@ -17,10 +17,10 @@
  * wiring and is too large and IPC-shaped to move) — stays in index.ts, which
  * imports back whatever bare names it still needs from this module.
  */
-import { join, dirname, resolve, basename } from 'node:path';
+import { join, dirname } from 'node:path';
 import {
   existsSync, readdirSync, statSync, readFileSync, mkdirSync, copyFileSync,
-  writeFileSync, renameSync, rmSync
+  writeFileSync, renameSync
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { PtyManager, type SpawnOptions } from '../pty';
@@ -45,7 +45,6 @@ import { SPAWN_SAFE_SESSION_ID } from '../transcript';
 import {
   appendTriggerHistory, listTriggerHistory
 } from '../triggerHistory';
-import { worktreeHasUnintegratedWork, removeWorktree } from '../git';
 import { IntegrationBroker } from '../integrationBroker';
 import * as integrations from '../integrations';
 import { RosterStore } from '../roster';
@@ -56,6 +55,16 @@ import {
 import { claudeAccountSecretRef } from '../../shared/claudeAccounts';
 import { DEFAULT_CONTEXT_TRIGGER, type ContextRule } from '../../shared/triggers';
 import type { FloorDeps } from './deps';
+import {
+  teardownPty as lifecycleTeardownPty,
+  workerScratchDir as lifecycleWorkerScratchDir,
+  removeWorkerScratch as lifecycleRemoveWorkerScratch,
+  type WorkerRec,
+  type PreservedWorktree,
+  type AgentTeardownDeps
+} from './lifecycle';
+
+export type { WorkerRec, PreservedWorktree };
 
 // ─── Types shared with index.ts (erased at runtime — safe for a type-only
 //     cross-import that never pulls in this module's runtime code) ───────────
@@ -71,32 +80,6 @@ export type AgentSpawnOptions = SpawnOptions & {
   resumeSessionId?: string; provider?: AgentProvider; noAutoInstall?: boolean;
 };
 
-/** A live god-triggered ephemeral worker, tracked from spawn to teardown.
- *  Shared with index.ts's `ephemeralWorkerTick`/`workers:list` — that machinery
- *  stays in index.ts (it spawns via `spawnAgentCore`), but `teardownPty` here
- *  still needs to read/clear the same map. */
-export interface WorkerRec {
-  workerId: string;
-  reqId: string;
-  name?: string;
-  slack?: { channel: string; thread_ts: string };
-  baseBranch: string;
-  spawnedAt: number;
-  releasing?: boolean;
-  tokenCap?: number;
-}
-
-/** A worker worktree that teardown PRESERVED because it held unintegrated work.
- *  Shared with index.ts's GC sweep for the same reason as {@link WorkerRec}. */
-export interface PreservedWorktree {
-  workerId: string;
-  wtPath: string;
-  origCwd: string;
-  baseBranch: string;
-  scratchDir: string | null;
-  slack?: { channel: string; thread_ts: string };
-  preservedAt: number;
-}
 
 /** A mission's live scheduler handles: the initial `setTimeout` that waits out
  *  the time remaining until its next due fire, and the steady `setInterval`
@@ -148,6 +131,12 @@ export interface Floor {
    *  `before-quit` with `allowQuit` set, so the re-entrant pass takes
    *  `quitDecision`'s `'allow'` arm and the quit proceeds. */
   teardownAndQuit: () => void;
+  /** Tear down everything tied to one PTY id — `src/main/floor/lifecycle.ts`'s
+   *  `teardownPty`, bound to this floor's live subsystems. index.ts's IPC
+   *  `pty:kill` handler and node-pty's `onExit` callback both call this
+   *  rather than a bare imported function, so a floor booted with no
+   *  Electron binary (the boot test) can drive the exact same path. */
+  teardownPty: (id: string) => void;
 }
 
 // ─── Module state — every field is declared here (typed, unconstructed) and
@@ -257,123 +246,43 @@ function ptyForAgent(agentId: string): string | undefined {
   return undefined;
 }
 
+/** The sixteen collaborators `lifecycle.ts`'s free functions need, bound to
+ *  THIS module's current subsystem bindings. A function rather than a
+ *  module-scope object literal because `hive`/`delivery`/every Map below are
+ *  reassigned fresh on each `bootFloor()` call — this must read them at CALL
+ *  time, not at module-load time. */
+function agentTeardownDeps(): AgentTeardownDeps {
+  return {
+    integrationBroker, ptyToAgent, breaker, control, telemetry, hive,
+    worktreePaths, worktreeOrigins, worktreeBases, liveWorkers, preservedWorktrees,
+    spawnRecipes, delivery,
+    syncKeepAwake: () => deps.syncKeepAwake?.(),
+    savePreservedWorktrees, informGod
+  };
+}
+
 /** The hive scratch dir for a worker (its inbox/outbox/memory): HIVE_ROOT/agents/<id>. */
 function workerScratchDir(workerId: string): string | null {
-  const root = hive.root();
-  return root ? join(root, 'agents', workerId) : null;
+  return lifecycleWorkerScratchDir(workerId, { hive });
 }
 
 /** Best-effort removal of a worker's scratch (hive agent) dir. Guarded to ONLY
  *  ever delete a path that resolves to exactly HIVE_ROOT/agents/<workerId> and
  *  never a still-live worker. */
 function removeWorkerScratch(workerId: string): void {
-  if (liveWorkers.has(workerId)) return;
-  const dir = workerScratchDir(workerId);
-  const root = hive.root();
-  if (!dir || !root) return;
-  const agentsRoot = join(root, 'agents');
-  if (resolve(dir) !== join(resolve(agentsRoot), basename(dir)) || basename(dir) !== workerId) return;
-  try { rmSync(dir, { recursive: true, force: true }); }
-  catch (e) { console.error('[worker] removeWorkerScratch failed:', e); }
-}
-
-/** Gated worktree teardown for an ephemeral worker: remove it ONLY when it
- *  holds no unintegrated work; otherwise leave it (and its branch) in place and
- *  ping god, the sole integrator. Fail-safe — any uncertainty KEEPS it. */
-async function finalizeWorkerWorktree(wtPath: string, origCwd: string, worker: WorkerRec): Promise<void> {
-  try {
-    const work = await worktreeHasUnintegratedWork(wtPath, worker.baseBranch);
-    if (work.keep) {
-      console.warn(`[worker] PRESERVING worktree with unintegrated work: ${wtPath} (${work.detail})`);
-      preservedWorktrees.set(wtPath, {
-        workerId: worker.workerId, wtPath, origCwd, baseBranch: worker.baseBranch,
-        scratchDir: workerScratchDir(worker.workerId), slack: worker.slack, preservedAt: Date.now()
-      });
-      savePreservedWorktrees();
-      informGod(
-        `[worker worktree preserved] ${worker.workerId}`,
-        `Ephemeral worker ${worker.workerId} ended but its worktree holds unintegrated work, so it was NOT auto-removed (you are the sole integrator).\n`
-        + `Worktree: ${wtPath}\nBranch: ${work.branch}\nState: ${work.detail}\n`
-        + `Review/merge it — it will be auto-reclaimed once its work lands in ${worker.baseBranch}, or remove it now with: git -C "${origCwd}" worktree remove "${wtPath}"`,
-        worker.slack
-      );
-      return;
-    }
-    const r = await removeWorktree(origCwd, wtPath);
-    if (!r.ok) { console.error('[worker] removeWorktree failed:', r.error); return; }
-    preservedWorktrees.set(wtPath, {
-      workerId: worker.workerId, wtPath, origCwd, baseBranch: worker.baseBranch,
-      scratchDir: workerScratchDir(worker.workerId), slack: worker.slack, preservedAt: Date.now()
-    });
-    savePreservedWorktrees();
-  } catch (e) {
-    console.error('[worker] finalizeWorkerWorktree threw (worktree left in place):', e);
-  }
-}
-
-/** Gated worktree teardown for a NORMAL (non-worker) isolated agent: remove it
- *  only when nothing would be lost. Deliberately does NOT register in
- *  `preservedWorktrees` — a real agent's scratch dir is its memory/inbox, not a
- *  worker's disposable scratch. */
-async function finalizeAgentWorktree(
-  id: string, wtPath: string, origCwd: string, baseBranch: string
-): Promise<void> {
-  try {
-    const work = await worktreeHasUnintegratedWork(wtPath, baseBranch);
-    if (work.keep) {
-      console.warn(
-        `[worktree] PRESERVING ${id}'s worktree — it holds unintegrated work: ${wtPath} `
-        + `(branch ${work.branch}, ${work.detail}). Restarting this agent re-enters it; `
-        + `once the work has landed, remove it with: git -C "${origCwd}" worktree remove "${wtPath}"`
-      );
-      return;
-    }
-    const r = await removeWorktree(origCwd, wtPath);
-    if (!r.ok) console.error('[worktree] removeWorktree failed:', r.error);
-  } catch (e) {
-    console.error('[worktree] finalizeAgentWorktree threw (worktree left in place):', e);
-  }
+  lifecycleRemoveWorkerScratch(workerId, { hive, liveWorkers });
 }
 
 /**
  * Tear down everything tied to a PTY id: archive its hive agent, remove its
  * isolated git worktree, and drop the bookkeeping-map entries. Idempotent,
  * best-effort — every step is wrapped so a teardown error can never crash the
- * caller (an IPC handler or node-pty's onExit, both index.ts-owned).
+ * caller (an IPC handler or node-pty's onExit, both index.ts-owned). The
+ * state machine itself lives in `src/main/floor/lifecycle.ts` — this is the
+ * bound wrapper every module-scope caller in THIS file uses (`respawnOnAccount`,
+ * the circuit-breaker beat), and it is also exposed on `Floor` for index.ts.
  */
-function teardownPty(id: string): void {
-  try { integrationBroker.revoke(id); } catch { /* best-effort */ }
-  const agentId = ptyToAgent.get(id);
-  if (agentId) {
-    ptyToAgent.delete(id);
-    try { breaker.forget(agentId); } catch { /* best-effort */ }
-    try { control.forget(agentId); } catch { /* best-effort */ }
-    try { telemetry.forget(agentId); } catch { /* best-effort */ }
-    try { hive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
-    if (hive.enabled()) {
-      try { hive.setArchived(agentId, true); } catch (e) { console.error('[hive] setArchived failed:', e); }
-    }
-  }
-  const wtPath = worktreePaths.get(id);
-  if (wtPath) {
-    const origCwd = worktreeOrigins.get(id) ?? wtPath;
-    worktreePaths.delete(id);
-    worktreeOrigins.delete(id);
-    const worker = liveWorkers.get(id);
-    const baseBranch = worktreeBases.get(id) ?? 'main';
-    worktreeBases.delete(id);
-    if (worker) {
-      liveWorkers.delete(id);
-      void finalizeWorkerWorktree(wtPath, origCwd, worker);
-    } else {
-      void finalizeAgentWorktree(id, wtPath, origCwd, baseBranch);
-    }
-  }
-  if (liveWorkers.has(id)) liveWorkers.delete(id);
-  spawnRecipes.delete(id);
-  delivery.forgetPty(id);
-  deps.syncKeepAwake?.();
-}
+const teardownPty = (id: string): void => { lifecycleTeardownPty(id, agentTeardownDeps()); };
 
 /** Clear and forget every armed mission timer. */
 function clearMissionTimers(): void {
@@ -1254,7 +1163,8 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     ptyToAgent, worktreePaths, worktreeOrigins, worktreeBases, preservedWorktrees,
     spawnRecipes, missionTimers, contextTimers, liveWorkers,
     shutdown,
-    teardownAndQuit: () => { shutdown(); deps.quit(); }
+    teardownAndQuit: () => { shutdown(); deps.quit(); },
+    teardownPty
   };
 }
 
@@ -1301,7 +1211,7 @@ export function startHiveServices(): void {
 }
 
 export {
-  teardownPty, respawnOnAccount, informGod, syncMissions, syncContextTriggers,
+  respawnOnAccount, informGod, syncMissions, syncContextTriggers,
   archiveOrphanedAgents, ensureDefaultMissions, breakerToast, condenseBoardIfOversized,
   ptyForAgent, isFloorQuiet, lastCoordinationAt, looksStuck, readDeliveryCursor,
   notifyTriggerHistoryUpdated, savePreservedWorktrees, clearMissionTimers,
