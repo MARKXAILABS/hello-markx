@@ -12,6 +12,8 @@
  * re-parents that host element into itself when it mounts and detaches it on
  * unmount — the rendered content moves with it, so the terminal is always
  * visible immediately, no repaint required.
+ *
+ * Rationale and the rejected alternatives: docs/adr/0006-terminal-pool-lifetime.md
  */
 import { useEffect, useState } from 'react';
 import { Terminal } from '@xterm/xterm';

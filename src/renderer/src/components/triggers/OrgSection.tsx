@@ -44,7 +44,7 @@ export function OrgSection({ onSummary }: { onSummary?: (s: string) => void }) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ flex: 1, fontSize: 12, color: 'var(--cth-ink-700)' }}>
+        <span style={{ flex: 1, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
           Accept messages from your organisation
         </span>
         <Toggle on={cfg.enabled} onClick={() => apply({ ...cfg, enabled: !cfg.enabled })} />

@@ -192,7 +192,7 @@ export function MemoryGraphPanel({
         </button>
         <div style={{ flex: 1 }} />
         {showTopics && (
-          <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
             {loadingTopics ? 'reading memory…' : `showing ${graph.topicShown} of ${graph.topicTotal} topics`}
           </span>
         )}
@@ -330,7 +330,9 @@ export function MemoryGraphPanel({
                   opacity={dim ? 0.25 : 1}
                   style={{
                     fontFamily: isTopic ? 'var(--cth-font-mono)' : 'var(--cth-font-ui)',
-                    fontSize: isTopic ? 12 : 11,
+                    // Rule 2 per branch, mirroring the family ternary above it.
+                    // Evaluated minimum 14 on both branches.
+                    fontSize: isTopic ? 'var(--cth-text-mono-md)' : 'var(--cth-text-body-md)',
                     fill: isTopic ? 'var(--cth-ink-700)' : 'var(--cth-ink-900)'
                   }}
                 >{truncate(n.label, isTopic ? 20 : 16)}</text>
@@ -343,7 +345,7 @@ export function MemoryGraphPanel({
         {messageEdgeCount === 0 && !showTopics && (
           <div style={{
             position: 'absolute', top: 10, left: 0, right: 0, textAlign: 'center',
-            fontSize: 12, color: 'var(--cth-ink-500)', pointerEvents: 'none'
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', pointerEvents: 'none'
           }}>No messages logged yet — the hive is quiet. Agents shown as roster.</div>
         )}
 
@@ -374,7 +376,7 @@ function NodeTip({ node, memories }: { node: GraphNode; memories: Record<string,
         <div style={tipTitle}>{node.label}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '2px 0 4px' }}>
           <PixelBadge status={node.status} />
-          <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{node.degree} message link{node.degree === 1 ? '' : 's'}</span>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>{node.degree} message link{node.degree === 1 ? '' : 's'}</span>
         </div>
         <div style={tipBody}>{snippet}</div>
       </>
@@ -406,7 +408,7 @@ function EdgeTip({ edge, nodeById }: { edge: GraphEdge; nodeById: Map<string, Gr
   return (
     <>
       <div style={tipTitle}>{a} {arrow} {b}</div>
-      <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', margin: '2px 0' }}>
+      <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', margin: '2px 0' }}>
         {edge.weight} message{edge.weight === 1 ? '' : 's'} · last: {edge.lastAct ?? '—'}
       </div>
       {edge.lastSubject && <div style={tipBody}>{truncate(edge.lastSubject, 80)}</div>}
@@ -430,7 +432,7 @@ function Legend() {
       display: 'flex', flexWrap: 'wrap', gap: '2px 10px', maxWidth: 280, pointerEvents: 'none'
     }}>
       {items.map((it) => (
-        <span key={it.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--cth-ink-700)' }}>
+        <span key={it.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
           <span style={{ width: 9, height: 3, background: it.c, display: 'inline-block' }} /> {it.label}
         </span>
       ))}
@@ -460,7 +462,7 @@ function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; labe
         display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px 2px', border: 'none', cursor: 'pointer',
         background: on ? 'var(--cth-lilac)' : 'var(--cth-cream-200)',
         boxShadow: on ? 'inset 0 0 0 1px var(--cth-ink-300)' : 'inset 0 0 0 1px var(--cth-ink-100)',
-        fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)'
+        fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
       }}
     >
       <Icon name={on ? 'check' : 'plus'} /> {label}
@@ -524,12 +526,12 @@ function memorySnippet(text: string): string {
 const iconBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px 2px', border: 'none', cursor: 'pointer',
   background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-  fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)'
+  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
 };
 
 const tipTitle: React.CSSProperties = {
-  fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)', lineHeight: '16px'
+  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-900)', lineHeight: 'var(--cth-lh-body-md)'
 };
 const tipBody: React.CSSProperties = {
-  fontSize: 11, lineHeight: '15px', color: 'var(--cth-ink-700)'
+  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
 };

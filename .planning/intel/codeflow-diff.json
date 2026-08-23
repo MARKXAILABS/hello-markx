@@ -1,0 +1,34 @@
+{
+  "scoreBefore": 63,
+  "scoreAfter": 63,
+  "drop": 0,
+  "securityDiff": {
+    "added": [
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "hook-auth-roundtrip.test.cjs",
+        "path": "test/hook-auth-roundtrip.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      }
+    ],
+    "removed": []
+  },
+  "newSecurityHigh": [],
+  "circDiff": {
+    "added": [],
+    "removed": []
+  },
+  "layerViolations": {
+    "before": 255,
+    "after": 255,
+    "delta": 0
+  },
+  "unused": {
+    "before": 15,
+    "after": 15,
+    "delta": 0
+  },
+  "flags": []
+}

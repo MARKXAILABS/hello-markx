@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { useStore } from '@/store/store';
+import { useHiveTasks } from '@/hooks/useHiveTasks';
 import { type HiveTask, openQuestion, waitsOnHuman } from './TasksKanban';
 
 /**
@@ -21,8 +22,6 @@ import { type HiveTask, openQuestion, waitsOnHuman } from './TasksKanban';
  *   2. mails the god so it picks the answer up, unblocks the card, and the
  *      work continues — no separate HumanQuestion.md side-channel anymore.
  */
-
-const POLL_MS = 5000;
 
 function parse(raw: unknown): HiveTask[] {
   const list = (raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks))
@@ -49,17 +48,17 @@ export function AskMeTab() {
   const setAnswerDraft = useStore((s) => s.setAnswerDraft);
   const openTaskDetail = useStore((s) => s.openTaskDetail);
   const [sending, setSending] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const refresh = useCallback(async () => {
-    try { setTasks(parse(await window.cth.hiveTasks())); } catch { /* keep last good */ }
-  }, []);
-
+  // The renderer's ONE task poll (hooks/useHiveTasks) replaces this view's own
+  // 5s timer against the same file (#20). `tasks` stays LOCAL state rather than
+  // being derived straight off the payload: sendAnswer and dismiss both write
+  // to it optimistically (`setTasks(next)` before the disk round trip, and the
+  // restore-on-failure below), so a derived value would drop the immediate
+  // feedback and leave the card sitting there until the next tick.
+  const rawTasks = useHiveTasks();
   useEffect(() => {
-    refresh();
-    timer.current = setInterval(refresh, POLL_MS);
-    return () => { if (timer.current) clearInterval(timer.current); };
-  }, [refresh]);
+    try { setTasks(parse(rawTasks)); } catch { /* keep last good */ }
+  }, [rawTasks]);
 
   const nameFor = (id?: string): string | undefined =>
     id ? (agents.find((a) => a.id === id)?.name ?? restorable.find((a) => a.id === id)?.name ?? id) : undefined;
@@ -140,9 +139,9 @@ export function AskMeTab() {
     // questions and answers. Display/badge bits keep their explicit faces.
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: 'var(--cth-paper-200)', padding: 10, display: 'flex', flexDirection: 'column', gap: 10, fontFamily: 'var(--cth-font-mono)' }}>
       {waiting.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '24px 12px', color: 'var(--cth-ink-500)', fontSize: 12 }}>
+        <div style={{ textAlign: 'center', padding: '24px 12px', color: 'var(--cth-ink-500)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
           Nothing needs you right now. 🌿<br />
-          <span style={{ fontSize: 11, color: 'var(--cth-ink-300)' }}>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-300)' }}>
             When the team blocks a task on your input — a question to answer or a to-do only
             you can perform — it shows up here (and on the ASK ME board on the floor).
           </span>
@@ -186,11 +185,15 @@ export function AskMeTab() {
                   display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
                   border: 'none', cursor: sending === t.id ? 'default' : 'pointer',
                   background: 'transparent', color: 'var(--cth-ink-500)',
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 13
+                  fontFamily: 'var(--cth-font-ui)'
                 }}
                 onMouseEnter={(e) => { if (sending !== t.id) e.currentTarget.style.color = 'var(--cth-coral)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--cth-ink-500)'; }}
-              >✕</button>
+              >
+                {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH; the
+                    button keeps its accessible name and stays focusable. */}
+                <span aria-hidden="true" style={{ fontSize: 13 }}>✕</span>
+              </button>
             </div>
 
             <div style={{ padding: 9, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -228,7 +231,7 @@ export function AskMeTab() {
                     title="open the task detail with the full Q&A history"
                     style={{
                       border: 'none', background: 'transparent', cursor: 'pointer', padding: 0,
-                      fontSize: 10, color: 'var(--cth-ink-700)', fontFamily: 'var(--cth-font-display)',
+                      fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-700)', fontFamily: 'var(--cth-font-display)',
                       textDecoration: 'underline'
                     }}
                   >
@@ -240,23 +243,26 @@ export function AskMeTab() {
               {/* the cascade: what's stuck behind this answer */}
               {stuck.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-coral)' }}>
+                  <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-coral)' }}>
                     BLOCKING {stuck.length} DOWNSTREAM TASK{stuck.length === 1 ? '' : 'S'}
                   </div>
                   {stuck.slice(0, 6).map((d, i) => (
                     <div key={d.id} style={{
                       display: 'flex', alignItems: 'center', gap: 6,
                       paddingLeft: 8 + Math.min(i, 3) * 8,
-                      fontSize: 12, color: 'var(--cth-ink-700)'
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
                     }}>
-                      <span style={{ color: 'var(--cth-ink-300)' }}>└</span>
+                      {/* Rule 0 — decorative glyph. It has no fontSize of its
+                          own (it rides the row's), so it takes aria-hidden and
+                          no allowlist entry. */}
+                      <span aria-hidden="true" style={{ color: 'var(--cth-ink-300)' }}>└</span>
                       <span style={{ width: 7, height: 7, flexShrink: 0, background: d.status === 'blocked' ? 'var(--cth-coral)' : 'var(--cth-sky)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)' }} />
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
-                      {nameFor(d.assignee) && <span style={{ fontSize: 10, color: 'var(--cth-ink-500)' }}>({nameFor(d.assignee)})</span>}
+                      {nameFor(d.assignee) && <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>({nameFor(d.assignee)})</span>}
                     </div>
                   ))}
                   {stuck.length > 6 && (
-                    <div style={{ paddingLeft: 14, fontSize: 11, color: 'var(--cth-ink-300)' }}>… +{stuck.length - 6} more</div>
+                    <div style={{ paddingLeft: 14, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-300)' }}>… +{stuck.length - 6} more</div>
                   )}
                 </div>
               )}

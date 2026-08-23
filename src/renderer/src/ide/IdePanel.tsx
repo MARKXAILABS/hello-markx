@@ -105,7 +105,7 @@ export function IdePanel() {
 
   const [isRepo, setIsRepo] = useState<boolean | null>(null);
   const [status, setStatus] = useState<GitStatusT | null>(null);
-  const [treeWidth, setTreeWidth] = useState(300);
+  const [treeWidth, setTreeWidth] = useState(424); // 424 = 300 + the 124px spill MEASURED in real Electron 43 at 1280/1024/800; inside the 200..520 drag clamp.
   // v0.3.4 git visualization: which rail pane is showing, and the repo's MAIN
   // root (a worktree's history/compare must run against the shared repo).
   const [railTab, setRailTab] = useState<'changes' | 'history' | 'compare'>('changes');
@@ -275,6 +275,10 @@ export function IdePanel() {
     } else {
       setEditBuffers((p) => ({ ...p, [rel]: { ...p[rel], saveState: 'error', error: res.error } }));
     }
+    // `refreshStatus` is omitted deliberately: it is declared BELOW this callback, so
+    // naming it here is a use-before-declaration on the const binding. It is a
+    // useCallback keyed on `root`, which this callback already depends on, so the
+    // omission cannot make `save` stale.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root]);
 
@@ -376,7 +380,8 @@ export function IdePanel() {
         }}
       >
         <span style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 12, lineHeight: '20px', color: 'var(--cth-ink-900)'
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+          lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-900)'
         }}>
           HELLO MARKX · IDE
         </span>
@@ -393,32 +398,41 @@ export function IdePanel() {
                 ? `No agent was named when the IDE opened — showing ${target.agent.name}'s workspace (the current selection)`
                 : `${target.agent.name}'s workspace`}
               style={{
-                fontFamily: 'var(--cth-font-ui)', fontSize: 13, fontWeight: 600,
+                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                lineHeight: 'var(--cth-lh-body-md)', fontWeight: 600,
                 color: 'var(--cth-ink-900)',
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '22vw'
               }}
             >{target.agent.name}</span>
             {target.agent.isGod && (
               <span style={{
-                fontFamily: 'var(--cth-font-display)', fontSize: 7, padding: '1px 3px',
+                fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                lineHeight: 'var(--cth-lh-display-md)', padding: '1px 3px',
                 background: 'var(--cth-lilac-light)', color: 'var(--cth-ink-900)'
               }}>god</span>
             )}
             {target.inferred && (
               // Never assert a name we had to guess at. One quiet word is enough
               // to stop someone trusting the wrong agent's directory.
-              <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-500)' }}>
+              <span style={{
+                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
+              }}>
                 (assumed)
               </span>
             )}
           </span>
         ) : (
-          <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13, color: 'var(--cth-ink-500)' }}>
+          <span style={{
+            fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+            lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
+          }}>
             no agent
           </span>
         )}
         <span title={root ?? ''} style={{
-          fontFamily: 'var(--cth-font-mono)', fontSize: 13, color: 'var(--cth-ink-500)',
+          fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)',
+          lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-500)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '30vw'
         }}>
           {root ? basename(root) : 'no workspace'}
@@ -472,10 +486,14 @@ export function IdePanel() {
                   ...iconBtn,
                   // A caret is the one glyph that reads as "this section folds"
                   // without a legend; it points at where the content will go.
-                  fontFamily: 'var(--cth-font-mono)', fontSize: 10, lineHeight: '14px',
-                  color: 'var(--cth-ink-700)'
+                  fontFamily: 'var(--cth-font-mono)', color: 'var(--cth-ink-700)'
                 }}
-              >{gitCollapsed ? '▸' : '▾'}</button>
+              >
+                {/* Rule 0 exempt glyph. Size override and aria-hidden both sit on
+                    this span, never on the button: aria-hidden on a focusable
+                    element strips its name while leaving it tabbable. */}
+                <span aria-hidden="true" style={{ fontSize: 10, lineHeight: '14px' }}>{gitCollapsed ? '▸' : '▾'}</span>
+              </button>
               {(['changes', 'history', 'compare'] as const).map((k) => (
                 <button
                   key={k}
@@ -484,7 +502,8 @@ export function IdePanel() {
                   onClick={() => { setRailTab(k); if (gitCollapsed) toggleGitRail(); }}
                   style={{
                     padding: '1px 8px', border: 'none', cursor: 'pointer',
-                    fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '14px',
+                    fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                    lineHeight: 'var(--cth-lh-display-md)',
                     textTransform: 'uppercase', color: 'var(--cth-ink-700)',
                     background: railTab === k && !gitCollapsed ? 'var(--cth-sky-light)' : 'transparent',
                     boxShadow: railTab === k && !gitCollapsed ? 'inset 0 0 0 1px var(--cth-ink-300)' : 'none'
@@ -507,10 +526,16 @@ export function IdePanel() {
                   off the bottom with no way to reach the end. */}
               <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
                 {isRepo === false && (
-                  <div style={{ padding: '6px 12px', fontSize: 12, color: 'var(--cth-ink-500)' }}>not a git repo</div>
+                  <div style={{
+                    padding: '6px 12px', fontSize: 'var(--cth-text-body-md)',
+                    lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
+                  }}>not a git repo</div>
                 )}
                 {isRepo && changedFiles.length === 0 && (
-                  <div style={{ padding: '6px 12px', fontSize: 12, color: 'var(--cth-ink-500)' }}>working tree clean</div>
+                  <div style={{
+                    padding: '6px 12px', fontSize: 'var(--cth-text-body-md)',
+                    lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
+                  }}>working tree clean</div>
                 )}
                 {changedFiles.map((f) => {
                   const active = activeKey === tabKey('diff', f.path);
@@ -521,7 +546,8 @@ export function IdePanel() {
                       title={f.path}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 6, padding: '2px 12px',
-                        cursor: 'pointer', fontSize: 12, color: 'var(--cth-ink-900)',
+                        cursor: 'pointer', fontSize: 'var(--cth-text-body-md)',
+                        lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)',
                         background: active ? 'var(--cth-lemon-light)' : 'transparent'
                       }}
                     >
@@ -579,12 +605,14 @@ export function IdePanel() {
                       background: active ? 'var(--cth-paper-100)' : 'transparent',
                       boxShadow: active ? 'inset 0 -2px 0 var(--cth-sky)' : 'none',
                       borderRight: '1px solid var(--cth-ink-100)',
-                      fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)'
+                      fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                      lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
                     }}
                   >
                     {t.mode !== 'edit' && (
                       <span style={{
-                        fontFamily: 'var(--cth-font-display)', fontSize: 7, padding: '1px 3px',
+                        fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                        lineHeight: 'var(--cth-lh-display-md)', padding: '1px 3px',
                         background: t.mode === 'revdiff' ? 'var(--cth-lilac-light)'
                           : t.mode === 'image' ? 'var(--cth-peach-light)'
                           : 'var(--cth-sky-light)',
@@ -616,10 +644,14 @@ export function IdePanel() {
                 }}>
                   <Icon name="code" size={2} />
                   <div style={{
-                    fontFamily: 'var(--cth-font-display)', fontSize: 8, textTransform: 'uppercase',
+                    fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                    lineHeight: 'var(--cth-lh-display-md)', textTransform: 'uppercase',
                     letterSpacing: 1, color: 'var(--cth-ink-700)'
                   }}>nothing open</div>
-                  <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13 }}>
+                  <div style={{
+                    fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                    lineHeight: 'var(--cth-lh-body-md)'
+                  }}>
                     Pick a file from the tree to edit, or a changed file to diff.
                   </div>
                   <ShortcutHint />
@@ -695,7 +727,8 @@ export function IdePanel() {
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 8, padding: '3px 8px',
                       background: 'var(--cth-cream-200)', borderBottom: '1px solid var(--cth-ink-700)',
-                      fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)'
+                      fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                      lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
                     }}>
                       <span style={{ fontFamily: 'var(--cth-font-mono)', color: 'var(--cth-ink-500)' }}>
                         {activeTab.revLabel ?? `${activeTab.revA} → ${activeTab.revB}`}
@@ -722,7 +755,8 @@ export function IdePanel() {
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 8, padding: '3px 8px',
                       background: 'var(--cth-cream-200)', borderBottom: '1px solid var(--cth-ink-700)',
-                      fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)'
+                      fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                      lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
                     }}>
                       <span style={{ color: 'var(--cth-ink-500)' }}>HEAD</span>
                       <Icon name="arrow-right" />
@@ -753,7 +787,8 @@ function SectionHeader({ title, right }: { title: string; right?: React.ReactNod
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px 4px',
-      fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px', textTransform: 'uppercase',
+      fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+      lineHeight: 'var(--cth-lh-display-md)', textTransform: 'uppercase',
       color: 'var(--cth-ink-700)', background: 'var(--cth-cream-50)', borderBottom: '1px solid var(--cth-ink-100)'
     }}>
       <span style={{ flex: 1 }}>{title}</span>
@@ -841,7 +876,8 @@ function ShortcutHint() {
   return (
     <div style={{
       marginTop: 10, display: 'grid', gap: 2, justifyItems: 'center',
-      fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-300)'
+      fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+      lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-300)'
     }}>
       {EDITOR_SHORTCUTS.map(([keys, label]) => (
         <div key={label} style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
@@ -874,7 +910,8 @@ function Centered({ children, tone }: { children: React.ReactNode; tone?: 'error
   return (
     <div style={{
       height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: 16, textAlign: 'center', fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+      padding: 16, textAlign: 'center', fontFamily: 'var(--cth-font-ui)',
+      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
       color: tone === 'error' ? 'var(--cth-coral)' : 'var(--cth-ink-500)'
     }}>{children}</div>
   );

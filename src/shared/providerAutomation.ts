@@ -253,6 +253,41 @@ export interface ProviderCapabilities {
   spend: CostTracking;
   /** The compaction verb we can type, or null when nothing typed reaches it. */
   compact: string | null;
+  /** FLOOR-18 — whether this engine can be driven from OUTSIDE the app (phone,
+   *  another machine) on THIS host. `false` is a declared limitation, not a bug;
+   *  `remoteControlAvailability` says which of the two reasons applies. */
+  remote: boolean;
+}
+
+/**
+ * FLOOR-18 — where each engine's remote control stands, on a given host.
+ *
+ *   - `'ok'`      Claude exposes it as the `/remote-control` slash command. That
+ *                 is typed text, so it works on every platform.
+ *   - `'windows'` The engine HAS remote control, but not here. Codex's remote
+ *                 control *is* its app-server daemon, and upstream records that
+ *                 daemon's lifecycle as Unix-only — a pidfile plus Unix
+ *                 process/file-locking primitives: openai/codex#30372, "Codex
+ *                 remote control cannot start on Windows, CLI reports daemon
+ *                 lifecycle is Unix-only" (open; labelled windows-os /
+ *                 app-server / remote). `enableCodexRemoteForSpawn` in
+ *                 `src/main/index.ts` returns false on win32 for exactly this
+ *                 reason — the two must move together.
+ *   - `'none'`    The engine has no remote-control affordance at all, on any
+ *                 platform (`remoteControlCommandForProvider` returns null and
+ *                 there is no daemon).
+ *
+ * `platform` is a defaulted parameter, following `installInfoForProvider` in
+ * `agentProvider.ts`, so a test can exercise BOTH Codex branches on any CI
+ * runner rather than only the one it happens to be running on.
+ */
+export function remoteControlAvailability(
+  provider: AgentProvider,
+  platform: string = process.platform
+): 'ok' | 'windows' | 'none' {
+  if (provider === 'claude') return 'ok';
+  if (provider !== 'codex') return 'none';
+  return platform === 'win32' ? 'windows' : 'ok';
 }
 
 export function providerCapabilities(provider: AgentProvider): ProviderCapabilities {
@@ -261,7 +296,8 @@ export function providerCapabilities(provider: AgentProvider): ProviderCapabilit
     provider,
     mail: preset.canReceiveInbox,
     spend: preset.costTracking,
-    compact: contextCommandsForProvider(provider).compact
+    compact: contextCommandsForProvider(provider).compact,
+    remote: remoteControlAvailability(provider) === 'ok'
   };
 }
 
@@ -277,13 +313,36 @@ export function providerCapabilities(provider: AgentProvider): ProviderCapabilit
  *
  * `hive.ts` owns where this lands (it must go in a cache-safe position — the
  * roster path, not the content; see #44).
+ *
+ * ADR-0002 (the prompt-cache invariant) governs this string, and the REMOTE
+ * CONTROL clause is the one that could have broken it. The invariant is
+ * "interpolate only values stable for an agent's whole lifetime" — NOT "never
+ * vary by machine": the ADR already requires per-OS text, since "every path and
+ * command is written the way the agent will actually type it on the platform it
+ * is running on", and a prompt cache is per-account-per-machine anyway. What
+ * would break it is a value that can CHANGE BETWEEN TURNS. So the platform is
+ * read once, through `remoteControlAvailability`'s defaulted `process.platform`
+ * argument — a constant for the life of the process — and this line is
+ * byte-identical on every turn of every agent on a given host. That is also why
+ * `capabilityLine` itself grew a `remote` BIT and not a platform PARAMETER
+ * (D-40): a caller free to pass a varying platform is exactly how a stable
+ * prefix turns volatile, and the signature is asserted on by
+ * `test/engine-parity.test.cjs`.
  */
 export function capabilityLine(provider: AgentProvider): string {
   const c = providerCapabilities(provider);
   const bits = [
     c.mail ? 'mail ok' : 'NO MAIL (bounces to you)',
     c.spend === 'none' ? 'spend UNTRACKED (invisible to every budget)' : `spend tracked (${c.spend})`,
-    c.compact ? `compacts ${c.compact}` : 'NO COMPACT (context cannot be reclaimed)'
+    c.compact ? `compacts ${c.compact}` : 'NO COMPACT (context cannot be reclaimed)',
+    // FLOOR-18 — the gap SHOUTS and names WHICH gap it is, so the god (and the
+    // human reading the roster) can tell "this engine never had remote control"
+    // from "this engine has it and this machine cannot use it".
+    c.remote
+      ? 'remote control ok'
+      : remoteControlAvailability(c.provider) === 'windows'
+        ? 'REMOTE CONTROL unavailable on Windows'
+        : 'NO REMOTE CONTROL'
   ];
   return `${c.provider}: ${bits.join(', ')}`;
 }

@@ -13,8 +13,11 @@ on:
   pull_request:
     branches: [main]
 
-# Node 22 everywhere, same reason as ci.yml: Node 24 ships no better-sqlite3
-# prebuild and breaks node-pty's winpty gyp build.
+# Node 22 everywhere, same reason as ci.yml: the pin rests on node-pty's winpty
+# gyp build alone. better-sqlite3 13.x is N-API and ships a prebuild for every
+# platform, so it is no longer what holds the pin - but this job still installs
+# with FULL scripts below, because the app boots as Electron and both natives
+# must be built for the ELECTRON ABI.
 env:
   NODE_VERSION: "22"
 

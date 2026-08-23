@@ -25,11 +25,26 @@
  * (Lane A's cost-ledger, Lane B's SQLite) inherit that guarantee and must never
  * persist a raw record either.
  *
- * Transport posture mirrors `slack.ts`: the local handler bound to 127.0.0.1 is
- * the security boundary. Runs in the Electron main process; deliberately free of
+ * Transport posture is a per-agent telemetry capability: the listener is bound
+ * to 127.0.0.1 AND every batch must carry an `x-hive-otel-token` minted for one
+ * agent at one PTY spawn (`mintAgentToken`, exported on the per-signal OTLP
+ * header vars by pty.ts) and revoked when that PTY exits. The batch is
+ * attributed to the agent the TOKEN resolves to; the payload's own `agent.id` is
+ * not read on any network-reachable path. The bind alone was never a boundary
+ * here — this endpoint is injected into every agent's own environment, so the
+ * attacker is already inside it.
+ *
+ * What that model does NOT close, stated so no reader over-trusts it: there is
+ * no replay window and no signature over the body, so a captured token is valid
+ * until its PTY exits; and the token lives in the agent's own environment, which
+ * a same-uid sibling can read (`/proc/<pid>/environ` on Linux) — the ceiling
+ * `.planning/REQUIREMENTS.md:569` already records for GATE-01.
+ *
+ * Runs in the Electron main process; deliberately free of
  * any `electron` import so it can be smoke-tested as a plain Node module.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readAgentUsage } from './transcript';
 import { readCodexUsage } from './usage';
 import { normalizeModel } from './pricing';
@@ -40,7 +55,11 @@ import { normalizeModel } from './pricing';
  *  Lane A's breaker (#6) and persisted by Lane A's cost-ledger / Lane B's SQLite
  *  (#4). PII-free by construction (see file header). `usd` is Claude's own
  *  per-model cost on the live path, the fallback estimate on the transcript
- *  path — never recomputed downstream. */
+ *  path — never recomputed downstream.
+ *  CUMULATIVE is the contract, not a detail: diff consecutive rows of the same
+ *  (agentId, sessionId), never sum them. Summing over-counts quadratically, and
+ *  it is what RECORD-03/RECORD-04 exist to fix — see
+ *  docs/adr/0005-cumulative-cost-ledger.md. */
 export interface AgentUsageSample {
   agentId: string;
   /** Dedup/accounting key — present on every OTel record; fixes the cwd
@@ -123,6 +142,22 @@ interface SessionAccum {
 }
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024; // OTLP batches are small; cap unauth peers.
+/** At most one reject line per interval, mirroring `hooks.ts` `authorized()`. */
+const OTEL_REJECT_LOG_INTERVAL_MS = 10_000;
+
+/** The accumulator key: the (agentId, sessionId) PAIR, never the session id
+ *  alone (T-P25-04). Session ids are chosen by whoever posts, so a map keyed by
+ *  the id alone lets one agent add spend to another agent's accumulator — and
+ *  that arm has to hold even if the token gate failed completely.
+ *
+ *  The separator is the SAME `\u0000` `hive.ts`'s `applyCostRow` already uses,
+ *  so the two halves of the cost path agree; it is written as the six-character
+ *  escape rather than a raw NUL so the source stays text to git. A printable
+ *  separator would NOT be injective — with a space, ('a','b c') and ('a b','c')
+ *  collide, which is exactly the cross-agent fusion this key exists to prevent. */
+export function sessionKey(agentId: string, sessionId: string): string {
+  return `${agentId}\u0000${sessionId}`;
+}
 const SPAN_RING_CAP = 200; // rich spans retained per agent for the waterfall.
 /** How long a session accumulator may keep feeding an agent's LIVE aggregate.
  *  Sessions are never closed by the OTel protocol — every `--resume`, restart
@@ -170,6 +205,18 @@ export class TelemetryCollector {
    *  has no input source of its own (hook payloads don't expose api errors), and
    *  the account pool's 429/401 detection (which reads `info.statusCode`). */
   private readonly apiErrorSubs = new Set<(agentId: string, info: ApiErrorInfo) => void>();
+  /** token -> agentId. THIS collector's own capability registry (T-P25-01),
+   *  deliberately NOT the hook token: one secret shared between the hook socket
+   *  and an OpenTelemetry-spec'd env var means any grandchild with its own
+   *  OTel -> vendor configuration posts the HOOK credential off-box. Two
+   *  capabilities, two secrets. Empty until a PTY spawns, and an empty registry
+   *  REFUSES — an optional gate whose absence opens the door is the defect this
+   *  exists to close. */
+  private readonly otelTokens = new Map<string, string>();
+  /** Refused batches since start. Read-only accessor below; the only early
+   *  warning for a total telemetry blackout (T-P25-08). */
+  private rejected = 0;
+  private lastRejectLog = 0;
 
   constructor(opts: TelemetryCollectorOptions = {}) {
     this.host = opts.host ?? '127.0.0.1';
@@ -203,6 +250,34 @@ export class TelemetryCollector {
   /** The bound loopback URL agents export to, or null until started. */
   endpoint(): string | null {
     return this.boundPort ? `http://${this.host}:${this.boundPort}` : null;
+  }
+
+  // ─── the per-agent telemetry capability (T-P25-01) ─────────────────────────
+
+  /** Mint a telemetry-only credential for ONE agent at ONE PTY spawn. Called
+   *  through `ptyManager.setOtelTokenSource(...)`, the same choke point the hook
+   *  token uses, so a spawn site added later gets one automatically. A leaked
+   *  telemetry token buys exactly "post telemetry as the agent that already owns
+   *  it" — something that agent could do legitimately — and never the hook
+   *  socket. Two mints for one agent are two different secrets on purpose: a
+   *  restart mints a fresh one while the old PTY is still tearing down. */
+  mintAgentToken(agentId: string): string {
+    const token = randomBytes(32).toString('hex');
+    this.otelTokens.set(token, agentId);
+    return token;
+  }
+
+  /** Hand a credential back when its PTY is gone. Token-exact, like `pty.ts`'s
+   *  `releaseHookToken`, so a restart's fresh token survives the dying spawn's
+   *  revoke. */
+  revokeAgentToken(token: string): void {
+    this.otelTokens.delete(token);
+  }
+
+  /** Batches refused for want of a valid token. Climbing steadily means the
+   *  producer stopped working, not that an attacker showed up. */
+  get rejectedCount(): number {
+    return this.rejected;
   }
 
   // ─── The locked provider seam ──────────────────────────────────────────────
@@ -268,7 +343,7 @@ export class TelemetryCollector {
    *  life carrying the dead one's cumulative tokens/cost and its stale spans. */
   forget(id: string): void {
     const set = this.agentSessions.get(id);
-    if (set) for (const sid of set) this.sessions.delete(sid);
+    if (set) for (const sid of set) this.sessions.delete(sessionKey(id, sid));
     this.agentSessions.delete(id);
     this.spans.delete(id);
   }
@@ -309,6 +384,12 @@ export class TelemetryCollector {
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+    // THE trust boundary. Resolved BEFORE the body is consumed and BEFORE
+    // anything is parsed, so an unauthenticated peer moves nothing at all. The
+    // agent this batch is attributed to comes from the TOKEN; the payload's own
+    // `agent.id` claim is not read on this path (see ingestMetrics/ingestLogs).
+    const agentId = this.agentForToken(req.headers['x-hive-otel-token']);
+    if (!agentId) { this.refuse(res); return; }
     const chunks: Buffer[] = [];
     let size = 0;
     let aborted = false;
@@ -328,8 +409,8 @@ export class TelemetryCollector {
       const url = req.url ?? '';
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (url.includes('/v1/metrics')) this.ingestMetrics(body);
-        else if (url.includes('/v1/logs')) this.ingestLogs(body);
+        if (url.includes('/v1/metrics')) this.ingestMetrics(body, agentId);
+        else if (url.includes('/v1/logs')) this.ingestLogs(body, agentId);
       } catch { /* malformed batch — drop it, never throw into the socket */ }
       // OTLP success response is an empty JSON ExportServiceResponse.
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -341,9 +422,42 @@ export class TelemetryCollector {
     });
   }
 
+  /** Resolve a request header to the agent that holds it, or null. Fails CLOSED
+   *  on an absent header, on an unknown/stale token and on an EMPTY registry
+   *  alike (a test collector, or main before any PTY has spawned). */
+  private agentForToken(header: string | string[] | undefined): string | null {
+    const token = Array.isArray(header) ? header[0] : header;
+    if (!token) return null;
+    return this.otelTokens.get(token) ?? null;
+  }
+
+  /** Refuse, loudly but at most once per interval, mirroring the discipline of
+   *  `hooks.ts` `authorized()` — and, for the reason that function's own comment
+   *  gives, never printing the identity the payload claimed: printing it invites
+   *  a reader to trust it. The message is a DIAGNOSIS, not a status line,
+   *  because it is the only signal an operator gets before a silent telemetry
+   *  blackout takes the cost ledger, the resume key, every breaker cost arm and
+   *  account failover dark at once (T-P25-08). */
+  private refuse(res: ServerResponse): void {
+    this.rejected += 1;
+    const now = Date.now();
+    if (now - this.lastRejectLog >= OTEL_REJECT_LOG_INTERVAL_MS) {
+      this.lastRejectLog = now;
+      console.error(
+        `[hive] OTLP batch REJECTED (missing or unknown x-hive-otel-token) — ${this.rejected} `
+        + 'refused so far. If this is EVERY batch, the Claude Code SDK is not forwarding the '
+        + 'per-signal OTLP header vars (set per spawn in pty.ts) and this floor has NO live cost '
+        + 'telemetry at all — ledger, resume key, breaker cost arms and account failover are '
+        + 'blind; if it is one agent, that PTY exited and its token was revoked with it, or '
+        + 'something other than an agent is posting here.'
+      );
+    }
+    try { res.writeHead(401); res.end(); } catch { /* socket already gone */ }
+  }
+
   // ─── OTLP decode → normalize → accumulate ──────────────────────────────────
 
-  private ingestMetrics(body: unknown): void {
+  private ingestMetrics(body: unknown, authAgentId?: string): void {
     const root = body as { resourceMetrics?: ResourceMetrics[] };
     if (!Array.isArray(root?.resourceMetrics)) return;
     const touched = new Set<string>(); // agentIds with new data this batch
@@ -354,7 +468,17 @@ export class TelemetryCollector {
           const points = metric.sum?.dataPoints ?? metric.gauge?.dataPoints ?? [];
           for (const dp of points) {
             const attrs = flattenAttrs(dp.attributes);
-            const agentId = str(attrs['agent.id']) || str(resAttrs['agent.id']);
+            // ATTRIBUTION. `authAgentId` is the id `handleRequest` resolved from
+            // the caller's token, and `handleRequest` is the ONLY caller that is
+            // reachable from the network — it answers 401 before it can get here
+            // and always passes a non-empty id. The payload's own claim therefore
+            // survives ONLY as the `??` fallback, for the 28 in-process call
+            // sites that drive this method directly with the id in the
+            // attributes (test/claude-account-failover.test.cjs, the whole
+            // FLOOR-09 account-pool suite, plus test/claude-accounts.test.cjs).
+            // Both claim reads are behind it: `attrs` and `resAttrs` are two
+            // distinct strings and a grep for one does not catch the other.
+            const agentId = authAgentId ?? (str(attrs['agent.id']) || str(resAttrs['agent.id']));
             const sessionId = str(attrs['session.id']);
             if (!agentId || !sessionId) continue;
             const accum = this.session(agentId, sessionId);
@@ -384,7 +508,7 @@ export class TelemetryCollector {
     for (const agentId of touched) this.publishUsage(agentId);
   }
 
-  private ingestLogs(body: unknown): void {
+  private ingestLogs(body: unknown, authAgentId?: string): void {
     const root = body as { resourceLogs?: ResourceLogs[] };
     if (!Array.isArray(root?.resourceLogs)) return;
     for (const rl of root.resourceLogs) {
@@ -393,7 +517,11 @@ export class TelemetryCollector {
         for (const lr of sl.logRecords ?? []) {
           const attrs = flattenAttrs(lr.attributes);
           const name = str(attrs['event.name']) || str(lr.body?.stringValue);
-          const agentId = str(attrs['agent.id']) || str(resAttrs['agent.id']);
+          // Token-derived, exactly as in ingestMetrics above — and this is the
+          // arm that matters most: an `api_error` carrying `status_code: 401`
+          // reaches accountPool.handleApiError, which marks a SHARED Claude
+          // account dead and plans a failover for every agent on it.
+          const agentId = authAgentId ?? (str(attrs['agent.id']) || str(resAttrs['agent.id']));
           const sessionId = str(attrs['session.id']);
           if (!agentId) continue;
           if (name === 'tool_result') {
@@ -432,10 +560,11 @@ export class TelemetryCollector {
   // ─── Accumulation helpers ──────────────────────────────────────────────────
 
   private session(agentId: string, sessionId: string): SessionAccum {
-    let accum = this.sessions.get(sessionId);
+    const key = sessionKey(agentId, sessionId);
+    let accum = this.sessions.get(key);
     if (!accum) {
       accum = { agentId, model: '', ts: Date.now(), input: 0, output: 0, cacheRead: 0, cacheCreation: 0, usd: 0 };
-      this.sessions.set(sessionId, accum);
+      this.sessions.set(key, accum);
     }
     let set = this.agentSessions.get(agentId);
     if (!set) { set = new Set(); this.agentSessions.set(agentId, set); }
@@ -464,9 +593,9 @@ export class TelemetryCollector {
       agentId, sessionId: '', ts: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, model: '', usd: 0
     };
     for (const sid of set) {
-      const a = this.sessions.get(sid);
+      const a = this.sessions.get(sessionKey(agentId, sid));
       if (!a) { set.delete(sid); continue; }
-      if (a.ts < cutoff) { this.sessions.delete(sid); set.delete(sid); continue; }
+      if (a.ts < cutoff) { this.sessions.delete(sessionKey(agentId, sid)); set.delete(sid); continue; }
       out.input += a.input;
       out.output += a.output;
       out.cacheRead += a.cacheRead;

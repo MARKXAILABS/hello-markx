@@ -31,7 +31,7 @@ function StatusChip({ tool }: { tool: ToolStatus }) {
   const ready = tool.found;
   return (
     <span style={{
-      fontFamily: 'var(--cth-font-display)', fontSize: 9, letterSpacing: 0.5,
+      fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', letterSpacing: 0.5,
       padding: '2px 6px', flexShrink: 0, whiteSpace: 'nowrap',
       background: ready ? 'var(--cth-mint-light)' : 'var(--cth-cream-200)',
       boxShadow: `inset 0 0 0 1px ${ready ? 'var(--cth-mint)' : 'var(--cth-ink-300)'}`,
@@ -56,21 +56,21 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
       background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 11, flex: 1, minWidth: 0 }}>
+        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', flex: 1, minWidth: 0 }}>
           {tool.label.toUpperCase()}
         </span>
         {tool.essential && !tool.found && (
-          <span style={{ fontSize: 10, color: 'var(--cth-ink-500)', flexShrink: 0 }}>recommended</span>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', flexShrink: 0 }}>recommended</span>
         )}
         <StatusChip tool={tool} />
       </div>
 
-      <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.5 }}>{tool.why}</div>
+      <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 1.5 }}>{tool.why}</div>
 
       {/* Found: show WHERE, so a "ready" claim is verifiable rather than trusted. */}
       {tool.found && tool.path && (
         <div style={{
-          fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-500)',
+          fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-500)',
           wordBreak: 'break-all'
         }}>
           {tool.path}{tool.detail ? ` · ${tool.detail}` : ''}
@@ -81,7 +81,7 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
       {!tool.found && tool.installCommand && (
         <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
           <code style={{
-            flex: 1, minWidth: 0, fontFamily: 'var(--cth-font-mono)', fontSize: 11,
+            flex: 1, minWidth: 0, fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
             padding: '4px 6px', background: 'var(--cth-cream-100)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
             color: 'var(--cth-ink-900)', overflowX: 'auto', whiteSpace: 'pre'
@@ -89,7 +89,7 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
           <button
             onClick={copy}
             style={{
-              flexShrink: 0, fontFamily: 'var(--cth-font-ui)', fontSize: 11, padding: '0 8px',
+              flexShrink: 0, fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', padding: '0 8px',
               background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
               border: 'none', cursor: 'pointer', color: 'var(--cth-ink-900)'
             }}
@@ -98,7 +98,7 @@ function ToolRow({ tool }: { tool: ToolStatus }) {
       )}
 
       {(tool.note || tool.docsUrl) && (
-        <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {tool.note && <span>{tool.note}</span>}
           {tool.docsUrl && (
             <a
@@ -148,8 +148,8 @@ export function SetupPanel({ onDone }: { onDone?: () => void } = {}) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 12 }}>PREREQUISITES</div>
-          <div style={{ fontSize: 12, color: 'var(--cth-ink-500)', marginTop: 2 }}>
+          <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>PREREQUISITES</div>
+          <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', marginTop: 2 }}>
             {tools === null
               ? 'Checking what is installed…'
               : `${readyCount} of ${tools.length} ready${missingEssential.length ? ` · ${missingEssential.length} recommended missing` : ''}`}
@@ -167,7 +167,7 @@ export function SetupPanel({ onDone }: { onDone?: () => void } = {}) {
         background: missingEssential.length ? 'var(--cth-lemon-light)' : 'var(--cth-cream-100)',
         boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
       }}>
-        <div style={{ flex: 1, minWidth: 220, fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.5 }}>
+        <div style={{ flex: 1, minWidth: 220, fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 1.5 }}>
           {missingEssential.length
             ? <>Michael can install the {missingEssential.length} missing recommended {missingEssential.length === 1 ? 'tool' : 'tools'} for you. This fills in his dispatch box — nothing runs until you press dispatch.</>
             : <>Everything recommended is installed. Individual engines above are optional — set up only the ones you use.</>}
@@ -190,10 +190,10 @@ export function SetupPanel({ onDone }: { onDone?: () => void } = {}) {
         return (
           <div key={section.kind} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{
-              fontFamily: 'var(--cth-font-display)', fontSize: 10, letterSpacing: 0.5,
+              fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', letterSpacing: 0.5,
               color: 'var(--cth-ink-500)', textTransform: 'uppercase'
             }}>{section.title}</div>
-            <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', marginTop: -2 }}>{section.blurb}</div>
+            <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', marginTop: -2 }}>{section.blurb}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rows.map((t) => <ToolRow key={t.id} tool={t} />)}
             </div>

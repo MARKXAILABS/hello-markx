@@ -112,7 +112,7 @@ export function SchedulesSection({ onSummary }: { onSummary?: (s: string) => voi
       )}
       {adding && (
         <SubCard>
-          <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-500)' }}>NEW SCHEDULE</div>
+          <div style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)' }}>NEW SCHEDULE</div>
           <Field label="LABEL">
             <input
               value={mLabel}
@@ -181,6 +181,9 @@ function MissionRow({ mission, targetName, agents, onPatch, onDelete }: {
     setIntervalMs(mission.intervalMs);
     setBody(mission.body);
     setSaved(false);
+    // Keyed on `open` alone, deliberately: `mission.label`, `mission.to`,
+    // `mission.intervalMs` and `mission.body` are omitted so the scheduler stamping
+    // `lastFiredAt` mid-edit cannot reseed the draft and wipe what you are typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -229,7 +232,8 @@ function MissionRow({ mission, targetName, agents, onPatch, onDelete }: {
         <div style={{
           marginTop: 6, padding: '4px 6px',
           background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-          fontFamily: 'var(--cth-font-mono)', fontSize: 11, lineHeight: '15px',
+          fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)',
+          lineHeight: 'var(--cth-lh-mono)',
           color: 'var(--cth-ink-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
         }}>{mission.body.trim() || 'No prompt set.'}</div>
       )}

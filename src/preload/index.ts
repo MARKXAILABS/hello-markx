@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import type { AgentProvider } from '../shared/agentProvider';
+import type { QueueOp } from '../shared/queueDelivery';
+import type { QueueResult, QueueSnapshot } from '../main/delivery';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
 export type { ClaudeAccount } from '../shared/claudeAccounts';
 import type { PoolSnapshot } from '../shared/claudeAccountPool';
@@ -340,7 +342,7 @@ export interface HarnessConfig {
   autoDeliveryPausedAgents?: string[];
   maxTurns?: number;
   circuitBreaker?: CircuitBreakerConfig;
-  /** Enterprise Knowledge Graph (multimodal context for agents). Default OFF. */
+  /** Knowledge store — keyword search over your own documents. Default OFF. */
   knowledgeGraph?: KnowledgeGraphConfig;
   /** Terminal theme, mirrored into each agent's per-session Claude settings. */
   terminalTheme?: 'light' | 'dark';
@@ -372,9 +374,14 @@ export interface MemoryStatus {
   palacePath: string | null;
   model: 'minilm' | 'embeddinggemma';
   bin: string | null;
+  /** 'shared' (the default) = every agent can recall every other agent's notes.
+   *  MemoryManager.status() has always returned this (src/main/memory.ts:220-233)
+   *  and this mirror dropped it, so the renderer could not surface the sharing
+   *  model even though main was already reporting it. */
+  scope: 'shared' | 'agent';
 }
 
-/** Enterprise Knowledge Graph — corpus status, one document, and a search hit. */
+/** Knowledge store — corpus status, one document, and a search hit. */
 export interface KnowledgeStatus {
   enabled: boolean;
   root: string;
@@ -780,6 +787,12 @@ const api = {
   hiveLog: (n?: number): Promise<unknown[]> => ipcRenderer.invoke('hive:log', n ?? 200),
   hiveMemory: (id: string): Promise<string> => ipcRenderer.invoke('hive:memory', id),
   hiveInbox: (id: string): Promise<HiveMessage[]> => ipcRenderer.invoke('hive:inbox', id),
+  /** FLOOR-14 (#42) — tell main an agent just TRANSITIONED into `blocked`, so it
+   *  can fire the same OS toast a Claude agent already gets from its own hook
+   *  stream. A SIGNAL, not a command: main re-resolves the id against the live
+   *  registry and decides the title, the body, the click target and whether
+   *  anything fires at all. Call once per transition, never per repaint. */
+  hiveNotifyBlocked: (agentId: string): Promise<void> => ipcRenderer.invoke('hive:notifyBlocked', agentId),
   /** Voice read-layer: recent message CONTENT (inbox/outbox bodies), REDACTED in
    *  main. Pass { id } for one message, { agentId } to scope to one mailbox, or
    *  {} for the whole floor. Backs Realtime Michael's get_messages. The renderer
@@ -823,18 +836,16 @@ const api = {
   /** Show a skill's folder in the OS file manager. */
   skillsReveal: (path: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('skills:reveal', path),
+  /** Reveal the log folder (#13). */
+  openLogs: (): Promise<{ ok: boolean; path?: string; error?: string }> => ipcRenderer.invoke('app:openLogs'),
+  /** Keyword/semantic recall. `wing` is an agent id and it is what scopes the
+   *  answer — see the sharing model at src/main/memory.ts:10-21. The scope is
+   *  AGENT-SUPPLIED until RECALL-02 (Phase 5) makes the server bind it. */
   searchMemory: (query: string, wing?: string): Promise<{ ok: boolean; output: string; error?: string }> =>
     ipcRenderer.invoke('hive:searchMemory', query, wing),
-  memoryWakeUp: (wing?: string): Promise<{ ok: boolean; output: string; error?: string }> =>
-    ipcRenderer.invoke('hive:memoryWakeUp', wing),
   mineNow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('hive:mineNow'),
-  /** Condense agent memory.md files (the janitor's missing half). With an id,
-   *  condense that agent on demand; without, run a full threshold scan. Returns
-   *  the per-agent outcomes ({ id, condensed, reason, oldBytes?, newBytes? }). */
-  reflectNow: (id?: string): Promise<Array<{ id: string; condensed: boolean; reason: string; oldBytes?: number; newBytes?: number }>> =>
-    ipcRenderer.invoke('memory:reflectNow', id),
 
-  // ─── Enterprise Knowledge Graph (multimodal context for agents) ───────────
+  // ─── Knowledge store (keyword search over the user's own documents) ───────
   kgStatus: (): Promise<KnowledgeStatus> => ipcRenderer.invoke('kg:status'),
   kgList: (): Promise<KnowledgeDoc[]> => ipcRenderer.invoke('kg:list'),
   kgSearch: (query: string, limit?: number): Promise<KnowledgeHit[]> =>
@@ -873,10 +884,15 @@ const api = {
   hiveSend: (msg: Partial<HiveMessage>, from?: string): Promise<{ ok: boolean; error?: string; message?: HiveMessage }> =>
     ipcRenderer.invoke('hive:send', msg, from),
 
+  /** `synthesized` marks main's own idle-quiesce backstop (delivery.ts `quiesce`)
+   *  apart from a turn-end the harness actually reported (hooks.ts). Both send the
+   *  same three populated keys, so this discriminator is the only thing that tells
+   *  them apart on this side. BOTH signatures below carry it — widening only the
+   *  callback would leave the boundary half-typed. */
   onHiveHookEvent: (
-    cb: (e: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean }) => void
+    cb: (e: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean; synthesized?: boolean }) => void
   ): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean }) => cb(payload);
+    const listener = (_e: IpcRendererEvent, payload: { agentId?: string; event: string; tool?: string; notificationType?: string; source?: string; message?: string; blocked?: boolean; synthesized?: boolean }) => cb(payload);
     ipcRenderer.on('hive:hookEvent', listener);
     return () => ipcRenderer.removeListener('hive:hookEvent', listener);
   },
@@ -967,6 +983,28 @@ const api = {
    *  renderer can never wedge the floor's autonomy. */
   hiveDeliveryVeto: (agentId: string, reason: string | null): void => {
     ipcRenderer.send('hive:deliveryVeto', agentId, reason);
+  },
+  /** The MD queue (#5 / FLOOR-02). MAIN owns the queue and its drain now, so a
+   *  message composed here is delivered with the window closed; every renderer
+   *  mutation — park, remove, "send now", clear — goes through this one channel
+   *  instead of writing the store slice directly. */
+  hiveQueue: (op: QueueOp): Promise<QueueResult> => ipcRenderer.invoke('hive:queue', op),
+  /** Main's push of the whole queue, on every mutation and every delivery. The
+   *  renderer's copy is a VIEW: this is what keeps the composer's pending list
+   *  honest now that it is no longer the thing being drained. */
+  onHiveQueue: (cb: (queues: QueueSnapshot) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, queues: QueueSnapshot) => cb(queues);
+    ipcRenderer.on('hive:queue', listener);
+    return () => ipcRenderer.removeListener('hive:queue', listener);
+  },
+  /** One queued message just landed in a terminal. Carries the text because the
+   *  renderer's remaining job on this path depends on WHAT landed: a delivered
+   *  `/clear` starts a new session whose size nothing reports until the next
+   *  status line, so the context gauge has to be zeroed rather than left full. */
+  onHiveQueueDelivered: (cb: (e: { to: string; id: string; text: string }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { to: string; id: string; text: string }) => cb(payload);
+    ipcRenderer.on('hive:queueDelivered', listener);
+    return () => ipcRenderer.removeListener('hive:queueDelivered', listener);
   },
   /** Main is putting an agent in front of the human — today from a clicked OS
    *  notification (#42), which has already raised the window. The renderer only

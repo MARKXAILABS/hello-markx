@@ -71,7 +71,8 @@ export interface CircuitBreakerConfig {
   tokenVelocityPerMin?: number;
 }
 
-/** Enterprise Knowledge Graph config (mirrors src/main/config.ts KnowledgeGraphConfig). */
+/** Document keyword store config (mirrors src/main/config.ts KnowledgeGraphConfig).
+ *  Keyword scoring over text chunks, not a graph — see src/main/kg-core.cjs. */
 export interface KnowledgeGraphConfig {
   enabled?: boolean;
   rootPath?: string;
@@ -139,7 +140,7 @@ export interface HarnessConfig {
   autoDeliveryPausedAgents?: string[];
   maxTurns?: number;
   circuitBreaker?: CircuitBreakerConfig;
-  /** Enterprise Knowledge Graph (multimodal context for agents). Default OFF. */
+  /** Document keyword store (multimodal context for agents). Default OFF. */
   knowledgeGraph?: KnowledgeGraphConfig;
   /** TV-show office themes feature flag (Settings picker + switch flow). Default OFF. */
   tvShowOffices?: boolean;

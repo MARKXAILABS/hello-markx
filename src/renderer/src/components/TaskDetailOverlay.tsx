@@ -1,37 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '@/store/store';
+import { useHiveTasks, refreshHiveTasks } from '@/hooks/useHiveTasks';
 import { TaskDetail, parseTasks, type HiveTask } from './TasksKanban';
 
 /**
  * App-wide host for the task detail: whoever calls store.openTaskDetail(id) —
  * a kanban card, the sticky note on an agent's strip card, a floor prop —
- * gets the SAME big overlay rendered over the office floor. Keeps its own
- * 5s ledger poll so an open detail stays fresh while the god edits cards.
+ * gets the SAME big overlay rendered over the office floor. Rides the
+ * renderer's ONE ledger poll (hooks/useHiveTasks) so an open detail stays fresh
+ * while the god edits cards, without a second 5s timer on the same file (#20).
  */
-
-const POLL_MS = 5000;
 
 export function TaskDetailOverlay() {
   const taskDetailId = useStore((s) => s.taskDetailId);
   const closeTaskDetail = useStore((s) => s.closeTaskDetail);
   const agents = useStore((s) => s.agents);
   const restorable = useStore((s) => s.restorableAgents);
+  // `tasks` stays LOCAL state rather than being derived straight off the shared
+  // payload: `move` below writes to it optimistically, so a derived value would
+  // leave the card in its old column until the next tick.
   const [tasks, setTasks] = useState<HiveTask[]>([]);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rawTasks = useHiveTasks();
 
-  const refresh = useCallback(async () => {
+  useEffect(() => {
     // parseTasks NORMALIZES (the ledger is a hand-written file; cards may lack
     // dependsOn/priority/etc.) — a raw card without dependsOn crashed the
     // detail once. Never feed TaskDetail unparsed ledger entries.
-    try { setTasks(parseTasks(await window.cth.hiveTasks())); } catch { /* keep last good */ }
-  }, []);
-
-  useEffect(() => {
-    if (!taskDetailId) return;
-    void refresh();
-    timer.current = setInterval(() => { void refresh(); }, POLL_MS);
-    return () => { if (timer.current) clearInterval(timer.current); };
-  }, [taskDetailId, refresh]);
+    try { setTasks(parseTasks(rawTasks)); } catch { /* keep last good */ }
+  }, [rawTasks]);
 
   if (!taskDetailId) return null;
   const task = tasks.find((t) => t.id === taskDetailId);
@@ -44,9 +40,11 @@ export function TaskDetailOverlay() {
     const next = tasks.map((t) => (t.id === task.id ? { ...t, status } : t));
     setTasks(next); // optimistic
     try {
+      // Force the shared poller to re-read NOW rather than waiting out its 5s
+      // tick — the same job this view's own `refresh()` did before the migration.
       const result = await window.cth.hivePatchTask(task.id, { status });
-      if (!result.ok) void refresh();
-    } catch { void refresh(); }
+      if (!result.ok) refreshHiveTasks();
+    } catch { refreshHiveTasks(); }
   };
 
   const assign = () => {

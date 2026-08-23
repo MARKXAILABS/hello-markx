@@ -269,8 +269,8 @@ export function RealtimeMichaelToggle({ compact = false }: RealtimeMichaelToggle
                 // as part of whichever card it happens to cover.
                 boxShadow: 'inset 0 0 0 1.5px var(--cth-ink-500), 4px 4px 0 rgba(26,19,32,0.25)',
                 fontFamily: 'var(--cth-font-ui)',
-                fontSize: 11,
-                lineHeight: '15px',
+                fontSize: 'var(--cth-text-body-md)',
+                lineHeight: 'var(--cth-lh-body-md)',
                 color: 'var(--cth-ink-900)',
                 textAlign: 'left',
                 whiteSpace: 'normal'
@@ -283,7 +283,7 @@ export function RealtimeMichaelToggle({ compact = false }: RealtimeMichaelToggle
                 style={{
                   border: 'none', background: 'none', padding: 0, cursor: 'pointer',
                   alignSelf: 'flex-start',
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 11, lineHeight: '15px',
+                  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-900)', textDecoration: 'underline'
                 }}
               >

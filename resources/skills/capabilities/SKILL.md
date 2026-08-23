@@ -93,9 +93,11 @@ on one):
   channel.
 - **Semantic memory (MemPalace).** If enabled for you: `mempalace search
   "<query>"` to recall shared knowledge, `mempalace wake-up` for a digest.
-- **Enterprise Knowledge Graph.** If enabled: `node "$KG_CLI" search "<query>"`
+- **Document keyword store.** If enabled: `node "$KG_CLI" search "<query>"`
   for ranked passages, `node "$KG_CLI" list`, `node "$KG_CLI" get <id>` — use it
-  for company-specific facts instead of guessing.
+  for company-specific facts instead of guessing. Ranking is keyword scoring
+  over text chunks (term frequency plus a title boost), not entities or edges,
+  so ask it for wording that would appear in the document.
 - **MCP integrations** (filesystem, git, and others) come pre-wired into your
   session settings when enabled; invoke them as normal tools. The set is gated
   by the hive's consent configuration.

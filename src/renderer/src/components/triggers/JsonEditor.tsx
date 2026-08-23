@@ -16,12 +16,12 @@ const editorTheme = EditorView.theme({
     background: 'var(--cth-paper-100)',
     color: 'var(--cth-ink-900)',
     fontFamily: 'var(--cth-font-mono)',
-    fontSize: '13px'
+    fontSize: 'var(--cth-text-mono-md)'
   },
   '&.cm-focused': { outline: 'none' },
   '.cm-content': { padding: '6px 8px' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--cth-coral)', borderLeftWidth: '2px' },
-  '.cm-scroller': { fontFamily: 'inherit', lineHeight: '17px' },
+  '.cm-scroller': { fontFamily: 'inherit', lineHeight: 'var(--cth-lh-mono)' },
   '.cm-gutters': { display: 'none' },
   '.cm-activeLine': { background: 'transparent' },
   '.cm-selectionBackground, ::selection': { background: 'var(--cth-lemon-light) !important' }

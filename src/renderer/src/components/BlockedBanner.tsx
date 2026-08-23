@@ -20,7 +20,7 @@ export function BlockedBanner({ reason, onAction }: BlockedBannerProps) {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         fontFamily: 'var(--cth-font-display)',
-        fontSize: 8, lineHeight: '12px',
+        fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-900)',
         textTransform: 'uppercase'
       }}>
@@ -35,8 +35,8 @@ export function BlockedBanner({ reason, onAction }: BlockedBannerProps) {
         {reason.summary}
       </div>
       <div style={{
-        fontSize: 13,
-        lineHeight: '18px',
+        fontSize: 'var(--cth-text-body-md)',
+        lineHeight: 'var(--cth-lh-body-md)',
         color: 'var(--cth-ink-700)'
       }}>
         {reason.detail}
@@ -44,8 +44,8 @@ export function BlockedBanner({ reason, onAction }: BlockedBannerProps) {
       {reason.command && (
         <div style={{
           fontFamily: 'var(--cth-font-mono)',
-          fontSize: 13,
-          lineHeight: '18px',
+          fontSize: 'var(--cth-text-mono-md)',
+          lineHeight: 'var(--cth-lh-mono)',
           color: 'var(--cth-ink-900)',
           background: 'var(--cth-paper-100)',
           padding: '4px 8px',

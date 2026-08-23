@@ -150,6 +150,32 @@ export interface TaskLedger {
   updatedAt: string;
 }
 
+/** Drop the DERIVED fields `tasks()` adds for the card meter before anything is
+ *  persisted (D-22 / #34).
+ *
+ *  `tasks()` widens each row with `{tokens, budgetTokens, pct}` so the renderer
+ *  gets a meter through the channel it already polls. Two production paths then
+ *  read rows straight out of `tasks()` and hand those SAME objects back to
+ *  `writeTasks()` — the webhook card-creation path in `src/main/index.ts`
+ *  (`const ledger = hive.tasks()` … `hive.writeTasks([...existing, card])`) and
+ *  every voice task action in `src/main/realtimeActions.ts` (`findTasks` →
+ *  `hiveWriteTasks`). Without this, the first webhook card or voice command
+ *  after the widening writes a derived, immediately-stale meter into tasks.json
+ *  as if it were card data.
+ *
+ *  One strip at the single choke point every persist goes through, rather than a
+ *  guard at each call site — `writeTasks` is also what `mutateTasks` (and so
+ *  addTask/patchTask/deleteTask) funnels through. `budgetTokens` is a REAL card
+ *  field and is kept; only the `null` that `tasks()` uses for "no cap" is
+ *  dropped back to absent, so a capless card is not given a null cap field. */
+const stripDerivedTaskFields = (task: HiveTask): HiveTask => {
+  const card: HiveTask & { tokens?: unknown; pct?: unknown } = { ...task };
+  delete card.tokens;
+  delete card.pct;
+  if (typeof card.budgetTokens !== 'number') delete card.budgetTokens;
+  return card;
+};
+
 export interface AgentMeta {
   id: string;
   name: string;
@@ -236,12 +262,42 @@ const REPLY_DEADLINE_MS = 15 * 60_000;
 /** How often the router tick actually runs the deadline + review sweeps. The
  *  router itself ticks every 1.5 s; these are minute-scale concerns. */
 const SWEEP_INTERVAL_MS = 60_000;
-/** Tail window for cost-ledger reads (taskSpend). Same bounded-read discipline as
- *  logTail: an append-only file must never be slurped whole to answer one query.
- *  ponytail: a card whose spend predates this window under-reports; widen it (or
- *  move to Kevin's cost_ledger table, whose row shape this already matches) if
- *  that ever matters. */
-const COST_TAIL_BYTES = 1024 * 1024;
+// RECORD-03 (#34): the 1 MB `COST_TAIL_BYTES` window that `taskSpend()` used to
+// read through is DELETED, not widened. Its own comment already named the defect
+// ("a card whose spend predates this window under-reports"), and an under-report
+// is exactly the case where `over` reads false while the card is over its cap —
+// the number FLOOR-10 enforces against. The bounded-read discipline it borrowed
+// from `logTail` is right for a log tail and wrong for an accounting total: a
+// total that silently drops its oldest rows is not a total. What replaces the
+// bound is `costByTask` below — an in-memory accumulator built by ONE scan and
+// then kept current incrementally, so the file is never re-slurped per query.
+
+/**
+ * Where the hive's own `git` looks for hooks: nowhere.
+ *
+ * The hive root IS a git repo (`git init` in ensureHive) and both wrappers below
+ * spawn `git` as a child of the Electron MAIN process, inheriting main's
+ * environment. Nothing stopped an agent writing `<root>/.git/hooks/pre-commit`
+ * and having the next hive commit execute it — arbitrary code with more
+ * privilege than the agent that planted it, reached from outside the PreToolUse
+ * write gate (which cannot see the pi, opencode or proxy tiers at all).
+ *
+ * `core.hooksPath` rather than `--no-verify`, deliberately: `--no-verify`
+ * suppresses only `pre-commit`/`commit-msg` on a commit, leaves `post-commit`
+ * and every other hook running, and would have to be repeated at each of the
+ * seven commit() call sites. This is one flag in the shared `-c` prefix of BOTH
+ * wrappers — either can be the next writer — and it disables every hook for
+ * every git invocation the hive makes.
+ *
+ * THE CEILING, stated rather than implied. This protects git runs the HIVE
+ * makes; an agent running `git` in its own shell still runs its own hooks, and
+ * that is its own repo's business. And `/dev/null` is a char device no
+ * unprivileged process can turn into a directory on POSIX — on win32 the string
+ * resolves to a drive-root path instead, which is weaker, so the behavioural
+ * test in test/engine-parity.test.cjs asserts the hook does not fire rather than
+ * asserting the flag is present.
+ */
+const GIT_HOOKS_DISABLED = '/dev/null';
 
 // ─── git + log budgets ──────────────────────────────────────────────────────
 // Every number here used to be an order of magnitude larger and paid for on the
@@ -257,6 +313,17 @@ const GIT_TIMEOUT_MS = 2_000;
 const GIT_ATTEMPTS = 2;
 /** Base backoff between attempts (async timer, never a blocking sleep). */
 const GIT_RETRY_MS = 50;
+/** FLOOR-04 bound on the staged diff the secret scrub will scan, in LINES
+ *  (added + deleted, straight off `--numstat`). Measured BEFORE the content diff
+ *  is ever pulled into memory, so a pathological commit is turned away rather
+ *  than buffered — `--numstat` costs one short row per changed PATH, not per
+ *  byte. Past this the scan is skipped and said out loud; never skipped quietly. */
+const SECRET_SCAN_MAX_LINES = 20_000;
+/** …and a byte bound on the text actually handed to the matcher, because a line
+ *  count does not bound bytes: one minified 10 MB line is a single line to
+ *  `--numstat`. Beyond this only the first slice is scanned, and the shortfall
+ *  is logged rather than presented as a clean scan. */
+const SECRET_SCAN_MAX_BYTES = 4 * 1024 * 1024;
 /** How old `.git/index.lock` must be before we treat it as abandoned. Must stay
  *  comfortably ABOVE GIT_TIMEOUT_MS — the old 10 s was BELOW the old 8 s git
  *  timeout, so a slow-but-alive git (a big `add -A` behind Windows antivirus)
@@ -328,11 +395,38 @@ export function redactSecrets(text: unknown): string {
   s = s.replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, '[redacted]');
   // 2. JSON Web Tokens — three base64url segments separated by dots.
   s = s.replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g, '[redacted]');
-  // 3. Known credential prefixes: OpenAI/Anthropic (sk-, sk-ant-), Slack
-  //    (xoxb/xoxp/xoxa/xoxr/xoxs-, xapp-), GitHub (ghp_/gho_/ghu_/ghs_/ghr_,
-  //    github_pat_), AWS access-key ids (AKIA…), Google API keys (AIza…).
+  // 3. Known credential prefixes: OpenAI/Anthropic (sk-ant-, sk-proj-,
+  //    sk-svcacct-, bare sk-), Slack (xoxb/xoxp/xoxa/xoxr/xoxs-, xapp-),
+  //    GitHub (ghp_/gho_/ghu_/ghs_/ghr_, github_pat_), AWS access-key ids
+  //    (AKIA…), Google API keys (AIza…).
+  //
+  //    THE sk- ARM IS SPLIT, AND THE SPLIT IS MEASURED, NOT TIDY. A vendor
+  //    segment (ant-, proj-, svcacct-) discriminates on its own, so those
+  //    three stay UNBOUNDED: a word boundary on them loses `q=key%3Dsk-proj-`
+  //    + a key — a URL-encoded `=` in a curl line, a log or a stack trace —
+  //    and `xsk-ant-…`, both of which redact without it.
+  //    The BARE sk- body is ambiguous by construction and is the ONLY
+  //    alternative with a measured false positive, so it alone carries the \b.
+  //    It is what stops `desk-backend-engineer`, `desk-market-researcher`,
+  //    `task-kanban-work-as-a-board-not-a-chat-log` and
+  //    `risk-assessment-matrix-builder-v2` being read as vendor keys — four
+  //    tracked files were dropped from every commit that touched them.
+  //
+  //    DECLARED TRADE, because an undeclared one is worse than the bug: that
+  //    \b costs a LEGACY bare sk-<alnum> OpenAI key glued to a preceding word
+  //    character. Five measured shapes, pinned as DECLARED LOSSES in
+  //    test/voice-messages.test.cjs. A lookbehind — (?<![a-z])sk- — was
+  //    measured and recovers two of the five with the same zero newly-unstaged
+  //    paths over 481 tracked text files and 400 commits; it is the recorded
+  //    upgrade path, not a hypothetical.
+  //
+  //    The other six alternatives are left EXACTLY as they were, with NO
+  //    boundary. They have zero measured false positives across those same 481
+  //    files and 400 commits, and a boundary on them loses `AWS` + `AKIA…` and
+  //    `MY` + `github_pat_…`, both redacted today. One uniform rule is only
+  //    smaller than six exceptions when the uniform rule is free; it is not.
   s = s.replace(
-    /(?:sk-(?:ant-)?[A-Za-z0-9_-]{16,}|xox[bpaors]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|gh[posru]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{20,})/g,
+    /(?:sk-ant-[A-Za-z0-9_-]{16,}|sk-proj-[A-Za-z0-9_-]{16,}|sk-svcacct-[A-Za-z0-9_-]{16,}|\bsk-[A-Za-z0-9_-]{16,}|xox[bpaors]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|gh[posru]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{20,})/g,
     '[redacted]'
   );
   // 4. Bearer tokens — keep the label, drop the credential.
@@ -347,6 +441,26 @@ export function redactSecrets(text: unknown): string {
     /\b((?:[a-z0-9]+[_-])*(?:api[_-]?key|secret[_-]?access[_-]?key|secret|token|password|passwd|pwd|access[_-]?token|refresh[_-]?token|client[_-]?secret|signing[_-]?secret|webhook[_-]?secret|auth[_-]?token|bot[_-]?token|private[_-]?key))(\s*[:=]\s*)(["']?)[^\s"',}]{6,}\3/gi,
     (_m, k) => `${k}=[redacted]`
   );
+  // 6. Unlabelled vendor keys spelled with an UNDERSCORE vendor segment.
+  //    THESE RUN AFTER PATTERNS 1-5 DELIBERATELY, AND THE ORDER IS THE WHOLE
+  //    DESIGN. A greedy [A-Za-z0-9_]{10,} body placed INSIDE pattern 3's
+  //    alternation matches at an EARLIER position than the sk- arm and eats the
+  //    leading "sk" of a following sk-ant- key, leaking the rest of it —
+  //    measured, 20 bytes, on `sk_live_AAAAAAAAAAsk-ant-BBBBBBBBBBBBBBBB`.
+  //    "Appending a branch to an alternation cannot subtract" is FALSE: it
+  //    cannot subtract AT A POSITION, and it does subtract DOWNSTREAM.
+  //    Running as their own statements, these two can only redact MORE, because
+  //    every earlier pattern has already finished with the string. That is a
+  //    property of STATEMENT ORDER you can check by reading the function,
+  //    rather than of a lookahead enumerating every prefix a greedy body might
+  //    swallow — an enumeration that is wrong the day a vendor prefix is added.
+  //    A vendor segment is REQUIRED after the underscore so a bare long
+  //    snake_case identifier can never satisfy the body. It is not free:
+  //    `sk_test_helper_function` and `rk_live_stream_handler` DO match. That
+  //    residual family is recorded in the ceiling on scrubStagedSecrets, and it
+  //    unstages zero paths across 481 tracked text files and 400 commits.
+  s = s.replace(/\bsk_(?:ant|live|test|proj)_[A-Za-z0-9_]{10,}/g, '[redacted]');
+  s = s.replace(/\brk_(?:live|test)_[A-Za-z0-9_]{10,}/g, '[redacted]');
   return s;
 }
 
@@ -621,6 +735,60 @@ export class HiveManager {
    *  ensureAgent, killed on PTY exit / removeAgent / app quit (index.ts) — so a
    *  dead agent never leaks an orphan loopback listener. */
   private proxyChildren = new Map<string, ChildProcess>();
+
+  /** GATE-01 — how the hive mints a hook token for a PROXY SIDECAR.
+   *
+   *  The sidecar is not a PTY, so `PtyManager`'s per-spawn mint never sees it;
+   *  it is a child of THIS class. Injected as callbacks the same way `pty.ts`
+   *  takes them (`setHookTokenSource`), so hive.ts keeps no dependency on
+   *  hooks.ts and no new wiring line is needed in the composition root:
+   *  `HookServer`'s constructor already holds a `HiveManager` and registers
+   *  itself here. Null until it does — a hive with no hook server mints no
+   *  tokens, and its sidecars are inert rather than floor-wide-authenticated. */
+  private hookTokenSource: {
+    mint: (agentId: string) => string;
+    revoke: (token: string) => void;
+  } | null = null;
+
+  /** agentId → the token its live sidecar is using, so it can be revoked when
+   *  that sidecar exits. Mirrors pty.ts revoking token-exact on PTY exit. */
+  private proxyTokens = new Map<string, string>();
+
+  /** Called by `HookServer`'s constructor. See `hookTokenSource`. */
+  setHookTokenSource(mint: (agentId: string) => string, revoke: (token: string) => void): void {
+    this.hookTokenSource = { mint, revoke };
+  }
+
+  /** One fresh token for one sidecar spawn. Empty string when no hook server is
+   *  wired: the sidecar then sends `sock_token: ''`, `authorized()` drops it and
+   *  the tier is visibly dead-hooked — which is the correct failure. NEVER falls
+   *  back to `process.env`; that floor-wide secret is what GATE-01 deleted. */
+  private mintProxyToken(agentId: string): string {
+    this.revokeProxyToken(agentId);
+    const token = this.hookTokenSource?.mint(agentId) ?? '';
+    if (token) this.proxyTokens.set(agentId, token);
+    return token;
+  }
+
+  /** Revoke whatever token is currently registered for an agent. This is BY AGENT,
+   *  and that is safe ONLY where the caller has established that the map entry
+   *  belongs to the thing being torn down.
+   *
+   *  Who owns that invariant, exactly:
+   *   - `stopProxyBridge` and `mintProxyToken` call it BEFORE any re-mint, so the
+   *     entry is still the outgoing generation's. Correct as written.
+   *   - `startProxyBridge`'s exit handler CANNOT assume that — a restart mints the
+   *     replacement synchronously and the dying sidecar's exit event lands after —
+   *     so it guards on `this.proxyTokens.get(agentId) === token` against the token
+   *     its own spawn was given, the way pty.ts's releaseHookToken releases the
+   *     credential the session holds. It used to call this unguarded, which
+   *     dead-hooked every proxy-tier agent from its second spawn onward. */
+  private revokeProxyToken(agentId: string): void {
+    const token = this.proxyTokens.get(agentId);
+    if (!token) return;
+    this.proxyTokens.delete(agentId);
+    try { this.hookTokenSource?.revoke(token); } catch { /* teardown is best-effort */ }
+  }
 
   // — bootstrap —
 
@@ -1174,6 +1342,12 @@ export class HiveManager {
     this.stopProxyBridge(agentId);
     const script = this.proxyShimPath();
     if (!script) return Promise.resolve(0);
+    // GATE-01 — this sidecar's OWN token, minted through the same registry every
+    // PTY spawn uses. Before this it inherited a floor-wide secret that
+    // index.ts assigned into `process.env`; deleting that assignment is the
+    // whole of GATE-01, and re-reading it here would restore the vulnerability
+    // by a longer route. Empty when no hook server is wired — see mintProxyToken.
+    const token = this.mintProxyToken(agentId);
     return new Promise<number>((resolve) => {
       let settled = false;
       const settle = (port: number): void => { if (!settled) { settled = true; resolve(port); } };
@@ -1188,7 +1362,10 @@ export class HiveManager {
             AGENT_ID: agentId,
             UPSTREAM_BASE_URL: cfg.upstream,
             HIVE_PROXY_SESSION: cfg.sessionId,
-            HIVE_PROXY_API: cfg.api
+            HIVE_PROXY_API: cfg.api,
+            // Last, so the `...process.env` spread above can never shadow it —
+            // including with a stale floor-wide value left in this process.
+            HIVE_SOCK_TOKEN: token
           },
           // Read the port line from stdout; never inherit stdio (the sidecar must
           // never write into the agent's terminal or leak request bodies to a log).
@@ -1215,6 +1392,16 @@ export class HiveManager {
       child.on('error', () => settle(0));
       child.on('exit', () => {
         if (this.proxyChildren.get(agentId) === child) this.proxyChildren.delete(agentId);
+        // Revoke THE TOKEN THIS SPAWN WAS GIVEN, never whatever the map currently
+        // holds. A restart is stopProxyBridge -> mintProxyToken -> spawn ->
+        // proxyChildren.set, all synchronously in one tick, and this exit event is
+        // asynchronous — so it ALWAYS lands after the replacement has minted. An
+        // unguarded revokeProxyToken(agentId) here therefore kills generation 2's
+        // credential every single time, not occasionally. Mirrors pty.ts's
+        // releaseHookToken, which releases the credential the SESSION holds.
+        // When a replacement already owns the entry, this generation's token was
+        // revoked by stopProxyBridge on the way in — nothing is left to leak.
+        if (this.proxyTokens.get(agentId) === token) this.revokeProxyToken(agentId);
         settle(0); // never hang the spawn if the sidecar dies before reporting
       });
       // Hard ceiling: if the sidecar never reports a port, degrade rather than hang.
@@ -1227,6 +1414,7 @@ export class HiveManager {
     const child = this.proxyChildren.get(agentId);
     if (!child) return;
     this.proxyChildren.delete(agentId);
+    this.revokeProxyToken(agentId);
     try { child.kill(); } catch { /* already gone */ }
   }
 
@@ -1330,10 +1518,15 @@ export class HiveManager {
       // (or an empty expansion) for a Windows agent that tried to use it literally.
       ? `Semantic memory: the whole hive shares a searchable MemPalace at the path in your MEMPALACE_PALACE_PATH environment variable. To recall relevant past knowledge across the team, run \`"${mem}" search "<query>"\`; run \`"${mem}" wake-up\` at the start of a task for a memory digest. (That is the absolute path to the mempalace CLI — use it instead of a bare \`mempalace\`, which may not be on your PATH.) Your notes in memory.md are mined into the palace automatically — write durable facts there.`
       : '';
-    // Enterprise Knowledge Graph (opt-in). Volatile-free: the bundled-node launcher
-    // and the KG CLI are both fixed absolute paths for an install, so baking them
-    // keeps the prefix prompt-cache-stable while making the command runnable in
-    // cmd.exe/PowerShell as well as a POSIX shell.
+    // The local document store (opt-in). To be exact about what it is, in the words
+    // of its own core: retrieval is KEYWORD SCORING OVER TEXT CHUNKS — term
+    // frequency plus a title/phrase boost — not entities, edges, or a graph
+    // (src/main/kg-core.cjs). A retired capability name presented as live is a
+    // false claim the agents themselves consume.
+    // Volatile-free: the bundled-node launcher and the store's CLI are both fixed
+    // absolute paths for an install, so baking them keeps the prefix
+    // prompt-cache-stable while making the command runnable in cmd.exe/PowerShell
+    // as well as a POSIX shell.
     const hiveNode = this.nodeCommand();
     const kgCli = kgCliPath || (process.platform === 'win32' ? '%KG_CLI%' : '$KG_CLI');
     const knowledgeLine = knowledgeGraph
@@ -1732,12 +1925,52 @@ export class HiveManager {
    *  mass-reviewed at boot — only a card that reaches 'done' while we are watching
    *  gets a reviewer. A restart re-seeds; a card finished while the app was closed
    *  is not reviewed, which is the right trade against mailing the floor a hundred
-   *  stale queries. */
+   *  stale queries.
+   *
+   *  TWO different guards deliver that promise and they cover DIFFERENT sweeps —
+   *  confusing them is how the storm gets shipped. `if (!previous) return 0` in
+   *  sweepTaskReviews suppresses the FIRST sweep and only the first. The
+   *  `previous.get(id) !== 'done'` mint test is what keeps every sweep from the
+   *  SECOND onward quiet against the backlog: the boot seed already recorded every
+   *  historic card as 'done', so the rule mints nothing for them.
+   *
+   *  `owesReview` shares this lifetime deliberately. It is process-local and is
+   *  NEVER rebuilt from the persisted board at startup, because a rebuilt set would
+   *  already hold every historic 'done' card — sweep 2 would mint nothing new, pass
+   *  the obligation guard anyway, and mail one query per historic card. That is
+   *  verbatim the storm this comment promises cannot happen. The price is that an
+   *  obligation minted in a session which ends before any reviewer was free is
+   *  lost, which is the same accepted trade as the card finished while the app was
+   *  closed. (#18) */
   private lastTaskStatus: Map<string, string> | null = null;
 
+  /** Task ids that owe a review — an obligation SET, not a second status field.
+   *  The done-transition edge MINTS the obligation and only a successfully mailed
+   *  query (the `send` AND the `patchTask`, both) clears it, so a card that
+   *  flipped to 'done' while every other agent was busy stays in the set and is
+   *  retried on a later sweep.
+   *
+   *  That retry is the whole of VERDICT-02. `if (!reviewer) continue` used to
+   *  consume the transition permanently, because `this.lastTaskStatus = seen` is
+   *  assigned ABOVE the loop: by the time the sweep found nobody free it had already
+   *  recorded the card as 'done', so no later sweep saw a transition and the card
+   *  was never reviewed again — silently.
+   *
+   *  Process-local by design; see lastTaskStatus above for why it must never be
+   *  rebuilt from the board at startup. (#18) */
+  private owesReview = new Set<string>();
+
   /** The least-loaded idle agent that can actually take mail, excluding `skip`
-   *  (the assignee) and god. Null when nobody qualifies — the sweep then simply
-   *  leaves the card alone and tries again next minute. */
+   *  (the assignee) and god. `canReceiveInbox` is the VERDICT-03 filter: a
+   *  provider with no inbox-drain path (kimi, copilot, custom) is never selected,
+   *  so on a mixed-engine floor a review is not routed into a black hole.
+   *
+   *  Null when nobody qualifies, and the sweep then leaves the card alone and tries
+   *  again on a later sweep. That sentence was a FALSE claim in this comment until
+   *  #18: the sweep recorded the card as 'done' before the loop ran, so a null
+   *  reviewer consumed the transition and the card was never looked at again. It is
+   *  true now, and true ONLY because `owesReview` holds the obligation across
+   *  sweeps — do not remove the set and leave this comment standing. */
   private leastLoadedIdle(skip: string[]): string | null {
     const reg = this.registry();
     const godId = reg.godId ?? 'god';
@@ -1756,21 +1989,62 @@ export class HiveManager {
    * on conversation `review-<taskId>`; their verdict comes back through
    * applyReviewVerdict — `refuse` sends the card back to 'doing'.
    *
-   * Detects the transition from the LEDGER rather than from writeTasks, so it
-   * catches every writer including a god that hand-edits tasks.json.
+   * Reads the LEDGER rather than hooking writeTasks, so no writer is privileged:
+   * whoever moved the card, the sweep sees the same durable state.
+   *
+   * ACCEPTED RESIDUAL (T-P03-07) — this is a SWEEP_INTERVAL_MS poll, not a change
+   * feed. A card that is 'done' at one snapshot, reopened by a writer that does not
+   * go through applyReviewVerdict (a god editing the board by hand), and 'done'
+   * again before the next snapshot presents IDENTICAL durable state at both
+   * observations, so it mints nothing and is not reviewed. No snapshot rule can see
+   * a change that is undone before the next observation, and the alternative —
+   * minting on "done with no open review" with no transition test — IS the boot
+   * review-storm that lastTaskStatus forbids. The supported reopen path is
+   * applyReviewVerdict's refuse branch, which re-mints the obligation directly.
    */
   sweepTaskReviews(): number {
     const tasks = this.ledger().tasks;
     const seen = new Map<string, string>(tasks.map((t) => [t.id, t.status]));
+    // Bound the set by card lifetime (T-P03-05): an id no longer on the board —
+    // archived or deleted — can never be reviewed, so drop it instead of carrying it
+    // for the life of the process. Deliberately ABOVE the first-sweep return so an
+    // obligation re-added by a refuse cannot outlive its card either.
+    for (const id of this.owesReview) if (!seen.has(id)) this.owesReview.delete(id);
     const previous = this.lastTaskStatus;
     this.lastTaskStatus = seen;
     if (!previous) return 0; // first sweep: learn the floor, act on nothing
 
     let asked = 0;
     for (const task of tasks) {
-      if (task.status !== 'done' || task.review || !task.assignee) continue;
-      if (previous.get(task.id) === 'done' || !previous.has(task.id)) continue;
+      if (task.status !== 'done' || !task.assignee) continue;
+      // "already has an OPEN review", not "has ever had a review object". After a
+      // refusal the record survives with ok:false, and that card is precisely the one
+      // a second look matters most for once it is re-done. The open case must still
+      // be skipped or a card under review is re-queried every minute
+      // (test/hive-protocol-v2.test.cjs:233).
+      if (task.review && task.review.ok === undefined) continue;
+      // Mint the obligation from the card's DURABLE state, not from a snapshot
+      // MEMBERSHIP test. The deleted guard also demanded that the card ALREADY EXIST
+      // in the previous snapshot (a bare `has()` membership test on the card id), which
+      // silently dropped every card created AND flipped to 'done' inside one
+      // SWEEP_INTERVAL_MS window: such a card is never observed in a non-done state
+      // by any snapshot, so no obligation was ever minted for it and no amount of
+      // retrying could recover it. That clause is DELETED — `previous.get(missingId)`
+      // is undefined, which is !== 'done', so the absent-from-snapshot case mints
+      // correctly here with no extra branch.
+      //
+      // Deleting it does not re-open the boot backlog storm, because two guards cover
+      // two different sweeps: `if (!previous) return 0` above covers the FIRST sweep
+      // (pinned by test/hive-protocol-v2.test.cjs:220), and the surviving `!== 'done'`
+      // half below covers every sweep from the SECOND onward against the seeded
+      // backlog (pinned by the quiet-second-sweep test in the same file — :220 alone
+      // does NOT prove it, being green purely from the seed guard). Do not add a
+      // second minting path. (#18)
+      if (previous.get(task.id) !== 'done') this.owesReview.add(task.id);
+      if (!this.owesReview.has(task.id)) continue;
       const reviewer = this.leastLoadedIdle([task.assignee]);
+      // Nobody free. The obligation SURVIVES this `continue` — that is the fix: it
+      // used to consume the transition edge and lose the review forever.
       if (!reviewer) continue;
       this.send({
         to: reviewer,
@@ -1785,6 +2059,9 @@ export class HiveManager {
         ].filter(Boolean).join('\n')
       }, 'system');
       this.patchTask(task.id, { review: { by: reviewer, askedAt: new Date().toISOString() } });
+      // Cleared only now, after BOTH the send and the patch succeeded. A throw from
+      // either leaves the obligation standing for the next sweep.
+      this.owesReview.delete(task.id);
       asked++;
     }
     return asked;
@@ -1803,6 +2080,13 @@ export class HiveManager {
       review: { ...task.review, ok },
       ...(ok ? {} : { status: 'doing' as const })
     });
+    // A refusal is NOT terminal. When the assignee fixes the card and marks it
+    // 'done' again the review record still carries ok:false, and the sweep's snapshot
+    // may already hold the card as 'done', so neither the open-review skip nor the
+    // transition mint would fire for it. Re-mint here: this is the supported reopen
+    // path named in sweepTaskReviews's T-P03-07 note, and a refused-then-fixed card
+    // is the one a second look matters most for. (#18)
+    if (!ok) this.owesReview.add(taskId);
     this.appendLog({ kind: 'review', taskId, by: msg.from, ok });
   }
 
@@ -1828,8 +2112,38 @@ export class HiveManager {
     const root = this.root();
     return root && existsSync(join(root, 'board.md')) ? readFileSync(join(root, 'board.md'), 'utf8') : '';
   }
+  /**
+   * The task ledger for READERS — the `hive:tasks` IPC channel, the renderer's
+   * pollers, the Slack/webhook done-observers and the voice read layer.
+   *
+   * D-22 (#34, FLOOR-10): each row is widened with the card's meter — `tokens`
+   * spent on it, its `budgetTokens` cap (null when it has none) and `pct`, the
+   * ratio of the two (null when there is no cap, so a capless card renders as
+   * "no cap" rather than as a NaN blank or an Infinity full bar). The renderer
+   * already polls this channel every 5 s, so the meter needs no new IPC channel
+   * and no preload change — `src/preload/index.ts` already types the return
+   * `unknown`. The `hive:tasks` handler in index.ts stays a one-liner.
+   *
+   * The `rev` / `updatedAt` envelope is passed straight through: every mutation
+   * path compare-and-swaps on `rev`.
+   *
+   * Reads the per-card accumulator DIRECTLY rather than calling `taskSpend()`
+   * once per card — `taskSpend` re-reads tasks.json to find the cap on every
+   * call, which on a channel this heavily polled would be one file read per card
+   * per poll. Same accumulator, same card-lifetime bound RECORD-03 established;
+   * no second cache is introduced here.
+   */
   tasks(): unknown {
-    return this.ledger();
+    const ledger = this.ledger();
+    const byTask = this.costByTask ?? this.rescanCostLedger();
+    return {
+      ...ledger,
+      tasks: ledger.tasks.map((t) => {
+        const tokens = byTask.get(t.id)?.tokens ?? 0;
+        const cap = typeof t.budgetTokens === 'number' && t.budgetTokens > 0 ? t.budgetTokens : null;
+        return { ...t, tokens, budgetTokens: cap, pct: cap === null ? null : tokens / cap };
+      })
+    };
   }
 
   /** The task ledger with its revision — the typed read every mutation path goes
@@ -1863,7 +2177,7 @@ export class HiveManager {
       this.appendLog({ kind: 'tasks-conflict', expectedRev, rev: current.rev });
       return false;
     }
-    const next: TaskLedger = { tasks, rev: current.rev + 1, updatedAt: new Date().toISOString() };
+    const next: TaskLedger = { tasks: tasks.map(stripDerivedTaskFields), rev: current.rev + 1, updatedAt: new Date().toISOString() };
     this.writeJson(join(root, 'tasks.json'), next);
     this.appendLog({ kind: 'tasks', count: tasks.length, rev: next.rev });
     this.commit(`hive: tasks (${tasks.length})`);
@@ -2534,6 +2848,114 @@ export class HiveManager {
       usd: sample.usd
     };
     try { appendFileSync(join(root, 'cost-ledger.jsonl'), JSON.stringify(row) + '\n', 'utf8'); } catch { /* noop */ }
+    // Keep the per-card accumulator current without re-reading the file. Only
+    // when it has already been built — otherwise the first taskSpend() call
+    // scans the whole ledger and would double-count anything applied here first.
+    if (this.costByTask) this.applyCostRow(this.costByTask, this.costCumulative, row);
+  }
+
+  // ─── RECORD-03 / RECORD-04 — what one card has actually cost ────────────────
+  //
+  // THE ARITHMETIC, because getting it wrong is invisible until a budget is
+  // enforced against it (#34, FLOOR-10):
+  //
+  // A ledger row is a CUMULATIVE snapshot of one (agent, session) at one beat —
+  // `src/main/db.ts:44` and `src/main/telemetry.ts` both say so, and since
+  // RECORD-04 there is exactly one appender, so it is now true of every row.
+  // Spend "since the last beat" is therefore the DIFFERENCE between consecutive
+  // snapshots of the same series, never the sum of the snapshots themselves
+  // (summing over-counts roughly quadratically — that was the defect).
+  //
+  //   series key   = agent_id + session_id. A new session starts its own
+  //                  accumulator at zero, so it starts a new series rather than
+  //                  diffing against the previous session's much larger total.
+  //   first row    = its OWN value. It has no predecessor and the series began
+  //                  at zero, so the whole of it was spent after that zero. The
+  //                  alternative (treat it as zero) silently loses every card
+  //                  that starts and finishes inside one ~30 s beat window,
+  //                  which is the same class of under-report RECORD-03 removes.
+  //   later rows   = max(0, now - previous). CLAMPED, because
+  //                  `telemetry.forget()` on a respawn resets the collector, so
+  //                  the next snapshot can legitimately be SMALLER than the last
+  //                  one; an unclamped diff would go negative and hand the card
+  //                  a refund it never earned.
+  //   attribution  = the delta lands on the CURRENT row's `task_id`. Rows with a
+  //                  null task_id (idle chatter, the god) still advance the
+  //                  series baseline — they must, or the next carded row would
+  //                  bill their spend to the card — but they credit no card.
+  //
+  // Worked example, one agent, one session, card `t-1`:
+  //   row 1 {input 10, output 5}  → no predecessor → t-1 += 15   (t-1 = 15)
+  //   row 2 {input 14, output 6}  → 20 - 15 = 5    → t-1 += 5    (t-1 = 20)
+  //   row 3 {input  1, output 0}  → 1 - 20 = -19   → clamped 0   (t-1 = 20)
+  // The old code read 15 + 20 + 1 = 36 for the same three rows, through a 1 MB
+  // tail that would have dropped row 1 entirely on a long card.
+
+  /** taskId → spend so far, or null until the first full ledger scan builds it.
+   *  This is what replaces RECORD-03's deleted 1 MB read window: one scan at
+   *  first use (which, after a restart, is the rescan that stops a card in
+   *  flight from silently resetting to zero), then incremental updates from
+   *  `appendCostLedger`. Bounded by CARD LIFETIME — `pruneCostByTask` drops
+   *  entries for cards that have left the board, since removing the tail
+   *  removed the only bound this map now stands in for. */
+  private costByTask: Map<string, { tokens: number; usd: number }> | null = null;
+  /** The last cumulative snapshot seen per series (agent id + session id), which
+   *  is what the next row is diffed against. */
+  private costCumulative = new Map<string, { tokens: number; usd: number }>();
+
+  /** Fold one ledger row into the accumulators. Shared by the startup scan and
+   *  the incremental append so the two can never disagree. */
+  private applyCostRow(
+    byTask: Map<string, { tokens: number; usd: number }>,
+    cumulative: Map<string, { tokens: number; usd: number }>,
+    row: { agent_id?: string | null; session_id?: string | null; task_id?: string | null; input?: number; output?: number; usd?: number }
+  ): void {
+    const key = `${row.agent_id ?? ''}\u0000${row.session_id ?? ''}`;
+    const now = { tokens: (row.input ?? 0) + (row.output ?? 0), usd: row.usd ?? 0 };
+    const previous = cumulative.get(key);
+    const delta = previous
+      ? { tokens: Math.max(0, now.tokens - previous.tokens), usd: Math.max(0, now.usd - previous.usd) }
+      : now;
+    cumulative.set(key, now);
+    const taskId = row.task_id;
+    if (!taskId) return; // advanced the baseline, credits no card
+    const acc = byTask.get(taskId) ?? { tokens: 0, usd: 0 };
+    acc.tokens += delta.tokens;
+    acc.usd += delta.usd;
+    byTask.set(taskId, acc);
+  }
+
+  /** Rebuild both accumulators from the WHOLE ledger. Runs once per process, on
+   *  the first `taskSpend()` — which after an app restart is what stops a card
+   *  still in flight from reporting zero spend (T-P06-03). One scan of one
+   *  append-only file at boot; if that ever measurably costs, `PersistStore`'s
+   *  `cost_ledger` table answers it in one `SUM(...) GROUP BY task_id`. */
+  private rescanCostLedger(): Map<string, { tokens: number; usd: number }> {
+    const byTask = new Map<string, { tokens: number; usd: number }>();
+    const cumulative = new Map<string, { tokens: number; usd: number }>();
+    const root = this.root();
+    if (root) {
+      let raw = '';
+      try { raw = readFileSync(join(root, 'cost-ledger.jsonl'), 'utf8'); } catch { raw = ''; }
+      for (const line of raw.split('\n')) {
+        if (!line) continue;
+        try { this.applyCostRow(byTask, cumulative, JSON.parse(line)); } catch { /* skip a torn line */ }
+      }
+    }
+    this.costCumulative = cumulative;
+    this.costByTask = byTask;
+    this.pruneCostByTask();
+    return byTask;
+  }
+
+  /** Drop accumulator entries for cards that are no longer on the board. The
+   *  map has no other bound now that the tail read is gone, and an archived or
+   *  deleted card's entry would otherwise live as long as the process. */
+  private pruneCostByTask(): void {
+    const byTask = this.costByTask;
+    if (!byTask) return;
+    const live = new Set(this.ledger().tasks.map((t) => t.id));
+    for (const id of [...byTask.keys()]) if (!live.has(id)) byTask.delete(id);
   }
 
   /** assignee → their in-flight card id, rebuilt at most once a beat.
@@ -2551,6 +2973,9 @@ export class HiveManager {
         if (t?.status === 'doing' && t.assignee && !map.has(t.assignee)) map.set(t.assignee, t.id);
       }
       this.activeTaskCache = { at: now, map };
+      // Cheapest honest place for the accumulator's lifetime bound: this rebuild
+      // already reads the board, and it only runs while cost is actually flowing.
+      this.pruneCostByTask();
     }
     return this.activeTaskCache.map.get(agentId) ?? null;
   }
@@ -2560,26 +2985,48 @@ export class HiveManager {
    *
    * This is the read side of the per-task cap: `task_id` on the ledger rows makes
    * the spend attributable, `budgetTokens` on the card is the cap, and breaker.ts
-   * (the engine-cost cluster's file) owns the enforcement decision. Reads only the
-   * ledger's tail — see COST_TAIL_BYTES for that ceiling.
+   * (the engine-cost cluster's file) owns the enforcement decision.
+   *
+   * RECORD-03/RECORD-04: reads the per-card accumulator described above — every
+   * row of the ledger, never a tail window, and clamped consecutive DIFFERENCES
+   * between cumulative snapshots, never their sum.
    */
   taskSpend(taskId: string): { tokens: number; usd: number; budgetTokens: number | null; over: boolean } {
-    const root = this.root();
-    let tokens = 0;
-    let usd = 0;
-    if (root) {
-      for (const line of this.tailLines(join(root, 'cost-ledger.jsonl'), COST_TAIL_BYTES)) {
-        try {
-          const row = JSON.parse(line) as { task_id?: string; input?: number; output?: number; usd?: number };
-          if (row.task_id !== taskId) continue;
-          tokens += (row.input ?? 0) + (row.output ?? 0);
-          usd += row.usd ?? 0;
-        } catch { /* skip a torn line */ }
-      }
-    }
+    const byTask = this.costByTask ?? this.rescanCostLedger();
+    const { tokens, usd } = byTask.get(taskId) ?? { tokens: 0, usd: 0 };
     const cap = this.ledger().tasks.find((t) => t.id === taskId)?.budgetTokens;
     const budgetTokens = typeof cap === 'number' && cap > 0 ? cap : null;
     return { tokens, usd, budgetTokens, over: budgetTokens !== null && tokens > budgetTokens };
+  }
+
+  /**
+   * FLOOR-10 (#34) — the assignee's in-flight card as a breaker budget, or null
+   * when the agent has no card in flight or the card has no cap. ONE call, so
+   * the breaker beat's edit in `src/main/index.ts` is a single line:
+   * `budget: hive.budgetForAgent(id) ?? undefined`.
+   *
+   * The card is resolved through `activeTaskId()` — the SAME resolver
+   * `appendCostLedger` stamps `task_id` with — so the rows a card's spend was
+   * billed to and the card its cap is read from can never disagree.
+   *
+   * Null when `budgetTokens` is unset: no cap means no budget arm, never a
+   * surprise trip.
+   *
+   * Null, too, for a card that has left the board — and that is load-bearing
+   * rather than incidental. RECORD-03's accumulator is bounded by CARD LIFETIME
+   * (`pruneCostByTask`), which is the memory bound that replaced the deleted
+   * 1 MB tail window, so `taskSpend()` on an archived or deleted card answers
+   * ZERO. `activeTaskId()` only ever names a card that is 'doing' on the live
+   * board, so that zero can never reach the arm dressed as a live card sitting
+   * comfortably under its cap — which would recover an agent that had just been
+   * constrained, on a number that only means the card was archived.
+   */
+  budgetForAgent(agentId: string): { taskId: string; tokens: number; cap: number } | null {
+    const taskId = this.activeTaskId(agentId);
+    if (!taskId) return null;
+    const { tokens, budgetTokens } = this.taskSpend(taskId);
+    if (budgetTokens === null) return null;
+    return { taskId, tokens, cap: budgetTokens };
   }
 
   // — json + atomic io —
@@ -2613,7 +3060,7 @@ export class HiveManager {
    *  at bootstrap on an empty directory. Everything on the commit path uses
    *  gitAsync; see commit() for why that matters. */
   private git(args: string[], cwd: string): { ok: boolean; out: string; err: string } {
-    const res = spawnSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args], {
+    const res = spawnSync('git', ['-c', `core.hooksPath=${GIT_HOOKS_DISABLED}`, '-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args], {
       cwd, encoding: 'utf8', timeout: 8000
     });
     return { ok: res.status === 0, out: res.stdout ?? '', err: res.stderr ?? '' };
@@ -2633,7 +3080,7 @@ export class HiveManager {
       try {
         const child = spawn(
           'git',
-          ['-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args],
+          ['-c', `core.hooksPath=${GIT_HOOKS_DISABLED}`, '-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args],
           { cwd, timeout: GIT_TIMEOUT_MS }
         );
         child.stdout?.on('data', (d) => { out += d.toString(); });
@@ -2723,6 +3170,249 @@ export class HiveManager {
     return { subject, body: uniq.length > 1 ? uniq.join('\n') : '' };
   }
 
+  /**
+   * True when a staged path's blob is BYTE-IDENTICAL to the constant this class
+   * writes there — i.e. the harness authored it, not an agent.
+   *
+   * This exists because both hook shims embed the line
+   * `payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';` — source that
+   * READS a token, which redactSecrets pattern 5 matches on sight. Without this
+   * check every hive would unstage its own bootstrap on its very first commit,
+   * the shims would stay untracked so the next `add -A` would re-stage them, and
+   * the scrub would then shout on every commit forever. An alarm that fires
+   * constantly on the harness's own files is one an operator learns to skip,
+   * which costs more than it buys.
+   *
+   * It is byte-identity against a compiled-in constant, NOT a path allowlist:
+   * an agent that edits a shim to smuggle a key changes the bytes and the scrub
+   * fires on it like any other file. The comparison is against the INDEX blob
+   * (`git show :path`), not the working file — the index is what is about to be
+   * committed, and it is also the only form immune to core.autocrlf, which is
+   * `true` by default on Git for Windows and would otherwise make every
+   * comparison fail there and quietly restore the false positives.
+   */
+  private async harnessAuthored(root: string, rel: string): Promise<boolean> {
+    const generated: Record<string, string | undefined> = {
+      'bin/cth-hook.cjs': HOOK_SHIM,
+      'bin/hive-proxy.cjs': PROXY_BRIDGE_SHIM
+    };
+    const want = generated[rel];
+    if (want === undefined) return false;
+    const blob = await this.gitAsync(['show', `:${rel}`], root);
+    return blob.ok && blob.out === want;
+  }
+
+  /** Drop one path from the index, leaving it untouched on disk. `restore
+   *  --staged` is the modern spelling and restores from HEAD — which is exactly
+   *  why it needs the fallback: on a repo whose first commit has not landed yet
+   *  HEAD is unborn, and it exits 128 `could not resolve HEAD` having unstaged
+   *  NOTHING (measured). The hive's first commit stages the whole bootstrap, so
+   *  that is precisely the window an agent-planted secret would ride in on. */
+  private async unstagePath(root: string, rel: string): Promise<boolean> {
+    const restored = await this.gitAsync(['restore', '--staged', '--', rel], root);
+    if (restored.ok) return true;
+    const removed = await this.gitAsync(['rm', '--cached', '-q', '--ignore-unmatch', '--', rel], root);
+    return removed.ok;
+  }
+
+  /**
+   * FLOOR-04 (#10, defect 5): scrub secret-shaped content out of the staged set,
+   * between `git add -A` and `git commit`.
+   *
+   * WHY HERE AND NOWHERE ELSE. ADR-0004 makes this class the hive repo's single
+   * committer, so flushCommit is the ONE place every hive write reaches git
+   * through. A per-caller guard would have to be repeated at each of commit()'s
+   * callers and would be missed by the next one added. A `.git/hooks/pre-commit`
+   * would be both a second committer and unrunnable by construction, since the
+   * hive deliberately suppresses hooks with core.hooksPath so an agent cannot
+   * plant one (see git/gitAsync).
+   *
+   * THE SINGLE-COMMITTER PREMISE ABOVE IS FALSE AS WRITTEN, and this is the
+   * place to say so rather than the place to assume it. AGENT_DENY_RULES has no
+   * `git add` rule, no `git commit` rule and no `git -C` rule — measured — so an
+   * agent can run `git -C "$HIVE_ROOT" add -A && git -C "$HIVE_ROOT" commit -m x`
+   * and never reach flushCommit or this scrub at all. Closing it is a deny-rule
+   * change with a blast radius this comment cannot measure (agents legitimately
+   * commit in their OWN worktrees, and a deny rule that wedges every agent's git
+   * is a worse failure than the one it prevents), so it is RECORDED here and
+   * owned by the residual register, not silently patched.
+   *
+   * WHY redactSecrets AND NOT A SECOND MATCHER. The project trusts exactly one
+   * pattern set; the mail path already runs every subject and body through it.
+   * Two matchers that disagree is worse than one imperfect matcher, because the
+   * disagreement is silent — the commit path would accept what the mail path
+   * redacts. This call site does not change the battery, which is under a
+   * LOCKSTEP contract with test/voice-messages.test.cjs.
+   *
+   * THE CEILING — BOUNDED, MEASURED, AND NOT NEGOTIABLE DOWNWARD.
+   *
+   * FLOOR-04's own wording is *"so it never reaches git history"*. No regex
+   * delivers "never", and this control has now been measured twice proving it.
+   * WHAT IT DOES DELIVER, exactly: labelled `key=value` / `key: value` pairs,
+   * plus ten vendor prefixes (the eight in pattern 3 after the sk- split and
+   * the two underscore-spelled ones in pattern 6), matched on ADDED lines only,
+   * ON ONE LINE, under two size caps. Everything below is what that leaves open.
+   * Each item is pinned by a test in test/hive-durability.test.cjs and
+   * test/voice-messages.test.cjs rather than promised here.
+   *
+   * FIVE ACTIVE BYPASSES. Each is an ACTION AN AGENT TAKES, not a passive limit.
+   *
+   *  1. LINE-CHUNKING, and WHERE THE CUT FALLS DECIDES IT. addedLines joins `+`
+   *     lines with `\n`, so no pattern spans a line break. Measured, labelled:
+   *       `const KEY = "sk_live_EX_Hxxxxxxxxxxxxyyyyzzzzwwww";`     -> 1 hit here
+   *       `const A = "sk_live_" + "51Hxxxxxxxxxxxx";`              -> 0 hits
+   *     A cut INSIDE the vendor prefix is never scanned, at any size, on any
+   *     line count. A cut AFTER the prefix plus ten body characters is caught in
+   *     the head and leaks the tail. Closing this needs a whole-blob scanner,
+   *     which is a different design.
+   *  2. THE LINE CAP, disabled by one command. `seq 20001 > pad.txt` in the same
+   *     debounce window pushes --numstat past SECRET_SCAN_MAX_LINES and sends
+   *     the WHOLE commit, secret included, down the `committing UNSCANNED` path.
+   *  3. THE BYTE CAP. Past SECRET_SCAN_MAX_BYTES the diff is slice()d and
+   *     everything after the cut is never scanned. Same shape, one level up.
+   *  4. QUOTED-KEY JSON. `{"token": "…"}` and `obj["token"] = "…"` are both
+   *     unmatched — the closing quote and the `]` break key-to-delimiter
+   *     adjacency. An arm for it was BUILT, MEASURED and REJECTED ON ITS COST:
+   *     it gains 2 detections and costs 2 of the 12 demonstrated false positives
+   *     (`"api_key": "$OPENAI_API_KEY"` and `"secret": "REPLACE_ME"` — a config
+   *     template and a scaffold placeholder, both shapes agents write
+   *     constantly), and over 400 commits it costs 0 additional paths, so those
+   *     2 ARE the cost. +2 detections do not buy 2 permanent unstages. That is
+   *     the whole reason. It is NOT rejected because a value-shape predicate on
+   *     it would re-open the door that lost 15 detections — it would not; those
+   *     were lost to a predicate on PATTERN 5, the only arm covering labelled
+   *     key=value, where a predicate subtracts from live detections.
+   *  5. `printf '* -diff' > .gitattributes` — ONE LINE, PERSISTENT, AND THE ONLY
+   *     ONE THAT LOGS NOTHING AT ALL. Every diff then reads `Binary files …
+   *     differ`; --numstat reports `-`/`-`, so `Number('-') || 0` makes `changed`
+   *     0 and the SECRET_SCAN_MAX_LINES branch never fires; addedLines is empty
+   *     and this function returns true having scanned nothing. Both size caps at
+   *     least print `committing UNSCANNED` and append a log row; this one writes
+   *     no warning and no log row, and unlike `seq 20001 > pad.txt` it persists
+   *     for every future commit until a human reads .gitattributes. It is the
+   *     agent-controllable escalation of the sentence that follows.
+   *
+   * Binary blobs produce no `+` lines and are never scanned.
+   *
+   * DECLARED LOSS, carried here so it is not discoverable only by reading a
+   * regex: the \b on pattern 3's BARE sk- arm means a LEGACY bare sk-<alnum>
+   * OpenAI key glued to a preceding word character (`q=key%3Dsk-A1B2…`) is no
+   * longer redacted — 5 measured shapes, pinned as declared losses in
+   * test/voice-messages.test.cjs. `sk-ant-`, `sk-proj-` and `sk-svcacct-` are
+   * unbounded and keep matching in every one of those contexts. Separately,
+   * pattern 6's two arms redact ordinary identifiers of the form
+   * `sk_test_helper_function` / `rk_live_stream_handler`; measured over 481
+   * tracked text files and 400 commits that family unstages nothing here, which
+   * is a property of THIS corpus and not of the arms.
+   *
+   * THE FALSE-POSITIVE RATE, AS A NUMBER, AND IT IS THE BIGGER FACT. Replayed
+   * over the last 400 commits with this function's own algorithm — the window
+   * is COMMIT-RELATIVE, so the tip and the variant are part of the number:
+   * `git log -n 400 0b3d631`, with addedLines keeping the leading `+` exactly
+   * as it does above (strip it and the same data answers 67/66). Under the
+   * matcher this replaced, 50 of those commits (12.5%) would have had at least
+   * one path silently dropped, across 66 distinct paths. Under the matcher in
+   * this commit: 48 (12.0%) across 65. The DISTINCT-PATH count is the stable
+   * half; the percentage moves as the window rolls.
+   * The dominant shapes are `token: string):`, `secret: string` and
+   * `botToken: string` — ordinary TypeScript, not credentials. WHAT THAT COSTS:
+   * unstagePath drops the file from the commit, the `secret-scrubbed` log line
+   * is indistinguishable from a real credential catch, and the agent's work
+   * never reaches history. This commit rescues `desk-backend-engineer` and
+   * `desk-market-researcher` (four tracked files) and, in the replay window,
+   * `docs/blog/command-center-guide/index.html`. THE REST ARE OPEN, owned by the
+   * residual register, and NOT closable by tightening pattern 5 — that is the
+   * mechanism that lost 4 credential classes in one attempt and 11 in the next.
+   *
+   * This is defence in depth, not a guarantee, and no doc may claim more of it.
+   *
+   * ADDED LINES ONLY. A removed line is content git already has, so flagging it
+   * would mean unstaging a DELETION — which cannot unpublish anything and would
+   * wedge the committer permanently on any repo that ever held a secret.
+   *
+   * @returns false ONLY when a secret is staged and could not be unstaged, the
+   * single case where the caller must not commit. Every other failure returns
+   * true and degrades loudly: a scrub that throws or halts would take the hive's
+   * whole durability path down with it, which is a worse failure than the one it
+   * prevents, and nothing is lost by committing late — see commit(), git here is
+   * history and not storage.
+   */
+  private async scrubStagedSecrets(root: string): Promise<boolean> {
+    const addedLines = (s: string): string =>
+      s.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+
+    // 1. Bound the work before it exists as a string.
+    const stat = await this.gitAsync(['diff', '--cached', '--numstat'], root);
+    if (!stat.ok) {
+      console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', stat.err.trim());
+      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
+      return true;
+    }
+    if (!stat.out.trim()) return true; // nothing staged — nothing to scan
+    let changed = 0;
+    for (const row of stat.out.split('\n')) {
+      const [added, deleted] = row.split('\t');
+      changed += (Number(added) || 0) + (Number(deleted) || 0); // '-' (binary) → 0
+    }
+    if (changed > SECRET_SCAN_MAX_LINES) {
+      console.warn(`[hive] FLOOR-04: staged diff is ${changed} lines, over the ${SECRET_SCAN_MAX_LINES} scan cap — committing UNSCANNED`);
+      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-too-large', lines: changed });
+      return true;
+    }
+
+    // 2. core.quotePath=false so a non-ASCII path comes back raw and can be
+    //    handed straight back to `restore --staged`; -U0 drops context lines,
+    //    which are unchanged content and so cannot be a NEW leak.
+    const diff = await this.gitAsync(
+      ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color', '--no-ext-diff'],
+      root
+    );
+    if (!diff.ok) {
+      console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', diff.err.trim());
+      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
+      return true;
+    }
+    const text = diff.out.slice(0, SECRET_SCAN_MAX_BYTES);
+    if (text.length < diff.out.length) {
+      console.warn(`[hive] FLOOR-04: staged diff is ${diff.out.length} bytes — only the first ${SECRET_SCAN_MAX_BYTES} were scanned`);
+      this.appendLog({ kind: 'secret-scan-truncated', bytes: diff.out.length, scanned: text.length });
+    }
+
+    // 3. One pass over every added line in the whole diff. The common case is
+    //    clean and pays for a single regex battery, not a per-file split.
+    const all = addedLines(text);
+    if (!all || redactSecrets(all) === all) return true;
+
+    // 4. Something matched — split per file to name it. `^diff --git ` is the
+    //    per-file boundary; the b-side of `+++` is the path as it will be
+    //    committed (it survives renames, where the a-side does not).
+    let safe = true;
+    for (const section of text.split(/^diff --git /m).slice(1)) {
+      const plus = addedLines(section);
+      if (!plus || redactSecrets(plus) === plus) continue;
+      const rel = /^\+\+\+ b\/(.+)$/m.exec(section)?.[1];
+      if (!rel) {
+        console.warn('[hive] FLOOR-04: a secret-shaped value is staged under a path this scrub could not name — NOT committing');
+        this.appendLog({ kind: 'secret-blocked', reason: 'unresolved-path' });
+        safe = false;
+        continue;
+      }
+      if (await this.harnessAuthored(root, rel)) continue;
+      if (!(await this.unstagePath(root, rel))) {
+        console.warn(`[hive] FLOOR-04: ${rel} carries a secret-shaped value and could NOT be unstaged — NOT committing`);
+        this.appendLog({ kind: 'secret-blocked', reason: 'unstage-failed', path: rel });
+        safe = false;
+        continue;
+      }
+      console.warn(
+        `[hive] FLOOR-04: unstaged ${rel} — it carries a secret-shaped value, and it has been kept OUT of the hive's `
+        + 'git history. The file is untouched on disk; remove the credential from it, or it will be skipped again on every commit.'
+      );
+      this.appendLog({ kind: 'secret-scrubbed', path: rel });
+    }
+    return safe;
+  }
+
   /** The debounced commit body — async end to end. Two attempts at a 2 s timeout,
    *  with a TIMER backoff rather than a blocking sleep: a repo whose lock is held
    *  by something outside this process is retried by the next mutation anyway, so
@@ -2738,6 +3428,13 @@ export class HiveManager {
       for (let attempt = 0; attempt < GIT_ATTEMPTS; attempt++) {
         this.clearStaleLock(root);
         const add = await this.gitAsync(['add', '-A'], root);
+        // FLOOR-04: the scrub sits INSIDE the retry loop, not above it, because
+        // every attempt re-runs `add -A` — a scrub hoisted out would be undone
+        // by the second attempt's staging and the secret would ride in on the
+        // retry. It returns false only when a secret is staged that it could not
+        // unstage; committing anyway would put it in history permanently, and
+        // the files are already durable on disk either way.
+        if (!(await this.scrubStagedSecrets(root))) return;
         const commit = await this.gitAsync(
           ['commit', '-q', '-m', subject, ...(body ? ['-m', body] : [])],
           root
@@ -3211,6 +3908,8 @@ function post(payload) {
   try {
     if (!SOCK) return;
     payload.agent_id = payload.agent_id || AGENT;
+    // See HOOK_SHIM: without this the socket rejects every payload.
+    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
     var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
     c.on('error', function () {});
   } catch (e) {}
@@ -3248,6 +3947,8 @@ function post(payload) {
   try {
     if (!SOCK) return;
     payload.agent_id = payload.agent_id || AGENT;
+    // See HOOK_SHIM: without this the socket rejects every payload.
+    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
     const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
     c.on('error', () => {});
   } catch (e) {}
@@ -3306,6 +4007,10 @@ function ctxSize(model) {
 // Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.
 function emit(payload) {
   if (!SOCK) return;
+  // See HOOK_SHIM: without this the socket rejects every payload. Set HERE, in
+  // the one function every Status/CostSample/PostToolUse/Stop goes through,
+  // rather than at the five call sites.
+  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
   try {
     const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\n'); });
     c.on('error', function () {});

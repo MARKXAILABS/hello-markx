@@ -1,0 +1,1099 @@
+'use strict';
+
+/**
+ * The repo-fact accumulator for Phase 1 (D-45).
+ *
+ * Phase 1's premise is that every claim the project makes about itself is true.
+ * The reason that needs a test file rather than a review is recorded verbatim in
+ * `.planning/codebase/CONCERNS.md` § Method: on 2026-08-20 four issues — #4, #5,
+ * #10 and #34 — were called "stale trackers whose code was already fixed", and
+ * all four were wrong, because the bar applied was "some code exists" rather
+ * than "the issue's stated done". Each was genuinely partial and correctly still
+ * open. That is not a reviewer being careless; it is what happens when a claim
+ * is graded by reading rather than by running something.
+ *
+ * So each test here pins ONE such claim, mechanically, so it cannot silently rot
+ * back. Clauses are added by later waves — one owner per wave — and the whole
+ * file is asserted at the end of the phase. It is a real `node:test` file, so it
+ * runs under `npm test` on all three platforms with no extra ceremony.
+ *
+ * Clauses so far:
+ *   • #20 (FLOOR-11) — N independent 5-second polls of one JSON file
+ *   • #20 (FLOOR-11) — the shared poller keeps its callers
+ *   • #7  (D-45)     — a hand-rolled harness whose assertions cannot fail
+ *   • #5  (FLOOR-02) — HIVE.md denying the Stop-drain runs, twelve ways
+ *   • #5  (FLOOR-02) — the Stop-drain wiring HIVE.md now describes
+ *   • #13 (FLOOR-05) — a finished main handler with nothing wired to it
+ *   • #16 (FLOOR-07) — two preload exports and their handlers, both dead
+ *   • #31 (FLOOR-07) — a keyword store described as an "Enterprise Knowledge Graph"
+ *   • #32 (FLOOR-07) — the FTS5 index the docs promised and the schema lacked
+ *   • #32 (FLOOR-07) — the FTS5 test, bypassed into a permanently green gate
+ *   • #32 (FLOOR-07) — the prebuilt N-API driver that test needs in order to load
+ *   • #26 (FLOOR-12) — clause 1: a token layer that can represent a sub-14px size
+ *   • #26 (FLOOR-12) — clause 2: the frozen content-keyed sub-14px allowlist
+ *   • #26 (FLOOR-12) — clause 3: an allowlisted glyph that is not aria-hidden
+ *   • #26 (FLOOR-12) — clause 4: the three non-literal sizes
+ *   • #26 (FLOOR-12) — a sub-14px size hiding in a decimal or a quoted string
+ *   • #26 (FLOOR-12) — an expression-valued size with no floor of its own
+ *   • #26 (FLOOR-12) — an icon-only control with no accessible name
+ *   • #26 (FLOOR-12) — PixelButton's {children} body, which that rule rests on
+ *   • #26 (FLOOR-12) — the two deliberate <div role="button"> and their names
+ *   • #19/#34 (FLOOR-09/10) — two composition-root seams minted and never fed
+ *
+ * Everything here greps COMMENT-STRIPPED source. That is mandatory, not
+ * tidiness: several Phase 1 fixes deliberately add a comment quoting the very
+ * thing they removed (this file's own subject matter included), and a raw grep
+ * would match the explanation and fail the correct fix.
+ */
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const yaml = require('js-yaml');
+
+const root = path.join(__dirname, '..');
+const rendererRoot = path.join(root, 'src', 'renderer', 'src');
+
+/**
+ * Block and line comments removed. Same intent as the one at
+ * test/net-binding.test.cjs:217-232, and load-bearing for the same reason.
+ */
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+/** Every .ts/.tsx under a directory, as repo-relative POSIX paths. */
+function sourceFiles(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourceFiles(full));
+    else if (/\.tsx?$/.test(entry.name)) out.push(path.relative(root, full).split(path.sep).join('/'));
+  }
+  return out;
+}
+
+const readStripped = (rel) => stripComments(fs.readFileSync(path.join(root, rel), 'utf8'));
+
+/**
+ * The SHIPPED-SURFACE corpus: every text file this repo ships, as repo-relative
+ * POSIX paths.
+ *
+ * Deliberately NOT `sourceFiles()` above. That walker matches `.ts`/`.tsx`
+ * ONLY, so a "tree-wide" scan built on it would never read
+ * `resources/skills/capabilities/SKILL.md` — the single highest-value site for
+ * the naming claim below, because that file is installed into every agent's
+ * skills directory and so the agents themselves consume whatever it says — and
+ * it would DROP `README.md`, which the two-file loop it replaces already
+ * covered. It would ship strictly weaker while reporting wider.
+ *
+ * Scope is an explicit ROOT LIST plus tracked top-level `*.md`. `dist/`, `out/`
+ * and `.planning/` therefore fall outside by CONSTRUCTION, not by exclusion: an
+ * exclusion list is a thing to forget, a root list is a thing to read, and a
+ * scan with no build-output exclusion is permanently red on any machine that
+ * has run `npm run build`. `node_modules` and `.git` are denied by name because
+ * they can appear BELOW a listed root.
+ *
+ * Measured when written: 315 files, of which 43 are `.md`/`.html`.
+ */
+const SHIPPED_ROOTS = ['src', 'resources', 'docs', 'test', 'scripts', 'e2e'];
+const SHIPPED_EXT = /\.(tsx?|cjs|mjs|jsx?|md|html|ya?ml)$/;
+const SHIPPED_DIR_DENY = new Set(['node_modules', '.git']);
+
+function shippedTextFiles() {
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SHIPPED_DIR_DENY.has(entry.name)) walk(full);
+      } else if (SHIPPED_EXT.test(entry.name)) {
+        out.push(path.relative(root, full).split(path.sep).join('/'));
+      }
+    }
+  };
+  for (const rel of SHIPPED_ROOTS) {
+    const full = path.join(root, rel);
+    if (fs.existsSync(full)) walk(full);
+  }
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() && /\.md$/.test(entry.name)) out.push(entry.name);
+  }
+  return out.sort();
+}
+
+// The one file allowed to own a hiveTasks timer: it IS the shared poller.
+const POLLER = 'src/renderer/src/hooks/useHiveTasks.ts';
+
+/**
+ * Files that read `hiveTasks(` one-shot AND happen to run timers for unrelated
+ * things, so the per-file rule below cannot adjudicate them by shape alone.
+ * Each is pinned by its exact call-site COUNT instead: a new read appearing in
+ * one of these is what a regression would look like, and it forces a human to
+ * look at whether the new read is on a timer.
+ *
+ * `hooks/useHive.ts` — its single `hiveTasks()` lives in `ensureSlackCard()`, a
+ * per-delivered-message promotion, and none of its six `setInterval`s touch it
+ * (they are the nudge poll, the veto report, the feed flush and the 30s terminal
+ * reap). Verified by reading, 2026-08-21.
+ */
+const ONE_SHOT_READERS = { 'src/renderer/src/hooks/useHive.ts': 1 };
+
+test('no renderer file outside the shared poller owns a hiveTasks timer (#20)', () => {
+  const offenders = [];
+  const files = sourceFiles(rendererRoot).filter((f) => f !== POLLER);
+  assert.ok(files.length > 50, `expected the renderer tree, found ${files.length} files`);
+
+  for (const file of files) {
+    const src = readStripped(file);
+    const reads = (src.match(/hiveTasks\(/g) || []).length;
+    if (!reads) continue;
+
+    const pinned = ONE_SHOT_READERS[file];
+    if (pinned !== undefined) {
+      assert.equal(
+        reads,
+        pinned,
+        `${file} gained a hiveTasks() read (${reads}, was ${pinned}). It is allowlisted because its `
+        + 'existing read is one-shot while it runs timers for other things — a NEW read here has to '
+        + 'be checked by hand for being on a timer, which is what #20 is about'
+      );
+      continue;
+    }
+    if (/setInterval\(/.test(src)) offenders.push(file);
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    'a second independent 5-second poll of one JSON file has come back — #20. These files both '
+    + `read hiveTasks() and run a setInterval: ${offenders.join(', ')}. The renderer gets ONE task `
+    + `poll (${POLLER}); a component subscribes to it, it does not start its own timer`
+  );
+});
+
+test('the shared poller still has its callers — it was written once and orphaned (#20)', () => {
+  // The recurring failure mode on this repo is building the right thing and
+  // never calling it: useHiveTasks shipped with ZERO callers and stayed that way
+  // while five components each ran their own 5s timer. Absence of timers is not
+  // enough to pin that — a refactor could delete both the timers and the calls.
+  const callers = sourceFiles(rendererRoot)
+    .filter((f) => f !== POLLER)
+    .filter((f) => /\buseHiveTasks\b/.test(readStripped(f)));
+
+  assert.ok(
+    callers.length >= 5,
+    `${POLLER} is down to ${callers.length} caller(s) (${callers.join(', ') || 'none'}). The five `
+    + 'migrated timer sites are AgentStrip, AskMeTab, TaskDetailOverlay, TasksKanban and '
+    + 'OfficeFloor; fewer than five means one of them stopped reading the ledger, or went back to '
+    + 'polling it itself'
+  );
+});
+
+// Poison `assert` so every assertion throws, then load the harness. A file that
+// still exits 0 is a file whose assertions cannot fail - fake coverage. #20 / D-45.
+const POISON =
+  "const M=require('module'),o=M.prototype.require,b=()=>{throw new Error('poison')};" +
+  "M.prototype.require=function(i){return (i==='assert'||i==='node:assert')" +
+  "?new Proxy(b,{get:()=>b}):o.apply(this,arguments)};" +
+  "require(require('path').resolve(process.argv[1]))";
+
+test('every hand-rolled harness fails loudly — no assertion that cannot fail (#7)', () => {
+  // Why this is durable rather than a one-off check at authoring time: it caught
+  // test/proc-kill.test.cjs, whose win32 branch exited 0 straight after the smoke
+  // import and BEFORE a single assertion ran, so on Windows it was green
+  // forever — green even if procKill.ts had stopped exporting anything. Running
+  // it once in wave 2 proves nothing about a bypass introduced into breaker,
+  // kg-core, slack or voice-messages in a later wave.
+  //
+  // Cost: one short-lived node process per hand-rolled harness (eight today),
+  // each only loading a module. If that count ever grows past a couple of dozen
+  // the fix is to delete hand-rolled harnesses in favour of node:test, not to
+  // delete this test.
+  //
+  // Files that use the real runner are skipped: node:test reports its own
+  // failures and sets the exit code itself, so poisoning them measures nothing.
+  const harnesses = fs
+    .readdirSync(path.join(root, 'test'))
+    .filter((name) => name.endsWith('.test.cjs'))
+    .map((name) => `test/${name}`)
+    .filter((rel) => !/require\('node:test'\)/.test(readStripped(rel)));
+
+  assert.ok(harnesses.length > 0, 'expected some hand-rolled harnesses — has the glob moved?');
+
+  const silent = [];
+  for (const rel of harnesses) {
+    let status = 0;
+    try {
+      execFileSync(process.execPath, ['-e', POISON, rel], { cwd: root, stdio: 'ignore' });
+    } catch (err) {
+      // execFileSync throws on a non-zero exit — which is the PASSING case here.
+      status = err && typeof err.status === 'number' ? err.status : 1;
+    }
+    if (status === 0) silent.push(rel);
+  }
+
+  assert.deepEqual(
+    silent,
+    [],
+    `these harnesses cannot fail, so their green is meaningless: ${silent.join(', ')}. Every `
+    + 'assertion in them was made to throw and they still exited 0 — they run to completion '
+    + 'without asserting anything, or they swallow the failure and exit 0 anyway'
+  );
+});
+
+// ─── FLOOR-02 (#5): HIVE.md must stop denying the Stop-drain runs ────────────
+
+/**
+ * Every stale denial HIVE.md carried, frozen ON the false claim rather than next
+ * to it. Each of the twelve was measured at exactly `1` in HIVE.md immediately
+ * before it was deleted (2026-08-21), so every one of these assertions could
+ * actually fail — a literal that was already `0` is a permanently-green
+ * assertion, not a gate.
+ *
+ * Compared with `String.prototype.includes`, never a RegExp: two contain `*`
+ * and three contain `{}`, and a regex engine reads both as syntax.
+ *
+ * Section attributions are from `grep -n "^## " HIVE.md` before the edit
+ * (§2 :36, §3 :107, §5 :169, §7 :221, §8 :268); the line numbers are pointers,
+ * the LITERAL is the key.
+ */
+const STALE_STOP_DRAIN_DENIALS = [
+  'nothing calls that',            // HIVE.md:125 — §3 on-disk layout, cursor.json block
+  'shipped, but not as planned',   // HIVE.md:227 — §7 phased plan
+  'Moot today',                    // HIVE.md:273 — §8 risk table
+  'never advanced',                // HIVE.md:275 — §8 risk table
+  '**Reversed',                    // HIVE.md:88  — §2 decision 5 struck out
+  'answers **every**',             // HIVE.md:90  — §2 "Stop always returns {}"
+  'never forces a continuation',   // HIVE.md:91  — §2
+  'nothing in the app calls it',   // HIVE.md:94  — §2 drainForStop "uncalled"
+  'per-renderer-session',          // HIVE.md:101 — §2 dedup denial
+  '`Stop` returns `{}`',           // HIVE.md:232 — §7 phased plan, second half
+  'always answers `{}`',           // HIVE.md:273 — §8 risk table, second half
+  'main answers {} — never a forced continue' // HIVE.md:184 — §5 control-flow diagram
+];
+
+test('HIVE.md no longer promises the Stop-drain does not run (#5, FLOOR-02)', () => {
+  // Trimming this list is the obvious way to make the loop below pass, so the
+  // length is asserted too: twelve fails here instead of passing there.
+  assert.equal(
+    STALE_STOP_DRAIN_DENIALS.length, 12,
+    'the freeze list has been shortened. Five of the twelve denials live in §2 decision 5, one in '
+    + "§3's on-disk layout, one in §5's control-flow diagram, two in §7 and three in §8 — dropping "
+    + 'one lets that section go back to denying the feature while this test stays green'
+  );
+
+  const hive = stripComments(fs.readFileSync(path.join(root, 'HIVE.md'), 'utf8'));
+  const found = STALE_STOP_DRAIN_DENIALS.filter((claim) => hive.includes(claim));
+
+  assert.deepEqual(
+    found,
+    [],
+    'HIVE.md says the Stop-drain does not run, and it does: '
+    + `${found.map((c) => JSON.stringify(c)).join(', ')}. `
+    + '.planning/codebase/ARCHITECTURE.md describes the same code correctly, so the two docs '
+    + 'contradict each other — and ROADMAP criterion 1 for FLOOR-02 bans exactly this: "grep finds '
+    + 'no doc promising a code path that does not run". The drain is live and guarded: '
+    + 'hooks.ts calls DeliveryService.drainAtStop at the Stop boundary and returns '
+    + "{decision:'block', reason} when the agent has unread mail"
+  );
+});
+
+/**
+ * The six anchor SITES that pointed at unrelated code, frozen ON the wrong
+ * string in the same shape as STALE_STOP_DRAIN_DENIALS above — and for the same
+ * reason. Each was measured non-zero in its own document immediately before
+ * plan 01-31 corrected it (`grep -c` read 4 lines in HIVE.md and 1 in
+ * docs/adr/), so every row here could actually fail.
+ *
+ * Why a DENIAL table and not a pin on the correct line: a `:NNN` pin is red on
+ * every unrelated refactor, which is how a pin ends up disabled. These name
+ * strings that were WRONG IN THE PAST, so this test can never go red for a
+ * refactor reason — only for the anchors coming back.
+ *
+ * Why it was needed at all: `01-23-SUMMARY.md` reported this exact sweep as
+ * APPLIED when six of thirteen anchors had not been touched, and when 01-31
+ * re-derived all thirteen at wave 4 it found 13 of 13 stale — 01-24, 01-25 and
+ * 01-26 each insert above the four the earlier sweep had called correct. A
+ * line number is a claim that expires on the next edit.
+ */
+const STALE_ANCHORS = [
+  { doc: 'HIVE.md', wrong: 'hive.ts:1338', where: '§2.5 dedup paragraph',
+    shouldSay: 'hive.ts drainForStop()', pointedAt: 'private startProxyBridge(' },
+  { doc: 'HIVE.md', wrong: 'hive.ts:1338', where: "§3 on-disk layout, cursor.json block",
+    shouldSay: 'hive.ts drainForStop()', pointedAt: 'private startProxyBridge(' },
+  { doc: 'HIVE.md', wrong: 'hooks.ts:662', where: '§3 on-disk layout, cursor.json block',
+    shouldSay: "hooks.ts's Stop arm", pointedAt: 'this.server = null;' },
+  { doc: 'HIVE.md', wrong: 'hooks.ts:662', where: '§7 phased plan, Stop-loop paragraph',
+    shouldSay: "hooks.ts's Stop arm", pointedAt: 'this.server = null;' },
+  { doc: 'HIVE.md', wrong: 'delivery.ts:262', where: '§7 phased plan, Stop-loop paragraph',
+    shouldSay: 'delivery.ts drainAtStop()', pointedAt: 'a VETO_TTL_MS comment' },
+  { doc: 'docs/adr/0005-cumulative-cost-ledger.md', wrong: 'index.ts:1524',
+    where: 'the "second appender" paragraph',
+    shouldSay: 'index.ts appendCostLedger()', pointedAt: "the god-beat prompt builder's byteLength" },
+];
+
+test('no doc restores an anchor that pointed at unrelated code (FLOOR-02, FLOOR-17, c/WR-07)', () => {
+  assert.equal(
+    STALE_ANCHORS.length, 6,
+    'the denial table has been shortened. Six SITES across five doc lines were wrong; dropping a '
+    + 'row lets that anchor come back while this test stays green'
+  );
+
+  const offenders = [];
+  for (const row of STALE_ANCHORS) {
+    const text = fs.readFileSync(path.join(root, row.doc), 'utf8');
+    if (text.includes(row.wrong)) {
+      offenders.push(
+        `${row.doc} (${row.where}) cites ${row.wrong}, which pointed at ${row.pointedAt}; `
+        + `it should name ${row.shouldSay}`
+      );
+    }
+  }
+
+  assert.deepEqual(
+    offenders, [],
+    `a corrected anchor is back:\n  ${offenders.join('\n  ')}\n`
+    + 'ROADMAP criterion 1 is "grep finds no doc promising a code path that does not run", and an '
+    + 'anchor pointing at the wrong function routes the next change into the wrong file. Write '
+    + '`<file>.ts <symbol>()`; if a line number genuinely helps navigation, put it BESIDE the '
+    + 'symbol and only after re-deriving it.'
+  );
+});
+
+/**
+ * `DESIGN.md` stated a 1280 × 800 window minimum in two places. Plan 01-25
+ * lowered `MIN_WIN.width` to 960 so FLOOR-13's sub-1024 sidebar collapse is
+ * reachable in the shipped app at all, and 01-25 owns and edits `DESIGN.md`.
+ *
+ * `DESIGN.md` is NOT in plan 01-31's files_modified. This pin exists precisely
+ * so the correction cannot fall BETWEEN the two plans: if 01-25 had missed it,
+ * this is red and says which file and line.
+ */
+const PRE_FIX_DESIGN_MINIMUM = '- Main window minimum: 1280 × 800.';
+const STATES_1280_MINIMUM = /1280\s*[×x]\s*800|minimum:?\s*1280/i;
+
+test('no shipped doc still states a 1280 window minimum (FLOOR-13, cross-checks 01-25)', () => {
+  // Non-vacuity first: the matcher must fire on the sentence the tree actually
+  // shipped before 01-25. A pin nobody has seen failing is a comment.
+  assert.ok(
+    STATES_1280_MINIMUM.test(PRE_FIX_DESIGN_MINIMUM),
+    'the matcher no longer recognises the pre-01-25 DESIGN.md sentence, so a green result below '
+    + 'would mean the regex broke rather than the docs being right'
+  );
+
+  const docs = shippedTextFiles().filter((rel) => /\.(md|html)$/.test(rel));
+  assert.ok(
+    docs.length > 30,
+    `expected the shipped doc corpus, found ${docs.length} files (43 measured when written)`
+  );
+  assert.ok(docs.includes('DESIGN.md'), 'DESIGN.md is not in the doc corpus — the walker is wrong');
+
+  const offenders = [];
+  for (const rel of docs) {
+    fs.readFileSync(path.join(root, rel), 'utf8').split(/\r?\n/).forEach((line, i) => {
+      if (STATES_1280_MINIMUM.test(line)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+    });
+  }
+
+  assert.deepEqual(
+    offenders, [], `a shipped doc still promises a 1280px window minimum:\n  ${offenders.join('\n  ')}\n`
+    + 'src/main/index.ts MIN_WIN.width is 960 (plan 01-25), which is what makes '
+    + "sidebarLayout.ts's SIDEBAR_COLLAPSE_WIDTH = 1024 branch reachable in the shipped app. A doc "
+    + 'stating 1280 describes a window the app no longer enforces.'
+  );
+});
+
+test('the Stop-drain wiring HIVE.md now describes is still there (#5, FLOOR-02)', () => {
+  // The negative test above can be satisfied by DELETING the feature as well as by
+  // correcting the docs — and a deletion would make every removed denial
+  // retroactively true. Pin the positive direction in the same file so that
+  // refactor fails the suite instead of quietly winning the argument.
+  const index = readStripped('src/main/index.ts');
+  const hooks = readStripped('src/main/hooks.ts');
+  const delivery = readStripped('src/main/delivery.ts');
+
+  assert.ok(
+    /drainForStop\(/.test(index) && /delivery\.drainAtStop\(/.test(index),
+    'src/main/index.ts no longer wires the Stop-drain (hive.drainForStop into DeliveryService.deps.drain, '
+    + 'and delivery.drainAtStop into HookServer). HIVE.md §2.5/§3/§5/§7/§8 now all say it runs'
+  );
+  assert.ok(
+    /this\.drainAtStop\?\.\(/.test(hooks) && /decision: 'block'/.test(hooks),
+    "src/main/hooks.ts no longer calls the drain at the Stop boundary, or no longer returns "
+    + "{decision:'block'} — without both, Stop really does always answer {} and HIVE.md's "
+    + 'corrected sections would be the lie instead'
+  );
+  assert.ok(
+    /paused\(agentId\)/.test(delivery) && /vetoed\(agentId\)/.test(delivery),
+    'src/main/delivery.ts drainAtStop lost a guard. The UNGUARDED drain is the version that was '
+    + 'removed for bypassing the terminal-draft/HITL gate; both guards are why decision 5 ships'
+  );
+});
+
+// ─── FLOOR-05 (#13) / FLOOR-07 (#16, #31, #32): plan 01-10's clauses ────────
+
+/**
+ * The recurring failure mode this whole file exists for, in its purest form:
+ * `app:openLogs` was complete and correct in the main process and had ZERO
+ * callers — no preload export, no UI — so the bug template asked reporters for
+ * logs they had no way to reach. A main-process half with nothing wired to it
+ * is indistinguishable from a feature until someone tries to use it.
+ */
+test('the log folder is reachable from the renderer, not just implemented in main (#13, FLOOR-05)', () => {
+  const preload = readStripped('src/preload/index.ts');
+  const main = readStripped('src/main/index.ts');
+  const settings = readStripped('src/renderer/src/components/SettingsModal.tsx');
+
+  assert.match(
+    main, /ipcMain\.handle\('app:openLogs'/,
+    "src/main/index.ts no longer registers app:openLogs. The Settings row and the preload "
+    + 'export below now invoke a channel with no handler, which rejects at run time — and the '
+    + 'bug template tells every reporter to use that button.'
+  );
+  assert.match(
+    preload, /openLogs:\s*\(\)/,
+    'src/preload/index.ts stopped exporting openLogs, so the main-process handler is '
+    + 'unreachable from the renderer again — exactly the state #13 was open for, with the '
+    + 'handler present the whole time.'
+  );
+  assert.match(
+    settings, /window\.cth\.openLogs\(/,
+    'Settings no longer calls window.cth.openLogs. The preload export is then dead code, and '
+    + "the bug template's `Settings → General → Log folder → open logs` route points at a "
+    + 'button that is not there.'
+  );
+});
+
+test('the two dead memory exports and their handlers stay deleted (#16, FLOOR-07)', () => {
+  const preload = readStripped('src/preload/index.ts');
+  const main = readStripped('src/main/index.ts');
+
+  for (const dead of ['memoryWakeUp', 'reflectNow']) {
+    assert.ok(
+      !new RegExp(`${dead}\\s*:`).test(preload),
+      `src/preload/index.ts exports ${dead} again. It had no renderer caller when it was `
+      + 'deleted, and an unused IPC export is surface the sandbox pays for and nobody uses: '
+      + 'every export here is a path from a web page into the main process.'
+    );
+  }
+  for (const channel of ['hive:memoryWakeUp', 'memory:reflectNow']) {
+    assert.ok(
+      !main.includes(channel),
+      `src/main/index.ts registers ${channel} again. Nothing invokes it — reflect.ts's own `
+      + 'timer calls the class method directly — so this is an unreachable handler that reads '
+      + 'as a live feature to the next person who greps for one.'
+    );
+  }
+});
+
+/**
+ * The two paths held OUT of the naming scan, each carrying its reason here
+ * rather than in a comment somewhere else, because an unexplained exclusion is
+ * the shape a weakened pin takes.
+ */
+const EKG_SCAN_EXCLUDED = {
+  'docs/floor-inspection.html':
+    'the audit RECORD, which quotes the defect in order to report it — erasing the quotation '
+    + 'would delete the finding rather than fix it',
+  'test/repo-claims.test.cjs':
+    'this file: a pin must be allowed to contain its own needle, or it can never pass '
+    + '(01-REDTEAM-5 R-32 demonstrated exactly that)',
+};
+
+test('no shipped surface describes the keyword store as an "Enterprise Knowledge Graph" (#31, FLOOR-07)', () => {
+  // NOT comment-stripped, deliberately, and it is the one place in this file
+  // that is: the claim is made IN prose and IN doc comments, so stripping them
+  // would delete the very text under test. That reasoning survived the widening
+  // from two files to the whole shipped surface. It is also NOT routed through
+  // `stripComments` for a second reason — that helper carries an unfixed
+  // string-truncation defect (review c/WR-13), outside this plan's scope.
+  const files = shippedTextFiles().filter((rel) => !(rel in EKG_SCAN_EXCLUDED));
+
+  // Assert the CORPUS before asserting the corpus is clean: a broken walker and
+  // a clean tree must never be indistinguishable. 315 measured when written.
+  assert.ok(
+    files.length > 200,
+    `expected the shipped tree, found ${files.length} files — shippedTextFiles() is broken, `
+    + 'so a green result below would mean nothing was read rather than nothing was found'
+  );
+  for (const needed of ['resources/skills/capabilities/SKILL.md', 'README.md', 'DESIGN.md']) {
+    assert.ok(
+      files.includes(needed),
+      `${needed} is NOT in the scanned corpus. It is the reason this scan does not reuse `
+      + "sourceFiles(), which matches .ts/.tsx only — a corpus that excludes this file's own "
+      + 'highest-value site reports a guarantee it does not hold.'
+    );
+  }
+
+  const offenders = files.filter(
+    (rel) => /enterprise knowledge graph/i.test(fs.readFileSync(path.join(root, rel), 'utf8'))
+  );
+
+  assert.deepEqual(
+    offenders, [],
+    `these shipped files call the keyword store an "Enterprise Knowledge Graph": ${offenders.join(', ')}. `
+    + 'src/main/kg-core.cjs says what it actually is — keyword scoring over text chunks, term '
+    + 'frequency plus a title boost, no entities and no edges — and V2-05 (the entity graph) was '
+    + 'formally RETIRED, not deferred. The name promises the retired thing. '
+    + 'resources/skills/capabilities/SKILL.md is the one that matters most: it is installed into '
+    + "every agent's skills directory, so a false capability claim there is consumed by the models."
+  );
+});
+
+test('the FTS5 migration the docs promise is in the schema (#32, FLOOR-07)', () => {
+  const db = readStripped('src/main/db.ts');
+
+  assert.match(
+    db, /CREATE VIRTUAL TABLE[\s\S]{0,60}memory_fts[\s\S]{0,40}USING\s+fts5/i,
+    'src/main/db.ts no longer creates memory_fts as an FTS5 virtual table. Asserted on the '
+    + 'DDL and not on the comment above it (this source is comment-stripped first) because '
+    + 'docs/design/knowledge-graph.md:45 has promised this index since long before it existed '
+    + '— a comment naming it is exactly the state that was wrong for months.'
+  );
+
+  const entries = (migrationsBody(db).match(/\(db\)\s*=>/g) || []).length;
+  assert.ok(
+    entries >= 2,
+    `MIGRATIONS has ${entries} entr${entries === 1 ? 'y' : 'ies'}, not the 2 it needs. The rail `
+    + 'is APPEND-ONLY: index N takes the DB from user_version N to N+1, so removing an entry '
+    + 'or folding the FTS5 table into migration 1 means every already-shipped install — which '
+    + 'has run migration 1 and will never run it again — silently never gets the index.'
+  );
+});
+
+test('the FTS5 test cannot be bypassed into a green gate (#32, FLOOR-07)', () => {
+  const rel = 'test/db-fts.test.cjs';
+  assert.ok(
+    fs.existsSync(path.join(root, rel)),
+    `${rel} is gone. It is the only coverage over a REAL SQLite handle: the stand-in driver `
+    + 'in test/config-secrets.test.cjs implements the migration rail in pragma() and makes '
+    + 'exec() a no-op, so an FTS5 test written against that reports a successful migration '
+    + 'over an empty database.'
+  );
+
+  const bypass = readStripped(rel).match(/\.skip\(|\.todo\(|skip\s*:|todo\s*:/g) || [];
+  assert.deepEqual(
+    bypass, [],
+    'the FTS5 test was skipped — a skipped file exits 0, so the index would be untested while '
+    + 'CI stayed green. This claim lives in a file `npm test` ALWAYS runs, so it is the guard '
+    + 'that survives even when db-fts itself cannot load: whoever "fixes" a red CI by '
+    + `bypassing that file turns this red instead. Found: ${bypass.join(', ')}`
+  );
+
+  // The whole line that loads the driver, not merely a line that mentions it.
+  // A bare /^(const|let|var) .*require\('better-sqlite3'\)/m was tried first and
+  // is NOT a pin: `let Database; try { Database = require('better-sqlite3'); }
+  // catch { return; }` starts with `let` and contains the require, so it
+  // satisfies that regex while being precisely the early-return this claim
+  // exists to forbid. Proven by driving it RED, 2026-08-21.
+  const source = readStripped(rel);
+  const load = source.match(/^.*require\('better-sqlite3'\).*$/m);
+  assert.ok(load, `${rel} does not load better-sqlite3 at all — it is not testing SQLite`);
+  assert.match(
+    load[0],
+    /^(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*require\('better-sqlite3'\);?\s*$/,
+    `${rel} no longer loads better-sqlite3 as a plain top-level binding — the line is `
+    + `\`${load[0].trim()}\`. Wrapped in a guard or nested in a function, a missing native `
+    + 'module becomes an early return, the file reports zero tests, and `node --test` exits '
+    + '0 — unavailable-and-failing must not be able to look like passing.'
+  );
+  assert.ok(
+    !/\btry\b/.test(source.slice(0, source.indexOf("require('better-sqlite3')"))),
+    `${rel} opens a try block before it loads better-sqlite3. Whatever the binding looks like, `
+    + 'a load reached through a catch can swallow the ABI failure and leave the file with no '
+    + 'tests and a zero exit code.'
+  );
+});
+
+test('better-sqlite3 stays a prebuilt N-API 13.x that CI never rebuilds (#32, FLOOR-07)', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const range = pkg.dependencies['better-sqlite3'] ?? '';
+
+  assert.match(
+    range, /^[\^~]?13\./,
+    `package.json pins better-sqlite3 at "${range}". 11.x is raw-V8 and must be COMPILED; `
+    + '13.x is N-API and ships eight prebuilds in the tarball with no install script. The CI '
+    + 'test jobs install with `npm ci --ignore-scripts`, so on 11.x nothing loadable is left '
+    + 'and test/db-fts.test.cjs cannot load in CI at all.'
+  );
+
+  // Parsed, never grepped: ci.yml names better-sqlite3 in three comments, one of
+  // which explains why the rebuild must NOT be there. A text search reads those
+  // as hits and answers the opposite of the truth.
+  const dir = path.join(root, '.github/workflows');
+  const offenders = [];
+  for (const file of fs.readdirSync(dir).filter((n) => /\.ya?ml$/.test(n))) {
+    const wf = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
+    for (const [name, job] of Object.entries(wf?.jobs ?? {})) {
+      for (const step of job?.steps ?? []) {
+        if (typeof step?.run === 'string' && /npm\s+rebuild\s+better-sqlite3/.test(step.run)) {
+          offenders.push(`${file}:${name}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders, [],
+    `these jobs rebuild better-sqlite3: ${offenders.join(', ')}. \`npm rebuild\` DISCARDS the `
+    + 'shipped prebuild and synthesises a node-gyp compile, which needs Python on the macOS '
+    + 'and Windows runners where setup-python is Linux-gated — so "making the FTS5 test run" '
+    + 'that way trades one green test for two broken hard-gate jobs.'
+  );
+});
+
+/** The MIGRATIONS array literal, bounded by the STRUCTURE that closes it (a
+ *  `];` at the start of a line) rather than by a character count. A fixed-size
+ *  slice of a file that grows either runs out mid-entry or swallows the next
+ *  declaration, and both make the entry count above wrong in a way that reads as
+ *  a real failure. */
+function migrationsBody(dbSource) {
+  const start = dbSource.indexOf('const MIGRATIONS');
+  assert.ok(start >= 0, 'src/main/db.ts no longer declares MIGRATIONS — re-derive this anchor');
+  const rest = dbSource.slice(start);
+  const end = rest.indexOf('\n];');
+  assert.ok(
+    end > 0,
+    'the MIGRATIONS array literal no longer ends with `];` at the start of a line. The entry '
+    + 'count is measured against that delimiter, so it would silently be counting the rest of '
+    + 'the file instead of the array.'
+  );
+  return rest.slice(0, end);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Wave 9 (plan 01-23) — the accumulator asserted whole.
+//
+// Everything below is a negative grep this phase relied on that would otherwise
+// have lived only in a SUMMARY. D-45: a grep that lives in a report rots; a
+// grep that lives here runs on three platforms on every future PR.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * M1, pinned. Do NOT re-derive with a different regex — the repo-wide count
+ * moves by ±6 with regex shape, and the whole FLOOR-12 completeness bar is a
+ * multiset equality against it. This is character-identical to the shell form
+ * `grep -rhoE "fontSize *[:=] *\{?(1[0-3]|[1-9])($|[^0-9.])"`, which counts
+ * OCCURRENCES (`-o`), not lines. The unit matters: a `grep -c` form under-counts
+ * any line carrying two hits.
+ */
+const M1 = /fontSize *[:=] *\{?(1[0-3]|[1-9])($|[^0-9.])/g;
+
+/**
+ * The frozen FLOOR-12 allowlist, keyed on CONTENT and never on a line number.
+ *
+ * The line-anchor contract (01-23-PLAN `<interfaces>`), in two halves:
+ *   • half 1 — plan 01-21 (wave 8) changed no line matching M1, so the TEXT of
+ *     every site below is stable even though its line number is not. 81 M1 sites
+ *     sat below a plan-21 edit, and 44 of the 61 M1 files contain a React hook,
+ *     so a line-keyed array would be off by at least one line and would fail for
+ *     a reason that has nothing to do with FLOOR-12.
+ *   • half 2 — THIS array. Each entry is `{ file, text, count }` where `text` is
+ *     the trimmed source line and `count` is how many M1 hits that exact trimmed
+ *     text produces in that file. The assertion compares two multisets for exact
+ *     equality, so a NEW sub-14px site either introduces an unlisted
+ *     `(file, text)` key or bumps a count — either way the suite fails — while a
+ *     line inserted above an existing site is a non-event.
+ *
+ * Assembled from the seven wave-7 sweep SUMMARYs (01-14 … 01-20) and re-derived
+ * against the tree at wave 9. Attribution, per 01-20-SUMMARY: 01-14 five,
+ * 01-17 four, 01-18 three, 01-20 three, 01-19 one, 01-15/01-16 zero — which
+ * reconciles with 01-14's handoff arithmetic (567 handed out + 5 kept = 572;
+ * wave 7 kept 11; 5 + 11 = 16).
+ *
+ * Every entry is a decorative glyph inside a `<span aria-hidden="true">` with
+ * its own local fontSize override — UI-SPEC Rule 0's exempt shape. That is not
+ * a convention here, it is asserted below, clause by clause.
+ */
+const FLOOR12_ALLOWLIST = [
+  { file: 'src/renderer/src/components/AgentCard.tsx', text: '<span aria-hidden="true" style={{ fontSize: 10 }}>✎</span>', count: 1 },
+  { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/AskMeTab.tsx', text: '<span aria-hidden="true" style={{ fontSize: 13 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: "{armed && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}", count: 1 },
+  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✓</span>', count: 1 },
+  { file: 'src/renderer/src/components/FullscreenFileEditor.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/FullscreenTerminal.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/FullscreenTerminal.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✎</span>', count: 1 },
+  { file: 'src/renderer/src/components/PtyTerminalView.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>−</span>', count: 1 },
+  { file: 'src/renderer/src/components/PtyTerminalView.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>+</span>', count: 1 },
+  { file: 'src/renderer/src/components/TasksKanban.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/components/triggers/ui.tsx', text: "<span aria-hidden=\"true\" style={{ flexShrink: 0, width: 8, fontSize: 11, color: 'var(--cth-ink-500)' }}>{open ? '▾' : '▸'}</span>", count: 1 },
+  { file: 'src/renderer/src/ide/GitPanes.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
+  { file: 'src/renderer/src/ide/GitPanes.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>⇄</span>', count: 1 },
+  { file: 'src/renderer/src/ide/IdePanel.tsx', text: "<span aria-hidden=\"true\" style={{ fontSize: 10, lineHeight: '14px' }}>{gitCollapsed ? '▸' : '▾'}</span>", count: 1 },
+];
+
+/** Every renderer `.ts`/`.tsx`, comment-stripped, keyed by repo-relative path. */
+function rendererSources() {
+  const out = new Map();
+  for (const rel of sourceFiles(rendererRoot)) out.set(rel, readStripped(rel));
+  return out;
+}
+
+/** The `(file, trimmed-line-text) -> occurrence count` multiset M1 produces. */
+function m1Multiset() {
+  const found = new Map();
+  for (const [rel, src] of rendererSources()) {
+    for (const line of src.split('\n')) {
+      const hits = line.match(M1);
+      if (!hits) continue;
+      const key = `${rel}\u0000${line.trim()}`;
+      found.set(key, (found.get(key) ?? 0) + hits.length);
+    }
+  }
+  return found;
+}
+
+test('FLOOR-12 clause 1 — tokens.css declares no text size below the 14px floor (#26)', () => {
+  const css = fs.readFileSync(path.join(rendererRoot, 'design', 'tokens.css'), 'utf8');
+
+  // Parsed, not matched against a literal: a whitespace change inside the
+  // declaration must not be able to make this pass or fail.
+  const decls = [...css.matchAll(/--cth-text-([a-z-]+)\s*:\s*([0-9.]+)px/g)]
+    .map((m) => ({ name: `--cth-text-${m[1]}`, px: Number(m[2]) }));
+  assert.ok(decls.length >= 5, `tokens.css declared ${decls.length} --cth-text-* sizes; the parse is wrong`);
+
+  const under = decls.filter((d) => d.px < 14);
+  assert.deepEqual(
+    under, [],
+    'DESIGN.md:706 states no user-facing text sits below 14px, and the token layer is where a '
+    + 'sub-floor value becomes representable at all. These declarations are below it: '
+    + `${under.map((d) => `${d.name}: ${d.px}px`).join(', ')} (#26, FLOOR-12).`
+  );
+
+  // display-sm was DELETED rather than raised (01-14): a token whose whole job
+  // is "the smallest" cannot sit AT the floor without inviting the next
+  // sub-floor value to be written into it. Deleting it makes the regression
+  // unrepresentable rather than merely wrong.
+  for (const dead of ['--cth-text-display-sm', '--cth-lh-display-sm']) {
+    assert.equal(
+      new RegExp(`${dead}\\s*:`).test(css), false,
+      `${dead} is back in tokens.css. It was deleted, not raised, so that "the smallest text `
+      + 'token" cannot exist as a place to put a sub-14px value (#26, FLOOR-12).'
+    );
+  }
+});
+
+test('FLOOR-12 clause 2 — every sub-14px site left in the renderer is on the frozen allowlist (#26)', () => {
+  const found = m1Multiset();
+  const allowed = new Map();
+  for (const e of FLOOR12_ALLOWLIST) {
+    const key = `${e.file}\u0000${e.text}`;
+    allowed.set(key, (allowed.get(key) ?? 0) + e.count);
+  }
+
+  const show = (k, n) => `  ${k.split('\u0000')[0]}  ×${n}\n      ${k.split('\u0000')[1]}`;
+  const extra = [];
+  const missing = [];
+  for (const [k, n] of found) if ((allowed.get(k) ?? 0) !== n) extra.push(show(k, n));
+  for (const [k, n] of allowed) if ((found.get(k) ?? 0) !== n) missing.push(show(k, n));
+
+  assert.ok(
+    extra.length === 0 && missing.length === 0,
+    'The FLOOR-12 allowlist and the tree disagree (#26).\n\n'
+    + 'PRESENT IN SOURCE BUT NOT ALLOWLISTED — a new sub-14px site, or an existing one whose\n'
+    + 'count grew. Fix the site; do NOT widen this list:\n'
+    + (extra.join('\n') || '  (none)')
+    + '\n\nALLOWLISTED BUT ABSENT FROM SOURCE — a stale entry, or half 1 of the line-anchor\n'
+    + 'contract broke and a site\'s TEXT changed. If the text no longer exists anywhere in its\n'
+    + 'file, report it against the plan that moved it rather than editing this list:\n'
+    + (missing.join('\n') || '  (none)')
+  );
+
+  const total = [...found.values()].reduce((a, b) => a + b, 0);
+  assert.equal(
+    total, FLOOR12_ALLOWLIST.reduce((a, e) => a + e.count, 0),
+    'the repo-wide M1 occurrence count no longer equals the summed allowlist size'
+  );
+});
+
+test('FLOOR-12 clause 3 — every allowlisted site is a decorative glyph hidden from the a11y tree (#26)', () => {
+  const sources = rendererSources();
+  for (const entry of FLOOR12_ALLOWLIST) {
+    const src = sources.get(entry.file);
+    assert.ok(src, `${entry.file} is on the FLOOR-12 allowlist and no longer exists`);
+
+    // Located by CONTENT, never by a line number: find the site's text, then walk back to
+    // the opening tag of the element that owns the fontSize.
+    const at = src.indexOf(entry.text);
+    assert.ok(at >= 0, `the allowlisted text is gone from ${entry.file}: ${entry.text}`);
+    const sizeAt = src.slice(at).search(M1) + at;
+    const tagStart = src.lastIndexOf('<', sizeAt);
+    const tagEnd = src.indexOf('>', sizeAt);
+    const openTag = src.slice(tagStart, tagEnd + 1);
+
+    assert.match(
+      openTag, /aria-hidden=("true"|\{true\})/,
+      `${entry.file} keeps a sub-14px size on an element that is NOT hidden from the accessibility `
+      + 'tree. UI-SPEC Rule 0 exempts a decorative glyph only because a screen reader never '
+      + `announces it. Without aria-hidden it is user-facing text below the floor:\n  ${openTag}\n`
+      + '(#26, FLOOR-12).'
+    );
+  }
+});
+
+test('FLOOR-12 clause 4 — the three non-literal sizes are at or above the floor (#26)', () => {
+  // Located by IDENTIFIER, not by line — `ThoughtBubble.ts:22` and
+  // `ToolBubble.ts:29` both read `const FONT_SIZE = 12;` before wave 7, so this
+  // is a real gate on that work rather than a formality.
+  for (const rel of ['src/renderer/src/scene/office/ThoughtBubble.ts', 'src/renderer/src/scene/office/ToolBubble.ts']) {
+    const m = readStripped(rel).match(/const FONT_SIZE\s*=\s*([0-9.]+)/);
+    assert.ok(m, `${rel} no longer declares FONT_SIZE — re-derive this anchor`);
+    assert.ok(
+      Number(m[1]) >= 14,
+      `${rel} renders its Pixi label at ${m[1]}px, below DESIGN.md's 14px floor (#26, FLOOR-12). `
+      + 'NOTE the caveat 01-14 filed and did not claim away: both classes draw inside a container '
+      + 'held at RENDER_SCALE = 0.5, so the DESIGNED on-screen size is half this number. Raising '
+      + 'FONT_SIZE is necessary and not sufficient; the geometry is UI-SPEC containment step 3.'
+    );
+  }
+
+  const ft = readStripped('src/renderer/src/components/FullscreenTerminal.tsx');
+  const floor = ft.match(/fontSize:\s*Math\.max\(\s*([0-9.]+)\s*,/);
+  assert.ok(floor, 'FullscreenTerminal.tsx no longer floors a fontSize with Math.max — re-derive this anchor');
+  assert.ok(
+    Number(floor[1]) >= 14,
+    `FullscreenTerminal.tsx floors an expression-valued fontSize at ${floor[1]}px (#26, FLOOR-12).`
+  );
+});
+
+test('FLOOR-12 — no sub-14px size hides in a decimal or quoted literal, where M1 cannot see it (#26)', () => {
+  // M1's regex requires a bare digit right after `fontSize:`, so `fontSize: 12.5`
+  // and `fontSize: '13px'` are both invisible to it. Red-team round 2 found
+  // twelve real sub-14px sites in exactly those forms, so asserting M1 alone
+  // would sign FLOOR-12 off with `fontSize: 12.5` re-introduced.
+  //
+  // M1d matches ONLY the two forms M1 is blind to — a decimal, or a quoted
+  // string — so it can never overlap the allowlist above, every entry of which
+  // is a bare integer. `< 14` is the bar, not `> 0`: `fontSize: '16px'` is a real
+  // hit of this shape and is correctly above the floor.
+  const M1d = /fontSize *[:=] *\{?(?:'[0-9.]+(?:px)?'|"[0-9.]+(?:px)?"|[0-9]+\.[0-9]+)/g;
+  const seen = [];
+  const under = [];
+  for (const [rel, src] of rendererSources()) {
+    for (const m of src.matchAll(M1d)) {
+      const px = Number(m[0].replace(/[^0-9.]/g, '').replace(/\.$/, ''));
+      seen.push(`${rel}: ${m[0].trim()} (${px})`);
+      if (px < 14) under.push(`${rel}: ${m[0].trim()}`);
+    }
+  }
+  assert.ok(
+    seen.length > 0,
+    'M1d matched nothing at all in the renderer. It is a NEGATIVE scan, so an empty result is '
+    + 'indistinguishable from a broken regex — and a broken regex here signs FLOOR-12 off with '
+    + '`fontSize: 12.5` re-introduced. Re-derive the pattern before trusting a zero.'
+  );
+  assert.deepEqual(
+    under, [],
+    'These sizes are below the 14px floor and are INVISIBLE to M1, because M1 requires a bare '
+    + 'digit straight after `fontSize:` and cannot see a decimal or a quoted string. They are '
+    + 'not eligible for the Rule 0 allowlist — that list is literal-only (#26, FLOOR-12):\n'
+    + under.join('\n')
+  );
+});
+
+test('FLOOR-12 — every expression-valued size carries its own 14px floor (#26)', () => {
+  // M1x hits SURVIVE the sweep by construction: the sweeps fix them by raising
+  // the expression's minimum, not by deleting the expression. So the rule is
+  // per-hit, never a count. The terminal's OWN font is the carve-out
+  // (`term.options.fontSize` — UI-SPEC: terminal sizing is user-controlled, and
+  // MIN_TERMINAL_FONT_SIZE stays 8 for exactly that reason). CHROME that merely
+  // READS the zoom is not exempt and must carry its own floor, which is why the
+  // composer is floored on its consumer rather than on the shared constant.
+  const floors = [
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /name:\s*clamp\([^,]+,\s*([0-9.]+)\s*,/, 'rosterScale().name'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /group:\s*clamp\([^,]+,\s*([0-9.]+)\s*,/, 'rosterScale().group'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /note:\s*clamp\([^,]+,\s*([0-9.]+)\s*,/, 'rosterScale().note'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /noteFontSize\s*=\s*Math\.min\([0-9.]+,\s*Math\.max\(\s*([0-9.]+)/, 'noteFontSize'],
+    ['src/renderer/src/components/FullscreenTerminal.tsx', /noteLabelSize\s*=\s*Math\.max\(\s*([0-9.]+)/, 'noteLabelSize'],
+    ['src/renderer/src/components/MessageQueueComposer.tsx', /composerFontSize\s*=\s*Math\.max\(\s*([0-9.]+)/, 'composerFontSize'],
+  ];
+  for (const [rel, re, name] of floors) {
+    const m = readStripped(rel).match(re);
+    assert.ok(m, `${rel} no longer floors ${name} — re-derive this anchor by content, not by line`);
+    assert.ok(
+      Number(m[1]) >= 14,
+      `${name} floors at ${m[1]}px in ${rel}. It reads the terminal zoom, whose own minimum is `
+      + 'MIN_TERMINAL_FONT_SIZE = 8, so without its own floor it renders chrome text at 8px the '
+      + 'moment the operator zooms out. Raising the shared constant instead would take two zoom '
+      + 'steps away from xterm, which is what the terminal carve-out exists to protect '
+      + '(#26, FLOOR-12).'
+    );
+  }
+});
+
+test('FLOOR-12 — an icon-only button carries an accessible name; a text button is left alone (#26)', () => {
+  // THE RULE, NOT A RATIO. 49 `aria-label` against 133 `<button>` is not a bar,
+  // and a ratio test would be actively wrong: a <button> with visible text
+  // already HAS an accessible name, and adding `aria-label` to it OVERRIDES the
+  // visible label and breaks voice control ("click Save" stops working). So this
+  // asserts a per-element rule and never a count.
+  //
+  // Name sources accepted: aria-label, aria-labelledby, and `title` — on the
+  // control or on a non-hidden element inside it. `title` is not a stylistic
+  // choice here, it is the ONLY name source `PixelButton`'s closed prop set
+  // exposes, and 01-16/01-20 measured it live on Chromium's AX tree
+  // (`Accessibility.getFullAXTree` reported "Remove <path>", not ""). Excluding
+  // it would fail this test against code that is demonstrably named.
+  //
+  // PIXELBUTTON'S CLASSIFICATION IS EXPLICIT, per 01-23-PLAN task 1: the
+  // predicate below classifies a `{children}` body as TEXT-BEARING, so
+  // `PixelButton.tsx`'s own <button> is never reported as icon-only and needs no
+  // exclusion by name. That is the general rule and not a carve-out — a
+  // ReactNode prop's accessible name is supplied by the CALLER, so it is not
+  // statically knowable here, and demanding `aria-label` on the primitive would
+  // override every caller's visible text. The pin below keeps that reasoning
+  // from silently outliving itself.
+  const glyphOnly = (body) => {
+    const text = body.replace(/<[^>]*>/g, '').trim();
+    return text.length > 0 || body.includes('<') ? !/[A-Za-z0-9]/.test(text) : false;
+  };
+  const named = (openTag, body) => {
+    if (/(aria-label|aria-labelledby|title)\s*=/.test(openTag)) return true;
+    for (const tag of body.match(/<[^>]*>/g) ?? []) {
+      if (/aria-hidden/.test(tag)) continue;
+      if (/(aria-label|aria-labelledby|title)\s*=/.test(tag)) return true;
+    }
+    return false;
+  };
+
+  const unnamed = [];
+  let iconOnly = 0;
+  for (const [rel, src] of rendererSources()) {
+    if (!rel.endsWith('.tsx')) continue;
+    for (const tag of ['button', 'PixelButton']) {
+      for (const el of jsxElements(src, tag)) {
+        if (!glyphOnly(el.body)) continue;
+        iconOnly++;
+        if (!named(el.openTag, el.body)) {
+          unnamed.push(`${rel}\n      ${el.openTag.replace(/\s+/g, ' ').slice(0, 160)}`);
+        }
+      }
+    }
+  }
+
+  assert.ok(iconOnly > 20, `the icon-only predicate found ${iconOnly} controls; it has stopped matching`);
+  assert.deepEqual(
+    unnamed, [],
+    'These controls render nothing but a glyph and have no accessible name, so a screen reader '
+    + 'announces them as "button" and nothing else (#26, FLOOR-12):\n' + unnamed.join('\n')
+  );
+});
+
+test('FLOOR-12 — PixelButton still renders {children}, so its text-bearing classification holds (#26)', () => {
+  // The exclusion above rests entirely on this: PixelButton's <button> renders a
+  // ReactNode PROP, whose accessible name comes from the caller. If it ever
+  // rendered a glyph literal instead, that reasoning would be dead and the
+  // predicate would have to demand a name here.
+  const src = readStripped('src/renderer/src/components/PixelButton.tsx');
+  const el = jsxElements(src, 'button')[0];
+  assert.ok(el, 'PixelButton.tsx no longer renders a <button>');
+  assert.match(
+    el.body, /\{\s*children\s*\}/,
+    "PixelButton's <button> no longer renders {children}. The FLOOR-12 accessible-name test "
+    + 'classifies it as text-bearing precisely BECAUSE its content is a caller-supplied '
+    + 'ReactNode. If it now renders a glyph, that classification is wrong and the test above '
+    + 'is silently exempting a real unnamed control (#26, FLOOR-12).'
+  );
+});
+
+test('the two deliberate <div role="button"> keep their accessible names (#26)', () => {
+  // `.planning/codebase/CONCERNS.md` records these as RESOLVED history: a native
+  // <button> cannot legally contain the other buttons these rows carry, so the
+  // row is a div with an explicit role. A future "accessibility cleanup" that
+  // converts them back to <button> would regress a documented decision and
+  // reintroduce nested-interactive markup.
+  //
+  // Located by ATTRIBUTE, never by the line numbers :145 and :604 —
+  // FullscreenTerminal.tsx has useEffect at :142 and :168, both ABOVE both
+  // anchors, so plan 01-21's dependency fixes can legitimately shift them.
+  for (const rel of [
+    'src/renderer/src/components/AgentCard.tsx',
+    'src/renderer/src/components/FullscreenTerminal.tsx',
+  ]) {
+    const src = readStripped(rel);
+    // The BRACE-AWARE scanner, not `indexOf('>')`: both of these divs carry an
+    // `onKeyDown={(e) => …}` arrow, so a naive scan for the next `>` ends the
+    // open tag inside the arrow's fat arrow and reports "no aria-label" against
+    // a div that plainly has one. That failure looks exactly like the real
+    // regression this test exists to catch, which makes it worse than no test.
+    const el = jsxElements(src, 'div').find((d) => /role="button"/.test(d.openTag));
+    assert.ok(
+      el,
+      `${rel} no longer carries a <div role="button">. CONCERNS.md records it as the resolved `
+      + 'form of the nested-interactive defect in #26: the row holds its own buttons, so it '
+      + 'cannot be a native <button>. Converting it back regresses that decision.'
+    );
+    assert.match(
+      el.openTag, /aria-label\s*=/,
+      `${rel}'s <div role="button"> has no aria-label. A div has no implicit accessible name, so `
+      + 'without one this control announces as "button" and nothing else (#26, FLOOR-12).'
+    );
+  }
+});
+
+test('both composition-root seams are still fed — FLOOR-09 and FLOOR-10 are not dead code (#19, #34)', () => {
+  // `src/main/index.ts` is single-owner-per-wave, so two requirements crossed a
+  // wave boundary as named handoffs: plan 06 minted `recordCostSample` in wave 3
+  // and plan 08 injected it in wave 4; plan 09 minted `budgetForAgent` in wave 4
+  // and plan 10 fed the breaker beat in wave 5. A handoff that is written but
+  // never applied leaves a requirement closed on paper with dead code beneath it,
+  // and BOTH greps read 0 when this plan was written.
+  const index = readStripped('src/main/index.ts');
+
+  assert.ok(
+    index.includes('recordCostSample'),
+    'src/main/index.ts never calls recordCostSample. The HookServer sink exists and is unit-tested, '
+    + 'but nothing in production feeds it: proxy-tier spend stops reaching getAgentUsage and the '
+    + 'budget cap becomes a false cap (#19, FLOOR-09).'
+  );
+  assert.ok(
+    index.includes('budgetForAgent'),
+    'src/main/index.ts never calls hive.budgetForAgent. The accessor exists and is unit-tested, '
+    + 'but the breaker beat is never handed a budget: BreakerInput.budget becomes an optional '
+    + 'field nothing ever sets, and the FLOOR-10 arm is dead code behind a green suite (#34).'
+  );
+});
+
+/**
+ * JSX elements of one tag name, as `{ openTag, body }`, nesting-aware and
+ * quote-aware. Written by hand rather than pulled in as a parser dependency:
+ * this file must keep loading under a plain `node --test` with no build step,
+ * on all three CI platforms, exactly as every other clause here does.
+ */
+function jsxElements(src, tag) {
+  const out = [];
+  const open = `<${tag}`;
+  const close = `</${tag}>`;
+  const re = new RegExp(`<${tag}\\b`, 'g');
+  let m;
+  while ((m = re.exec(src))) {
+    let i = m.index + open.length;
+    let quote = null;
+    let brace = 0;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === quote && src[i - 1] !== '\\') quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+      if (c === '{') brace++;
+      else if (c === '}') brace--;
+      else if (c === '>' && brace === 0) break;
+    }
+    const openTag = src.slice(m.index, i + 1);
+    if (/\/>$/.test(openTag)) { out.push({ openTag, body: '' }); continue; }
+    let j = i + 1;
+    let depth = 1;
+    while (j < src.length && depth > 0) {
+      const nested = src.indexOf(open, j);
+      const closing = src.indexOf(close, j);
+      if (closing < 0) break;
+      if (nested >= 0 && nested < closing) { depth++; j = nested + open.length; } else { depth--; j = closing + close.length; }
+    }
+    out.push({ openTag, body: src.slice(i + 1, j - close.length) });
+  }
+  return out;
+}

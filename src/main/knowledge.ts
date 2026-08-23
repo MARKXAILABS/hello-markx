@@ -19,7 +19,6 @@ import { readConfig } from './config';
 
 // Pure-JS core, copied to out/main at build (like slack-trigger.cjs) and shipped
 // to process.resourcesPath for the agent CLI (electron-builder extraResources).
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const core = require('./kg-core.cjs') as KgCore;
 
 interface KgMeta {

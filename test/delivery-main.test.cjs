@@ -6,7 +6,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const loadTs = require('./load-ts.cjs');
+
+const { MAX_QUEUED_PER_AGENT } = loadTs('src/shared/queueDelivery.ts');
 
 const {
   DeliveryService,
@@ -18,12 +24,24 @@ const {
 
 /** A DeliveryService wired to fakes, on a fake clock so a TUI settle + four
  *  post-resume Enter retries cost no wall-clock time. */
+const CLOCK0 = 1_000_000;
+
 function harness(overrides = {}) {
   const state = {
-    clock: 1_000_000,
-    agents: [{ agentId: 'dev1', ptyId: 'pty1', provider: 'claude', hasOutput: true, idleMs: 30_000 }],
+    clock: CLOCK0,
+    // `lastOutputAt` is the raw epoch stamp main reads off the PTY; `idleMs` is the
+    // same fact pre-subtracted. Both are kept coherent here because production
+    // derives one from the other (index.ts `liveAgents`).
+    agents: [{
+      agentId: 'dev1', ptyId: 'pty1', provider: 'claude', hasOutput: true,
+      idleMs: 30_000, lastOutputAt: CLOCK0 - 30_000
+    }],
     inbox: { dev1: [{ id: 'm1', from: 'god' }] },
     paused: new Set(),
+    /** agentId → breaker level; absent = healthy. */
+    breaker: {},
+    /** The DURABLE half of a quiesce flip (index.ts appends it to the hive log). */
+    statuses: [],
     drain: { block: false },
     writeOk: true,
     respawnCalls: [],
@@ -40,6 +58,13 @@ function harness(overrides = {}) {
       return { ok: true };
     },
     paused: (id) => state.paused.has(id),
+    // No durable home by default: `null` disables the main-owned MD queue, so
+    // every pre-existing test drives exactly the loop it always drove. The queue
+    // tests below pass a real path into a mkdtemp dir and read the bytes back.
+    queuePath: () => null,
+    knownAgent: () => true,
+    breakerLevel: (id) => state.breaker[id] ?? 'healthy',
+    setStatus: (id, status) => state.statuses.push({ id, status }),
     drain: () => state.drain,
     respawn: (agentId, account) => {
       state.respawnCalls.push({ agentId, account });
@@ -142,6 +167,128 @@ test('an operator auto-delivery pause blocks the Stop drain', () => {
   assert.equal(svc.drainAtStop('dev1').block, false);
 });
 
+// ─── the idle-quiesce backstop, with nothing attached ───────────────────────
+
+test('a silent PTY is flipped idle with NO window attached, once per quiet spell', async () => {
+  // The renderer version of this ran in a React effect, so with the window closed
+  // an agent whose bridge never fires its turn-end signal stayed 'working' forever.
+  // `emit` here is the real no-window behaviour — a no-op, exactly what index.ts's
+  // `liveWebContents()?.send` does with no webContents — so the ONLY thing that can
+  // carry the flip is the durable half. If this passes on `emit` alone it is not
+  // testing the property the move exists for.
+  const { svc, state } = harness({ emit: () => { /* no webContents attached */ } });
+  state.inbox.dev1 = [];               // no mail: this is the quiesce path, not the wake
+
+  await svc.tick();
+  assert.deepEqual(
+    state.statuses,
+    [{ id: 'dev1', status: 'idle' }],
+    'an agent silent for 30 s was not flipped idle with no window attached'
+  );
+
+  await svc.tick();
+  assert.equal(state.statuses.length, 1, 'the flip re-announced on every 4 s tick while the agent stayed quiet');
+
+  // The PTY speaks again, then goes quiet again: a NEW turn, so a new announcement.
+  state.clock += 60_000;
+  state.agents[0].lastOutputAt = state.clock;
+  await svc.tick();
+  assert.equal(state.statuses.length, 1, 'a talking PTY was announced idle');
+  state.clock += 60_000;
+  await svc.tick();
+  assert.equal(state.statuses.length, 2, 'the backstop did not re-arm after the agent worked again');
+});
+
+test('the quiesce Stop is marked SYNTHESIZED, so the renderer can tell it from a real turn-end', async () => {
+  // Asserted where the emit lives. The renderer cannot derive this: hooks.ts's
+  // real Stop sends { agentId, event:'Stop', blocked:false } with every other key
+  // undefined — byte-equivalent to this one without the discriminator — so a
+  // renderer-side heuristic would have to guess, and guessing wrong either erases
+  // a permission-prompted agent's "needs you" or swallows Claude Code's own
+  // turn-end. useHive.ts's `stopArmDecision` is the consumer.
+  const { svc, state, emitted } = harness();
+  state.inbox.dev1 = [];               // no mail: this is the quiesce path, not the wake
+
+  await svc.tick();
+
+  const stops = emitted.filter((m) => m.channel === 'hive:hookEvent' && m.payload.event === 'Stop');
+  assert.equal(stops.length, 1, 'the quiesce backstop did not emit exactly one Stop for a silent PTY');
+  assert.deepEqual(stops[0].payload, {
+    agentId: 'dev1', event: 'Stop', blocked: false, synthesized: true
+  }, 'the synthesized turn-end is indistinguishable from a real one on the wire');
+});
+
+test('silence that is not a finished turn does not flip: a booting TUI, and a PTY that never painted', async () => {
+  const { svc, state } = harness();
+  state.inbox.dev1 = [];
+  svc.noteSpawn('pty1');               // boot grace: its silence IS the boot sequence
+
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a booting TUI was called idle mid-boot');
+
+  svc.forgetPty('pty1');
+  // pty.ts SEEDS lastOutputAt to the spawn instant, so a TUI that never painted
+  // still carries an old-looking stamp — `hasOutput` is the only thing that can
+  // tell the two apart, which is why the guard reads it and not just the clock.
+  state.agents[0].hasOutput = false;
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a PTY that has never painted a frame was read as quiet-for-ages');
+
+  state.agents[0].lastOutputAt = 0;    // no stamp at all
+  state.agents[0].hasOutput = true;
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a PTY with no output stamp was flipped on a 1970 epoch');
+});
+
+test('the backstop never fights the breaker pin', async () => {
+  const { svc, state } = harness();
+  state.inbox.dev1 = [];
+  state.breaker.dev1 = 'constrained';
+
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a breaker-constrained agent was flipped idle out from under the pin');
+
+  state.breaker.dev1 = 'stopped';
+  await svc.tick();
+  assert.deepEqual(state.statuses, [], 'a breaker-stopped agent was flipped idle out from under the pin');
+
+  state.breaker.dev1 = 'healthy';
+  await svc.tick();
+  assert.deepEqual(state.statuses, [{ id: 'dev1', status: 'idle' }], 'a healthy silent agent was not flipped');
+});
+
+test('the backstop is on the timer start() arms — not a method nobody schedules', () => {
+  // The three tests above call svc.tick() by hand, so all three would stay green
+  // if start() stopped scheduling the tick at all — and then the backstop would
+  // not run, which is the whole property. Stub the global timer instead of
+  // waiting TICK_MS of real wall clock: capture what start() arms, then fire it.
+  const realSetInterval = global.setInterval;
+  const armed = [];
+  global.setInterval = (fn, ms) => { armed.push({ fn, ms }); return { unref() { /* noop */ } }; };
+  try {
+    const { svc, state } = harness();
+    state.inbox.dev1 = [];
+
+    svc.start();
+    assert.equal(armed.length, 1, 'start() armed ' + armed.length + ' timers; the backstop rides the ONE tick');
+    assert.ok(
+      armed[0].ms <= 4000,
+      `the tick is ${armed[0].ms} ms apart, slower than the 4 s cadence the renderer's backstop ran at`
+    );
+
+    // quiesce() runs at the top of tick(), before its first await, so the
+    // scheduled callback drives it synchronously.
+    armed[0].fn();
+    assert.deepEqual(
+      state.statuses,
+      [{ id: 'dev1', status: 'idle' }],
+      'the timer start() arms does not run the quiesce backstop — it is dead code in production'
+    );
+  } finally {
+    global.setInterval = realSetInterval;
+  }
+});
+
 // ─── failover: the guard that used to die with the window ───────────────────
 
 const SWITCH = { agentId: 'dev1', from: 'a', to: 'b', fromLabel: 'Work', toLabel: 'Personal' };
@@ -224,6 +371,376 @@ test('a failed PTY write leaves the message unclaimed so the next sweep retries'
   state.writeOk = true;
   await svc.tick();
   assert.ok(writes.length > 0, 'a message lost to a dead PTY was never retried');
+});
+
+// ─── the MD queue, with no window attached (FLOOR-02) ───────────────────────
+//
+// ROADMAP criterion 1's headline clause: "with the app window closed, a message
+// composed in the UI still reaches its recipient's inbox and is typed into that
+// agent's terminal". Before this migration the queue and its drain lived in
+// `useHive.ts` and every one of these tests was unwritable — there was nothing
+// in main to drive.
+//
+// `emit` is a genuine no-op in these tests, which is what main's emit IS with no
+// webContents: `try { liveWebContents()?.send(...) } catch {}`. Nothing below may
+// depend on a renderer receiving anything.
+
+/** A queue rooted in its own temp dir, torn down whatever the body does. */
+function withQueueDir(body) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-delivery-queue-'));
+  try {
+    return body({ dir, queuePath: path.join(dir, 'delivery-queue.json') });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The child that plays "the app restarted": a genuinely separate
+ *  `process.execPath`, a FRESH DeliveryService over the same file, its own fakes,
+ *  and the pending message ids on stdout as JSON. A `fork()`ed worker sharing
+ *  module state, a `vm` context or `delete require.cache` would prove nothing —
+ *  the point is that the bytes, not the process, carry the queue. */
+const RESTART_CHILD = `
+const loadTs = require(${JSON.stringify(path.join(__dirname, 'load-ts.cjs'))});
+const { DeliveryService } = loadTs('src/main/delivery.ts');
+const svc = new DeliveryService({
+  liveAgents: () => [],
+  inbox: () => [],
+  write: () => ({ ok: true }),
+  paused: () => true,
+  drain: () => ({ block: false }),
+  respawn: () => Promise.resolve({ ok: true }),
+  queuePath: () => process.argv[2],
+  emit: () => {},
+  log: () => {}
+});
+const pending = Object.values(svc.queueSnapshot()).flat().map((m) => m.id);
+process.stdout.write(JSON.stringify(pending));
+`;
+
+test('a message enqueued through main is typed into the recipient PTY with NO window attached', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];   // isolate: no unread mail, so the wake nudge cannot be the writer
+
+    const res = svc.enqueue({ agentId: 'dev1', text: 'ship the release notes' });
+    assert.equal(res.ok, true, res.error);
+    await svc.tick();
+
+    assert.match(typed(writes), /ship the release notes/, 'the queued message never reached the PTY');
+    assert.equal(writes.at(-1).data, '\r', 'the message was typed but never submitted');
+  });
+});
+
+test("the human's draft still vetoes a queued delivery — the renderer keeps exactly that job", async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'do not land on my half-typed line' });
+
+    svc.setVeto('dev1', 'user is mid-draft');
+    await svc.tick();
+    assert.equal(writes.length, 0, 'a queued message landed on top of the human draft');
+
+    svc.setVeto('dev1', null);
+    bump(10_000);
+    await svc.tick();
+    assert.match(typed(writes), /half-typed line/, 'clearing the veto did not release the queued message');
+  });
+});
+
+test('enqueue-and-tick twice writes ONCE — a delivered message leaves the queue', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'exactly once please' });
+
+    await svc.tick();
+    const after1 = writes.length;
+    assert.ok(after1 > 0, 'nothing was delivered at all');
+
+    // Past the per-agent cooldown, so a second write is genuinely un-gated here:
+    // without the queue removal this tick WOULD type the message again.
+    bump(10_000);
+    await svc.tick();
+    assert.equal(writes.length, after1, 'the same queued message was typed in twice');
+    assert.deepEqual(svc.queueSnapshot(), {}, 'a delivered message was left in the queue');
+  });
+});
+
+test('the delivered event names the message AND its text — the /clear gauge depends on it', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, emitted } = harness({ queuePath: () => queuePath });
+    state.inbox.dev1 = [];
+    const { id } = svc.enqueue({ agentId: 'dev1', text: '/clear' });
+
+    await svc.tick();
+
+    // The acknowledge REMOVES the item before this fires, so the renderer cannot
+    // look the text up afterwards — it has to arrive on the event or the context
+    // bar stays stale-full through a session that no longer has that context.
+    assert.deepEqual(
+      emitted.filter((e) => e.channel === 'hive:queueDelivered').map((e) => e.payload),
+      [{ to: 'dev1', id, text: '/clear' }]
+    );
+  });
+});
+
+test('an operator pause holds a queued message, and "send now" releases it', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    state.paused.add('dev1');
+    const { id } = svc.enqueue({ agentId: 'dev1', text: 'held by the floor switch' });
+
+    await svc.tick();
+    assert.equal(writes.length, 0, 'a paused floor delivered anyway');
+
+    svc.releaseQueued('dev1', id);
+    bump(10_000);
+    await svc.tick();
+    assert.match(typed(writes), /held by the floor switch/, '"send now" did not bypass the pause');
+  });
+});
+
+test('the enqueue boundary refuses what it cannot trust', () => {
+  withQueueDir(({ queuePath }) => {
+    const { svc } = harness({
+      queuePath: () => queuePath,
+      emit: () => {},
+      knownAgent: (id) => id === 'dev1'
+    });
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: '   ' }).ok, false, 'an empty message was parked');
+    assert.equal(svc.enqueue({ agentId: '', text: 'hi' }).ok, false, 'a blank agent id was accepted');
+    // T-P08-05: the recipient is resolved against MAIN's roster, not the id a
+    // renderer happened to send.
+    assert.equal(svc.enqueue({ agentId: 'not-on-this-floor', text: 'hi' }).ok, false,
+      'a renderer named an agent that is not on this floor and main typed at it');
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'hi' }).ok, true);
+  });
+});
+
+test('a message enqueued and not yet delivered survives a REAL process restart', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    // 1. Parent: park a message and hold it (the floor is paused, so nothing
+    //    delivers), then assert on the BYTES before any restart. This is the
+    //    assertion a module-level Map cannot pass, and it is deliberately a
+    //    separate, earlier failure point than the reload below.
+    const { svc, state } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    state.paused.add('dev1');
+    const { ok, id } = svc.enqueue({ agentId: 'dev1', text: 'survive the restart' });
+    assert.equal(ok, true);
+
+    assert.equal(fs.existsSync(queuePath), true, 'the queue wrote no bytes to disk at all');
+    const onDisk = fs.readFileSync(queuePath, 'utf8');
+    assert.ok(onDisk.includes(id), `the queue file does not contain ${id}: ${onDisk}`);
+
+    // 2. Restart: a genuinely separate process, a fresh service, the same file.
+    const child = path.join(dir, 'restart-child.cjs');
+    fs.writeFileSync(child, RESTART_CHILD, 'utf8');
+    const res = spawnSync(process.execPath, [child, queuePath], { encoding: 'utf8' });
+    assert.equal(res.status, 0, `restart child exited ${res.status}: ${res.stderr}`);
+
+    // 3. The SPECIFIC message, not merely "the queue is non-empty".
+    assert.deepEqual(JSON.parse(res.stdout), [id],
+      `a fresh process did not read back the parked message (stdout: ${res.stdout})`);
+
+    // NEGATIVE CONTROL. Delete the file and run the same child again: if the
+    // message is still there, it is being served from somewhere that is not the
+    // bytes, and this test has been proving nothing.
+    fs.rmSync(queuePath);
+    const gone = spawnSync(process.execPath, [child, queuePath], { encoding: 'utf8' });
+    assert.equal(gone.status, 0, `negative-control child exited ${gone.status}: ${gone.stderr}`);
+    assert.deepEqual(JSON.parse(gone.stdout), [],
+      'the queue survived deletion of its own file — it is not reading the disk');
+  });
+});
+
+test('the queue is durable across a changed harness home, and bounded per agent', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    let target = queuePath;
+    const { svc, state } = harness({ queuePath: () => target, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'hive one' });
+
+    // The thunk is the point: a path captured at construction would keep writing
+    // the first hive's queue into the second hive's file.
+    target = path.join(dir, 'other-hive-queue.json');
+    assert.deepEqual(svc.queueSnapshot(), {}, 'a second hive was handed the first hive\'s queue');
+    svc.enqueue({ agentId: 'dev1', text: 'hive two' });
+    assert.ok(fs.readFileSync(target, 'utf8').includes('hive two'));
+    assert.ok(fs.readFileSync(queuePath, 'utf8').includes('hive one'), 'the first hive\'s file was clobbered');
+
+    // T-P08-04: an agent with no live PTY must not accumulate forever.
+    for (let i = 0; i < MAX_QUEUED_PER_AGENT; i++) svc.enqueue({ agentId: 'dev1', text: `spam ${i}` });
+    const full = svc.enqueue({ agentId: 'dev1', text: 'one too many' });
+    assert.equal(full.ok, false, 'the queue grew past its ceiling');
+    assert.match(full.error, /queue full/);
+  });
+});
+
+// ─── a queue that cannot be READ is not a queue that is EMPTY (a/CR-05) ──────
+//
+// `loadQueue` armed the write path on EVERY path, including after its `catch`
+// swallowed a failure — while the doc comment three lines above stated the
+// opposite invariant. One EBUSY/EPERM (Windows AV, an indexer) or one EMFILE
+// under load replaced the queue with `[]`, and the next mutation wrote that
+// emptiness over a file that was fine.
+//
+// The disk is the observable throughout. The armed-path field is private and
+// no test below reads it: a service that "looks disarmed" while still writing
+// is exactly the failure being closed.
+
+/** The portable read fault: a DIRECTORY where the queue file should be. EISDIR
+ *  is the win32, linux and darwin answer alike, so one fixture drives the
+ *  non-ENOENT branch on every CI runner. ASSERTED, not assumed — if a platform
+ *  ever answers something else this fails HERE, loudly, instead of silently
+ *  turning every case below into a no-op. */
+function unreadableQueuePath(dir, name) {
+  const p = path.join(dir, name);
+  fs.mkdirSync(p);
+  let code = null;
+  try { fs.readFileSync(p, 'utf8'); } catch (e) { code = e.code; }
+  assert.equal(code, 'EISDIR',
+    `a directory at the queue path did not throw EISDIR on ${process.platform} (got ${code}) — `
+    + 'this fixture no longer drives the non-ENOENT branch and the tests below prove nothing');
+  return p;
+}
+
+test('a queue whose read FAILS leaves the write path disarmed and the persisted bytes intact', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    let target = queuePath;
+    const { svc, state } = harness({ queuePath: () => target, emit: () => {} });
+    state.inbox.dev1 = [];
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'parked before the fault' }).ok, true);
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'parked before the fault as well' }).ok, true);
+    const good = fs.readFileSync(queuePath, 'utf8');
+
+    // The antivirus hold: the next read of the queue throws, and it is NOT ENOENT.
+    target = unreadableQueuePath(dir, 'held-by-the-scanner.json');
+
+    const refused = svc.enqueue({ agentId: 'dev1', text: 'arrived during the hold' });
+    assert.equal(refused.ok, false,
+      'an enqueue was ACCEPTED against a queue whose read had just failed. The write path was armed '
+      + 'BY the failure, so the caller is told its message is parked and the next mutation writes an '
+      + 'empty queue over a file that was fine');
+    assert.match(refused.error, /temporarily unreadable/,
+      `the refusal must name the real cause: ${refused.error}`);
+    assert.equal(/no harness home/.test(refused.error), false,
+      'the operator is told there is no harness home during a transient read fault — plan 01-28 '
+      + 'renders this exact string to the screen unaltered');
+
+    // Nothing was staged or written at the path that could not be read.
+    assert.deepEqual(fs.readdirSync(target), [],
+      'the failed load wrote into the very path it could not read');
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.tmp-')), [],
+      'a persist was staged off a load that never landed');
+
+    // The bytes that WERE durable are untouched, read straight back off disk.
+    assert.equal(fs.readFileSync(queuePath, 'utf8'), good,
+      'the persisted queue was rewritten after a failed read');
+
+    // And the refused message was refused, not buffered for the next mutation.
+    target = queuePath;
+    assert.equal(JSON.stringify(svc.queueSnapshot()).includes('during the hold'), false,
+      'a refused message survived in memory and will be written on the next successful mutation');
+  });
+});
+
+// POSITIVE CONTROL. Without this a loader that NEVER arms passes everything above.
+
+test('a transient read fault is TRANSIENT: the next good read re-arms and one enqueue reaches disk', () => {
+  withQueueDir(({ dir, queuePath }) => {
+    let target = queuePath;
+    const { svc, state } = harness({ queuePath: () => target, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.enqueue({ agentId: 'dev1', text: 'one' });
+    svc.enqueue({ agentId: 'dev1', text: 'two' });
+    const before = JSON.parse(fs.readFileSync(queuePath, 'utf8')).items.length;
+    assert.equal(before, 2);
+
+    target = unreadableQueuePath(dir, 'held-open.json');
+    assert.equal(svc.enqueue({ agentId: 'dev1', text: 'during the hold' }).ok, false);
+
+    target = queuePath; // the scanner lets go
+    const res = svc.enqueue({ agentId: 'dev1', text: 'three' });
+    assert.equal(res.ok, true, `the loader never re-armed — a transient fault became permanent: ${res.error}`);
+
+    const items = JSON.parse(fs.readFileSync(queuePath, 'utf8')).items;
+    assert.equal(items.length, before + 1, 'a healthy enqueue after the fault never reached disk');
+    assert.equal(items.filter((m) => m.text === 'during the hold').length, 0,
+      'a message that was refused during the fault was written to disk anyway');
+    assert.ok(items.some((m) => m.text === 'three'));
+    assert.ok(items.some((m) => m.text === 'one'), 'the pre-fault queue was lost on re-arm');
+  });
+});
+
+// NEGATIVE CONTROLS — the ordinary operations that must still work.
+
+test('ENOENT is a first boot, not a fault: an absent queue still arms and the first enqueue writes it', () => {
+  withQueueDir(({ dir }) => {
+    const fresh = path.join(dir, 'never-written-yet.json');
+    const { svc, state } = harness({ queuePath: () => fresh, emit: () => {} });
+    state.inbox.dev1 = [];
+    assert.equal(fs.existsSync(fresh), false);
+
+    const res = svc.enqueue({ agentId: 'dev1', text: 'first message on a fresh floor' });
+    assert.equal(res.ok, true, `a first boot was treated as a read fault: ${res.error}`);
+
+    const items = JSON.parse(fs.readFileSync(fresh, 'utf8')).items;
+    assert.equal(items.length, 1, 'the first message on a fresh floor never reached disk');
+    assert.equal(items[0].text, 'first message on a fresh floor');
+  });
+});
+
+test('no harness home at all still returns the harness-home refusal — that string stays right for its own case', () => {
+  const { svc, state } = harness(); // queuePath: () => null, the default
+  state.inbox.dev1 = [];
+  const res = svc.enqueue({ agentId: 'dev1', text: 'nowhere durable to put this' });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /no harness home/,
+    `a genuinely homeless floor must still say so: ${res.error}`);
+});
+
+test('a corrupt file is still replaceable: unparseable JSON is an empty queue, and it ARMS', () => {
+  withQueueDir(({ queuePath }) => {
+    fs.writeFileSync(queuePath, '{ not json at all', 'utf8');
+    const { svc, state } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+
+    // Readable-vs-unreadable is the distinction being drawn, NOT valid-vs-invalid:
+    // a file that read fine and parsed badly is genuinely corrupt, and a floor that
+    // could never overwrite it would be wedged forever.
+    const res = svc.enqueue({ agentId: 'dev1', text: 'past the corruption' });
+    assert.equal(res.ok, true, `a corrupt queue file wedged the floor permanently: ${res.error}`);
+    assert.equal(JSON.parse(fs.readFileSync(queuePath, 'utf8')).items.length, 1);
+  });
+});
+
+// VISIBILITY — the row filter is a silent deleter on the first launch after a
+// shape change. It stays a deleter; it stops being silent.
+
+test('rows dropped by the shape filter are COUNTED and logged, not deleted in silence', () => {
+  withQueueDir(({ queuePath }) => {
+    fs.writeFileSync(queuePath, JSON.stringify({
+      version: 1,
+      items: [
+        { id: 'q-1', agentId: 'dev1', text: 'survives', ts: 1 },
+        { id: 'q-2', agentId: 'dev1', ts: 2 },   // a `text` that a shape change renamed
+        { id: 'q-3', agentId: 'dev1', text: 'no ts' }
+      ]
+    }), 'utf8');
+    const logs = [];
+    const { svc, state } = harness({
+      queuePath: () => queuePath, emit: () => {}, log: (...a) => logs.push(a.map(String).join(' '))
+    });
+    state.inbox.dev1 = [];
+
+    assert.equal(Object.values(svc.queueSnapshot()).flat().length, 1);
+    assert.ok(logs.some((l) => /drop/i.test(l) && /2/.test(l)),
+      `a shape change deleted 2 parked messages leaving no trace at all: ${JSON.stringify(logs)}`);
+  });
 });
 
 // ─── board.md size policy (#35) ─────────────────────────────────────────────

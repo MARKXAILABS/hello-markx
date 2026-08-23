@@ -49,7 +49,7 @@ export function TerminalView({ initialLines = [], feed = [] }: TerminalViewProps
     const term = new Terminal({
       theme,
       fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
-      fontSize: 13,
+      fontSize: 14, // was 13. Not carved out: no zoom hook here, so nothing about this size is user-controlled. Number, not a var() — xterm cannot read one.
       lineHeight: 1.0,
       cursorBlink: true,
       cursorStyle: 'block',
@@ -77,6 +77,9 @@ export function TerminalView({ initialLines = [], feed = [] }: TerminalViewProps
       term.dispose();
       termRef.current = null;
     };
+    // Mount-once, deliberately: `initialLines` is the backfill snapshot read at
+    // construction time. Depending on it would dispose and rebuild the xterm on every
+    // new line; the effect below streams later lines in via `writtenCount` instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -108,7 +111,7 @@ export function TerminalView({ initialLines = [], feed = [] }: TerminalViewProps
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         fontFamily: 'var(--cth-font-ui)',
-        fontSize: 12,
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
         color: 'var(--cth-ink-500)',
         borderBottom: '1px dashed var(--cth-ink-300)',
         paddingBottom: 4,

@@ -26,7 +26,10 @@ export function MonacoDiff({ path, original, modified }: MonacoDiffProps) {
         readOnly: true,
         renderSideBySide: true,
         fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
-        fontSize: 12,
+        // DESIGN.md:706 floor. Monaco takes a NUMBER here, not a CSS length, so
+        // this is the token's own value (--cth-text-mono-md 14 / --cth-lh-mono 20)
+        // written as a literal rather than a var() the editor cannot parse.
+        fontSize: 14,
         lineHeight: 20,
         minimap: { enabled: false },
         scrollBeyondLastLine: false,

@@ -6,6 +6,7 @@ import { useStore, type Agent } from '@/store/store';
 import { type HarnessConfig } from '@/store/config';
 import { useRestoreTeam } from '@/hooks/useRestoreTeam';
 import { useFleetTelemetry } from '@/hooks/useTelemetry';
+import { useHiveTasks } from '@/hooks/useHiveTasks';
 import { groupKey, matchesAgentQuery, useAgentGroups } from './agentGroups';
 
 /** Above this many agents the strip stops being scannable, so it grows a filter
@@ -71,28 +72,24 @@ export function AgentStrip({ config }: AgentStripProps) {
   // strip clips overflow and the compact cards have no room for an inline box.
   const [noteEditId, setNoteEditId] = useState<string | null>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  // Each worker's actively-DOING ledger tasks, polled from hive/tasks.json —
+  // Each worker's actively-DOING ledger tasks, read from hive/tasks.json —
   // rendered as a sticky note on the avatar card (click → task detail).
-  const [doingByAgent, setDoingByAgent] = useState<Record<string, string[]>>({});
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const raw = await window.cth.hiveTasks() as { tasks?: Array<{ id?: string; status?: string; assignee?: string }> } | null;
-        if (cancelled) return;
-        const map: Record<string, string[]> = {};
-        for (const t of (raw && Array.isArray(raw.tasks)) ? raw.tasks : []) {
-          if (t?.status === 'doing' && typeof t.assignee === 'string' && t.assignee && typeof t.id === 'string') {
-            (map[t.assignee] = map[t.assignee] ?? []).push(t.id);
-          }
-        }
-        setDoingByAgent(map);
-      } catch { /* keep last good */ }
-    };
-    void poll();
-    const iv = setInterval(() => { void poll(); }, 5000);
-    return () => { cancelled = true; clearInterval(iv); };
-  }, []);
+  //
+  // Shares the renderer's ONE task poll (hooks/useHiveTasks) rather than running
+  // a sixth 5s timer against the same file (#20). Nothing here mutates the
+  // ledger, so this is pure derivation — no local copy of the state to keep in
+  // step, and the parser below is the same one the timer used.
+  const rawTasks = useHiveTasks();
+  const doingByAgent = useMemo<Record<string, string[]>>(() => {
+    const raw = rawTasks as { tasks?: Array<{ id?: string; status?: string; assignee?: string }> } | null;
+    const map: Record<string, string[]> = {};
+    for (const t of (raw && Array.isArray(raw.tasks)) ? raw.tasks : []) {
+      if (t?.status === 'doing' && typeof t.assignee === 'string' && t.assignee && typeof t.id === 'string') {
+        (map[t.assignee] = map[t.assignee] ?? []).push(t.id);
+      }
+    }
+    return map;
+  }, [rawTasks]);
   // One roster card + its drag wrapper + its note-editor popover. Pulled out
   // of the render so gods and each repo group can call it without three copies
   // of the same eighty lines.
@@ -173,7 +170,11 @@ export function AgentStrip({ config }: AgentStripProps) {
       {noteEditId === a.id && !dragId && (() => {
         const rect = cardRefs.current[a.id]?.getBoundingClientRect();
         if (!rect) return null;
-        const width = 280;
+        // Containment, step 2: 'PRIVATE NOTE · <NAME>' is ~22 characters, and
+        // Press Start 2P at the 14px floor measures ~1em per character — 308px
+        // against the 260px of content this popover used to offer. Widened by
+        // the measured delta so the header still sits on one line.
+        const width = 340;
         const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
         const bottom = Math.max(8, window.innerHeight - rect.top + 8);
         return (
@@ -196,7 +197,8 @@ export function AgentStrip({ config }: AgentStripProps) {
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{
-                  fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+                  fontFamily: 'var(--cth-font-display)',
+                  fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
                   color: 'var(--cth-ink-500)'
                 }}>PRIVATE NOTE · {a.name.toUpperCase()}</span>
                 <button
@@ -206,11 +208,15 @@ export function AgentStrip({ config }: AgentStripProps) {
                   style={{
                     flexShrink: 0, width: 18, height: 18, padding: 0, lineHeight: 1,
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                    fontFamily: 'var(--cth-font-ui)',
                     color: 'var(--cth-ink-500)', background: 'transparent',
                     border: 'none', cursor: 'pointer'
                   }}
-                >✕</button>
+                >
+                  {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH; the
+                      button keeps its accessible name and stays focusable. */}
+                  <span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>
+                </button>
               </div>
               {/* A textarea, not an input: the note is a bullet list (one
                   line per bullet) and the fullscreen roster renders every
@@ -228,11 +234,15 @@ export function AgentStrip({ config }: AgentStripProps) {
                   border: 'none', outline: 'none', resize: 'none', boxSizing: 'border-box',
                   background: 'var(--cth-cream-100)',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                  fontFamily: 'var(--cth-font-mono)', fontSize: 12,
-                  lineHeight: '18px', color: 'var(--cth-ink-900)'
+                  fontFamily: 'var(--cth-font-mono)',
+                  fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
+                  color: 'var(--cth-ink-900)'
                 }}
               />
-              <span style={{ fontSize: 10, color: 'var(--cth-ink-500)' }}>
+              <span style={{
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                color: 'var(--cth-ink-500)'
+              }}>
                 one line = one bullet · esc to close
               </span>
             </div>
@@ -254,8 +264,11 @@ export function AgentStrip({ config }: AgentStripProps) {
       background: 'var(--cth-cream-200)',
       // Tall enough for the god card to stand proud of the row (it's taller and
       // rides a drop shadow) plus the hover-lift on every card, without clipping.
-      height: 112,
-      minHeight: 112,
+      // FLOOR-12 containment, step 2: AgentCard grew a measured +8px, so this
+      // grows by the same +8 (112 -> 120) and the card's lift headroom is
+      // unchanged. Nothing was reflowed to fit.
+      height: 120,
+      minHeight: 120,
       alignItems: 'center'
     }}>
       {/* Filter first: with a fleet this size the strip is a horizontal
@@ -273,11 +286,15 @@ export function AgentStrip({ config }: AgentStripProps) {
               width: 132, padding: '5px 8px',
               background: 'var(--cth-paper-100)', border: 'none',
               boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-              fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+              fontFamily: 'var(--cth-font-ui)',
+              fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
               color: 'var(--cth-ink-900)', outline: 'none'
             }}
           />
-          <span style={{ fontSize: 11, lineHeight: '14px', color: 'var(--cth-ink-500)' }}>
+          <span style={{
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+            color: 'var(--cth-ink-500)'
+          }}>
             {shown.length === agents.length
               ? `${agents.length} agents`
               : `${shown.length} of ${agents.length}`}
@@ -288,7 +305,7 @@ export function AgentStrip({ config }: AgentStripProps) {
       {groups.map((g) => (
         <Fragment key={g.key}>
           {/* The repo this run of cards belongs to. Vertical because the strip
-              is 112px tall and a horizontal header would cost a card slot;
+              is 120px tall and a horizontal header would cost a card slot;
               the divider is what actually separates the runs. A single-repo
               floor needs no label — there is nothing to tell apart. */}
           {groups.length > 1 && (
@@ -298,9 +315,13 @@ export function AgentStrip({ config }: AgentStripProps) {
               title={g.key}
               style={{
                 writingMode: 'vertical-rl', transform: 'rotate(180deg)',
-                fontFamily: 'var(--cth-font-display)', fontSize: 8, letterSpacing: 0.5,
+                fontFamily: 'var(--cth-font-display)',
+                fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+                letterSpacing: 0.5,
                 color: 'var(--cth-ink-500)',
-                maxHeight: 84, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'
+                // Tracks the strip's content box (120 minus 28px of padding); the
+                // label still truncates with an ellipsis rather than wrapping.
+                maxHeight: 92, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'
               }}
             >{g.label.toUpperCase()}</span>
           </div>
@@ -312,7 +333,11 @@ export function AgentStrip({ config }: AgentStripProps) {
           already reads as empty, and "no agent matches" with nothing in the box
           would be answering a question nobody asked. */}
       {shown.length === 0 && agents.length > 0 && (
-        <span style={{ flexShrink: 0, fontSize: 13, color: 'var(--cth-ink-500)' }}>
+        <span style={{
+          flexShrink: 0,
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+          color: 'var(--cth-ink-500)'
+        }}>
           no agent matches “{filter.trim()}”
         </span>
       )}
@@ -368,7 +393,8 @@ export function AgentStrip({ config }: AgentStripProps) {
             fontFamily: 'var(--cth-font-ui)'
           }}>
             <span style={{
-              fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+              fontFamily: 'var(--cth-font-display)',
+              fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
               color: 'var(--cth-ink-500)', textTransform: 'uppercase'
             }}>
               previous session
@@ -383,7 +409,8 @@ export function AgentStrip({ config }: AgentStripProps) {
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
                   height: 26, padding: '0 4px 0 8px',
-                  fontSize: 12, color: 'var(--cth-ink-900)',
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                  color: 'var(--cth-ink-900)',
                   background: 'var(--cth-paper-100)',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
                 }}
@@ -391,7 +418,10 @@ export function AgentStrip({ config }: AgentStripProps) {
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {a.name}
                 </span>
-                <span style={{ fontSize: 11, color: 'var(--cth-ink-500)', whiteSpace: 'nowrap' }}>
+                <span style={{
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                  color: 'var(--cth-ink-500)', whiteSpace: 'nowrap'
+                }}>
                   {a.description ? a.description.slice(0, 24) : ''}
                 </span>
                 <button
@@ -401,10 +431,14 @@ export function AgentStrip({ config }: AgentStripProps) {
                   style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     width: 18, height: 18, padding: 0, lineHeight: 1,
-                    fontSize: 12, color: 'var(--cth-ink-500)',
+                    color: 'var(--cth-ink-500)',
                     background: 'transparent', border: 'none', cursor: 'pointer'
                   }}
-                >✕</button>
+                >
+                  {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH; the
+                      button keeps its accessible name and stays focusable. */}
+                  <span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>
+                </button>
               </span>
             ))}
             <PixelButton

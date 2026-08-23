@@ -81,6 +81,9 @@ export function GitTab({ cwd }: GitTabProps) {
     // Poll the working-tree status every 4s so freshly-edited files show up.
     const id = window.setInterval(refresh, 4000);
     return () => window.clearInterval(id);
+    // Keyed on `cwd` alone, deliberately: `refresh` is redefined on every render, so
+    // depending on it would clear and re-create this 4s poll every time the component
+    // re-renders — which is once per poll, because the poll itself sets state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd]);
 
@@ -112,7 +115,8 @@ export function GitTab({ cwd }: GitTabProps) {
         borderBottom: '1px solid var(--cth-ink-700)'
       }}>
         <span style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+          lineHeight: 'var(--cth-lh-display-md)',
           padding: '2px 6px',
           background: 'var(--cth-sky-light)',
           boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
@@ -121,7 +125,7 @@ export function GitTab({ cwd }: GitTabProps) {
           {detached ? 'DETACHED HEAD' : (branch ?? '—')}
         </span>
         {upstream && (
-          <span style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
+          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
             ↑ {ahead} ↓ {behind} · {upstream}
           </span>
         )}
@@ -137,7 +141,8 @@ export function GitTab({ cwd }: GitTabProps) {
           padding: '4px 10px',
           background: 'var(--cth-coral-light)',
           color: 'var(--cth-ink-900)',
-          fontSize: 12,
+          fontSize: 'var(--cth-text-body-md)',
+          lineHeight: 'var(--cth-lh-body-md)',
           borderBottom: '1px solid var(--cth-coral)'
         }}>{error}</div>
       )}
@@ -153,7 +158,8 @@ export function GitTab({ cwd }: GitTabProps) {
               <StatusGroup label="untracked" entries={status.untracked.map(p => ({ path: p, code: '?' }))} />
               {status.staged.length === 0 && status.unstaged.length === 0 && status.untracked.length === 0 && (
                 <div style={{
-                  padding: '4px 12px', color: 'var(--cth-ink-500)', fontSize: 13
+                  padding: '4px 12px', color: 'var(--cth-ink-500)',
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)'
                 }}>working tree clean</div>
               )}
             </>
@@ -166,7 +172,7 @@ export function GitTab({ cwd }: GitTabProps) {
             <div style={{ padding: '0 8px 8px', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
               {branches.local.map(b => (
                 <span key={`l-${b}`} style={{
-                  padding: '0 6px', fontSize: 12,
+                  padding: '0 6px', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   background: b === branch ? 'var(--cth-lemon)' : 'var(--cth-cream-100)',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
                   color: 'var(--cth-ink-900)'
@@ -174,7 +180,7 @@ export function GitTab({ cwd }: GitTabProps) {
               ))}
               {branches.remote.map(b => (
                 <span key={`r-${b}`} style={{
-                  padding: '0 6px', fontSize: 12,
+                  padding: '0 6px', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   background: 'var(--cth-cream-100)',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
                   color: 'var(--cth-ink-500)',
@@ -191,7 +197,10 @@ export function GitTab({ cwd }: GitTabProps) {
         {/* Graph */}
         <Section title="log">
           {log.length > 0 ? <CommitGraph commits={log} currentBranch={branch} /> : (
-            <div style={{ padding: 12, color: 'var(--cth-ink-500)', fontSize: 12 }}>no commits yet</div>
+            <div style={{
+              padding: 12, color: 'var(--cth-ink-500)',
+              fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)'
+            }}>no commits yet</div>
           )}
         </Section>
       </div>
@@ -203,7 +212,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div style={{ marginBottom: 4 }}>
       <div style={{
-        fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+        fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+        lineHeight: 'var(--cth-lh-display-md)',
         textTransform: 'uppercase',
         color: 'var(--cth-ink-700)',
         padding: '8px 10px 4px',
@@ -223,14 +233,15 @@ function StatusGroup({ label, entries }: {
   return (
     <div style={{ padding: '4px 0' }}>
       <div style={{
-        padding: '0 12px', fontSize: 11, color: 'var(--cth-ink-500)',
+        padding: '0 12px', fontSize: 'var(--cth-text-body-md)',
+        lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)',
         textTransform: 'uppercase', letterSpacing: 0
       }}>{label}</div>
       {entries.map(e => (
         <div key={`${label}-${e.path}-${e.code}`} style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '2px 12px',
-          fontSize: 12, color: 'var(--cth-ink-900)'
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
         }}>
           <span style={{
             display: 'inline-block', width: 14, textAlign: 'center',
@@ -240,9 +251,12 @@ function StatusGroup({ label, entries }: {
           }}>{e.code === ' ' ? '·' : e.code}</span>
           <span style={{
             flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            fontFamily: 'var(--cth-font-mono)', fontSize: 13
+            fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)',
+            lineHeight: 'var(--cth-lh-mono)'
           }} title={e.path}>{e.path}</span>
-          <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>{statusLabel(e.code)}</span>
+          <span style={{
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
+          }}>{statusLabel(e.code)}</span>
           <button
             onClick={() => navigator.clipboard.writeText(e.path).catch(() => {})}
             title="Copy path"

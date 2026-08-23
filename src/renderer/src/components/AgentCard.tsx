@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { PixelPanel } from './PixelPanel';
 import { PixelBadge, StatusKind } from './PixelBadge';
 import { useHasTerminalDraft } from './terminalPool';
@@ -7,6 +7,9 @@ import { RealtimeMichaelToggle } from './RealtimeMichaelToggle';
 import { CostHud } from '@/realtime/CostHud';
 import { AccentColorName } from '@/design/tokens';
 import { OfficeCharacterName } from '@/scene/office/cast';
+import { useStore } from '@/store/store';
+import { agentRowForCard, isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
+import { shortModel } from './FullscreenTerminal';
 
 export interface AgentCardProps {
   name: string;
@@ -54,6 +57,27 @@ export interface AgentCardProps {
 }
 
 const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
+
+/**
+ * The widest the model chip may be, in px.
+ *
+ * A NAMED constant rather than a fifth anonymous literal in the same span,
+ * because the chip's own comment says it is "sized from a token so wave 6's
+ * sweep has no literal to chase" — and because this file's four other bounded
+ * elements already carry `maxWidth`/`overflow`/`textOverflow`, so only a name
+ * says which one was the fix.
+ *
+ * The subtraction, against this card's own arithmetic (see `const width = 322`
+ * below): the right column is 322 − 16 (panel padding) − 36 (portrait) − 8 (gap)
+ * ≈ 262px. The context row spends that on the flexible `infoLine`
+ * (`flex: 1, minWidth: 0`), this chip, an optional cost chip, the account chip
+ * (`maxWidth: 76`) and `gap: 5` between them. Worst case with an account pinned:
+ * 262 − 76 − 15 (three gaps) = 171px shared by `infoLine` and this chip, so 96
+ * here leaves `infoLine` ~75px — a truncated project name, which is the designed
+ * response to horizontal growth. Not `'52%'`: that value was copied from
+ * `FullscreenTerminal.tsx`'s roster row, where 52% is 52% of a much wider box.
+ */
+const MODEL_CHIP_MAX_W = 96;
 
 /**
  * v0.3.4 compact redesign: one identity row (name + status), one context line
@@ -107,8 +131,23 @@ export function AgentCard({
   // that gets cut. Widened for every card so the dock stays uniform, with enough
   // slack that Talk's info mark (which only appears when the OpenAI key is
   // missing) has somewhere to sit rather than pushing the row apart.
-  const width = 220;
-  const height = 78;
+  // FLOOR-12 containment, step 2 — MEASURED in a running Electron window, not
+  // estimated. At the 14px floor a four-character Press Start 2P chip is 64px
+  // wide (56 + 8 of padding), and the god card's identity row carries two of
+  // them. Measured at 220px: MICHAEL 64px intrinsic, BOSS 64, AUTO 64, the
+  // `idle` badge 54, gaps 5+5+6 — 262px of content against 160px of column,
+  // and because the name is the row's only flexible item it absorbed the whole
+  // deficit and rendered at ZERO width. A card with no name on it is not
+  // truncation, it is a dropped field, and the e2e smoke caught it. The card
+  // widens by the measured 102px so the name survives; a longer status label
+  // ('compacting') still truncates it with an ellipsis, which is the designed
+  // response to horizontal growth.
+  const width = 322;
+  // FLOOR-12 containment, step 2: the 14px floor grew this card's content from
+  // 63px to 71px (context row 18->20, note row 14->20), measured. The container
+  // moves by the same +8 so the original 3px of slack survives the bump rather
+  // than being spent on it. Nothing was reflowed, moved or dropped to fit.
+  const height = 86;
   const lift = (isGod ? -2 : 0) - (hover ? 1 : 0) - (selected ? 1 : 0);
   /** God's distinction: a tinted surface plus a thin accent border all the way
    *  around — NOT the 3px rule that used to sit on the top edge alone. That rule
@@ -133,6 +172,17 @@ export function AgentCard({
   const infoLine = (status !== 'idle' && action) ? action : project;
   const noteFirstLine = (note ?? '').split('\n').find((l) => l.trim()) ?? '';
 
+  // FLOOR-01 - does this agent act without asking for tool approval?
+  //
+  // The card is presentational: it is handed display props, never an agent id,
+  // and provider/command/model live on the store row. So it resolves its own row
+  // the same way useHasTerminalDraft above already keys off ptyId, and calls the
+  // ONE shared derivation the fullscreen roster row and the command-centre row
+  // also call. Three copies of a safety rule are three chances to start lying.
+  const row = useStore((s) => agentRowForCard(s.agents, ptyId, name));
+  const liveAutoMode = useSyncExternalStore(subscribeLiveAutoMode, getLiveAutoMode, getLiveAutoMode);
+  const autoMode = isAutoModeAgent(row?.provider, row?.command, liveAutoMode);
+
   return (
     // A <div role="button">, not a <button>. The card carries THREE other
     // controls inside it — the task sticky note, the ✎ note editor, and (on
@@ -152,7 +202,10 @@ export function AgentCard({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       draggable={draggable}
-      aria-label={`${name}${isGod ? ' (boss)' : ''} — ${status}`}
+      // An aria-label on this container REPLACES all inner text for a screen
+      // reader, so the AUTO chip below is silent unless the state is folded in
+      // here. The chip is aria-hidden for the same reason: announced once, here.
+      aria-label={`${name}${isGod ? ' (boss)' : ''} — ${status}${autoMode ? ` — Auto mode — ${name} runs with permissions bypassed` : ''}`}
       // The ring is the visual answer to "which terminal is open"; this is the
       // same answer for a screen reader. Matches SidebarRow in fullscreen.
       aria-current={selected ? 'true' : undefined}
@@ -177,12 +230,17 @@ export function AgentCard({
           style={{
             position: 'absolute', right: -4, bottom: -5, zIndex: 2,
             border: 'none', padding: 0,
-            width: 20, height: 18,
+            // Containment: a two-digit count at the 14px floor measures 28px
+            // against 16px at the old 8px size, so the note widens by the same
+            // delta and its height tracks the 20px display line box.
+            width: 30, height: 20,
             background: 'var(--cth-sky)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300), 1px 2px 0 rgba(26,19,32,0.18)',
             transform: 'rotate(4deg)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: 'var(--cth-font-display)', fontSize: 8, color: 'var(--cth-ink-900)',
+            fontFamily: 'var(--cth-font-display)',
+            fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+            color: 'var(--cth-ink-900)',
             cursor: 'pointer'
           }}
         >
@@ -216,19 +274,42 @@ export function AgentCard({
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between', minWidth: 0 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
                 <span style={{
-                  fontFamily: 'var(--cth-font-display)',
-                  fontSize: 'var(--cth-text-display-sm)',
-                  lineHeight: 'var(--cth-lh-display-sm)',
+                  fontFamily: 'var(--cth-font-ui)',
+                  fontSize: 'var(--cth-text-body-md)',
+                  lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-900)',
                   flex: 1, minWidth: 0,
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                 }}>{name.toUpperCase()}</span>
                 {isGod && (
                   <span style={{
-                    fontFamily: 'var(--cth-font-display)', fontSize: 7, lineHeight: '11px',
+                    fontFamily: 'var(--cth-font-display)',
+                    fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
                     background: `var(--cth-${accent})`, color: 'var(--cth-ink-900)',
                     padding: '1px 4px 0', flexShrink: 0
                   }}>BOSS</span>
+                )}
+                {/* FLOOR-01 - auto mode. The BOSS chip's exact shape (same
+                    padding, same flexShrink) in lilac with a hairline, so it
+                    can never be mistaken for the PixelBadge status chip beside
+                    it. aria-hidden: the card's own aria-label already carries
+                    the state, and announcing it twice is worse than once. An
+                    INDICATOR - not focusable, not clickable, no role. Written at
+                    the token, not a literal size, so wave 6's raise sweeps it. */}
+                {autoMode && (
+                  <span
+                    aria-hidden="true"
+                    title={`Auto mode: ${name} acts without asking for tool approval.`}
+                    style={{
+                      fontFamily: 'var(--cth-font-display)',
+                      fontSize: 'var(--cth-text-display-md)',
+                      lineHeight: 'var(--cth-lh-display-md)',
+                      background: 'var(--cth-lilac-light)',
+                      boxShadow: 'inset 0 0 0 1px var(--cth-lilac)',
+                      color: 'var(--cth-ink-900)',
+                      padding: '1px 4px 0', flexShrink: 0
+                    }}
+                  >AUTO</span>
                 )}
               </span>
               {/* flexShrink:0 — the badge is a fixed 2-to-5 character chip; when
@@ -242,14 +323,39 @@ export function AgentCard({
                 Claude pool-account chip when this agent is pinned to one. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
               <div
-                title={`${project}${action && status !== 'idle' ? ` — ${action}` : ''}${accountLabel ? ` · account: ${accountLabel}` : ''}`}
+                title={`${project}${action && status !== 'idle' ? ` — ${action}` : ''}${row?.model ? ` · model: ${row.model}` : ''}${accountLabel ? ` · account: ${accountLabel}` : ''}`}
                 style={{
                   flex: 1, minWidth: 0,
-                  fontSize: 11, lineHeight: '14px',
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-500)',
                   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                 }}
               >{infoLine}</div>
+              {/* FLOOR-13 field 5 — the model. The fullscreen roster row and the
+                  command-centre row have always shown it and the card has not, so
+                  the three renderings disagreed about what an agent IS. Same
+                  shortModel() the roster row uses, imported rather than copied:
+                  two copies of a formatter are two ways to render one id.
+                  Sized from a token so wave 6's sweep has no literal to chase.
+                  Bounded on all three axes its sibling row is bounded on
+                  (FullscreenTerminal.tsx's roster row, where this chip came
+                  from, and infoLine six lines above): the chip is flexShrink: 0
+                  and 'Gemini 3.1 Pro (High)' is 21 unshrinkable characters, so
+                  without a maxWidth it takes the width out of infoLine — the
+                  row's only flexible item — and reproduces the exact defect this
+                  card was widened 220->322 to fix. The title carries the full
+                  model id, so the ellipsis loses nothing. */}
+              <span
+                title={row?.model ? `Model: ${row.model}` : 'Runs the CLI default model'}
+                style={{
+                  flexShrink: 0,
+                  maxWidth: MODEL_CHIP_MAX_W,
+                  fontSize: 'var(--cth-text-body-sm)',
+                  lineHeight: 'var(--cth-lh-body-sm)',
+                  color: 'var(--cth-ink-500)',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                }}
+              >{shortModel(row?.model) ?? 'CLI default'}</span>
               {/* Cost before the account chip: money is the thing being asked
                   about, the account is context for it. Hidden until telemetry
                   reports a non-zero spend — "$0.00" on a fresh agent is noise. */}
@@ -259,7 +365,7 @@ export function AgentCard({
                   style={{
                     flexShrink: 0,
                     fontFamily: 'var(--cth-font-mono)',
-                    fontSize: 10, lineHeight: '13px',
+                    fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                     color: 'var(--cth-ink-700)'
                   }}
                 >${usd.toFixed(2)}</span>
@@ -269,7 +375,7 @@ export function AgentCard({
                   title={`Claude account: ${accountLabel}`}
                   style={{
                     flexShrink: 0, maxWidth: 76,
-                    fontSize: 9, lineHeight: '13px', padding: '0 4px',
+                    fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', padding: '0 4px',
                     background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
                     color: 'var(--cth-ink-700)',
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
@@ -305,7 +411,8 @@ export function AgentCard({
                   <span
                     title={note}
                     style={{
-                      flex: 1, minWidth: 0, fontSize: 10.5, lineHeight: '14px',
+                      flex: 1, minWidth: 0,
+                      fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                       color: 'var(--cth-ink-500)', fontStyle: 'italic',
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                     }}
@@ -321,11 +428,18 @@ export function AgentCard({
                       background: 'transparent', border: 'none', padding: 0,
                       flexShrink: 0, width: 15, height: 14,
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 10, lineHeight: 1, cursor: 'pointer',
+                      lineHeight: 1, cursor: 'pointer',
                       // Quiet until the card is hovered — discoverable, not noisy.
                       color: hover ? 'var(--cth-ink-500)' : 'var(--cth-ink-300)'
                     }}
-                  >✎</button>
+                  >
+                    {/* FLOOR-12 Rule 0: a decorative glyph, exempt from the 14px
+                        floor and hidden from the a11y tree. aria-hidden goes on
+                        the GLYPH, never on the button — the button is focusable,
+                        and hiding a focusable element leaves a screen-reader user
+                        tabbing to a control with no name at all. */}
+                    <span aria-hidden="true" style={{ fontSize: 10 }}>✎</span>
+                  </button>
                 )}
               </div>
             )}

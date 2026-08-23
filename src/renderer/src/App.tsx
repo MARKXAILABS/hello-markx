@@ -23,6 +23,8 @@ import { PixelPanel } from '@/components/PixelPanel';
 import { PixelButton } from '@/components/PixelButton';
 import { Icon } from '@/components/Icon';
 import { SidebarSplitter } from '@/components/SidebarSplitter';
+import { setLiveAutoMode } from '@/store/autoMode';
+import { sidebarLayout } from '@/store/sidebarLayout';
 import { acquireTerminal } from '@/components/terminalPool';
 import { FullscreenTerminal } from '@/components/FullscreenTerminal';
 import { TaskDetailOverlay } from '@/components/TaskDetailOverlay';
@@ -75,6 +77,9 @@ export function App() {
   const [quitWarn, setQuitWarn] = useState<{ ptyCount: number } | null>(null);
   const [closing, setClosing] = useState<ClosingTimeState | null>(null);
   const [vpWidth, setVpWidth] = useState<number>(window.innerWidth);
+  /** Is the collapsed sidebar showing as an overlay? Only consulted below 1024;
+   *  starts closed, so a narrow window opens on a full-width floor. */
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Deep link into Settings from anywhere in the tree. Settings' open state is
   // local to App, so a nested control (e.g. "set it now" beside a disabled Talk
@@ -226,6 +231,15 @@ export function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // FLOOR-01 - publish the floor's global auto-mode toggle for the three agent
+  // renderings. The agent card is fed flat display props by AgentStrip and has
+  // no path to `config`, and the command-centre row keeps its own copy - three
+  // routes to one boolean is how a safety indicator starts disagreeing with
+  // itself. One publisher here, one module (store/autoMode.ts), three readers.
+  // Only the opencode arm of the derivation consults it; every other provider
+  // answers from the agent's own command string and ignores this entirely.
+  useEffect(() => { setLiveAutoMode(!!config?.autoMode); }, [config?.autoMode]);
+
   if (!config) {
     return <div style={{ width: '100vw', height: '100vh', background: 'var(--cth-cream-100)' }} />;
   }
@@ -241,6 +255,60 @@ export function App() {
   if (!hiveOpened) {
     return <HivePicker config={config} onOpenCurrent={() => setHiveOpened(true)} />;
   }
+
+  // FLOOR-13 — one pure function decides the whole collapse, off the vpWidth
+  // state that already exists. No media-query listener, no CSS breakpoint: a
+  // second source of viewport truth is how this drifts out of step with the
+  // splitter clamp.
+  const layout = sidebarLayout(vpWidth, sidebarWidth, sidebarOpen);
+
+  /** The sidebar's contents. ONE definition, rendered either as the right column
+   *  (>=1024) or as an overlay over the canvas (<1024) — not two copies that can
+   *  drift. #12: the detail panel and the command center render ledger cards, git
+   *  status and trigger history, all of it agent-authored, so a throw in there
+   *  costs the sidebar rather than the window. */
+  const sidebarPanel = (
+    <ErrorBoundary label="This panel">
+    {agent ? (
+      <AgentDetailPanel agent={agent} />
+    ) : godStatus === 'booting' ? (
+      <PixelPanel variant="default" noPadding style={{
+        padding: 16, height: '100%',
+        display: 'flex', flexDirection: 'column',
+        justifyContent: 'center', alignItems: 'center', gap: 12
+      }}>
+        <div style={{
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+          color: 'var(--cth-ink-500)'
+        }}>WAKING THE FLOOR</div>
+        <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', textAlign: 'center', color: 'var(--cth-ink-700)' }}>
+          Michael is clocking in.<br />
+          The terminal will land here once he's seated.
+        </p>
+      </PixelPanel>
+    ) : (
+      <PixelPanel variant="default" noPadding style={{
+        padding: 16, height: '100%',
+        display: 'flex', flexDirection: 'column',
+        justifyContent: 'center', alignItems: 'center', gap: 12
+      }}>
+        <div style={{
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+          color: 'var(--cth-ink-500)'
+        }}>NO AGENT SELECTED</div>
+        <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', textAlign: 'center', color: 'var(--cth-ink-700)' }}>
+          Spawn an agent from the strip below.<br />
+          The terminal and command bar will land here.
+        </p>
+        <PixelButton variant="secondary" size="md" onClick={() => setAddAgentOpen(true)}>
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <Icon name="plus" /> add agent
+          </span>
+        </PixelButton>
+      </PixelPanel>
+    )}
+    </ErrorBoundary>
+  );
 
   return (
     <div style={{
@@ -279,7 +347,8 @@ export function App() {
         <UpdateBadge />
         <span style={{
           fontFamily: 'var(--cth-font-ui)',
-          fontSize: 13,
+          fontSize: 'var(--cth-text-body-md)',
+          lineHeight: 'var(--cth-lh-body-md)',
           color: 'var(--cth-ink-500)'
         }}>
           {config.autoMode ? 'auto mode on' : 'auto mode off'}
@@ -306,7 +375,7 @@ export function App() {
             background: 'var(--cth-paper-100)',
             boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
             border: 'none', borderRadius: 2, cursor: 'pointer',
-            color: 'var(--cth-ink-900)', fontSize: 13, lineHeight: 1
+            color: 'var(--cth-ink-900)', fontSize: 'var(--cth-text-body-md)', lineHeight: 1
           }}
         >
           {appThemeNow === 'dark' ? '☀' : '☾'}
@@ -384,14 +453,14 @@ export function App() {
               <div style={{ pointerEvents: 'auto', width: 400 }}>
                 <PixelPanel variant="dialog" title="MICHAEL DIDN'T CLOCK IN" noPadding>
                   <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: '20px' }}>
+                    <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
                       The floor is empty because the agent CLI never launched — usually
                       because the engine picked during onboarding isn&rsquo;t installed on
                       this machine.
                     </p>
                     {godError && (
                       <div style={{
-                        fontFamily: 'var(--cth-font-mono)', fontSize: 12, lineHeight: '18px',
+                        fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                         color: 'var(--cth-ink-900)', background: 'var(--cth-coral-light)',
                         padding: '6px 8px', boxShadow: 'inset 0 0 0 1px var(--cth-coral)',
                         maxHeight: 120, overflow: 'auto', overflowWrap: 'anywhere'
@@ -427,7 +496,7 @@ export function App() {
               <div style={{ pointerEvents: 'auto', width: 360 }}>
                 <PixelPanel variant="dialog" title="EMPTY FLOOR" noPadding>
                   <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: '20px' }}>
+                    <p style={{ margin: 0, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
                       No agents on the floor yet. Spawn one to see real claude output stream in here.
                     </p>
                     <PixelButton variant="primary" size="md" onClick={() => setAddAgentOpen(true)}>
@@ -440,63 +509,77 @@ export function App() {
               </div>
             </div>
           )}
-        </div>
-
-        <SidebarSplitter
-          width={sidebarWidth}
-          onChange={setSidebarWidth}
-          viewportWidth={vpWidth}
-        />
-
-        <div style={{
-          width: sidebarWidth, flexShrink: 0,
-          minHeight: 0, display: 'flex', flexDirection: 'column'
-        }}>
-          {/* #12 — the sidebar is the other half worth saving: the detail panel
-              and the command center render ledger cards, git status and trigger
-              history, all of it agent-authored. A throw in there now costs the
-              sidebar, not the window. */}
-          <ErrorBoundary label="This panel">
-          {agent ? (
-            <AgentDetailPanel agent={agent} />
-          ) : godStatus === 'booting' ? (
-            <PixelPanel variant="default" noPadding style={{
-              padding: 16, height: '100%',
-              display: 'flex', flexDirection: 'column',
-              justifyContent: 'center', alignItems: 'center', gap: 12
+          {/* FLOOR-13 — below 1024 the sidebar floats OVER the canvas instead of
+              taking a column of it. z-index 2 is DESIGN.md:686's drawer/sidebar
+              layer; layer 3 is toasts, and borrowing it would manufacture exactly
+              the doc/code contradiction criterion 1 bans. The width is COMPUTED
+              and never written back through the store's width setter — persisting a
+              small-window width is what strands the user's chosen width on the
+              next large-window boot. */}
+          {layout.showOverlay && (
+            <div style={{
+              position: 'absolute', top: 0, right: 0, bottom: 0,
+              width: layout.overlayWidth,
+              zIndex: 2,
+              minHeight: 0, display: 'flex', flexDirection: 'column',
+              background: 'var(--cth-cream-100)',
+              boxShadow: '-2px 0 0 0 var(--cth-ink-300)'
             }}>
-              <div style={{
-                fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
-                color: 'var(--cth-ink-500)'
-              }}>WAKING THE FLOOR</div>
-              <p style={{ margin: 0, fontSize: 13, textAlign: 'center', color: 'var(--cth-ink-700)' }}>
-                Michael is clocking in.<br />
-                The terminal will land here once he's seated.
-              </p>
-            </PixelPanel>
-          ) : (
-            <PixelPanel variant="default" noPadding style={{
-              padding: 16, height: '100%',
-              display: 'flex', flexDirection: 'column',
-              justifyContent: 'center', alignItems: 'center', gap: 12
-            }}>
-              <div style={{
-                fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '14px',
-                color: 'var(--cth-ink-500)'
-              }}>NO AGENT SELECTED</div>
-              <p style={{ margin: 0, fontSize: 13, textAlign: 'center', color: 'var(--cth-ink-700)' }}>
-                Spawn an agent from the strip below.<br />
-                The terminal and command bar will land here.
-              </p>
-              <PixelButton variant="secondary" size="md" onClick={() => setAddAgentOpen(true)}>
-                <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                  <Icon name="plus" /> add agent
-                </span>
-              </PixelButton>
-            </PixelPanel>
+              {sidebarPanel}
+            </div>
           )}
-          </ErrorBoundary>
+          {/* Rendered AFTER the overlay in the same stacking context, so DOM order
+              keeps it clickable above it. Above 1024 it is not in the tree at all.
+              The VISIBLE LABEL is the accessible name — no aria-label, which would
+              override it and make the control worse for voice control.
+
+              A native <button> rather than <PixelButton>: PixelButton forwards
+              only title/style/onClick to its <button>, so aria-expanded cannot
+              reach the element, and plan 23 pins PixelButton.tsx byte-identical
+              (hash bd286ebf...) so widening its props here is not available.
+              Every other aria-expanded control in this renderer is a native
+              button for the same reason. Palette copied from PixelButton
+              secondary/sm token for token, so it is the same control visually. */}
+          {layout.showToggle && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen((o) => !o)}
+              aria-expanded={layout.showOverlay}
+              style={{
+                position: 'absolute',
+                top: 'var(--cth-space-2)', right: 'var(--cth-space-2)',
+                zIndex: 2,
+                height: 24, padding: '0 8px',
+                background: 'var(--cth-cream-100)', color: 'var(--cth-ink-900)',
+                border: 'none',
+                boxShadow: 'inset 0 0 0 1px var(--cth-ink-300), 0 1px 0 var(--cth-ink-100)',
+                fontFamily: 'var(--cth-font-ui)',
+                fontSize: 'var(--cth-text-body-sm)',
+                cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none'
+              }}
+            >{layout.showOverlay ? 'hide panel' : 'show panel'}</button>
+          )}
         </div>
+
+        {/* Nothing to drag while the sidebar is an overlay. SidebarSplitter's
+            clamp effect is untouched: it is the viewport-relative half of the
+            width clamp and it is issue #38's already-shipped fix. */}
+        {layout.showSplitter && (
+          <SidebarSplitter
+            width={sidebarWidth}
+            onChange={setSidebarWidth}
+            viewportWidth={vpWidth}
+          />
+        )}
+
+        {!layout.collapsed && (
+          <div style={{
+            width: sidebarWidth, flexShrink: 0,
+            minHeight: 0, display: 'flex', flexDirection: 'column'
+          }}>
+            {sidebarPanel}
+          </div>
+        )}
       </div>
 
       <AgentStrip config={config} />

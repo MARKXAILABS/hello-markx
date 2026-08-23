@@ -170,6 +170,39 @@ test.describe('onboarding -> first spawn', () => {
     try { if (box) rmSync(box.root, { recursive: true, force: true }); } catch { /* the OS will */ }
   });
 
+  /**
+   * D-10 — the ONLY automated assertion in this repo that fails on a silent
+   * revert to Electron 32.
+   *
+   * D-08: all 426 unit tests run under plain Node with the `electron` module
+   * replaced by a stub in `require.cache` (test/load-ts.cjs), so `npm test` is
+   * structurally incapable of failing on an Electron-version regression — it
+   * would be a green run that asserted nothing about the runtime. This job is
+   * the only one that boots a real Electron, so the assertion lives here.
+   *
+   * The MAJOR is pinned, not the exact string: a patch bump must not turn the
+   * gate red, and a revert to 32 must. `process.versions.modules` (the native
+   * ABI number) is carried in the message because that is what a node-pty /
+   * better-sqlite3 ABI mismatch actually reports.
+   */
+  test('the launched app really is Electron 43 or newer', async () => {
+    // NOT `evaluate(({ process }) => ...)`. electronApplication.evaluate calls the
+    // function with the ELECTRON MODULE ({ app, BrowserWindow, ... }) as its only
+    // argument — there is no `process` on it, so destructuring one yields undefined
+    // and the assertion dies with "Cannot read properties of undefined (reading
+    // 'versions')" instead of reporting a version. The body already runs IN the main
+    // process, so read the global directly. (Caught by a live local run, 2026-08-21.)
+    const versions = await app.evaluate(() => ({
+      electron: process.versions.electron,
+      modules: process.versions.modules
+    }));
+    const major = Number(versions.electron.split('.')[0]);
+    expect(
+      major,
+      `launched Electron ${versions.electron} (native ABI ${versions.modules}); FLOOR-03 requires a supported major`
+    ).toBeGreaterThanOrEqual(43);
+  });
+
   test('the wizard counts its steps honestly and Michael clocks in on the floor', async () => {
     const next = page.getByRole('button', { name: 'next', exact: true });
 

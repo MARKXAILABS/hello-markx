@@ -69,8 +69,37 @@ export function projectDir(cwd: string): string {
  *  Best-effort: any fs error yields false rather than throwing into the spawn. */
 /** A Claude session id is a UUID. Renderer-supplied ids flow into `path.join`, so
  *  reject anything outside this charset before using one as a path component (a
- *  crafted id like `../../x` would otherwise traverse out of the project dirs). */
-const VALID_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+ *  crafted id like `../../x` would otherwise traverse out of the project dirs).
+ *  The pattern is UNCHANGED; only the `export` is new, so the subset control in
+ *  test/telemetry-auth.test.cjs can pin the argv guard below strictly inside it
+ *  instead of re-declaring a copy that would drift. */
+export const VALID_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+
+/** The ARGV-safe session-id shape. A SECOND constant on purpose — not a
+ *  tightening of the one above — because the two guard different sinks and
+ *  merging them breaks one of the two:
+ *
+ *   - `VALID_SESSION_ID` is a PATH-COMPONENT rule (the `path.join` above). It
+ *     must keep accepting a 200-character id, and one starting with `_`: both
+ *     resolve off disk today, and narrowing it would silently break
+ *     `seedSessionTranscript` and `resolveSessionCwd` for sessions that already
+ *     exist.
+ *   - This one is an ARGV rule. A session id becomes `--resume <sid>` (claude,
+ *     grok, kimi), `--conversation <id>` (antigravity) or `--session <id>`
+ *     (crush), and every one of those option parsers reads a `--`-prefixed
+ *     VALUE as a FLAG rather than as the option's argument.
+ *     `--dangerously-skip-permissions` passes the charset rule — `-` is a member
+ *     of `[A-Za-z0-9_-]` — so an agent that can poison its own recorded session
+ *     id turns permission gating off on an engine the operator deliberately
+ *     started without it. That is self-escalation, not a cosmetic defect.
+ *
+ *  The fix is the FIRST-CHARACTER anchor, not the charset. Bounded at 128
+ *  because argv is not a place for an unbounded string. The leading `(?![-_])`
+ *  is redundant against `[A-Za-z0-9]` TODAY and is kept deliberately: it keeps
+ *  refusing a leading `-`/`_` if someone later widens the first character class.
+ *  Strictly narrower than `VALID_SESSION_ID`, with a test asserting the subset
+ *  relation over the whole measured table so the two can never invert. */
+export const SPAWN_SAFE_SESSION_ID = /^(?![-_])[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export function seedSessionTranscript(cwd: string, sessionId: string): boolean {
   try {

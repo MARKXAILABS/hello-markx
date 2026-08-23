@@ -27,7 +27,7 @@ export function RecentText({ accent, text, seed }: RecentTextProps) {
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         fontFamily: 'var(--cth-font-display)',
-        fontSize: 8, lineHeight: '12px',
+        fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-700)',
         textTransform: 'uppercase'
       }}>
@@ -47,8 +47,8 @@ export function RecentText({ accent, text, seed }: RecentTextProps) {
       </div>
       <div style={{
         fontFamily: 'var(--cth-font-ui)',
-        fontSize: 13,
-        lineHeight: '18px',
+        fontSize: 'var(--cth-text-body-md)',
+        lineHeight: 'var(--cth-lh-body-md)',
         color: 'var(--cth-ink-900)',
         minHeight: 36
       }}>

@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { ensureKilled } from './procKill';
+import type { PersistStore } from './db';
 
 /** Non-memory files `mempalace mine` must not ingest: the Claude Code hooks
  *  config (a large JSON blob that swamps the wake-up digest), the cursor, and
@@ -101,6 +102,24 @@ function safeAgentSegment(id: string | undefined): string | null {
   if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(raw)) return raw;
   const scrubbed = raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 40);
   return `${scrubbed || 'agent'}-${createHash('sha256').update(raw).digest('hex').slice(0, 8)}`;
+}
+
+/** Longest single indexed chunk. A pathological memory.md (one 2 MB paragraph)
+ *  must not put a 2 MB row in the FTS index on every mine tick. */
+const MEM_CHUNK_MAX = 4_000;
+
+/** Split memory.md into the units keyword recall returns.
+ *
+ *  Blank-line paragraphs, because that is what memory.md actually is: a flat
+ *  markdown note file. Indexing the WHOLE file as one row would make every hit
+ *  return every note the agent has ever written, which is a search result nobody
+ *  can read and a prompt nobody can afford. */
+function chunkMemory(text: string): string[] {
+  return String(text ?? '')
+    .split(/\n\s*\n/)
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .map((c) => c.slice(0, MEM_CHUNK_MAX));
 }
 
 const MINE_INTERVAL_MS = 180_000; // re-mine changed memories every 3 min
@@ -185,8 +204,24 @@ export class MemoryManager {
 
   constructor(
     private getHome: () => string | null,
-    private getSettings: () => MemorySettings
+    private getSettings: () => MemorySettings,
+    /** The already-open harness DB, or null. Optional so a caller that only
+     *  wants the mempalace half (and every existing test) constructs unchanged;
+     *  when it IS supplied, memory.md is also indexed into `memory_fts` and
+     *  keywordSearch() below works with no `mempalace` on PATH at all. */
+    private getStore?: () => PersistStore | null,
+    /** The project an agent works in (its registry cwd), or null. Stored beside
+     *  each indexed chunk so recall can be narrowed by project as well as by
+     *  agent — the second half of D-33's predicate. */
+    private getProject?: (agentId: string) => string | null
   ) {}
+
+  /** The DB handle, and only once it is actually open — indexing into a closed
+   *  store is a silent no-op that reads as "the index is empty" forever. */
+  private store(): PersistStore | null {
+    const s = this.getStore?.() ?? null;
+    return s && s.isOpen ? s : null;
+  }
 
   /** The palace ONE agent reads and writes.
    *
@@ -260,10 +295,16 @@ export class MemoryManager {
    *  run `mempalace init`: it ends in an interactive "Mine now? [Y/n]" prompt
    *  that --yes doesn't cover, so a spawned child would hang forever. */
   start(): void {
-    if (!this.active() || this.initStarted) return;
+    if (this.initStarted || !this.enabled() || !this.getHome()) return;
     // No palacePath() check: under 'agent' scope there is no palace until an
     // agent id names one, and gating on it here would kill the mine loop outright.
-    if (!this.bin() || !this.getHome()) return;
+    //
+    // This used to require active() — i.e. the mempalace CLI — so on the COMMON
+    // machine (no mempalace on PATH) the loop never started and the whole
+    // subsystem was a no-op. The FTS5 index is the recall path that survives
+    // that, so the loop now also starts when all we have is somewhere to put the
+    // index; the CLI-only half stays gated inside mineNow().
+    if (!this.active() && !this.store()) return;
     this.initStarted = true;
     this.startMineLoop();
   }
@@ -286,8 +327,12 @@ export class MemoryManager {
    *  `mining` guards against a slow pass overlapping the next interval tick. */
   async mineNow(): Promise<void> {
     const home = this.getHome();
-    const bin = this.bin();
-    if (!this.active() || !home || !bin) return;
+    if (!home || !this.enabled()) return;
+    // Two independent sinks now. The CLI half is unchanged and still needs
+    // active() plus a resolved binary; the FTS index half needs only an open DB,
+    // and running it on the machines where mempalace is absent is the whole point.
+    const cli = this.active() && !!this.bin();
+    if (!cli && !this.store()) return;
     if (this.mining) return; // a previous pass is still running — let it finish
     const agentsDir = join(home, 'hive', 'agents');
     if (!existsSync(agentsDir)) return;
@@ -303,7 +348,8 @@ export class MemoryManager {
         try { mtime = statSync(mem).mtimeMs; } catch { continue; }
         if (this.lastMined.get(id) === mtime) continue; // unchanged — skip the model load
         this.lastMined.set(id, mtime);
-        await this.mineAgent(agentDir, id); // one writer at a time
+        this.indexIntoFts(id, mem); // keyword recall — no CLI required
+        if (cli) await this.mineAgent(agentDir, id); // one writer at a time
       }
     } finally {
       this.mining = false;
@@ -329,6 +375,7 @@ export class MemoryManager {
     this.mining = true;
     try {
       try { this.lastMined.set(id, statSync(mem).mtimeMs); } catch { this.lastMined.delete(id); }
+      this.indexIntoFts(id, mem); // the condense just rewrote the file — reindex too
       await this.mineAgent(agentDir, id);
     } finally {
       this.mining = false;
@@ -371,7 +418,57 @@ export class MemoryManager {
     });
   }
 
+  /** Index ONE agent's memory.md into `memory_fts`.
+   *
+   *  Deliberately outside every `active()` gate above: this is the recall path
+   *  for the machines that have no `mempalace`, so requiring the CLI to build it
+   *  would defeat the reason it exists. Best-effort — a DB that will not take a
+   *  write must not stop the mine loop for the agents queued behind this one. */
+  private indexIntoFts(id: string, memPath: string): void {
+    const store = this.store();
+    if (!store || !id) return;
+    let text = '';
+    try { text = readFileSync(memPath, 'utf8'); } catch { return; }
+    try { store.indexMemory(id, chunkMemory(text), this.getProject?.(id) ?? ''); }
+    catch (e) { console.error(`[memory] could not index ${id} into memory_fts:`, e); }
+  }
+
   // — recall (read) —
+
+  /** Keyword recall out of the SQLite FTS5 index, narrowed by a real
+   *  `WHERE agent_id = ?` (and optionally `project = ?`) predicate rather than by
+   *  a `--wing` flag handed to a CLI.
+   *
+   *  Synchronous and dependency-free: it reads the PersistStore the app already
+   *  has open. That makes it the ONLY recall path that works in the common case
+   *  where `mempalace` is not on PATH — `active()` is false there and every
+   *  mempalace call in this class degrades to a silent no-op.
+   *
+   *  LIMITATION, stated plainly because no doc may claim more (D-36): the scope
+   *  this filters on is AGENT-SUPPLIED. Whoever calls names the wing, so this
+   *  NARROWS recall, it does not ENFORCE isolation. RECALL-02 (Phase 5) is what
+   *  makes the server bind the scope instead of trusting the asker. */
+  keywordSearch(
+    query: string,
+    opts: { wing?: string; project?: string; results?: number } = {}
+  ): { ok: boolean; output: string; error?: string } {
+    const store = this.store();
+    if (!store) return { ok: false, output: '', error: 'keyword recall needs the harness database, which is not open' };
+    // Mirror palacePath()'s rule exactly, so the keyword path cannot become a way
+    // around the scope the CLI path already applies: under 'shared' an unnamed
+    // wing genuinely means everyone's notes (that IS the documented default), and
+    // under 'agent' it means no palace — never everybody's.
+    if (!opts.wing && this.scope() === 'agent') {
+      return { ok: false, output: '', error: 'semantic memory is scoped per agent — name an agent to recall from' };
+    }
+    let hits;
+    try {
+      hits = store.searchMemory(query, { agentId: opts.wing, project: opts.project, limit: opts.results ?? 5 });
+    } catch (e) {
+      return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
+    }
+    return { ok: true, output: hits.map((h) => h.text).join('\n\n---\n\n') };
+  }
 
   /** Run one mempalace read command asynchronously. These used to be spawnSync
    *  with a 120s timeout — on a cold model load that BLOCKED the Electron main
@@ -421,6 +518,10 @@ export class MemoryManager {
    *  narrows the one palace to that agent's wing, and under 'agent' scope it also
    *  selects which palace is opened at all. Returns the CLI's text output. */
   search(query: string, opts: { wing?: string; results?: number } = {}): Promise<{ ok: boolean; output: string; error?: string }> {
+    // No mempalace, no palace, no meaning-based search — but the notes are still
+    // sitting in memory_fts, so answer out of there rather than handing the user
+    // "semantic memory not active" next to a panel full of their own text.
+    if (!this.active()) return Promise.resolve(this.keywordSearch(query, opts));
     const args = ['search', query, '--results', String(opts.results ?? 5)];
     if (opts.wing) args.push('--wing', opts.wing);
     return this.runCli(args, 'search', opts.wing);

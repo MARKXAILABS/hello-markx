@@ -56,7 +56,7 @@ export function FullscreenFileEditor() {
 
   const chip: React.CSSProperties = {
     padding: '2px 10px', height: 22, border: 'none', cursor: 'pointer',
-    fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)',
+    fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)',
     background: 'var(--cth-cream-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
     display: 'inline-flex', alignItems: 'center'
   };
@@ -78,7 +78,7 @@ export function FullscreenFileEditor() {
           display: 'flex', alignItems: 'center',
           paddingLeft: 96, paddingRight: 12, gap: 12,
           userSelect: 'none',
-          fontFamily: 'var(--cth-font-display)', fontSize: 12, lineHeight: '20px',
+          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-900)'
         }}
       >
@@ -86,7 +86,7 @@ export function FullscreenFileEditor() {
         <span
           className="cth-titlebar-nodrag"
           style={{
-            fontFamily: 'var(--cth-font-mono)', fontSize: 13, color: 'var(--cth-ink-500)',
+            fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-500)',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '38vw'
           }}
           title={fullscreenFilePath}
@@ -109,7 +109,16 @@ export function FullscreenFileEditor() {
             </span>
           )}
           <button onClick={openInIde} title="Open this file in the full IDE" style={chip}>open in IDE</button>
-          <button onClick={() => setFullscreenFile(null)} title="Close (Esc)" aria-label="Close file" style={chip}>✕</button>
+          {/* Rule 0 exempt glyph, via a LOCAL override rather than an allowlist
+              entry on `chip`. `chip` is shared with `open in IDE` and the two
+              mode toggles above, all of them real text, so allowlisting the
+              declaration would hold that text below the floor with every grep
+              green. aria-hidden rides the span and never the button: this button
+              is focusable, and aria-hidden on a focusable element leaves a
+              nameless control in the tab order. */}
+          <button onClick={() => setFullscreenFile(null)} title="Close (Esc)" aria-label="Close file" style={chip}>
+            <span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>
+          </button>
         </span>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: mode === 'preview' ? 'auto' : 'hidden' }}>
@@ -148,10 +157,10 @@ function SavedFilePreview({ root, rel }: { root: string; rel: string }) {
   }, [root, rel]);
 
   if (state.status === 'loading') {
-    return <div style={{ padding: 24, fontFamily: 'var(--cth-font-ui)', fontSize: 13, color: 'var(--cth-ink-500)' }}>loading…</div>;
+    return <div style={{ padding: 24, fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>loading…</div>;
   }
   if (state.status === 'error') {
-    return <div style={{ padding: 24, fontFamily: 'var(--cth-font-ui)', fontSize: 13, color: 'var(--cth-coral)' }}>{state.error}</div>;
+    return <div style={{ padding: 24, fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-coral)' }}>{state.error}</div>;
   }
   return (
     <div style={{ display: 'flex', justifyContent: 'center' }}>

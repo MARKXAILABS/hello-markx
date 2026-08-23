@@ -43,13 +43,27 @@ export function SidebarTabs({ current, accent, onChange }: SidebarTabsProps) {
                 ? `inset 0 -3px 0 var(--cth-${accent}), inset 1px 0 0 var(--cth-ink-900), inset -1px 0 0 var(--cth-ink-900)`
                 : 'inset 0 0 0 0',
               fontFamily: 'var(--cth-font-display)',
-              fontSize: 10,
-              lineHeight: '14px',
+              fontSize: 'var(--cth-text-display-md)',
+              lineHeight: 'var(--cth-lh-display-md)',
               color: active ? 'var(--cth-ink-900)' : 'var(--cth-ink-500)',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: 6
+              gap: 6,
+              // MEASURED, not predicted: at the corrected 14px display size the
+              // four labels need 518px and this rail is 420 by default, so the
+              // strip spilled 98px past the panel at 1280, 1024 AND 800 — and the
+              // sidebar's own clamp (store.ts, 320..1200) means NO container
+              // integer fixes it at every width the splitter allows. `flex: 1`
+              // alone cannot save it either: a flex item's min-width is auto, so
+              // each button refuses to shrink below its own content and the row
+              // simply grows past its parent. These three are UI-SPEC containment
+              // step 1 — the truncation the element was missing. nowrap is
+              // load-bearing on its own: without it the anonymous text item wraps
+              // to a second line inside a fixed 36px button.
+              minWidth: 0,
+              overflow: 'hidden',
+              whiteSpace: 'nowrap'
             }}
           >
             <Icon name={t.icon} /> {t.label.toUpperCase()}

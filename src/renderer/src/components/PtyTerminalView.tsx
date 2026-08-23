@@ -31,7 +31,7 @@ const zoomBtnStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   fontFamily: 'var(--cth-font-ui)',
-  fontSize: 12,
+  fontSize: 'var(--cth-text-body-md)',
   lineHeight: 1,
   color: 'var(--cth-ink-700)',
   background: 'var(--cth-paper-100)',
@@ -385,7 +385,7 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         fontFamily: 'var(--cth-font-ui)',
-        fontSize: 12,
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
         color: 'var(--cth-ink-500)',
         borderBottom: '1px dashed var(--cth-ink-300)',
         paddingBottom: 4,
@@ -410,7 +410,14 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
             title="Zoom out (Cmd -)"
             aria-label="Zoom terminal out"
             style={zoomBtnStyle}
-          >−</button>
+          >
+            {/* Rule 0 exempt glyph, held at 12px by a LOCAL override. The shared
+                `zoomBtnStyle` also dresses the `{fontSize}px` readout, which is
+                real text, so the declaration is swept and only the glyph is
+                allowlisted. aria-hidden goes on the span, never the focusable
+                button, which keeps its aria-label. */}
+            <span aria-hidden="true" style={{ fontSize: 12 }}>−</span>
+          </button>
           <button
             onClick={resetZoom}
             title="Reset zoom (Cmd 0)"
@@ -423,7 +430,9 @@ export function PtyTerminalView({ ptyId, onStreamData, onUserPrompt, onToggleFul
             title="Zoom in (Cmd +)"
             aria-label="Zoom terminal in"
             style={zoomBtnStyle}
-          >+</button>
+          >
+            <span aria-hidden="true" style={{ fontSize: 12 }}>+</span>
+          </button>
           {fullscreen && onToggleFullscreen && (
             <button
               onClick={onToggleFullscreen}

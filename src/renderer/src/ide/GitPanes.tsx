@@ -26,13 +26,16 @@ function statusColor(code: string): string {
 
 const rowStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6, padding: '2px 12px',
-  cursor: 'pointer', fontSize: 12, color: 'var(--cth-ink-900)'
+  cursor: 'pointer', fontSize: 'var(--cth-text-body-md)',
+  lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
 };
 const noteStyle: React.CSSProperties = {
-  padding: '6px 12px', fontSize: 12, color: 'var(--cth-ink-500)'
+  padding: '6px 12px', fontSize: 'var(--cth-text-body-md)',
+  lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
 };
 const smallBtn: React.CSSProperties = {
-  padding: '0 6px', height: 20, fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+  padding: '0 6px', height: 20, fontFamily: 'var(--cth-font-ui)',
+  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
   color: 'var(--cth-ink-900)', background: 'var(--cth-cream-100)', border: 'none',
   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', cursor: 'pointer',
   display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0
@@ -118,7 +121,7 @@ export function HistoryPane({ gitRoot, onOpenRevDiff }: {
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px 3px',
-            fontSize: 12, color: 'var(--cth-ink-700)'
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
           }}>
             <span style={{ fontFamily: 'var(--cth-font-mono)', color: 'var(--cth-ink-900)' }}>{selected.shortSha}</span>
             <span style={{
@@ -127,7 +130,13 @@ export function HistoryPane({ gitRoot, onOpenRevDiff }: {
             <button style={smallBtn} onClick={() => void jump(selected)} title="Check out this commit (detached HEAD)">
               <Icon name="arrow-right" /> jump here
             </button>
-            <button style={{ ...smallBtn, width: 20, justifyContent: 'center' }} onClick={() => setSelected(null)} title="Close" aria-label="Close commit details">✕</button>
+            <button style={{ ...smallBtn, width: 20, justifyContent: 'center' }} onClick={() => setSelected(null)} title="Close" aria-label="Close commit details">
+              {/* Rule 0 exempt glyph. The size override lives on this SPAN, not on
+                  smallBtn (which also dresses `load older…` and `jump here`) and
+                  not on the button (aria-hidden on a focusable element leaves it
+                  in the tab order with no accessible name — axe aria-hidden-focus). */}
+              <span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>
+            </button>
           </div>
           {/* `flex: 1` is load-bearing: without it this scroller sizes to its
               CONTENT, overflows the parent's maxHeight and never reaches its own
@@ -196,7 +205,8 @@ export function ComparePane({ gitRoot, onOpenRevDiff }: {
   };
 
   const sel: React.CSSProperties = {
-    flex: 1, minWidth: 0, height: 22, fontFamily: 'var(--cth-font-mono)', fontSize: 11,
+    flex: 1, minWidth: 0, height: 22, fontFamily: 'var(--cth-font-mono)',
+    fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
     background: 'var(--cth-paper-100)', color: 'var(--cth-ink-900)',
     border: 'none', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)'
   };
@@ -209,12 +219,19 @@ export function ComparePane({ gitRoot, onOpenRevDiff }: {
             {branches.map((b) => <option key={b} value={b}>{b}</option>)}
           </select>
           <button style={{ ...smallBtn, width: 22, justifyContent: 'center' }} title="Swap base ↔ compare" aria-label="Swap base and compare branches"
-            onClick={() => { setBase(head); setHead(base); }}>⇄</button>
+            onClick={() => { setBase(head); setHead(base); }}>
+            {/* Rule 0 exempt glyph — see the ✕ above for why the override and the
+                aria-hidden both sit on this span. */}
+            <span aria-hidden="true" style={{ fontSize: 11 }}>⇄</span>
+          </button>
           <select value={head} onChange={(e) => setHead(e.target.value)} style={sel} title="Compare — the branch whose changes you're viewing">
             {branches.map((b) => <option key={b} value={b}>{b}</option>)}
           </select>
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, color: 'var(--cth-ink-500)' }}>
+        <div style={{
+          display: 'flex', gap: 6, alignItems: 'center',
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)'
+        }}>
           {result && (
             <span title={`'${head}' is ${result.ahead} ahead and ${result.behind} behind '${base}'`}>
               ↑{result.ahead} ↓{result.behind}

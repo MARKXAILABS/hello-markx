@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { splitterReachableMax } from '../store/sidebarLayout';
 
 export interface SidebarSplitterProps {
   /** Current sidebar width in px. */
@@ -21,8 +22,10 @@ export function SidebarSplitter({
   const startRef = useRef<{ clientX: number; width: number } | null>(null);
   const [active, setActive] = useState(false);
 
-  /** The widest the sidebar may be and still leave the floor 360px. */
+  /** The widest the sidebar may be and still leave the floor 360px. DRAG only. */
   const clampMax = Math.min(max, Math.max(min, viewportWidth - 360));
+  /** The widest it may be and still leave the handle reachable. RESIZE only. */
+  const reachableMax = splitterReachableMax(viewportWidth, min);
 
   // Re-clamp when the WINDOW changes, not only while dragging.
   //
@@ -32,9 +35,27 @@ export function SidebarSplitter({
   // could put this handle past the right edge — no way to drag it back. The
   // store still clamps to its own absolute bounds; this is the viewport-relative
   // half it cannot see.
+  //
+  // TWO BOUNDS, ON PURPOSE. `onChange` is App's `setSidebarWidth`, which WRITES
+  // localStorage — so anything this effect enforces becomes a permanent rewrite
+  // of a preference the operator chose. Enforcing `clampMax` here enforced a
+  // LAYOUT PREFERENCE ("leave the floor 360px") that way: once `MIN_WIN.width`
+  // dropped to 960 the 1024–1279 band became reachable with this splitter still
+  // mounted, where `clampMax` is 664–919, and one drag of the window to 1024
+  // silently rewrote a 900px sidebar to 664 — which the next boot on a 27"
+  // monitor then opened at. `reachableMax` enforces only the invariant issue #38
+  // actually needs: the handle must not sit past the right edge.
+  //
+  // WHAT THIS DOES NOT CLOSE: the genuine rescue still writes through the
+  // persisting setter, so a width really wider than `viewportWidth - 48` is
+  // still reduced and stored. That is the #38 trade and it is the right one —
+  // the alternative is an unreachable handle. This removes the newly opened band
+  // from the damage surface and shrinks the pre-existing one at every viewport
+  // (at 1280 the effect fired above 920 before, above 1232 now). The complete
+  // fix is a NON-PERSISTING ephemeral setter, which lives in `store.ts`.
   useEffect(() => {
-    if (width > clampMax) onChange(clampMax);
-  }, [width, clampMax, onChange]);
+    if (width > reachableMax) onChange(reachableMax);
+  }, [width, reachableMax, onChange]);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {

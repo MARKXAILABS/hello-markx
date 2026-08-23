@@ -173,7 +173,7 @@ export function Modal({
               background: 'transparent', border: 'none',
               cursor: locked ? 'default' : 'pointer',
               color: 'var(--cth-ink-900)',
-              fontFamily: 'var(--cth-font-display)', fontSize: 10,
+              fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
               opacity: locked ? 0.4 : 1
             }}
           >

@@ -156,7 +156,10 @@ export interface CircuitBreakerConfig {
   tokenVelocityPerMin?: number;
 }
 
-/** Enterprise Knowledge Graph (multimodal context store + agent access tool).
+/** Document keyword store (multimodal context store + agent access tool).
+ *  Retrieval is KEYWORD SCORING OVER TEXT CHUNKS — term frequency plus a
+ *  title/phrase boost, no entities and no edges — per `src/main/kg-core.cjs`'s
+ *  own header. It is not a graph, and the entity graph (V2-05) was RETIRED.
  *  The user ingests their own documents/images/PDFs; agents query them on demand
  *  via the `kg` CLI. Opt-in like the heartbeat/Slack features — `enabled` gates
  *  everything (no env injected, no prompt line, no store touched when off). See
@@ -272,7 +275,7 @@ export interface HarnessConfig {
   defaultWorkerTokenCap?: number;
   /** Circuit-breaker thresholds (Lane A #6.6b). Unset = conservative defaults. */
   circuitBreaker?: CircuitBreakerConfig;
-  /** Enterprise Knowledge Graph (multimodal context for agents). Default OFF. */
+  /** Document keyword store (multimodal context for agents). Default OFF. */
   knowledgeGraph?: KnowledgeGraphConfig;
   /** Fire native desktop notifications on agent lifecycle events (idle finish / waiting for input). */
   notifications?: boolean;
@@ -490,7 +493,7 @@ const DEFAULTS: HarnessConfig = {
   reflectSectionTrigger: 50,
   reflectRecentKeep: 12,
   reflectMinBytes: 16_384,
-  // Enterprise Knowledge Graph — opt-in; dark until the user enables it.
+  // Document keyword store — opt-in; dark until the user enables it.
   // v0.3.4 fix: default OFF, matching the field's own documentation ("Default
   // OFF / dark until enabled") — the true default contradicted it. Existing
   // installs keep their persisted value.

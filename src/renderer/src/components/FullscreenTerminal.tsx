@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { PixelBadge } from './PixelBadge';
 import { PixelButton } from './PixelButton';
@@ -20,6 +20,7 @@ import { useTerminalFontSize } from './terminalFontSize';
 import { useHasTerminalDraft, disposeTerminal } from './terminalPool';
 import { useAppTheme, toggleAppTheme } from '@/design/theme';
 import { basename, groupKey, useAgentGroups } from './agentGroups';
+import { isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
 import type { HarnessConfig } from '@/store/config';
 
 /** Roster rail width. A fixed 232px is right on a 14" laptop but reads as a
@@ -32,9 +33,11 @@ const ROSTER_COLLAPSED_KEY = 'cth.fullscreen.rosterCollapsed';
 /** Roster type scale, derived from the shared terminal zoom so Cmd +/- resizes
  *  the whole roster along with the terminal — one knob for the whole view
  *  instead of a size that only looked right on the display it was tuned on.
- *  Each is clamped: names are a pixel display face that turns to mush when it
- *  strays too far from its native size, and the bullets have to stay subordinate
- *  to the name however far the terminal is zoomed. */
+ *  Each is clamped, and every floor is 14 (FLOOR-12): these are agent names,
+ *  repo headers and note bullets — ordinary chrome that happens to scale with
+ *  Cmd +/-, not xterm's own font, so DESIGN.md:706 governs them. The caps were
+ *  raised alongside the floors so the roster still MOVES with the zoom instead
+ *  of pinning flat at the floor. */
 function rosterScale(zoom: number) {
   const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(n)));
   // The portrait is sized in SPRITE steps, not free pixels. The art is an 18×28
@@ -46,9 +49,9 @@ function rosterScale(zoom: number) {
   // tell two hires apart at a glance, which is the tile's whole job.
   const portraitScale = Math.min(2.5, Math.max(1.5, Math.round(zoom * 0.11 * 2) / 2));
   return {
-    name: clamp(zoom * 0.48, 7, 14),
-    group: clamp(zoom * 0.45, 7, 13),
-    note: clamp(zoom * 0.68, 10, 20),
+    name: clamp(zoom * 0.48, 14, 20),
+    group: clamp(zoom * 0.45, 14, 18),
+    note: clamp(zoom * 0.68, 14, 20),
     portraitScale,
     portrait: Math.round(PORTRAIT_W * portraitScale)
   };
@@ -200,7 +203,8 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
         }}
       >
         <span style={{
-          fontFamily: 'var(--cth-font-display)', fontSize: 12, lineHeight: '20px',
+          fontFamily: 'var(--cth-font-display)',
+          fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
           color: 'var(--cth-ink-900)'
         }}>HELLO MARKX · FULLSCREEN</span>
         {/* Same top-right controls as the main title bar — fullscreen covers
@@ -237,7 +241,7 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
               background: 'var(--cth-paper-100)',
               boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
               border: 'none', borderRadius: 2, cursor: 'pointer',
-              color: 'var(--cth-ink-900)', fontSize: 13, lineHeight: 1
+              color: 'var(--cth-ink-900)', fontSize: 'var(--cth-text-body-md)', lineHeight: 1
             }}
           >
             {appThemeNow === 'dark' ? '☀' : '☾'}
@@ -358,7 +362,7 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                       a 16-unit grid, so squeezing it to match a 7px label
                       merged the outline into mush. Dimmed instead of shrunk. */}
                   <span style={{ flexShrink: 0, display: 'inline-flex', opacity: 0.7 }}>
-                    <Icon name="folder" size={scale.group >= 13 ? 2 : 1} />
+                    <Icon name="folder" size={scale.group >= 18 ? 2 : 1} />
                   </span>
                   <span style={{
                     minWidth: 0,
@@ -394,7 +398,8 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 6,
                   padding: '4px 8px',
-                  fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                  fontFamily: 'var(--cth-font-ui)',
+                  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                   color: 'var(--cth-ink-900)',
                   background: 'var(--cth-status-working)',
                   boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
@@ -425,7 +430,8 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: 2,
                         height: 20, padding: '0 2px 0 6px',
-                        fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                        fontFamily: 'var(--cth-font-ui)',
+                        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                         color: 'var(--cth-ink-700)', background: 'var(--cth-paper-100)',
                         boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
                       }}
@@ -438,11 +444,15 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
                         style={{
                           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                           width: 14, height: 14, padding: 0, lineHeight: 1,
-                          fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+                          fontFamily: 'var(--cth-font-ui)',
                           color: 'var(--cth-ink-500)', background: 'transparent',
                           border: 'none', cursor: 'pointer'
                         }}
-                      >✕</button>
+                      >
+                        {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH;
+                            the button keeps its name and stays focusable. */}
+                        <span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>
+                      </button>
                     </span>
                   ))}
                 </div>
@@ -504,7 +514,7 @@ export function FullscreenTerminal({ config }: FullscreenTerminalProps) {
 /** Model ids are long and mostly boilerplate ("claude-opus-4-8[1m]",
  *  "anthropic/claude-sonnet-4-5"). The roster has ~120px, so show the part that
  *  distinguishes one agent from another and keep the full id in the tooltip. */
-function shortModel(model?: string): string | null {
+export function shortModel(model?: string): string | null {
   if (!model || !model.trim()) return null;
   const tail = model.split('/').pop() ?? model;
   return tail
@@ -533,7 +543,11 @@ function ContextBar({ tokens, limit, accent }: { tokens?: number; limit?: number
       }}>
         <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: color }} />
       </span>
-      <span style={{ flexShrink: 0, fontSize: 9, color: 'var(--cth-ink-500)' }}>{pct}%</span>
+      <span style={{
+        flexShrink: 0,
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+        color: 'var(--cth-ink-500)'
+      }}>{pct}%</span>
     </div>
   );
 }
@@ -563,8 +577,8 @@ function SidebarRow({
   // The editor rides the terminal's zoom, capped — it's a short note, not a
   // reading pane, and following the terminal all the way up turned it into a
   // banner wider than the roster itself.
-  const noteFontSize = Math.min(useTerminalFontSize(), 14);
-  const noteLabelSize = Math.max(8, Math.round(noteFontSize * 0.6));
+  const noteFontSize = Math.min(20, Math.max(14, useTerminalFontSize()));
+  const noteLabelSize = Math.max(14, Math.round(noteFontSize * 0.6));
   const noteWidth = Math.min(300, Math.round(noteFontSize * 20));
   const noteHeight = Math.round(noteFontSize * 9);
   // Total popover height, used only to keep it on screen near the bottom edge:
@@ -575,6 +589,13 @@ function SidebarRow({
   const bullets = (agent.note ?? '').split('\n').map(s => s.trim()).filter(Boolean);
 
   const typing = useHasTerminalDraft(agent.ptyId);
+
+  // FLOOR-01: does this agent act without asking for tool approval? One shared
+  // derivation (store/autoMode.ts), called identically by the agent card and the
+  // command-centre row, so the three renderings cannot disagree about a safety
+  // state. The live toggle is consulted for opencode only — see that module.
+  const liveAutoMode = useSyncExternalStore(subscribeLiveAutoMode, getLiveAutoMode, getLiveAutoMode);
+  const autoMode = isAutoModeAgent(agent.provider, agent.command, liveAutoMode);
 
   /** The ✎ button opens the editor beside the row — the bullets on the row are
    *  the summary, this is where you write them. EXPLICIT open only (v0.3.4):
@@ -619,7 +640,7 @@ function SidebarRow({
         onDrop={(e) => { e.preventDefault(); drag.drop(agent.id); }}
         onDragEnd={drag.end}
         onClick={onClick}
-        aria-label={`${agent.name} · ${agent.project}`}
+        aria-label={`${agent.name} · ${agent.project}${autoMode ? ` · Auto mode — ${agent.name} runs with permissions bypassed` : ''}`}
         aria-current={active ? 'true' : undefined}
         style={{
           width: '100%',
@@ -637,7 +658,8 @@ function SidebarRow({
           cursor: drag.dragId ? 'grabbing' : 'grab',
           position: 'relative',
           textAlign: 'left',
-          fontFamily: 'var(--cth-font-ui)', fontSize: 13,
+          fontFamily: 'var(--cth-font-ui)',
+          fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
           color: 'var(--cth-ink-900)',
           transition: 'opacity 120ms ease'
         }}
@@ -663,6 +685,25 @@ function SidebarRow({
               fontFamily: 'var(--cth-font-display)',
               fontSize: scale.name, lineHeight: 1.5
             }}>{agent.name.toUpperCase()}</span>
+            {/* FLOOR-01 — auto mode, cloned from the agent card's BOSS chip so the
+                three renderings read as one control. aria-hidden because the row's
+                own aria-label already carries the state; announcing it twice is
+                worse than once. Indicator only: not focusable, not clickable. */}
+            {autoMode && (
+              <span
+                aria-hidden="true"
+                title={`Auto mode: ${agent.name} acts without asking for tool approval.`}
+                style={{
+                  fontFamily: 'var(--cth-font-display)',
+                  fontSize: 'var(--cth-text-display-md)',
+                  lineHeight: 'var(--cth-lh-display-md)',
+                  background: 'var(--cth-lilac-light)',
+                  boxShadow: 'inset 0 0 0 1px var(--cth-lilac)',
+                  color: 'var(--cth-ink-900)',
+                  padding: '1px 4px 0', flexShrink: 0
+                }}
+              >AUTO</span>
+            )}
             {/* Your unsent text outranks the agent's own state here: an idle
                 agent with a draft on its prompt is not idle-and-free, it is
                 idle-and-held, and nothing else on screen said so. */}
@@ -678,12 +719,16 @@ function SidebarRow({
                 border: 'none', padding: 0,
                 flexShrink: 0, width: 20, height: 20,
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 12, lineHeight: 1, color: 'var(--cth-ink-500)',
+                lineHeight: 1, color: 'var(--cth-ink-500)',
                 background: notePosition ? 'var(--cth-cream-200)' : 'var(--cth-paper-100)',
                 boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
                 cursor: 'pointer'
               }}
-            >✎</button>
+            >
+              {/* Rule 0 — decorative glyph. aria-hidden on the GLYPH; the button
+                  keeps its accessible name and stays focusable. */}
+              <span aria-hidden="true" style={{ fontSize: 12 }}>✎</span>
+            </button>
           </div>
           {/* WHAT this agent is, at a glance. The roster used to carry only a
               name, a portrait and a status dot — enough to tell rows apart, not
@@ -692,7 +737,7 @@ function SidebarRow({
               terminal is the whole screen and the sidebar is your only index. */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
-            fontSize: Math.max(9, scale.name - 3), lineHeight: 1.4,
+            fontSize: Math.max(14, scale.name - 3), lineHeight: 1.4,
             color: 'var(--cth-ink-500)'
           }}>
             <span style={{
@@ -701,7 +746,7 @@ function SidebarRow({
             }} title={agent.model ? `Model: ${agent.model}` : 'Runs the CLI default model'}>
               {shortModel(agent.model) ?? 'CLI default'}
             </span>
-            <span style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
+            <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
             <span style={{
               flex: 1, minWidth: 0,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
@@ -710,7 +755,7 @@ function SidebarRow({
             </span>
             {!!usd && usd > 0 && (
               <>
-                <span style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
+                <span aria-hidden="true" style={{ flexShrink: 0, opacity: 0.5 }}>·</span>
                 <span
                   title={`Estimated spend so far: $${usd.toFixed(2)}`}
                   style={{ flexShrink: 0, fontFamily: 'var(--cth-font-mono)' }}
@@ -732,7 +777,7 @@ function SidebarRow({
                   color: 'var(--cth-ink-500)'
                 }}
               >
-                <span style={{ flexShrink: 0, color: 'var(--cth-ink-300)' }}>•</span>
+                <span aria-hidden="true" style={{ flexShrink: 0, color: 'var(--cth-ink-300)' }}>•</span>
                 {/* Exactly one line per bullet — a wrapping row would make the
                     roster's height jump around as notes are typed. The full
                     text is on hover (title, and the editor beside it). */}
@@ -812,7 +857,9 @@ function SidebarRow({
             }}
           />
           <div style={{
-            marginTop: 5, fontSize: 10, color: 'var(--cth-ink-500)'
+            marginTop: 5,
+            fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+            color: 'var(--cth-ink-500)'
           }}>one line = one bullet · esc to close</div>
         </div>
         </>,
@@ -859,16 +906,19 @@ function Header({ agent }: { agent: Agent }) {
       boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)'
     }}>
       <span style={{
-        fontFamily: 'var(--cth-font-display)', fontSize: 10, lineHeight: '16px',
+        fontFamily: 'var(--cth-font-display)',
+        fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-900)'
       }}>{agent.name.toUpperCase()}</span>
       <span style={{
-        fontSize: 12, color: 'var(--cth-ink-500)',
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+        color: 'var(--cth-ink-500)',
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         maxWidth: 300
       }}>{agent.cwd}</span>
       <span style={{
-        fontSize: 12, color: 'var(--cth-ink-700)',
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+        color: 'var(--cth-ink-700)',
         fontStyle: 'italic'
       }}>“{agent.description}”</span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>

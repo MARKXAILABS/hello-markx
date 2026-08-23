@@ -82,25 +82,39 @@ stream, retrieval, reflection, and planning.
    > a process start plus an embedding-model load and is bounded by a 120 s
    > timeout. It is optional and a no-op when `mempalace` is not installed. There
    > is no benchmark in this repo; do not quote latency numbers for it.
-5. **Autonomous loop = `Stop` hook.** ~~An agent that finishes drains its inbox
+5. **Autonomous loop = `Stop` hook.** An agent that finishes drains its inbox
    via a `Stop` hook that returns `{"decision":"block","reason":…}` to keep it
-   working, guarded by `stop_hook_active` to prevent infinite loops.~~
-   **Reversed — see below.**
+   working, guarded by `stop_hook_active` to prevent infinite loops. **Ships, and
+   it ships GUARDED** — the guards are the decision, not a reversal of it.
 
-   > `hooks.ts` now answers **every** `Stop`/`SubagentStop` with `{}`: it notifies
-   > and emits, and never forces a continuation. Turning unread mail into a forced
-   > next turn bypassed the terminal-draft and HITL gates and could spend credits
-   > while a human was mid-answer. `HiveManager.drainForStop()` still exists and
-   > still works, but nothing in the app calls it.
+   > The Stop boundary calls the drain — `hooks.ts`'s Stop arm reaches
+   > `delivery.ts drainAtStop()`, wired where `index.ts` constructs `HookServer` — and returns
+   > `{decision:'block', reason}` when the agent has unread mail — a forced
+   > continuation, which is the documented Claude/Codex contract. With no mail, or
+   > with a guard standing, it answers `{}`. `stop_hook_active` is screened first
+   > (`hooks.ts`, the first statement of that arm), so a continuation can never
+   > re-enter its own boundary.
    >
-   > Delivery moved to the renderer instead: `useHive.ts` effect #3 sees an **idle**
-   > agent holding unread inbox files and enqueues a nudge, which effect #4 — the
-   > one gate allowed to type into a live PTY — delivers once the terminal is
-   > genuinely free (see [`docs/message-queue.md`](./docs/message-queue.md) and
-   > [ADR-0001](./docs/adr/0001-one-gate-for-pty-writes.md)). Consequence: dedup is
-   > a per-renderer-session set of message ids, **not** the durable `cursor.json` —
-   > see §3 and §8. Tracked as
-   > [#5](https://github.com/MARKXAILABS/hello-markx/issues/5).
+   > The version that was removed was the UNGUARDED one, for a real reason: turning
+   > unread mail into a forced next turn bypassed the terminal-draft and HITL gates
+   > and could spend credits while a human was mid-answer. Both gates are now
+   > checked in main, before the drain runs: the operator's auto-delivery pause
+   > (`paused()`) and the renderer's draft/picker **veto** (`vetoed()`, a TTL'd
+   > assertion so a renderer that dies mid-draft cannot wedge the floor). Neither
+   > needs a window to be open, so the drain keeps working headless — which is the
+   > point of [#5](https://github.com/MARKXAILABS/hello-markx/issues/5).
+   >
+   > The renderer nudge is still a path, no longer the ONLY one: `useHive.ts`
+   > effect #4 — the one gate allowed to type into a live PTY — delivers a queued
+   > message once the terminal is genuinely free (see
+   > [`docs/message-queue.md`](./docs/message-queue.md) and
+   > [ADR-0001](./docs/adr/0001-one-gate-for-pty-writes.md)). The Stop drain is
+   > preferred whenever a `Stop` actually fires, because it types NOTHING — the
+   > agent's own turn carries the work.
+   >
+   > Dedup is durable and lives in main: `delivery.ts`'s `seenSet` (pruned against
+   > the live inbox each tick) plus `cursor.json`, advanced by the drain
+   > (`hive.ts drainForStop()`). Neither dies with the window — see §3 and §8.
 
 ---
 
@@ -121,9 +135,11 @@ hive/
     inbox/               # messages delivered TO me — <ts>-<msgid>.json
     inbox/.done/         # processed messages (kept for audit, not deleted)
     outbox/              # messages I want to SEND — router drains these
-    cursor.json          # { lastProcessed: <msgid> } — seeded at spawn; only
-                         #   drainForStop() advances it and nothing calls that
-                         #   today, so it stays { lastProcessed: null } (§2.5)
+    cursor.json          # { lastProcessed: <msgid> } — seeded at spawn and
+                         #   ADVANCED by hive.ts drainForStop(), which the Stop
+                         #   boundary in hooks.ts reaches through delivery.ts
+                         #   drainAtStop(). The durable
+                         #   exactly-once record for the drain (§2.5)
 ```
 
 Design rules that make this robust:
@@ -181,7 +197,10 @@ agent B mid-task needs something from agent C
         │ delivered to C's inbox
         ▼
 agent C finishes its current turn → Stop hook fires
-        │ hook POSTs to the hive socket; main answers {} — never a forced continue
+        │ hook POSTs to the hive socket; main runs the GUARDED drain: unread mail
+        │ comes back as {decision:'block', reason} — a forced continue carried by
+        │ C's OWN turn, so nothing is typed. An empty drain, an operator pause or
+        │ a renderer veto answers {} instead and the turn really ends
         │ C goes idle; the renderer sees idle + unread inbox → enqueues a nudge
         │ the drain loop types it in once C's prompt is genuinely free
         ▼
@@ -189,9 +208,13 @@ agent C keeps working: reads the messages, acts, replies via its own outbox
 ```
 
 The same hook socket drives the avatars: `PreToolUse`/`PostToolUse` payloads move
-an agent to the right station. Every payload must carry `HIVE_SOCK_TOKEN`
-(`hookSockToken()` in `hooks.ts`), injected into agent child environments only, so
-another local process cannot forge agent events — see [`SECURITY.md`](./SECURITY.md).
+an agent to the right station. Every payload must carry `HIVE_SOCK_TOKEN`, a
+per-agent token minted per-spawn (`mintToken` in `hooks.ts`) and injected into
+that one agent's PTY environment; the server looks it up to derive who is calling
+and ignores the payload's own `agent_id`. So there is no floor-wide key, and a
+payload's claim about its sender is not trusted — but this is not secrecy, and an
+agent that can read another agent's environment still defeats it. See
+[`SECURITY.md`](./SECURITY.md).
 
 ---
 
@@ -220,14 +243,17 @@ is the primary control surface — tune the prompt, not the code.
   (identity, protocol, env) + IPC to read hive state. Agents are hive-aware: they
   read their memory/inbox at task start and send via outbox; the router delivers;
   everything is committed and visible.
-- **Phase 1 — Autonomy** ⚠️ *shipped, but not as planned*: `hooks.ts` socket
+- **Phase 1 — Autonomy** ✅: `hooks.ts` socket
   server + `cth-hook` shim (attached per agent via `--settings`) landed, and hook
   events stream to the renderer to drive avatars. Codex, Grok and Antigravity got
   their own translating hook bridges; engines with no hook system at all (Crush,
   qwen) get a loopback proxy sidecar that derives the same events from the model
-  response. The **`Stop`-loop did not**: `Stop` returns `{}` and inbox
-  delivery is the renderer's idle-only nudge instead. See §2.5 for why, and
-  [#5](https://github.com/MARKXAILABS/hello-markx/issues/5).
+  response. The **`Stop`-loop ships too, guarded**: the Stop boundary calls the
+  drain (`hooks.ts`'s Stop arm → `delivery.ts drainAtStop()`) and hands unread mail back as
+  `{decision:'block', reason}` unless the operator's pause or the renderer's
+  draft veto stands. Both guards are checked in MAIN, so the loop runs with no
+  window attached. The renderer's idle nudge is a second path, not the only one.
+  See §2.5, and [#5](https://github.com/MARKXAILABS/hello-markx/issues/5).
 - **Phase 2 — God mode** ✅: the god agent auto-spawns into Michael's room
   (`desk-ceo` reserved) and, on a fresh spawn, is started with `/remote-control`
   (best-effort) plus an orientation prompt so it begins running the floor on its
@@ -266,9 +292,9 @@ is the primary control surface — tune the prompt, not the code.
 | Risk | Mitigation |
 | --- | --- |
 | `index.lock` corruption | Single committer (main process), retry+backoff, stale-lock cleanup |
-| Infinite Stop-hook loop | Moot today — `Stop` always answers `{}` (§2.5). The `stop_hook_active` guard and the `hops` cap stay for when a drain returns |
+| Infinite Stop-hook loop | Live risk, actively guarded (§2.5): a drain with mail returns `{decision:'block', reason}`. `stop_hook_active` is screened first (`hooks.ts`, the first statement of the Stop arm) so a continuation cannot re-enter its own boundary, and the `hops` cap bounds the chain |
 | Two agents ping-ponging | Only request/query/propose obligate replies; hop cap → god escalates |
-| Reprocessing messages | Agents move handled messages to `inbox/.done/` — instructed in the prompt, not enforced. `cursor.json` is seeded but never advanced; the live dedup is the renderer's per-session set of nudged message ids, lost on reload ([#5](https://github.com/MARKXAILABS/hello-markx/issues/5)) |
+| Reprocessing messages | Agents move handled messages to `inbox/.done/` — instructed in the prompt, not enforced. Dedup does not depend on that: `cursor.json` is advanced by the drain (`hive.ts drainForStop()`, at its `cursor.lastProcessed` write) and main holds `delivery.ts`'s `seenSet`, pruned against the live inbox each tick — neither dies with the window |
 | `memory.md` unbounded growth | `reflect.ts` condensation (shipped). `log.jsonl` rotates one generation at 8 MB, `backups/` keeps the newest 20 — both gitignored. The **semantic palace** is still unbounded: nothing prunes it ([#16](https://github.com/MARKXAILABS/hello-markx/issues/16)) |
 | Modifying the user's repo with hooks | Write hooks to `<cwd>/.claude/settings.local.json` (gitignored convention) |
 

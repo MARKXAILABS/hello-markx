@@ -18,7 +18,8 @@ import type { CSSProperties } from 'react';
 export const ideBarStyle: CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px',
   background: 'var(--cth-cream-200)', borderBottom: '1px solid var(--cth-ink-700)',
-  fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)'
+  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+  lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
 };
 
 /** Square, borderless button that holds only an icon. */
@@ -30,7 +31,8 @@ export const ideIconBtn: CSSProperties = {
 
 /** Small labelled button used for bar actions (save, copy path, view toggles). */
 export const ideTextBtn: CSSProperties = {
-  padding: '0 6px', height: 20, fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+  padding: '0 6px', height: 20, fontFamily: 'var(--cth-font-ui)',
+  fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
   color: 'var(--cth-ink-900)', background: 'var(--cth-cream-100)', border: 'none',
   boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', cursor: 'pointer',
   display: 'inline-flex', alignItems: 'center', gap: 4

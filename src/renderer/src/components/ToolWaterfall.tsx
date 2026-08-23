@@ -21,7 +21,7 @@ export function ToolWaterfall({ agentId }: { agentId: string }) {
       <div style={{
         flexShrink: 0, padding: '8px 10px', background: 'var(--cth-cream-200)',
         boxShadow: 'inset 0 -2px 0 var(--cth-ink-900)',
-        fontFamily: 'var(--cth-font-mono)', fontSize: 12, color: 'var(--cth-ink-900)',
+        fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-900)',
         display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline'
       }}>
         {sample ? (
@@ -44,7 +44,7 @@ export function ToolWaterfall({ agentId }: { agentId: string }) {
       {/* Waterfall */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 10 }}>
         {recent.length === 0 && (
-          <div style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
+          <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
             No tool calls captured yet. Each tool the agent runs appears here with its real duration.
           </div>
         )}
@@ -53,7 +53,7 @@ export function ToolWaterfall({ agentId }: { agentId: string }) {
           const ok = s.success && s.tool !== 'api_error';
           return (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-              <span style={{ width: 88, fontSize: 11, color: 'var(--cth-ink-700)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.error ?? s.tool}>
+              <span style={{ width: 88, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.error ?? s.tool}>
                 {s.tool}
               </span>
               <div style={{ flex: 1, height: 12, background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)' }}>
@@ -62,10 +62,20 @@ export function ToolWaterfall({ agentId }: { agentId: string }) {
                   style={{ width: `${pct}%`, height: '100%', background: ok ? 'var(--cth-mint)' : 'var(--cth-coral)' }}
                 />
               </div>
-              <span style={{ width: 54, textAlign: 'right', fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-500)' }}>
+              <span style={{ width: 54, textAlign: 'right', fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-500)' }}>
                 {fmtDur(s.durationMs)}
               </span>
-              <span style={{ width: 12, textAlign: 'center', fontSize: 11, color: ok ? 'var(--cth-mint)' : 'var(--cth-coral)' }}>
+              {/* Not a Rule 0 candidate: the frozen allowlist is UI-SPEC's M3 set
+                  and this file is not in it, so the glyph is swept like any other
+                  text. It is also the row's only success/failure signal, so it
+                  gets a real name rather than aria-hidden — and the name needs
+                  role="img", because Chromium does not expose aria-label on a
+                  bare span (role=generic). */}
+              <span
+                role="img"
+                aria-label={ok ? 'succeeded' : 'failed'}
+                style={{ width: 12, textAlign: 'center', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: ok ? 'var(--cth-mint)' : 'var(--cth-coral)' }}
+              >
                 {ok ? '✓' : '✗'}
               </span>
             </div>

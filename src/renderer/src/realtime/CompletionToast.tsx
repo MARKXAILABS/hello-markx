@@ -77,7 +77,6 @@ export function CompletionToast(): JSX.Element | null {
     };
     // Mount-once: the subscription + dismissal use refs + functional setState, so they
     // never need to re-bind on re-render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (toasts.length === 0) return null;
@@ -116,8 +115,8 @@ export function CompletionToast(): JSX.Element | null {
               alignItems: 'center',
               gap: 8,
               fontFamily: 'var(--cth-font-display)',
-              fontSize: 8,
-              lineHeight: '12px',
+              fontSize: 'var(--cth-text-display-md)',
+              lineHeight: 'var(--cth-lh-display-md)',
               color: 'var(--cth-ink-900)',
               textTransform: 'uppercase'
             }}
@@ -133,8 +132,8 @@ export function CompletionToast(): JSX.Element | null {
                 background: 'transparent',
                 cursor: 'pointer',
                 fontFamily: 'var(--cth-font-display)',
-                fontSize: 10,
-                lineHeight: '10px',
+                fontSize: 'var(--cth-text-display-md)',
+                lineHeight: 'var(--cth-lh-display-md)',
                 color: 'var(--cth-ink-700)',
                 padding: 0
               }}
@@ -153,7 +152,7 @@ export function CompletionToast(): JSX.Element | null {
             {t.summary}
           </div>
           {t.objective && (
-            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-700)' }}>
+            <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
               {t.objective}
             </div>
           )}

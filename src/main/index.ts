@@ -31,16 +31,19 @@ import { HiveManager, redactSecrets, type AgentMeta, type HiveMessage, type Hive
 import { AccountPoolManager } from './accountPool';
 import {
   DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
-  type AccountSwitch, type LiveAgentPty
+  type AccountSwitch, type LiveAgentPty, type QueueResult
 } from './delivery';
-import { HookServer, hookSockToken } from './hooks';
+import type { QueueOp, QueuedDelivery } from '../shared/queueDelivery';
+import { HookServer } from './hooks';
 import { CircuitBreaker, type BreakerInput } from './breaker';
 import type { UsageProvider } from './usage';
 import { MemoryManager } from './memory';
 import { KnowledgeManager } from './knowledge';
 import { MemoryReflector, type ReflectSettings } from './reflect';
 import { PersistStore } from './db';
-import { readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd } from './transcript';
+import {
+  readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd, SPAWN_SAFE_SESSION_ID
+} from './transcript';
 import { listIssues, listCIRuns } from './github';
 import { SlackWebhookServer, SlackReplyServer, postSlackReply, type SlackEventFile } from './slack';
 import {
@@ -261,11 +264,33 @@ function runCodexDaemonCommand(
 
 /** Start/enable one managed remote-control daemon for this isolated Codex home,
  * then point the TUI at its app-server socket. Failure is non-fatal: the worker
- * still starts as a normal local Codex session. */
+ * still starts as a normal local Codex session.
+ *
+ * FLOOR-18 — on Windows this is a DECLARED LIMITATION, not an oversight and not
+ * a best-effort failure. Codex remote control has no Windows implementation to
+ * fall back to, so the floor states the gap instead of pretending: the god's
+ * roster line carries `REMOTE CONTROL unavailable on Windows`
+ * (`shared/providerAutomation.ts` — `remoteControlAvailability`), and README's
+ * engine table says the same sentence. */
 async function enableCodexRemoteForSpawn(
   opts: SpawnOptions & { hive?: AgentMeta },
   agentId: string
 ): Promise<boolean> {
+  // FLOOR-18 / D-39 — Codex's remote control IS its app-server daemon, and that
+  // daemon's lifecycle is Unix-only upstream: it holds a pidfile and relies on
+  // Unix process/file-locking primitives that have no win32 equivalent.
+  // openai/codex#30372, "Codex remote control cannot start on Windows, CLI
+  // reports daemon lifecycle is Unix-only" (open; labelled windows-os /
+  // app-server / remote) — verified with `gh issue view 30372 --repo openai/codex`.
+  //
+  // D-41 — do NOT delete this early return "so the best-effort ladder can try".
+  // Below it are two awaited `codex` subprocesses; on Windows both would time
+  // out on every single spawn, which trades one silent no-op for guaranteed
+  // noise and STILL surfaces nothing to the operator. The honest surface is the
+  // capability line and the README, not a pair of timeouts.
+  // Kept as its own literal rather than calling `remoteControlAvailability`
+  // because this is the spawn-side gate and that is the declaration-side one;
+  // the JSDoc above names both so they cannot drift silently.
   if (process.platform === 'win32') return false;
   const realHome = opts.env?.CODEX_HOME;
   if (!realHome) return false;
@@ -434,7 +459,8 @@ const delivery = new DeliveryService({
         ptyId,
         provider: inferAgentProvider(p.command, a.provider),
         hasOutput: p.hasOutput,
-        idleMs: Math.max(0, Date.now() - p.lastOutputAt)
+        idleMs: Math.max(0, Date.now() - p.lastOutputAt),
+        lastOutputAt: p.lastOutputAt
       });
     }
     return out;
@@ -456,6 +482,60 @@ const delivery = new DeliveryService({
     return { ...res, delivered: res.block ? pending.map((m) => ({ id: m.id, from: m.from })) : [] };
   },
   respawn: respawnOnAccount,
+  // FLOOR-02 — the MD queue is MAIN's now, so it needs a durable home. One plain
+  // JSON file beside the hive's other live files (`log.jsonl`,
+  // `cost-ledger.jsonl`, `fleet.json`, `roster.json`), named for what it holds.
+  // A thunk because harnessHome is legitimately null before onboarding and can
+  // change in Settings afterwards; a path captured at module scope would be
+  // relative (i.e. the process CWD) and would then stay pointed at the old hive.
+  queuePath: () => {
+    const home = readConfig().harnessHome;
+    return home ? join(home, 'delivery-queue.json') : null;
+  },
+  // T-P08-05 — resolve the recipient against MAIN's roster rather than trusting
+  // the agent id a renderer sent. `isAssistant` agents are excluded for the same
+  // reason `liveAgents` skips them: the prep assistant is send-only.
+  knownAgent: (agentId) => {
+    if (!hive.enabled()) return false;
+    const a = hive.registry().agents[agentId];
+    return !!a && !a.archived;
+  },
+  // Promote a genuine Slack-origin work item to a stamped kanban card the first
+  // time it is delivered, carrying the origin thread so the done-observer can
+  // post its one summary reply in-thread. This ran in the renderer's drain until
+  // FLOOR-02 moved the drain here — and a promotion that only happens when a
+  // window is open is exactly the class of hole this migration closes.
+  //
+  // `addTask` is a no-op on a colliding id, which is the whole reason the
+  // renderer version had to read `hiveTasks()` first. That read is gone with it.
+  // ADDITIVE + best-effort: a failure here must never affect a delivery that
+  // already happened.
+  onQueueDelivered: (item) => {
+    if (!item.slack || !hive.enabled()) return;
+    const title = item.text.length > 80 ? `${item.text.slice(0, 79)}…` : item.text;
+    hive.addTask({
+      id: `slack-${item.slack.thread_ts}-${item.id}`,
+      title,
+      description: item.text,
+      status: 'todo',
+      dependsOn: [],
+      priority: 1,
+      createdAt: new Date().toISOString(),
+      slack: item.slack
+    });
+  },
+  breakerLevel: (agentId) => breaker.levelFor(agentId),
+  // The DURABLE half of the idle-quiesce backstop (#5). `emit` below reaches a
+  // renderer that may not exist — the whole point of moving the backstop out of
+  // useHive.ts is that it has to work with the window closed — so the transition
+  // is written to the hive log, which main owns and which outlives every window.
+  // Deliberately NOT registry.json: that file's `status` is written 'idle' once at
+  // spawn and never transitions (see isFloorQuiet below), so rewriting it here
+  // would be a no-op against a field nothing advances.
+  setStatus: (agentId, status) => {
+    if (!hive.enabled()) return;
+    hive.appendLog({ kind: 'agent_quiesced', agentId, status, reason: 'pty_silent' });
+  },
   emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } }
 });
 // HookServer needs BOTH: Oscar's control registry (HITL pause/gate/steer/halt via
@@ -465,13 +545,46 @@ const delivery = new DeliveryService({
 const hookServer = new HookServer(
   hive, () => liveWebContents(), () => readConfig(), control, breaker,
   (agentId) => delivery.drainAtStop(agentId),
-  (agentId) => focusAgent(agentId)
+  (agentId) => focusAgent(agentId),
+  (s) => telemetry.recordCostSample(s)          // FLOOR-09 (#19) — proxy-tier cost sink
+);
+// GATE-01 — the hook token is minted PER SPAWN and lives in exactly one PTY's
+// env, replacing the single floor-wide secret every PTY used to inherit. Wired
+// at the PtyManager rather than at each `ptyManager.spawn(…)` call site on
+// purpose: pty.ts:664 is the one place every agent PTY is actually created, so a
+// spawn site added later gets a token automatically instead of going silently
+// dead-hooked, and pty.ts already owns the session teardown where the matching
+// revoke belongs. Injected as callbacks so pty.ts keeps no dependency on hooks.ts.
+ptyManager.setHookTokenSource(
+  (agentId) => hookServer.mintToken(agentId),
+  (token) => hookServer.revokeToken(token)
+);
+// 01-25 — the same wiring for the collector's own, SEPARATE telemetry
+// capability. Placed here rather than at the collector's construction because
+// both `ptyManager` (above) and `telemetry` are already initialised at this
+// point: no temporal dead zone, and no startup window in which a legitimately
+// authenticated OTLP batch would be refused. A telemetry token is not a hook
+// token: leaking one buys "post telemetry as the agent that already holds it",
+// never the hook socket.
+ptyManager.setOtelTokenSource(
+  (agentId) => telemetry.mintAgentToken(agentId),
+  (token) => telemetry.revokeAgentToken(token)
 );
 const memory = new MemoryManager(
   () => readConfig().harnessHome,
-  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; }
+  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; },
+  // FLOOR-07: the FTS5 keyword index lives in the PersistStore this process is
+  // ALREADY holding open — no second database, no new dependency. Lazy on
+  // purpose: `persist` is declared below and is not open until whenReady, and
+  // the mine loop is the only caller.
+  () => persist,
+  // The project half of D-33's `WHERE agent_id = ? AND project = ?` predicate.
+  // The registry cwd is what an agent is actually working in; without it the
+  // project column would ship permanently empty and the predicate would be
+  // decoration rather than a filter.
+  (agentId) => hive.registry().agents[agentId]?.cwd ?? null
 );
-// Enterprise Knowledge Graph — file-backed store + agent CLI (default OFF).
+// Knowledge store — file-backed corpus + agent CLI, keyword search (default OFF).
 const knowledge = new KnowledgeManager();
 /** Reads the reflect tunables from config each tick (defaults baked in here so a
  *  pre-existing config.json without the keys still gets sane values). */
@@ -1480,6 +1593,12 @@ function breakerToast(title: string, body: string): void {
   catch { /* unsupported platform */ }
 }
 
+/** Throttle for the beat's argv-safety refusal below (plan 01-25 sink 3), in the
+ *  same shape `hooks.ts` throttles its own reject log: one line per interval, so
+ *  a single poisoned session id cannot fill the log from a ~30s loop. */
+const UNSAFE_SID_LOG_INTERVAL_MS = 60_000;
+let lastUnsafeSidWarn = 0;
+
 /** One circuit-breaker beat: pull a fresh usage sample per active agent, append
  *  it to the durable cost ledger (the SOLE durable cost store), tick the breaker,
  *  emit each BreakerState on control:breakerState (Seam 2), and enforce any
@@ -1518,7 +1637,22 @@ function runBreakerBeat(progressWindowMs: number): void {
     // (it was already being written to the cost ledger one line above). Same id,
     // same liveness gate; recordSession writes only on change, so this is a
     // no-op once the hooks are flowing.
-    if (sample?.sessionId) hive.recordSession(id, sample.sessionId);
+    //
+    // Sink 3 of 4 (plan 01-25). `sample.sessionId` is read off an OTLP batch, so
+    // it is only as trustworthy as the collector's own gate — and recordSession
+    // git-COMMITS it into registry.json, from where `hive.lastSession()` feeds it
+    // straight back into argv on the next restart. Refuse the same shape the two
+    // spawn sinks refuse, at the writer, so a poisoned id never becomes durable
+    // state. Throttled: this runs on the ~30s breaker beat, and an unthrottled
+    // line would repeat forever for one bad id.
+    if (sample?.sessionId) {
+      if (SPAWN_SAFE_SESSION_ID.test(sample.sessionId)) hive.recordSession(id, sample.sessionId);
+      else if (Date.now() - lastUnsafeSidWarn >= UNSAFE_SID_LOG_INTERVAL_MS) {
+        lastUnsafeSidWarn = Date.now();
+        console.warn(`[resume] refusing to record a session id that is not argv-safe for ${id} `
+          + `(length ${sample.sessionId.length}) — telemetry is reporting an id no CLI can be handed`);
+      }
+    }
     if (id === reg.godId) continue;            // breaker skips god
     // Progress = fresh coordination files OR a recent OTel tool span. The span
     // leg closes the background-work blind spot: subagent/Workflow tool calls
@@ -1532,6 +1666,7 @@ function runBreakerBeat(progressWindowMs: number): void {
     inputs.push({
       agentId: id,
       sample,
+      budget: hive.budgetForAgent(id) ?? undefined,   // FLOOR-10 (#34) — per-card token cap
       progressing: now - lastCoordinationAt(id) < progressWindowMs || now - lastSpanAt < progressWindowMs
     });
   }
@@ -2412,7 +2547,17 @@ function stopWebhookServer(): void {
 interface WindowBounds { x?: number; y?: number; width: number; height: number }
 
 const DEFAULT_WIN = { width: 1440, height: 900 };
-const MIN_WIN = { width: 1280, height: 800 };
+/** FLOOR-13. The minimum the operator may DRAG to — not what the app opens as,
+ *  which is DEFAULT_WIN above and unchanged. It was 1280, and that was the
+ *  accident: `sidebarLayout()` collapses the sidebar to a right-edge overlay
+ *  below 1024 so a narrow window stays usable, that collapse has passing tests,
+ *  and a 1280 floor made every width it covers unreachable in the shipped app —
+ *  a built, tested, documented feature that no operator could ever see. The
+ *  breakpoint is the designed behaviour; the floor was the contradiction, so the
+ *  floor moves. 960 also keeps the app usable on the 1366×768 laptops this tool
+ *  ships to. DESIGN.md's two statements of the minimum are corrected in the same
+ *  commit; plan 01-29 carries the splitter-persistence fix this makes reachable. */
+const MIN_WIN = { width: 960, height: 800 };
 
 /** Validate + clamp restored bounds: enforce the minimum size, and drop a
  *  position that no longer lands on any connected display (monitor unplugged) so
@@ -3154,7 +3299,19 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // session rather than launching a `--resume` against a missing id.
     const explicitSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
     const sid = explicitSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
-    if (sid && !args.includes('--resume')) {
+    // Sink 1 of 4 (plan 01-25). This id becomes ARGV — `--resume <sid>` — and a
+    // `--`-prefixed value is read by claude's parser as a FLAG, not as this
+    // option's argument: `--resume --dangerously-skip-permissions` turns
+    // permission gating off on a session the operator started without it. The id
+    // can arrive from `hive.lastSession()`, i.e. from whatever a hook payload
+    // once stored, so it is attacker-reachable. seedSessionTranscript()'s "the
+    // .jsonl must exist" is an accidental control, not a designed one — an agent
+    // with a Bash tool can create that file. Never echo the id itself.
+    if (sid && !SPAWN_SAFE_SESSION_ID.test(sid)) {
+      console.warn(`[resume] refusing a session id that is not argv-safe for ${opts.hive.id} `
+        + `(length ${sid.length}, opens "${sid.slice(0, 2)}") — starting a fresh session`);
+      if (explicitSid) resumeNotFound = true;
+    } else if (sid && !args.includes('--resume')) {
       if (seedSessionTranscript(opts.cwd, sid)) {
         args.push('--resume', sid);
         didResume = true;
@@ -3187,7 +3344,16 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // silently ignored it and started a brand-new empty session.
     const typedSid = typeof opts.resumeSessionId === 'string' ? opts.resumeSessionId.trim() : '';
     const sid = typedSid || (opts.resume === true ? hive.lastSession(opts.hive.id) : undefined);
-    if (sid && rf) {
+    // Sink 2 of 4 (plan 01-25) — a DIFFERENT function scope with its own `sid`,
+    // which is why one guard in the Claude branch above does not cover it. Placed
+    // above `if (sid && rf)` so it also fronts the `else if (sid && rsub)` arm:
+    // both the flag form (`--resume`/`--conversation`/`--session`) and Codex's
+    // subcommand form push this value into argv.
+    if (sid && !SPAWN_SAFE_SESSION_ID.test(sid)) {
+      console.warn(`[resume] refusing a session id that is not argv-safe for ${opts.hive.id} `
+        + `(length ${sid.length}, opens "${sid.slice(0, 2)}") — starting a fresh session`);
+      if (typedSid) resumeNotFound = true;
+    } else if (sid && rf) {
       const args = opts.args ?? [];
       if (!args.includes(rf)) { args.push(rf, sid); opts.args = args; didResume = true; }
     } else if (sid && rsub) {
@@ -3365,6 +3531,44 @@ ipcMain.handle('pty:idleFor', (_evt, agentId: string): number => {
 ipcMain.on('hive:deliveryVeto', (_evt, agentId: string, reason: string | null) => {
   if (typeof agentId !== 'string' || !agentId) return;
   delivery.setVeto(agentId, typeof reason === 'string' && reason ? reason : null);
+});
+/**
+ * FLOOR-02 — the ONE channel through which a renderer touches the delivery
+ * queue. The queue itself is main's (`delivery-queue.json` beside the hive), so
+ * the renderer's store no longer writes it; its producers call this and its
+ * pending list renders the snapshot main pushes back on `hive:queue`.
+ *
+ * This is an IPC trust boundary and text accepted here is text that will be
+ * typed into a live terminal, so every field is validated and the recipient is
+ * resolved against main's own roster (T-P08-01/05, `DeliveryDeps.knownAgent`).
+ * Never throws across IPC — a bad op is a `{ok:false, error}` (CONVENTIONS.md).
+ */
+ipcMain.handle('hive:queue', (_evt, raw: unknown): QueueResult => {
+  const req = raw as Partial<QueueOp> | null;
+  if (!req || typeof req !== 'object') return { ok: false, error: 'invalid op' };
+  const agentId = typeof (req as { agentId?: unknown }).agentId === 'string'
+    ? (req as { agentId: string }).agentId : '';
+  const id = typeof (req as { id?: unknown }).id === 'string' ? (req as { id: string }).id : '';
+  switch (req.op) {
+    case 'enqueue': {
+      const { text, slack, instruction } = req as Extract<QueueOp, { op: 'enqueue' }>;
+      const okSlack = !slack
+        || (typeof slack === 'object'
+          && typeof slack.channel === 'string' && typeof slack.thread_ts === 'string');
+      if (!okSlack) return { ok: false, error: 'invalid slack coordinates' };
+      return delivery.enqueue({
+        agentId,
+        text: typeof text === 'string' ? text : '',
+        ...(slack ? { slack } : {}),
+        ...(typeof instruction === 'string' ? { instruction } : {})
+      });
+    }
+    case 'remove': return id ? delivery.removeQueued(agentId, id) : { ok: false, error: 'invalid id' };
+    case 'release': return id ? delivery.releaseQueued(agentId, id) : { ok: false, error: 'invalid id' };
+    case 'clear': return agentId ? delivery.clearQueued(agentId) : { ok: false, error: 'invalid agentId' };
+    case 'list': return { ok: true, queues: delivery.queueSnapshot() };
+    default: return { ok: false, error: 'unknown op' };
+  }
 });
 ipcMain.handle('pty:resize', (_evt, id: string, cols: number, rows: number) => {
   if (typeof id !== 'string' || typeof cols !== 'number' || typeof rows !== 'number') return { ok: false, error: 'invalid args' };
@@ -3888,6 +4092,42 @@ ipcMain.on('roster:readSync', (evt) => { evt.returnValue = roster.read(); });
 ipcMain.handle('roster:read', () => roster.read());
 ipcMain.handle('roster:write', (_evt, snap: unknown) => roster.write(snap));
 
+/**
+ * FLOOR-02 — one-shot adoption of messages parked BEFORE the queue moved to main.
+ *
+ * The renderer used to own the MD queue and mirrored it into `roster.json`'s
+ * `queues` field. Anyone upgrading across this change has real messages sitting
+ * there, and a migration that silently drops them turns "the queue survives an
+ * app restart" into a lie on the one restart that matters. Guarded on the queue
+ * file's absence, so it runs at most once per hive and can never resurrect a
+ * message the operator deleted afterwards.
+ */
+function adoptRendererQueues(): void {
+  try {
+    const home = readConfig().harnessHome;
+    if (!home) return;
+    if (existsSync(join(home, 'delivery-queue.json'))) return;
+    const queues = roster.read()?.queues;
+    if (!queues) return;
+    let adopted = 0;
+    for (const [agentId, items] of Object.entries(queues)) {
+      for (const m of (Array.isArray(items) ? items : []) as Partial<QueuedDelivery>[]) {
+        if (typeof m?.text !== 'string' || !m.text.trim()) continue;
+        const res = delivery.enqueue({
+          agentId,
+          text: m.text,
+          ...(m.slack ? { slack: m.slack } : {}),
+          ...(m.instruction ? { instruction: m.instruction } : {})
+        });
+        if (res.ok) adopted += 1;
+      }
+    }
+    if (adopted) console.log(`[delivery] adopted ${adopted} message(s) parked by the renderer`);
+  } catch (e) {
+    console.error('[delivery] queue adoption failed', e);
+  }
+}
+
 // ─── IPC: hive (multi-agent coordination) ───────────────────────────────────
 ipcMain.handle('hive:registry', () => hive.registry());
 ipcMain.handle('hive:board', () => hive.board());
@@ -3895,6 +4135,20 @@ ipcMain.handle('hive:tasks', () => hive.tasks());
 ipcMain.handle('hive:log', (_evt, n: unknown) => hive.logTail(typeof n === 'number' ? n : 200));
 ipcMain.handle('hive:memory', (_evt, id: unknown) => (typeof id === 'string' ? hive.memory(id) : ''));
 ipcMain.handle('hive:inbox', (_evt, id: unknown) => (typeof id === 'string' ? hive.inbox(id) : []));
+// FLOOR-14 (#42) — the ONE renderer→main edge for a blocked NON-Claude agent.
+// `status: 'blocked'` for an engine with no hook `Notification` stream is a
+// renderer determination (usePtyParser matching an approval prompt in the
+// terminal tail), so main could not see it and the human got no toast at all.
+// This carries the TRANSITION and nothing else: hooks.notifyBlocked re-resolves
+// the id against the live registry, skips Claude providers (whose blocked state
+// already toasts from their own hook stream), and reuses the existing notify()
+// with its `notifications` gate and click-to-focus. `handle` rather than `on`
+// for one reason — every other renderer→main call in this file is `invoke`/
+// `handle` and the preload surface is uniformly promise-shaped; a lone `send`
+// channel would need its own preload idiom to buy nothing.
+ipcMain.handle('hive:notifyBlocked', (_evt, id: unknown) => {
+  if (typeof id === 'string' && id) hookServer.notifyBlocked(id);
+});
 // Voice read-layer: recent message CONTENT (inbox/outbox bodies), REDACTED
 // main-side by hive.voiceMessages(). The renderer/voice layer never sees a raw
 // body — secrets are stripped here, before the result crosses IPC.
@@ -4038,15 +4292,9 @@ ipcMain.handle('hive:searchMemory', (_evt, query: unknown, wing: unknown) => {
   if (typeof query !== 'string' || !query.trim()) return { ok: false, output: '', error: 'empty query' };
   return memory.search(query, { wing: typeof wing === 'string' ? wing : undefined });
 });
-ipcMain.handle('hive:memoryWakeUp', (_evt, wing: unknown) =>
-  memory.wakeUp(typeof wing === 'string' ? wing : undefined));
 ipcMain.handle('hive:mineNow', () => { memory.mineNow(); return { ok: true }; });
-// Condense memory.md on demand: an explicit id condenses that one agent (skips
-// the size trigger — a "condense now" button); no id runs a full threshold scan.
-ipcMain.handle('memory:reflectNow', (_evt, id: unknown) =>
-  reflector.reflectNow(typeof id === 'string' && id ? id : undefined));
 
-// ─── IPC: enterprise Knowledge Graph (multimodal context for agents) ─────────
+// ─── IPC: knowledge store (keyword search over the user's own documents) ─────
 ipcMain.handle('kg:status', () => knowledge.status());
 ipcMain.handle('kg:list', () => knowledge.list());
 ipcMain.handle('kg:search', (_evt, query: unknown, limit: unknown) => {
@@ -5387,6 +5635,7 @@ function bootstrapHiveServices(): void {
   memory.start(); // init shared palace + mine loop (no-op without mempalace)
   reflector.start(); // bound oversized memory.md files on a timer (no-op until threshold)
   delivery.start(); // #5 — the inbox wake + failover executor, in MAIN
+  adoptRendererQueues(); // FLOOR-02 — one-shot: don't lose messages parked before the move
 
   armAlwaysOnBeats();
 }
@@ -5523,15 +5772,23 @@ app.whenReady().then(() => {
   // server is running; the FILE only exists while it is, so the helper degrades
   // to "endpoint not running" cleanly. NO secret is in the env — only the path.
   process.env.MD_SLACK_REPLY_CONFIG = slackReplyConfigPath();
-  // The hook socket's shared secret, by the same inheritance route. HookServer
-  // rejects every payload whose `sock_token` doesn't equal hookSockToken(), and
-  // the hook shims read this value out of the env they inherit — as PTY
-  // descendants (pty.ts merges process.env) AND, for the qwen proxy bridge, as a
-  // sidecar main spawns with `...process.env`. Setting it here rather than at
-  // each spawn site is what makes BOTH of those work. Get this wrong and every
-  // hook in the app goes dead at once; hooks.ts's rejection log names this exact
-  // variable for that reason.
-  process.env.HIVE_SOCK_TOKEN = hookSockToken();
+  // The former floor-wide `HIVE_SOCK_TOKEN` env assignment was removed here — see
+  // GATE-01. It put ONE secret on this process's environment, and `pty.ts`
+  // spreads that environment into every PTY, so every LLM-controlled shell on the
+  // floor could read the key that authenticated every other agent. Against a
+  // prompt-injected agent the check bought nothing.
+  //
+  // The token is now minted PER SPAWN by `hookServer.mintToken(agentId)` and put
+  // in that one PTY's `opts.env` (see the wiring beside the HookServer
+  // construction above, and `PtyManager.setHookTokenSource`). Reading agent A's
+  // env yields A's identity and nothing else.
+  //
+  // Two consequences, both deliberate: anything that relied on INHERITING the
+  // value now gets nothing — `hiddenClaude.ts` and `memory.ts` spawn children
+  // with `...process.env` and neither installs a hook, so losing it is a leak
+  // closed rather than a feature lost; and the qwen proxy sidecar
+  // (`hive.ts` startProxyBridge) is dead-hooked until 01-06 threads its agent's
+  // token through that spawn site.
   // Open the durable store first — createWindow() reads the saved window bounds.
   // Guarded: a DB failure (e.g. a bad native build) must degrade to defaults,
   // never block app startup.

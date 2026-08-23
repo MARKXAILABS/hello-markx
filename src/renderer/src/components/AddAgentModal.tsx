@@ -38,11 +38,11 @@ const ossChip = (active: boolean, accent: AccentColorName): CSSProperties => ({
   padding: '3px 8px 1px',
   background: active ? `var(--cth-${accent}-light)` : 'var(--cth-cream-100)',
   boxShadow: active ? 'inset 0 0 0 1.5px var(--cth-ink-500)' : 'inset 0 0 0 1px var(--cth-ink-100)',
-  fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
   color: 'var(--cth-ink-900)', cursor: 'pointer', border: 'none'
 });
 const ossGroupHead: CSSProperties = {
-  fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+  fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
   color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 4
 };
 
@@ -464,7 +464,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                 padding: '6px 10px',
                 background: 'var(--cth-lemon-light, #fdf3cf)',
                 boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                fontSize: 12,
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                 color: 'var(--cth-ink-900)',
                 display: 'flex', flexDirection: 'column', gap: 2
               }}>
@@ -475,13 +475,13 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                 <span>review every field — especially the command — before spawning.</span>
                 {hireMeta.commandFlags && hireMeta.commandFlags.length > 0 && (
                   <span style={{ display: 'flex', gap: 4, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
-                    <span style={{ fontSize: 12 }}>⚠️ flags this hire appends to the command:</span>
+                    <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>⚠️ flags this hire appends to the command:</span>
                     {hireMeta.commandFlags.map((f, i) => (
                       <code
                         key={`${f}-${i}`}
                         style={{
                           fontFamily: 'var(--cth-font-mono)',
-                          fontSize: 12,
+                          fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                           padding: '0 4px',
                           background: 'var(--cth-paprika-light, #f6d3c4)',
                           boxShadow: 'inset 0 0 0 1px var(--cth-paprika-700, #b3502e)',
@@ -495,13 +495,13 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                 )}
                 {hireMeta.skills && hireMeta.skills.length > 0 && (
                   <span style={{ display: 'flex', gap: 4, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 2 }}>
-                    <span style={{ fontSize: 12 }}>skills this hire activates:</span>
+                    <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>skills this hire activates:</span>
                     {hireMeta.skills.map((s) => (
                       <code
                         key={s}
                         style={{
                           fontFamily: 'var(--cth-font-mono)',
-                          fontSize: 12,
+                          fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                           padding: '0 4px',
                           background: 'var(--cth-mint-light, #d0f0e0)',
                           boxShadow: 'inset 0 0 0 1px var(--cth-mint-700, #1f7a4d)',
@@ -524,10 +524,10 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2 }}>
                       {safe.length > 0 && (
                         <span style={{ display: 'flex', gap: 4, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 12 }}>MCP servers (safe, pre-enabled):</span>
+                          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>MCP servers (safe, pre-enabled):</span>
                           {safe.map((id) => (
                             <code key={id} style={{
-                              fontFamily: 'var(--cth-font-mono)', fontSize: 12, padding: '0 4px',
+                              fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', padding: '0 4px',
                               background: 'var(--cth-sky-light, #d0e8f8)',
                               boxShadow: 'inset 0 0 0 1px var(--cth-sky-700, #1f5a8a)',
                               color: 'var(--cth-ink-900)'
@@ -537,16 +537,16 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                       )}
                       {consent.length > 0 && (
                         <span style={{ display: 'flex', gap: 4, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 12 }}>⚠️ MCP (needs your consent — NOT auto-enabled):</span>
+                          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>⚠️ MCP (needs your consent — NOT auto-enabled):</span>
                           {consent.map((id) => (
                             <code key={id} style={{
-                              fontFamily: 'var(--cth-font-mono)', fontSize: 12, padding: '0 4px',
+                              fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', padding: '0 4px',
                               background: 'var(--cth-paprika-light, #f6d3c4)',
                               boxShadow: 'inset 0 0 0 1px var(--cth-paprika-700, #b3502e)',
                               color: 'var(--cth-ink-900)'
                             }}>{id}</code>
                           ))}
-                          <span style={{ fontSize: 11, color: 'var(--cth-ink-700)' }}>
+                          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
                             — enable in Settings → MCP after reviewing
                           </span>
                         </span>
@@ -578,14 +578,14 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                       }}
                     >
                       <span style={{
-                        fontFamily: 'var(--cth-font-display)', fontSize: 9, lineHeight: '13px',
+                        fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
                         color: 'var(--cth-ink-900)', textTransform: 'uppercase',
                         display: 'flex', alignItems: 'baseline', gap: 6
                       }}>
                         <span style={{ color: active ? 'var(--cth-ink-900)' : 'var(--cth-ink-500)' }}>{i + 1}</span>
                         {s.label}
                       </span>
-                      <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-500)' }}>
+                      <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                         {s.hint}
                       </span>
                     </button>
@@ -627,7 +627,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                             <div style={{ width: 44, height: 56, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', overflow: 'hidden' }}>
                               <SpritePortrait character={c.name} scale={2} />
                             </div>
-                            <span style={{ fontSize: 11, color: 'var(--cth-ink-700)' }}>{c.displayName}</span>
+                            <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>{c.displayName}</span>
                           </button>
                         ))}
                       </div>
@@ -660,7 +660,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                   <>
                     <Row label="Project">
                       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                        <span style={{ fontSize: 12, color: 'var(--cth-ink-500)' }}>
+                        <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                           {repos.length > 0 ? 'Pick a project, or add a new one:' : 'No projects yet — add one to get started:'}
                         </span>
                         <button
@@ -669,7 +669,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                           style={{
                             flexShrink: 0, padding: '2px 8px 1px', border: 'none', cursor: 'pointer',
                             background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                            fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)',
+                            fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)',
                             display: 'inline-flex', alignItems: 'center', gap: 4
                           }}
                         >
@@ -690,7 +690,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                                   ? 'inset 0 0 0 1.5px var(--cth-ink-500)'
                                   : 'inset 0 0 0 1px var(--cth-ink-100)',
                                 fontFamily: 'var(--cth-font-ui)',
-                                fontSize: 12,
+                                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                                 cursor: 'pointer',
                                 border: 'none'
                               }}
@@ -705,7 +705,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                           value={cwd}
                           onChange={(e) => setCwd(e.target.value)}
                           placeholder="/path/to/your/project"
-                          style={{ ...inputStyle, flex: 1, fontFamily: 'var(--cth-font-mono)', fontSize: 13 }}
+                          style={{ ...inputStyle, flex: 1, fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)' }}
                         />
                         <PixelButton variant="secondary" size="md" onClick={pickFolder}>
                           <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
@@ -721,7 +721,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                             alignSelf: 'flex-start', marginTop: 2,
                             padding: '2px 8px 1px', border: 'none', cursor: 'pointer',
                             background: 'var(--cth-mint-light)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                            fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)',
+                            fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)',
                             display: 'inline-flex', alignItems: 'center', gap: 4
                           }}
                         >
@@ -738,7 +738,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                         onChange={(e) => setIsolate(e.target.checked)}
                         style={{ width: 16, height: 16, cursor: resuming ? 'not-allowed' : 'pointer' }}
                       />
-                      <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 13, color: 'var(--cth-ink-900)' }}>
+                      <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
                         Git isolation (own worktree)
                       </span>
                     </label>
@@ -749,15 +749,15 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                         onChange={(e) => { setResumeSessionId(e.target.value); setFolderNote(undefined); }}
                         onBlur={resolveFolderFromSession}
                         placeholder="paste a Claude session id to continue its conversation"
-                        style={{ ...inputStyle, fontFamily: 'var(--cth-font-mono)', fontSize: 13 }}
+                        style={{ ...inputStyle, fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)' }}
                       />
                       {folderNote && (
-                        <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-mint, var(--cth-ink-700))' }}>
+                        <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-mint, var(--cth-ink-700))' }}>
                           {folderNote}
                         </span>
                       )}
                       {resuming && (
-                        <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-700)' }}>
+                        <span style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
                           Will resume this session in the chosen folder (git isolation disabled).
                         </span>
                       )}
@@ -790,7 +790,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                                 boxShadow: active
                                   ? 'inset 0 0 0 1.5px var(--cth-ink-500)'
                                   : 'inset 0 0 0 1px var(--cth-ink-100)',
-                                fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+                                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                                 color: 'var(--cth-ink-900)', cursor: 'pointer', border: 'none',
                                 display: 'inline-flex', alignItems: 'center', gap: 6
                               }}
@@ -827,7 +827,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                                 boxShadow: active
                                   ? 'inset 0 0 0 1.5px var(--cth-ink-500)'
                                   : 'inset 0 0 0 1px var(--cth-ink-100)',
-                                fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+                                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                                 color: 'var(--cth-ink-900)', cursor: 'pointer', border: 'none'
                               }}
                             >
@@ -861,7 +861,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                                   boxShadow: active
                                     ? 'inset 0 0 0 1.5px var(--cth-ink-500)'
                                     : 'inset 0 0 0 1px var(--cth-ink-100)',
-                                  fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+                                  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                                   color: 'var(--cth-ink-900)', cursor: 'pointer', border: 'none'
                                 }}
                               >
@@ -923,7 +923,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                     )}
 
                     {(provider === 'opencode' || provider === 'crush' || provider === 'pi' || provider === 'qwen') && (
-                      <div style={{ fontSize: 12, color: 'var(--cth-ink-500)', lineHeight: '16px', margin: '2px 0 6px' }}>
+                      <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-500)', lineHeight: 'var(--cth-lh-body-md)', margin: '2px 0 6px' }}>
                         BYOK keys &amp; local endpoints for this engine live in <strong>Settings → AI Engines</strong>.
                         {' '}New to local models? Start an Ollama, LM Studio or vLLM server and paste its base URL there.
                         {' '}Live end-to-end is pending real model calls (verify on-device).
@@ -962,7 +962,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                               padding: '3px 8px 1px',
                               background: 'var(--cth-cream-100)',
                               boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                              fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+                              fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                               color: 'var(--cth-ink-900)', cursor: 'pointer', border: 'none'
                             }}
                           >
@@ -1000,7 +1000,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                 padding: '6px 10px',
                 background: 'var(--cth-coral-light)',
                 boxShadow: 'inset 0 0 0 1px var(--cth-coral)',
-                fontSize: 13,
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
                 color: 'var(--cth-ink-900)'
               }}>
                 {error}
@@ -1015,7 +1015,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               display: 'flex', flexDirection: 'column', gap: 6
             }}>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: '17px' }}>
+                <span style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 'var(--cth-lh-body-md)' }}>
                   <strong>Import hire</strong> loads a ready-made agent from a <code style={{ fontFamily: 'var(--cth-font-mono)' }}>.json</code> manifest —
                   it fills in every field below for you to review. Nothing spawns until you hit <em>spawn</em>.
                 </span>
@@ -1026,7 +1026,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                     padding: '2px 8px 1px', border: 'none', cursor: 'pointer',
                     background: showHirePrompt ? 'var(--cth-lemon-light)' : 'var(--cth-cream-200)',
                     boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                    fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)'
+                    fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
                   }}
                 >
                   {showHirePrompt ? 'hide AI prompt' : 'generate one with AI…'}
@@ -1034,7 +1034,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               </div>
               {showHirePrompt && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 12, color: 'var(--cth-ink-500)', lineHeight: '16px' }}>
+                  <span style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-500)', lineHeight: 'var(--cth-lh-body-md)' }}>
                     Copy this into Claude/ChatGPT/Gemini, fill in the details at the bottom, then save
                     its JSON reply as a <code style={{ fontFamily: 'var(--cth-font-mono)' }}>.json</code> file and import it here.
                   </span>
@@ -1046,7 +1046,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                     style={{
                       ...inputStyle,
                       width: '100%',
-                      fontFamily: 'var(--cth-font-mono)', fontSize: 12, lineHeight: '16px',
+                      fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                       resize: 'vertical', background: 'var(--cth-paper-100)'
                     }}
                   />
@@ -1091,7 +1091,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <span style={{
         fontFamily: 'var(--cth-font-display)',
-        fontSize: 8, lineHeight: '12px',
+        fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
         color: 'var(--cth-ink-700)',
         textTransform: 'uppercase'
       }}>{label}</span>

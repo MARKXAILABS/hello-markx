@@ -119,11 +119,28 @@ test('a legacy-only install still resolves, so old transcripts stay readable', (
     const legacy = mkProject(legacyName('/Users/me/app'));
     assert.equal(projectDir('/Users/me/app'), legacy);
   });
-  if (process.platform !== 'win32') return;
-  // Windows never wrote a legacy spelling, so the POSIX one must stay INERT
-  // even when it is the only directory present: falling back to it would hand
-  // back a name Claude Code has never written on this platform, and the miss
-  // would look like a hit — the exact shape of the bug this file guards.
+});
+
+// Windows never wrote a legacy spelling, so the POSIX one must stay INERT
+// even when it is the only directory present: falling back to it would hand
+// back a name Claude Code has never written on this platform, and the miss
+// would look like a hit — the exact shape of the bug this file guards.
+//
+// SPLIT out of the case above rather than skipped with it. It used to sit behind
+// a bare `if (process.platform !== 'win32') return;` in the middle of that case,
+// which node:test counts as a PASS — so on ubuntu and macOS this half never ran
+// and the case still reported `ok`. Skipping the WHOLE case would have traded
+// that non-run for another: the half above runs, and asserts, on every platform.
+//
+// Note the polarity: this case RUNS on win32 and skips on POSIX, the mirror of
+// the other conversions in this wave. The skip is CONDITIONAL for the same
+// reason as theirs: an UNCONDITIONAL skip option would delete the win32 coverage
+// entirely, which is a non-run dressed up as a counted one.
+test('the POSIX legacy spelling stays inert on win32, even as the only directory present', {
+  skip: process.platform !== 'win32'
+    && 'this case asserts a win32-only rule: there is no second (legacy) spelling on this platform '
+      + 'for the resolver to fall back to, so the assertion has no meaning on POSIX'
+}, () => {
   withHome((_home, mkProject) => {
     mkProject('Users-me-app');
     assert.equal(path.basename(projectDir('/Users/me/app')), '-Users-me-app');

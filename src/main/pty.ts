@@ -33,6 +33,18 @@ interface PtySession {
   proc: pty.IPty;
   cwd: string;
   command: string;
+  /** GATE-01 — the per-spawn hook token handed to THIS pty's environment, kept
+   *  so every path that drops the session can revoke exactly it (and not a
+   *  replacement minted for the same id by a restart). Absent for a PTY with no
+   *  AGENT_ID: an installer or plain shell posts no hook payloads. */
+  hookToken?: string;
+  /** 01-25 — the per-spawn TELEMETRY token handed to this pty's environment on
+   *  the two per-signal OTLP header vars. A SEPARATE secret from `hookToken` on
+   *  purpose: those variables are OpenTelemetry-spec'd and inherited by every
+   *  grandchild, so sharing one secret would post the HOOK credential to any
+   *  vendor an agent's own tooling is configured for. Absent for a PTY with no
+   *  AGENT_ID or no OTLP endpoint — nothing to authenticate, nothing to leak. */
+  otelToken?: string;
   /** The window (webContents) that spawned this PTY and should receive its
    *  output. Multi-window: each floor owns its own terminals, so `pty:data:<id>`
    *  / `pty:exit:<id>` route ONLY here — never broadcast — so one floor's stream
@@ -324,6 +336,20 @@ export class PtyManager {
    *  runs. Best-effort — set once by the main process. */
   private exitHandler: ((id: string, exitCode?: number) => void) | null = null;
 
+  /** GATE-01 — mint/revoke the per-spawn hook token (HookServer, injected by
+   *  main so this file keeps no dependency on hooks.ts). Optional: a PtyManager
+   *  with no source simply spawns PTYs that carry no HIVE_SOCK_TOKEN, which is
+   *  what every test that does not care about hooks already expects. */
+  private mintHookToken: ((agentId: string) => string) | null = null;
+  private revokeHookToken: ((token: string) => void) | null = null;
+
+  /** 01-25 — mint/revoke the per-spawn TELEMETRY token (TelemetryCollector,
+   *  injected by main so this file keeps no dependency on telemetry.ts either).
+   *  Optional in exactly the same way: a PtyManager with no source spawns PTYs
+   *  that carry no OTLP header vars. */
+  private mintOtelToken: ((agentId: string) => string) | null = null;
+  private revokeOtelToken: ((token: string) => void) | null = null;
+
   /** The default/fallback output sink — set to the PRIMARY window. Used only for
    *  sessions with no recorded owner; owned sessions route to their owner. */
   attachWebContents(wc: WebContents) {
@@ -356,6 +382,7 @@ export class PtyManager {
         // phantom terminal and a respawn under the same id is refused with
         // "pty already exists".
         this.sessions.delete(id);
+        this.releaseHookToken(s); // GATE-01 — the env that held it is gone
         // ...but unlike kill(), NOBODY else runs teardown for this path (kill()'s
         // callers all follow it with teardownPty; the window 'closed' handler does
         // not). The delete above makes onExit's identity guard bail, so fire the
@@ -373,6 +400,41 @@ export class PtyManager {
    *  install → auto restart-and-continue) from a crash. */
   setExitHandler(handler: (id: string, exitCode?: number) => void): void {
     this.exitHandler = handler;
+  }
+
+  /** Register the per-spawn hook-token mint/revoke pair (GATE-01). Set once by
+   *  main, from the live HookServer. */
+  setHookTokenSource(mint: (agentId: string) => string, revoke: (token: string) => void): void {
+    this.mintHookToken = mint;
+    this.revokeHookToken = revoke;
+  }
+
+  /** Register the per-spawn TELEMETRY mint/revoke pair (01-25). Set once by
+   *  main, from the live TelemetryCollector, immediately beside
+   *  `setHookTokenSource` — both objects are already constructed there, so there
+   *  is no window in which a legitimately authenticated batch would be refused. */
+  setOtelTokenSource(mint: (agentId: string) => string, revoke: (token: string) => void): void {
+    this.mintOtelToken = mint;
+    this.revokeOtelToken = revoke;
+  }
+
+  /** Give up a session's per-spawn credentials. Called from EVERY path that
+   *  drops a session from the map — natural exit, kill(), killByOwner() —
+   *  because a token whose PTY is gone should not authenticate anything.
+   *  Idempotent.
+   *
+   *  It releases BOTH the hook token and the telemetry token (01-25): they have
+   *  exactly the same lifetime and the same call sites, and a second method
+   *  would be a second thing to forget at a fourth teardown path added later.
+   *  The name is kept because `hive.ts` cites it by name in two comments. */
+  private releaseHookToken(s: PtySession): void {
+    if (s.otelToken) {
+      try { this.revokeOtelToken?.(s.otelToken); } catch { /* never break teardown */ }
+      s.otelToken = undefined;
+    }
+    if (!s.hookToken) return;
+    try { this.revokeHookToken?.(s.hookToken); } catch { /* never break teardown */ }
+    s.hookToken = undefined;
   }
 
   /** Send to the renderer only if it's still alive. During app quit, killing a
@@ -561,6 +623,10 @@ export class PtyManager {
       return { ok: false, error: `cwd does not exist: ${opts.cwd}` };
     }
     const resolved = this.resolveCommand(opts.command).path;
+    // Declared out here so the catch below can hand back a token whose PTY never
+    // started — a minted-but-unused token would authenticate forever.
+    let hookToken: string | undefined;
+    let otelToken: string | undefined;
     try {
       // Build a user-shell PATH so child can resolve subprocess deps. Cached
       // for the session (shellEnv.userShellPath, fenced against rc-file noise) —
@@ -661,6 +727,21 @@ export class PtyManager {
           );
         }
       }
+      // GATE-01 — the hook token, minted for THIS spawn only and keyed on the
+      // very id the shims report (`AGENT_ID`), so the server can derive identity
+      // from the token instead of believing `payload.agent_id`. Keyed off
+      // opts.env rather than opts.id deliberately: AGENT_ID is what the shim
+      // reads and sends, and a PTY without one (the missing-CLI installer, a
+      // plain shell) installs no hooks and so needs no token.
+      const hookAgentId = opts.env?.AGENT_ID;
+      hookToken = hookAgentId ? (this.mintHookToken?.(hookAgentId) ?? undefined) : undefined;
+      // 01-25 — the TELEMETRY token, minted only when this spawn actually has an
+      // OTLP endpoint to post to (hive.ts sets it for claude agents with
+      // telemetry on, and for nobody else). Minting one for a PTY that will
+      // never use it is a credential with no consumer.
+      otelToken = hookAgentId && opts.env?.OTEL_EXPORTER_OTLP_ENDPOINT
+        ? (this.mintOtelToken?.(hookAgentId) ?? undefined)
+        : undefined;
       const proc = pty.spawn(file, spawnArgs, {
         name: 'xterm-256color',
         cols: opts.cols ?? 100,
@@ -689,7 +770,33 @@ export class PtyManager {
             : { LANG: process.env.LANG ?? 'en_US.UTF-8',
                 LC_CTYPE: process.env.LC_ALL ?? process.env.LC_CTYPE ?? process.env.LANG ?? 'en_US.UTF-8' }),
           // Per-agent hive identity (AGENT_ID, HIVE_ROOT, …) when provided.
-          ...(opts.env ?? {})
+          ...(opts.env ?? {}),
+          // LAST, so nothing upstream can shadow it: this PTY's own hook token.
+          ...(hookToken ? { HIVE_SOCK_TOKEN: hookToken } : {}),
+          // ...and this PTY's own TELEMETRY token, on the two PER-SIGNAL OTLP
+          // header variables. hive.ts builds the OTLP env before the PTY exists,
+          // so this is the one choke point where the endpoint and the credential
+          // are both in scope — the same reason HIVE_SOCK_TOKEN is set here.
+          //
+          // The per-signal pair, never the generic variable: the generic one is
+          // read by every OTel SDK in every language for every signal and is
+          // inherited by every grandchild, so an agent running `npm test` in a
+          // repo with its own OTel-to-vendor configuration would post our header
+          // to that vendor. The pair is also what actually applies, because
+          // hive.ts turns on exactly OTEL_METRICS_EXPORTER=otlp and
+          // OTEL_LOGS_EXPORTER=otlp, and the OTel spec gives a per-signal
+          // variable precedence over the generic one for those exporters.
+          //
+          // Set LAST for a second reason: an operator-set per-signal value that
+          // silently replaced ours would 401 every batch on this floor, taking
+          // the cost ledger, the resume key, all the breaker cost arms and
+          // account failover dark at once.
+          ...(otelToken
+            ? {
+              OTEL_EXPORTER_OTLP_METRICS_HEADERS: `x-hive-otel-token=${otelToken}`,
+              OTEL_EXPORTER_OTLP_LOGS_HEADERS: `x-hive-otel-token=${otelToken}`
+            }
+            : {})
         } as Record<string, string>
       });
 
@@ -706,6 +813,8 @@ export class PtyManager {
         proc,
         cwd: opts.cwd,
         command: resolved,
+        hookToken,
+        otelToken,
         lastOutputAt: Date.now(),
         hasOutput: false,
         owner,
@@ -736,6 +845,7 @@ export class PtyManager {
         if (this.sessions.get(opts.id) !== session) return;
         this.safeSend(`pty:exit:${opts.id}`, { exitCode, signal }, session.owner);
         this.sessions.delete(opts.id);
+        this.releaseHookToken(session); // GATE-01 — the env that held it is gone
         // Natural exit must run the same lifecycle teardown as an explicit kill.
         // Guarded so a teardown error can never crash node-pty's exit callback.
         try { this.exitHandler?.(opts.id, exitCode); } catch { /* never throw out of onExit */ }
@@ -743,6 +853,9 @@ export class PtyManager {
 
       return { ok: true };
     } catch (e) {
+      // The PTY never started, so nothing will ever present these tokens.
+      if (hookToken) { try { this.revokeHookToken?.(hookToken); } catch { /* noop */ } }
+      if (otelToken) { try { this.revokeOtelToken?.(otelToken); } catch { /* noop */ } }
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
@@ -791,6 +904,7 @@ export class PtyManager {
       s.proc.kill();
       ensureKilled(pid); // verify + sweep the process group so no PID leaks
       this.sessions.delete(id);
+      this.releaseHookToken(s); // GATE-01 — the env that held it is gone
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };

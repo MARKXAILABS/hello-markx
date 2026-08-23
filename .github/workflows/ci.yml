@@ -6,9 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-# Node 22 everywhere. Node 24 ships no better-sqlite3 prebuild and breaks
-# node-pty's winpty gyp build on Windows; package.json `engines` and .nvmrc say
-# the same thing, and CONTRIBUTING.md explains the toolchain behind it.
+# Node 22 everywhere. The pin now rests on node-pty's winpty gyp build alone:
+# better-sqlite3 13.x is N-API and ships a prebuild for every platform in the
+# matrix, so it loads under Node 24 and the `test` jobs must never rebuild it -
+# doing so throws the prebuild away and forces a node-gyp compile that only the
+# Linux leg has a pinned Python for. package.json `engines` and .nvmrc agree.
 env:
   NODE_VERSION: "22"
 
@@ -28,6 +30,22 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Typecheck (node + web)
         run: npm run typecheck
+      # A hard gate, deliberately in THIS job: it already installs with
+      # --ignore-scripts and needs no native build, so lint costs nothing extra
+      # here. The flag that makes it a gate lives in package.json's `lint`
+      # script (`eslint . --max-warnings 0`), not on this line, so the command is
+      # byte-identical to the one a contributor runs locally - one gate, one
+      # definition. Both react-hooks/exhaustive-deps and unused-directive
+      # reporting default to WARNING severity, so without --max-warnings 0 this
+      # step would pass while reporting findings.
+      #
+      # This step must never be softened. The repo carried 13 inert
+      # eslint-disable comments for its whole life because nothing read them;
+      # a lint step that reports and merges anyway is the same defect wearing a
+      # green tick. test/ci-config.test.cjs pins the step, the flag, and the
+      # count of failure-swallowing steps in this file.
+      - name: Lint (react-hooks, zero warnings)
+        run: npm run lint
       - name: npm audit (high and above)
         # Advisory. A fresh advisory in a transitive dep should be visible on the
         # PR, not block an unrelated change; dependabot (.github/dependabot.yml)

@@ -81,7 +81,24 @@ test('patch refuses an unknown card without rewriting the ledger', (t) => {
   hive.writeTasks([card('existing')]);
 
   assert.equal(hive.patchTask('missing', { status: 'done' }), false);
-  assert.deepEqual(tasks(hive), [card('existing')]);
+
+  const after = hive.tasks();
+  assert.equal(after.rev, 1,
+    'the ledger revision advanced on a REFUSED patch, so the whole collection was written back '
+    + 'anyway — the #17 clobber this file exists for, and one no card-content check can see');
+  assert.deepEqual(after.tasks.map((c) => c.id), ['existing']);
+
+  // D-22 (#34): rows read back through `hive:tasks` now also carry the card's
+  // meter — `tokens` spent, the `budgetTokens` cap and `pct`. Those three are
+  // DERIVED per read, not card data (`writeTasks` strips them before persisting),
+  // so the card content is compared on its own and the meter is pinned beside it
+  // rather than the whole widened row being compared to a bare card literal.
+  const { tokens, budgetTokens, pct, ...persisted } = after.tasks[0];
+  assert.deepEqual(persisted, card('existing'),
+    'a refused patch changed the card that WAS there');
+  assert.deepEqual({ tokens, budgetTokens, pct }, { tokens: 0, budgetTokens: null, pct: null },
+    'an untouched card with no cap must meter as no spend and no cap — a null cap that reads '
+    + 'as 0 would put every capless card permanently over budget');
 });
 
 test('renderer task actions never send a whole stale ledger back to main', () => {
@@ -106,5 +123,20 @@ test('renderer task actions never send a whole stale ledger back to main', () =>
   assert.match(sources[0], /hivePatchTask\s*\(/);
   assert.match(sources[1], /hivePatchTask\s*\(/);
   assert.match(sources[2], /hiveDeleteTask\s*\(/);
-  assert.match(sources[3], /hiveAddTask\s*\(/);
+  // FLOOR-02 moved the Slack-origin kanban promotion OUT of useHive.ts — it
+  // lived in the drain's `.then()`, and the drain is main's now — into main's
+  // `onQueueDelivered`. A card minted by the renderer is a card that is NOT
+  // minted with the window closed, which is the exact hole that migration exists
+  // to close, so the anchor follows the behaviour rather than being dropped.
+  // The contract this test guards is untouched: nothing writes a whole ledger.
+  assert.doesNotMatch(sources[3], /hiveAddTask\s*\(/,
+    'the Slack-origin card promotion belongs to main now; a renderer that mints it does not mint it with the window closed');
+  const hook = main.indexOf('onQueueDelivered:');
+  assert.ok(hook > 0,
+    'main lost its post-delivery hook — Slack-origin work would stop becoming a kanban card at all');
+  // Sliced to that hook's own block: index.ts is ~5,600 lines and already calls
+  // hive.addTask inside the `hive:addTask` IPC handler, so an unsliced match
+  // here would stay green with the promotion deleted.
+  assert.match(main.slice(hook, main.indexOf('\n  },', hook)), /hive\.addTask\(/,
+    "main's Slack-origin promotion must go through the atomic addTask, never a whole-ledger rewrite");
 });

@@ -6,7 +6,7 @@ import type { StatusKind } from '@/components/PixelBadge';
 import type { AgentProvider } from '@shared/agentProvider';
 import type { HireManifest } from '@shared/hire';
 import { DEFAULT_ORG_TRIGGER, type OrgTriggerConfig, type WebhookTrigger } from '@shared/triggers';
-import { isCompactionCommand } from '@shared/providerAutomation';
+import type { QueueOp } from '@shared/queueDelivery';
 import { patchChangesAgent, touchesDurableAgentField } from './agentPatch';
 
 export type ToolKind =
@@ -240,6 +240,13 @@ interface State {
    *  composer) doesn't eat what the user was typing. */
   drafts: Record<string, string>;
   setDraft: (agentId: string, text: string) => void;
+  /** Why main last refused a queue op for this agent, per agent. STORE state, not
+   *  component state: a refusal that only lives in the composer is invisible to a
+   *  server render and dies on the next agent switch, and the whole point of it is
+   *  that the operator can see WHY their message did not go. Set by `queueOp` on
+   *  `{ok:false}`, cleared by it on `{ok:true}`. */
+  queueError: Record<string, string | undefined>;
+  setQueueError: (agentId: string, error: string | undefined) => void;
   /** Mirror of config.freeflowEnabled so the composer can show/hide the Free Flow
    *  mic button reactively (set by App on config load and by Settings on save). */
   freeflowEnabled: boolean;
@@ -277,10 +284,12 @@ interface State {
    *  else. Configuration only for now: no transport reads the key yet. */
   orgTrigger: OrgTriggerConfig;
   setOrgTrigger: (cfg: OrgTriggerConfig) => void;
-  /** Park a message for an agent. Returns nothing; the flush loop delivers it.
+  /** Park a message for an agent, and RESOLVE main's answer — main owns the queue
+   *  and refuses on five reachable paths, so a caller that cannot tell acceptance
+   *  from refusal is a caller that loses the operator's words. Never rejects.
    *  `meta.instruction`, when set, is what gets typed into the PTY instead of
    *  `text` (UI/card surfaces still show `text`). */
-  enqueueMessage: (agentId: string, text: string, meta?: { slack?: { channel: string; thread_ts: string }; instruction?: string }) => void;
+  enqueueMessage: (agentId: string, text: string, meta?: { slack?: { channel: string; thread_ts: string }; instruction?: string }) => Promise<QueueOpResult>;
   /** Drop a single queued message (user removed it, or it was just delivered). */
   removeQueuedMessage: (agentId: string, messageId: string) => void;
   /** "Send now" while floor auto-delivery is paused: marks the message manual
@@ -288,6 +297,10 @@ interface State {
   releaseQueuedMessage: (agentId: string, messageId: string) => void;
   /** Clear an agent's entire pending queue. */
   clearQueue: (agentId: string) => void;
+  /** Apply main's queue snapshot. FLOOR-02: main owns the delivery queue, this
+   *  slice is a VIEW, and this is the only writer of it. Fed by the push on
+   *  `hive:queue` and by the one-shot pull in useHive effect #4. */
+  setQueues: (queues: Record<string, QueuedMessage[]>) => void;
   setAddAgentOpen: (open: boolean) => void;
   /** A validated hire manifest waiting to pre-fill the Add-Agent modal. */
   pendingHire: HireManifest | null;
@@ -359,10 +372,36 @@ const rosterMirror: {
 
 let rosterFlush: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * b/CR-03 — the pre-FLOOR-02 queue slice is published to `roster.json` ONCE.
+ *
+ * It cannot simply be dropped from the write: on a machine upgrading from a
+ * pre-FLOOR-02 build this slice is the ONLY bridge main has to those parked
+ * messages, because main cannot read localStorage. `adoptRendererQueues`
+ * (src/main/index.ts) reads it exactly once, guarded on `delivery-queue.json`
+ * not existing yet.
+ *
+ * It also cannot be republished forever, which is what happened. The slice's old
+ * localStorage writer had been dead since FLOOR-02, so nothing ever pruned a
+ * DELIVERED message out of the slice — it was frozen at boot — while
+ * `flushRosterNow` re-published it on every 500 ms debounce.
+ * `changeHome` copies `roster.json` but NOT `delivery-queue.json`
+ * (which lives at the home ROOT), so at the new home the `existsSync` guard
+ * passes and the frozen slice is re-enqueued into live terminals. Every Change
+ * Home. Forever.
+ *
+ * CEILING: this closes the RE-delivery. It does not repair a home whose
+ * `roster.json` was already copied before this landed — those messages were
+ * adopted at the source home, so main's `delivery-queue.json` there holds them
+ * and the `existsSync` guard is what protects that home.
+ */
+let queuesPendingPublish = false;
+
 function flushRosterNow(): void {
   if (rosterFlush) { clearTimeout(rosterFlush); rosterFlush = null; }
+  const publishing = queuesPendingPublish;
   try {
-    void window.cth?.rosterWrite?.({
+    const write = window.cth?.rosterWrite?.({
       version: 1,
       savedAt: new Date().toISOString(),
       agents: rosterMirror.agents,
@@ -371,6 +410,20 @@ function flushRosterNow(): void {
       queues: rosterMirror.queues,
       selectedId: rosterMirror.selectedId
     });
+    if (publishing && write) {
+      void write.then((r) => {
+        // ONLY a write that actually landed consumes the one-shot. A rejected,
+        // failed or SKIPPED write leaves the slice armed, because until main has
+        // the file this localStorage copy is the only one that exists — dropping
+        // it on a failure would destroy the messages instead of migrating them.
+        if (!r?.ok || r.skipped) return;
+        queuesPendingPublish = false;
+        rosterMirror.queues = {};
+        // `RosterSnapshot.queues` is REQUIRED, so every later write carries `{}`
+        // rather than omitting the key.
+        try { window.localStorage.removeItem(LS_QUEUES); } catch { /* noop */ }
+      }).catch(() => { /* nothing confirmed it landed — stay armed */ });
+    }
   } catch { /* the file is a mirror — localStorage already took the write */ }
 }
 
@@ -500,16 +553,75 @@ function loadPersistedRestorable(): Agent[] {
   }
 }
 
-function persistQueues(queues: Record<string, QueuedMessage[]>): void {
-  try {
-    // Only keep non-empty queues so the key stays small.
-    const slim: Record<string, QueuedMessage[]> = {};
-    for (const [id, q] of Object.entries(queues)) if (q.length) slim[id] = q;
-    window.localStorage.setItem(LS_QUEUES, JSON.stringify(slim));
-    rosterMirror.queues = slim;
-    scheduleRosterFlush();
-  } catch { /* noop */ }
+/** What `hiveQueue` resolves to. Declared LOCALLY on purpose: main's `QueueResult`
+ *  (`src/main/delivery.ts`) is the same shape, and importing it would pull a main
+ *  module across the process boundary into the renderer bundle. */
+export interface QueueOpResult {
+  ok: boolean;
+  error?: string;
+  queues?: Record<string, QueuedMessage[]>;
 }
+
+/** Park main's reason where a render can reach it, and hand it back to the caller.
+ *  Component state would satisfy neither: it is invisible to a server render, and
+ *  a composer that unmounts on an agent switch would drop it. */
+function queueRefusal(agentId: string | undefined, error: string): QueueOpResult {
+  if (agentId) useStore.getState().setQueueError(agentId, error);
+  return { ok: false, error };
+}
+
+/**
+ * Ask MAIN to mutate the delivery queue, and apply the snapshot it hands back.
+ *
+ * FLOOR-02 — the queue is main's now (`delivery-queue.json` beside the hive) and
+ * so is the drain, which is what makes a message composed here reach its
+ * recipient with the window closed. The renderer's copy is a VIEW: this is the
+ * ONE place it asks for a change, and `setQueues` is the one place it accepts
+ * one, from this reply or from main's push (`hive:queue`).
+ *
+ * This RESOLVES main's answer; it does not throw and it does not reject, so a
+ * caller may still ignore it inside a click handler without risking an unhandled
+ * rejection. What it must not do is SWALLOW it, which is what it used to.
+ *
+ * The old note here justified fire-and-forget on the grounds that "the next push
+ * corrects the view". That is true of the VIEW and false of the MESSAGE. Main
+ * returns `{ok:false}` with no `queues` key on five reachable paths — invalid
+ * agentId, empty message, unknown agent, no harness home, queue full — plus
+ * 01-27's transient read fault. Nothing renders, nothing is said, and the
+ * composer has already cleared the textarea: the operator's words are gone.
+ *
+ * Both failure shapes — a rejected promise and no preload at all — are normalised
+ * into the same `{ok:false, error}` object main's own refusals use, so one caller
+ * shape reads all of them. The success snapshot is applied through `setQueues`,
+ * not a raw `setState`: `setQueues`'s own doc calls itself the only writer of the
+ * slice, and a third writer that skips the declared gate silently misses any
+ * invariant added there.
+ */
+async function queueOp(op: QueueOp): Promise<QueueOpResult> {
+  const agentId = 'agentId' in op ? op.agentId : undefined;
+  let res: QueueOpResult;
+  try {
+    const pending = window.cth?.hiveQueue?.(op);
+    // No preload (unit tests), or a preload without the queue half.
+    if (!pending) return queueRefusal(agentId, 'no main process to accept this message');
+    res = await pending;
+  } catch (err) {
+    // Covers BOTH a rejected invoke and a synchronous throw from a missing window.
+    return queueRefusal(agentId, err instanceof Error ? err.message : String(err));
+  }
+  if (!res?.ok) return queueRefusal(agentId, res?.error ?? 'main declined without a reason');
+  if (res.queues) useStore.getState().setQueues(res.queues);
+  if (agentId) useStore.getState().setQueueError(agentId, undefined);
+  return res;
+}
+
+// The queue slice's localStorage writer stood here — dead since FLOOR-02
+// (nothing called it) and kept on the argument that `rosterMirror.queues` is
+// still seeded from the persisted copy at boot. That argument was for the SEED,
+// not for this writer, and the pair is resolved together rather than
+// half-removed: the seed is now a one-shot (`flushRosterNow`), and the dead
+// function is gone with its doc block. A dead function whose comment argues for
+// a live invariant is how b/CR-03 stayed invisible for a whole phase.
 
 function loadPersistedQueues(): Record<string, QueuedMessage[]> {
   try {
@@ -566,6 +678,8 @@ rosterMirror.agents = slimAgents(initialAgents);
 rosterMirror.archived = slimAgents(initialArchivedAgents);
 rosterMirror.restorable = slimAgents(initialRestorableAgents);
 rosterMirror.queues = initialQueues;
+// Arm the one-shot only when there is actually something to migrate.
+queuesPendingPublish = Object.keys(initialQueues).length > 0;
 rosterMirror.selectedId = initialSelectedId;
 
 // First run with the file: seed it from this origin's localStorage. Only when
@@ -605,7 +719,11 @@ export const useStore = create<State>((set) => ({
   sidebarWidth: initialSidebarWidth,
   sidebarTab: initialSidebarTab,
   godStatus: 'booting',
-  messageQueues: initialQueues,
+  // A VIEW of main's queue, filled by `setQueues` from main's push and from the
+  // one-shot pull in useHive effect #4. Deliberately NOT seeded from
+  // localStorage: main is the owner, and a stale local copy would render
+  // messages it has already delivered.
+  messageQueues: {},
   toolCounts: {},
   bumpToolCount: (id) =>
     set((s) => ({ toolCounts: { ...s.toolCounts, [id]: (s.toolCounts[id] ?? 0) + 1 } })),
@@ -687,7 +805,7 @@ export const useStore = create<State>((set) => ({
       const { [id]: _queueGone, ...messageQueues } = s.messageQueues;
       const selectedId = s.selectedId === id ? (agents[0]?.id ?? null) : s.selectedId;
       persistAgents(agents, selectedId);
-      if (_queueGone) persistQueues(messageQueues);
+      if (_queueGone) queueOp({ op: 'clear', agentId: id }); // main owns the queue
       return { agents, feeds, selectedId, messageQueues };
     }),
   archiveAgent: (id) =>
@@ -711,7 +829,7 @@ export const useStore = create<State>((set) => ({
       const selectedId = s.selectedId === id ? (agents[0]?.id ?? null) : s.selectedId;
       persistAgents(agents, selectedId);
       persistArchived(archivedAgents);
-      if (_queueGone) persistQueues(messageQueues);
+      if (_queueGone) queueOp({ op: 'clear', agentId: id }); // main owns the queue
       return { agents, archivedAgents, feeds, selectedId, messageQueues };
     }),
   removeArchivedAgent: (id) =>
@@ -754,6 +872,9 @@ export const useStore = create<State>((set) => ({
   drafts: {},
   setDraft: (agentId, text) =>
     set((s) => ({ drafts: { ...s.drafts, [agentId]: text } })),
+  queueError: {},
+  setQueueError: (agentId, error) =>
+    set((s) => ({ queueError: { ...s.queueError, [agentId]: error } })),
   freeflowEnabled: false,
   setFreeflowEnabled: (on) => set({ freeflowEnabled: on }),
   hasGroqKey: false,
@@ -769,63 +890,38 @@ export const useStore = create<State>((set) => ({
   // one careless mutation rewrites the default for everyone.
   orgTrigger: { ...DEFAULT_ORG_TRIGGER },
   setOrgTrigger: (cfg) => set({ orgTrigger: cfg }),
-  enqueueMessage: (agentId, text, meta) =>
-    set((s) => {
-      const trimmed = text.trim();
-      if (!trimmed) return s;
-      // ONE PENDING COMPACT PER AGENT. Compaction is idempotent in the worst way:
-      // the first `/compact` does the work and every one behind it answers
-      // "nothing to compact", so a queue that accumulates them spends a delivery
-      // slot and a model round-trip per copy to achieve nothing, and buries the
-      // operator's real backlog behind them.
-      //
-      // The invariant lives HERE rather than at the call sites because there are
-      // several — the context trigger, god dispatching a work order, Slack, the
-      // composer — and each one that grew its own check could still be bypassed
-      // by the next path someone adds. The context trigger's own check stays as
-      // cheap defence in depth, but this is the one that cannot be routed around.
-      const queued = s.messageQueues[agentId] ?? [];
-      if (isCompactionCommand(trimmed) && queued.some((m) => isCompactionCommand(m.text))) {
-        return s;
-      }
-      const msg: QueuedMessage = {
-        id: newQueuedId(), text: trimmed, ts: Date.now(),
-        ...(meta?.slack ? { slack: meta.slack } : {}),
-        ...(meta?.instruction ? { instruction: meta.instruction } : {})
-      };
-      const messageQueues = { ...s.messageQueues, [agentId]: [...(s.messageQueues[agentId] ?? []), msg] };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
-  removeQueuedMessage: (agentId, messageId) =>
-    set((s) => {
-      const current = s.messageQueues[agentId];
-      if (!current) return s;
-      const next = current.filter((m) => m.id !== messageId);
-      const messageQueues = { ...s.messageQueues, [agentId]: next };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
-  releaseQueuedMessage: (agentId, messageId) =>
-    set((s) => {
-      const current = s.messageQueues[agentId];
-      const target = current?.find((m) => m.id === messageId);
-      if (!current || !target) return s;
-      const next = [
-        { ...target, manual: true },
-        ...current.filter((m) => m.id !== messageId)
-      ];
-      const messageQueues = { ...s.messageQueues, [agentId]: next };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
-  clearQueue: (agentId) =>
-    set((s) => {
-      if (!s.messageQueues[agentId]?.length) return s;
-      const messageQueues = { ...s.messageQueues, [agentId]: [] };
-      persistQueues(messageQueues);
-      return { messageQueues };
-    }),
+  // ─── The delivery queue: MAIN owns it, these ASK (FLOOR-02) ──────────────
+  //
+  // These four were the renderer's writes into its own `messageQueues` slice,
+  // which is exactly what made them die with the window. They are forwarders
+  // now, and every producer call site is untouched on purpose: the store action
+  // has always been the renderer's ONE gate onto this path — the reason its own
+  // one-pending-compact invariant lived here rather than at the several
+  // producers — so repointing the gate repoints every producer, including the
+  // next one someone adds.
+  //
+  // That invariant went WITH the queue, to `DeliveryService.enqueue`. Leaving it
+  // here would have made it advisory: two producers can both read a stale view
+  // in the window between their enqueue and main's push back.
+  enqueueMessage: (agentId, text, meta) => {
+    const trimmed = text.trim();
+    // Main's `enqueue` refuses an empty message with this exact wording. Resolving
+    // it here rather than returning bare keeps ONE refusal to ONE wording wherever
+    // it is produced — and a bare `return` would resolve `undefined`, which every
+    // caller reading `.ok` would throw on.
+    if (!trimmed) return Promise.resolve(queueRefusal(agentId, 'empty message'));
+    return queueOp({
+      op: 'enqueue',
+      agentId,
+      text: trimmed,
+      ...(meta?.slack ? { slack: meta.slack } : {}),
+      ...(meta?.instruction ? { instruction: meta.instruction } : {})
+    });
+  },
+  removeQueuedMessage: (agentId, messageId) => queueOp({ op: 'remove', agentId, id: messageId }),
+  releaseQueuedMessage: (agentId, messageId) => queueOp({ op: 'release', agentId, id: messageId }),
+  clearQueue: (agentId) => queueOp({ op: 'clear', agentId }),
+  setQueues: (queues) => set({ messageQueues: queues }),
   reconcileWithLivePtys: (livePtyIds) =>
     set((s) => {
       const live = new Set(livePtyIds);

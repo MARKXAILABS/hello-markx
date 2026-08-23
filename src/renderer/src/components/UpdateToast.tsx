@@ -178,12 +178,12 @@ export function UpdateToast() {
     padding: '3px 10px 1px',
     background: 'var(--cth-mint-light, #d0f0e0)',
     boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-    fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+    fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
     color: 'var(--cth-ink-900)', cursor: 'pointer', border: 'none'
   };
 
   const linkStyle: React.CSSProperties = {
-    fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-900)',
+    fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)',
     textDecoration: 'underline', cursor: 'pointer'
   };
 
@@ -199,13 +199,13 @@ export function UpdateToast() {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <Icon name="sparkle" />
-        <span style={{ fontSize: 13, color: 'var(--cth-ink-900)', fontWeight: 600 }}>
+        <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)', fontWeight: 600 }}>
           {status.state === 'downloaded'
             ? `Update v${status.version} downloaded`
             : `v${status.version} is available`}
         </span>
       </div>
-      <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)' }}>
+      <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
         {status.state === 'downloaded'
           ? 'Restart Hello MarkX whenever you like to apply it — nothing restarts on its own.'
           : 'This install can’t update itself — grab the new build from the releases page.'}
@@ -214,7 +214,7 @@ export function UpdateToast() {
       {notes.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{
-            fontFamily: 'var(--cth-font-display)', fontSize: 8, lineHeight: '12px',
+            fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
             color: 'var(--cth-ink-500)', textTransform: 'uppercase'
           }}>
             What’s new
@@ -229,7 +229,7 @@ export function UpdateToast() {
             {notes.map((line, i) => (
               <li key={i} style={{
                 display: 'flex', gap: 6,
-                fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-700)'
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
               }}>
                 <span aria-hidden style={{ color: 'var(--cth-ink-300)' }}>•</span>
                 <span>{line}</span>

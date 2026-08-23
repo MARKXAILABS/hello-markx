@@ -39,10 +39,10 @@ const card: React.CSSProperties = {
 };
 const metaRow: React.CSSProperties = {
   display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontFamily: 'var(--cth-font-mono)',
-  fontSize: 11, color: 'var(--cth-ink-700)'
+  fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-700)'
 };
 const sectionHead: React.CSSProperties = {
-  fontFamily: 'var(--cth-font-ui)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase',
+  fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: 0.5, color: 'var(--cth-ink-900)', margin: '2px 0'
 };
 
@@ -50,7 +50,7 @@ function StatusBadge({ w }: { w: WorkerSnapshot }) {
   const releasing = w.status === 'releasing';
   return (
     <span style={{
-      fontFamily: 'var(--cth-font-mono)', fontSize: 10, padding: '1px 6px',
+      fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', padding: '1px 6px',
       textTransform: 'uppercase', letterSpacing: 0.5,
       color: releasing ? 'var(--cth-paper-100)' : 'var(--cth-ink-900)',
       background: releasing ? 'var(--cth-ink-700)' : 'var(--cth-green, #2f8f4e)',
@@ -91,16 +91,16 @@ export function WorkersTab() {
       <div>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <span style={sectionHead}>Live workers</span>
-          <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 11, color: 'var(--cth-ink-700)' }}>
+          <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-700)' }}>
             {live.length} / {max}
           </span>
         </div>
-        <p style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-700)', margin: '2px 0 8px' }}>
+        <p style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)', margin: '2px 0 8px' }}>
           Isolated workers Michael spins up to handle Slack messages — they run to completion, reply in-thread, then tear down.
         </p>
 
         {live.length === 0 ? (
-          <div style={{ ...card, color: 'var(--cth-ink-700)', fontFamily: 'var(--cth-font-ui)', fontSize: 12 }}>
+          <div style={{ ...card, color: 'var(--cth-ink-700)', fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)' }}>
             No workers running right now.
           </div>
         ) : (
@@ -111,12 +111,12 @@ export function WorkersTab() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <StatusBadge w={w} />
                     <span style={{
-                      fontFamily: 'var(--cth-font-ui)', fontSize: 12, fontWeight: 600, color: 'var(--cth-ink-900)',
+                      fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', fontWeight: 600, color: 'var(--cth-ink-900)',
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                     }}>{w.name}</span>
                     {w.hasSlack && (
                       <span title="replies to a Slack thread" style={{
-                        fontFamily: 'var(--cth-font-mono)', fontSize: 10, color: 'var(--cth-ink-700)',
+                        fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-700)',
                         boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)', padding: '0 5px'
                       }}>slack</span>
                     )}
@@ -148,13 +148,13 @@ export function WorkersTab() {
       {preserved.length > 0 && (
         <div>
           <span style={sectionHead}>Preserved worktrees ({preserved.length})</span>
-          <p style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 11, color: 'var(--cth-ink-700)', margin: '2px 0 8px' }}>
+          <p style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)', margin: '2px 0 8px' }}>
             Finished workers whose worktree held un-integrated work — kept (never auto-discarded) and auto-reclaimed once the work lands in its base branch.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {preserved.map((p) => (
               <div key={p.wtPath} style={card}>
-                <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 12, fontWeight: 600, color: 'var(--cth-ink-900)' }}>
+                <div style={{ fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', fontWeight: 600, color: 'var(--cth-ink-900)' }}>
                   {p.workerId}
                 </div>
                 <div style={metaRow}>

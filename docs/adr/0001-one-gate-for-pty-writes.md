@@ -17,8 +17,20 @@ sentence and the two were submitted together as one garbled prompt.
 ## Decision
 
 **Exactly one place types automatic text into a live agent's PTY**: the drain loop,
-`useHive.ts` effect #4. Everything else enqueues into the per-agent MD queue and lets
-the drain decide when. The drain delivers the head of a queue only when the agent is
+`DeliveryService.drainQueue()` in the main process (`src/main/delivery.ts:518`).
+Everything else enqueues into the per-agent MD queue and lets the drain decide when.
+
+> **Amended 2026-08-21.** As written in 2025 this decision named `useHive.ts` effect
+> #4, in the RENDERER. The decision itself — one gate, never ad hoc — is unchanged and
+> is why this record exists. What changed is **where the gate lives**: Phase 1 plan
+> 01-08 deleted the renderer effect and moved the queue and its drain into main,
+> because a gate that dies with the window is not a gate for an app whose whole
+> premise is that you can close the window (#5). The renderer's drain was **deleted,
+> not left as a fallback** — leaving it would have recreated the two-writer defect
+> this ADR was written about. The pure policy both processes read is
+> `src/shared/queueDelivery.ts`; the renderer keeps only a **veto** it reports up
+> (`hive:deliveryVeto`), because the xterm buffer and the operator's keystrokes are
+> the one fact main cannot see. The drain delivers the head of a queue only when the agent is
 `idle`, auto-delivery is not paused (or the message was manually released), the boot
 grace window has passed, `isTerminalAutomationSafe(ptyId)` says the user does not own
 the prompt, and 4.5 s have passed since the last delivery to that agent.
@@ -53,7 +65,10 @@ is covered by the boot-grace window, so there is no human draft it could land on
 
 ## Where it lives
 
-`src/renderer/src/hooks/useHive.ts` (effects #3, #4, #6) ·
+`src/main/delivery.ts` (`drainQueue()` — **the gate**, plus the inbox wake, the
+idle-quiesce backstop and account failover, all on one tick) ·
+`src/shared/queueDelivery.ts` (the pure drain policy both processes import) ·
+`src/renderer/src/hooks/useHive.ts` (effect #6, and the delivery veto it reports up) ·
 `src/renderer/src/components/terminalAutomation.ts` (pure policy, unit-tested in
 `test/terminal-automation.test.cjs`) · `src/renderer/src/components/terminalPool.ts`
 (buffer reads, latches) · full contract in [`docs/message-queue.md`](../message-queue.md)

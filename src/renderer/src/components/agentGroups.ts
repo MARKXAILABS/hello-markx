@@ -118,7 +118,17 @@ export function useAgentGroups(agents: Agent[]): { gods: Agent[]; groups: AgentG
       else byRepo.set(key, { key, label: repoLabelOf(a), members: [a] });
     }
     return { gods, groups: [...byRepo.values()] };
-    // repoVersion: rebucket once the async main-repo lookups land.
+    // `repoVersion` is not READ in this body, so ESLint calls it an unnecessary
+    // dependency - and it is the only thing that makes this memo correct.
+    // `repoKeyOf`/`repoLabelOf` above read the MODULE-LEVEL `repoRootByCwd` cache,
+    // which useResolvedRepoNames fills asynchronously and mutates in place; no
+    // static analysis can see through that. Drop the dependency and every agent
+    // stays bucketed under its raw cwd forever, because nothing else in this
+    // component changes when the git lookups land. The honest alternative -
+    // threading the resolved map through repoKeyOf/repoLabelOf - changes two
+    // exported functions that groupKey and matchesAgentQuery also call, which is a
+    // refactor, not a lint fix.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, repoVersion]);
 }
 

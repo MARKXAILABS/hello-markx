@@ -24,7 +24,7 @@ const PROVIDER_LABEL: Record<LocalSkill['provider'], string> = {
 function Chip({ text, tone = 'quiet' }: { text: string; tone?: 'quiet' | 'accent' }) {
   return (
     <span style={{
-      fontSize: 10, fontFamily: 'var(--cth-font-display)', letterSpacing: 0.4,
+      fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', fontFamily: 'var(--cth-font-display)', letterSpacing: 0.4,
       padding: '2px 6px', flexShrink: 0, textTransform: 'uppercase',
       color: 'var(--cth-ink-900)',
       background: tone === 'accent' ? 'var(--cth-mint-light)' : 'var(--cth-cream-200)',
@@ -142,7 +142,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
 
   const actionBtn = (kind: 'primary' | 'quiet' | 'danger'): React.CSSProperties => ({
     padding: '3px 9px 2px', border: 'none', cursor: 'pointer', flexShrink: 0,
-    fontFamily: 'var(--cth-font-ui)', fontSize: 11,
+    fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
     color: 'var(--cth-ink-900)',
     background:
       kind === 'primary' ? 'var(--cth-mint-light)'
@@ -155,7 +155,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
 
   const tabBtn = (m: Mode, label: string): React.CSSProperties => ({
     padding: '4px 10px 3px', border: 'none', cursor: 'pointer',
-    fontFamily: 'var(--cth-font-ui)', fontSize: 12,
+    fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
     background: mode === m ? 'var(--cth-lemon-light)' : 'var(--cth-cream-200)',
     boxShadow: `inset 0 0 0 1px ${mode === m ? 'var(--cth-lemon)' : 'var(--cth-ink-300)'}`,
     color: 'var(--cth-ink-900)'
@@ -182,7 +182,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
             flex: 1, minWidth: 140, padding: '4px 8px',
             background: 'var(--cth-paper-100)', color: 'var(--cth-ink-900)',
             border: 'none', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-            fontFamily: 'var(--cth-font-ui)', fontSize: 12
+            fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)'
           }}
         />
         {mode === 'browse' && (
@@ -194,7 +194,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
               padding: '4px 6px', maxWidth: 210,
               background: 'var(--cth-paper-100)', color: 'var(--cth-ink-900)',
               border: 'none', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-              fontFamily: 'var(--cth-font-ui)', fontSize: 12
+              fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)'
             }}
           >
             <option value="all">all categories</option>
@@ -209,7 +209,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
               padding: '4px 6px', maxWidth: 190,
               background: 'var(--cth-paper-100)', color: 'var(--cth-ink-900)',
               border: 'none', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
-              fontFamily: 'var(--cth-font-ui)', fontSize: 12
+              fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)'
             }}
           >
             <option value="all">all publishers</option>
@@ -239,19 +239,30 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
               {shownLocal.map((s) => (
                 <div key={s.id + s.path} style={rowStyle}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 11, flex: 1, minWidth: 0 }}>
+                    <span style={{
+                      fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                      lineHeight: 'var(--cth-lh-display-md)', flex: 1, minWidth: 0,
+                      // FLOOR-12 containment. Measured in real Electron at 1280/1024/800:
+                      // at Rule 1's 14px the Press Start 2P name is ~27% wider, and with
+                      // every sibling chip flexShrink:0 the name's ink printed 7px OVER the
+                      // provider chip (installed) and up to 68px over it (catalog). These
+                      // three properties are the house pattern UI-SPEC's containment step 1
+                      // cites (AgentCard.tsx:223-224) - a wider name truncates, it does not
+                      // paint across its neighbour.
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                    }}>
                       {s.name.toUpperCase()}
                     </span>
                     <Chip text={PROVIDER_LABEL[s.provider]} />
                     <Chip text={s.scope} tone={s.scope === 'project' ? 'accent' : 'quiet'} />
                   </div>
                   {s.description && (
-                    <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.45 }}>
+                    <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 1.45 }}>
                       {s.description.length > 220 ? `${s.description.slice(0, 220)}…` : s.description}
                     </div>
                   )}
                   <div style={{
-                    fontFamily: 'var(--cth-font-mono)', fontSize: 10.5,
+                    fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)',
                     color: 'var(--cth-ink-500)', wordBreak: 'break-all'
                   }}>{s.path}</div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -262,7 +273,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
                       // Bundled skills ship inside the app and are re-copied into
                       // every agent on spawn, so "removing" one would silently come
                       // back. Say that instead of offering a button that lies.
-                      <span style={{ fontSize: 11, color: 'var(--cth-ink-500)' }}>
+                      <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                         ships with the app
                       </span>
                     ) : confirming === s.path ? (
@@ -280,7 +291,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
                       >{action[s.path]?.busy ? 'removing…' : 'uninstall'}</button>
                     )}
                     {action[s.path]?.error && (
-                      <span style={{ fontSize: 11, color: 'var(--cth-coral)' }}>{action[s.path]?.error}</span>
+                      <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-coral)' }}>{action[s.path]?.error}</span>
                     )}
                   </div>
                 </div>
@@ -292,13 +303,13 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
           <>
             {catalogMeta?.error && (
               <div style={{
-                marginBottom: 8, padding: 8, fontSize: 12, color: 'var(--cth-ink-900)',
+                marginBottom: 8, padding: 8, fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)',
                 background: 'var(--cth-coral-light)', boxShadow: 'inset 0 0 0 1px var(--cth-coral)'
               }}>
                 Showing a cached copy — {catalogMeta.error}.
               </div>
             )}
-            <div style={{ fontSize: 11, color: 'var(--cth-ink-500)', marginBottom: 8 }}>
+            <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', marginBottom: 8 }}>
               {totalMatching} matching{totalMatching > shownCatalog.length ? ` · showing the first ${shownCatalog.length}` : ''}
               {' · '}curated by abubakarsiddik31/claude-skills-collection
             </div>
@@ -306,13 +317,24 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
               {shownCatalog.map((s) => (
                 <div key={s.url + s.name} style={rowStyle}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 11, flex: 1, minWidth: 0 }}>
+                    <span style={{
+                      fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                      lineHeight: 'var(--cth-lh-display-md)', flex: 1, minWidth: 0,
+                      // FLOOR-12 containment. Measured in real Electron at 1280/1024/800:
+                      // at Rule 1's 14px the Press Start 2P name is ~27% wider, and with
+                      // every sibling chip flexShrink:0 the name's ink printed 7px OVER the
+                      // provider chip (installed) and up to 68px over it (catalog). These
+                      // three properties are the house pattern UI-SPEC's containment step 1
+                      // cites (AgentCard.tsx:223-224) - a wider name truncates, it does not
+                      // paint across its neighbour.
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                    }}>
                       {s.name.toUpperCase()}
                     </span>
                     <Chip text={s.category} />
                     <Chip text={s.owner} />
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--cth-ink-700)', lineHeight: 1.45 }}>
+                  <div style={{ fontSize: 'var(--cth-text-body-md)', color: 'var(--cth-ink-700)', lineHeight: 1.45 }}>
                     {s.description}
                   </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -328,7 +350,7 @@ export function SkillsTab({ agentCwd }: { agentCwd?: string }) {
                       style={actionBtn('quiet')}
                     >learn more</button>
                     {action[s.url]?.error && (
-                      <span style={{ fontSize: 11, color: 'var(--cth-coral)', flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-coral)', flex: 1, minWidth: 0 }}>
                         {action[s.url]?.error}
                       </span>
                     )}
@@ -350,5 +372,5 @@ const rowStyle: React.CSSProperties = {
 };
 
 function Muted({ children }: { children: React.ReactNode }) {
-  return <div style={{ fontSize: 12, color: 'var(--cth-ink-500)', padding: 6 }}>{children}</div>;
+  return <div style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)', padding: 6 }}>{children}</div>;
 }

@@ -188,7 +188,7 @@ canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
 .cth-md-preview p { margin: 0.6em 0; }
 .cth-md-preview a { color: var(--cth-sky); }
 .cth-md-preview code {
-  font-family: var(--cth-font-mono); font-size: 12.5px;
+  font-family: var(--cth-font-mono); font-size: var(--cth-text-mono-md);
   background: var(--cth-cream-200); padding: 1px 5px; border-radius: 2px;
 }
 .cth-md-preview pre {
@@ -210,7 +210,7 @@ canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
 }
 .cth-md-preview th, .cth-md-preview td {
   border: 1px solid var(--cth-ink-100); padding: 5px 10px; text-align: left;
-  font-size: 13px;
+  font-size: var(--cth-text-body-md);
 }
 .cth-md-preview th { background: var(--cth-cream-200); font-weight: 600; }
 .cth-md-preview hr { border: none; border-top: 1px solid var(--cth-ink-100); margin: 1.4em 0; }
@@ -224,7 +224,7 @@ canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
   border-radius: 2px;
 }
 .cth-md-preview .cth-md-img {
-  display: inline-block; padding: 2px 8px; font-size: 12px;
+  display: inline-block; padding: 2px 8px; font-size: var(--cth-text-body-md);
   background: var(--cth-cream-200); box-shadow: inset 0 0 0 1px var(--cth-ink-100);
   color: var(--cth-ink-500); border-radius: 2px;
 }
