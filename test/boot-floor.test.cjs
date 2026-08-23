@@ -86,8 +86,8 @@ function floorEnv(t) {
 
 /** A fresh FloorDeps fake: identity encrypt/decrypt, `notify`/`focus`/
  *  `syncKeepAwake` no-ops, `send` pushing into `sent` and returning `true`
- *  (D-03's landmine: a void-typed `send` would silently invert
- *  emitTerminalHandoff's `=== true` routing decision), `quit` recording that
+ *  (D-03's landmine: a void-typed `send` would silently invert every
+ *  `=== true` routing decision that reads it), `quit` recording that
  *  it was called, `respawnCore`/`startWorkerWatcher` recording invocations
  *  without starting anything real (`PtyManager` is construct-only here —
  *  bootFloor never calls its spawn method on this fake's behalf). */
@@ -349,6 +349,64 @@ test('floor.teardownAndQuit(): quit is called exactly once, and the socket is re
     c.once('connect', () => { c.end(); reject(new Error('socket still accepts connections after teardownAndQuit()')); });
     c.once('error', () => resolve());
   });
+});
+
+// ─── D-11 gap 1, composed: the real wiring, not a fake — a real floor's
+//     hive hands a real message off to the real delivery queue file. ────────
+
+/** Every `.json` file directly under a hive agent's inbox, parsed. */
+function godInbox(floor) {
+  const dir = path.join(floor.hive.root(), 'agents', 'michael', 'inbox');
+  return fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+}
+
+test('D-11 composed: a hookless agent\'s mail lands in the real queue file main owns, with no bounce', async (t) => {
+  const env = floorEnv(t);
+  const { deps } = fakeDeps(env);
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  await floor.hive.ensureAgent({ id: 'michael', name: 'michael', cwd: env.harnessHome, capabilities: [], isGod: true });
+  // kimi: canReceiveInbox: false (src/shared/agentProvider.ts) — the hookless
+  // branch D-11 gap 1 targets.
+  await floor.hive.ensureAgent({ id: 'worker', name: 'worker', cwd: env.harnessHome, capabilities: [], provider: 'kimi' });
+
+  const sent = floor.hive.send({ to: 'worker', act: 'inform', subject: 'do the thing', body: 'go' }, 'michael');
+
+  const queuePath = path.join(env.harnessHome, 'delivery-queue.json');
+  assert.ok(fs.existsSync(queuePath), 'the delivery queue file was never written — the wired handoff never enqueued');
+  const queued = JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+  const items = (queued.items ?? []).filter((m) => m.agentId === 'worker');
+  assert.equal(items.length, 1, 'exactly one item should be queued for the worker');
+  assert.match(items[0].text, /WORK ORDER FROM HIVE/);
+  assert.match(items[0].text, new RegExp(`Message: ${sent.id}`));
+
+  assert.equal(godInbox(floor).filter((m) => m.subject.includes('[undeliverable')).length, 0,
+    'a message main successfully enqueued must not ALSO bounce to god');
+});
+
+test('D-11 composed: an archived agent\'s mail bounces to god, over the real wiring, with a true cause', async (t) => {
+  const env = floorEnv(t);
+  const { deps } = fakeDeps(env);
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  await floor.hive.ensureAgent({ id: 'michael', name: 'michael', cwd: env.harnessHome, capabilities: [], isGod: true });
+  await floor.hive.ensureAgent({ id: 'worker', name: 'worker', cwd: env.harnessHome, capabilities: [], provider: 'kimi' });
+
+  // Archive the worker — teardownPty does exactly this on PTY death. Then
+  // route: `DeliveryDeps.knownAgent` (`!!a && !a.archived`) now refuses the
+  // enqueue, and the SAME refusal the renderer used to bounce on fires again
+  // for the same underlying reason, with the true cause in the subject.
+  floor.hive.setArchived('worker', true);
+  floor.hive.send({ to: 'worker', act: 'inform', subject: 'do the thing', body: 'go' }, 'michael');
+
+  const bounces = godInbox(floor).filter((m) => m.subject.includes('[undeliverable'));
+  assert.equal(bounces.length, 1, 'an archived agent\'s mail must bounce to god exactly once');
+  assert.doesNotMatch(bounces[0].subject, /renderer unavailable/,
+    'the bounce subject still blames a renderer that was never asked in this test');
 });
 
 // ─── D-40: the ipcMain.handle pin — every count and channel name re-derived

@@ -55,6 +55,7 @@ import {
   installGrokHooks,
   hookSettings
 } from './hiveProvisioning';
+import type { TerminalWorkOrder } from '../shared/queueDelivery';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -451,10 +452,18 @@ export class HiveManager {
    * @param emit     Optional sink for renderer-facing events (set by the main
    *                 process to `webContents.send`). Used to animate routed
    *                 messages on the office floor; a no-op in tests/headless.
+   * @param handoff  D-11 gap 1: parks a terminal work order in main's queue
+   *                 for a non-Claude (hookless or proxy-tier) agent, returning
+   *                 whether it was accepted. Wired in `src/main/floor/boot.ts`
+   *                 to `delivery.enqueue()` — see the comment there (copies
+   *                 `index.ts`'s `claudeAccount:failover` interception in
+   *                 shape and reasoning) for why this is a THIRD constructor
+   *                 param and not an interception inside `emit`.
    */
   constructor(
     private getHome: () => string | null,
-    private emit?: (channel: string, payload: unknown) => boolean | void
+    private emit?: (channel: string, payload: unknown) => boolean | void,
+    private handoff?: (order: TerminalWorkOrder) => boolean
   ) {}
 
   /** ADR-0004: the hive's single git committer, composed rather than
@@ -1501,14 +1510,14 @@ export class HiveManager {
       // would let direct mail rot unread. Claude and bridged Antigravity/Codex
       // receive directly into inbox/ for guarded renderer delivery. Otherwise try
       // a terminal work-order handoff to its REPL (#53);
-      // if the renderer is unavailable, bounce to god to relay. God is exempt
+      // if main's queue refuses it, bounce to god to relay. God is exempt
       // (the bounce target).
       if (t !== godId && !canReceiveInbox(reg.agents[t]?.provider)) {
-        if (!this.emitTerminalHandoff(msg, t)) {
+        if (!this.terminalHandoff(msg, t)) {
           this.deliver({
             ...msg,
             to: godId,
-            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a hookless CLI'} and the terminal handoff failed (renderer unavailable); relay this to it] ${msg.subject}`
+            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a hookless CLI'} and main's queue refused the terminal handoff (unknown/archived agent, queue full, or no harness home); relay this to it] ${msg.subject}`
           }, godId);
         }
         continue;
@@ -1520,11 +1529,11 @@ export class HiveManager {
       // provider; the synthesized Stop→drain keeps the cursor in step.
       const proxyDesc = bridgeOf(reg.agents[t]?.provider);
       if (t !== godId && proxyDesc?.kind === 'proxy' && proxyDesc.inboxDelivery === 'terminal') {
-        if (!this.emitTerminalHandoff(msg, t)) {
+        if (!this.terminalHandoff(msg, t)) {
           this.deliver({
             ...msg,
             to: godId,
-            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a proxy-tier CLI'} and the terminal handoff failed (renderer unavailable); relay this to it] ${msg.subject}`
+            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a proxy-tier CLI'} and main's queue refused the terminal handoff (unknown/archived agent, queue full, or no harness home); relay this to it] ${msg.subject}`
           }, godId);
         }
         continue;
@@ -1575,10 +1584,17 @@ export class HiveManager {
     });
   }
 
-  /** Non-Claude providers cannot drain hive inbox; hand direct mail to the
-   *  renderer so it can queue a terminal work order for the target PTY. */
-  private emitTerminalHandoff(msg: HiveMessage, targetId: string): boolean {
-    const delivered = this.emit?.('hive:terminalHandoff', {
+  /** Non-Claude providers cannot drain hive inbox; hand direct mail to main's
+   *  queue as a terminal work order for the target PTY (D-11 gap 1 — this
+   *  used to hand it to the renderer over `emit`, which returned `false` with
+   *  no window and bounced the mail to god blaming a missing UI that was
+   *  never the true cause; main is now the one place typing into a terminal
+   *  ever happens, ADR-0001, so it is the one place this hands off to). */
+  private terminalHandoff(msg: HiveMessage, targetId: string): boolean {
+    // `delivered` now means "main's queue accepted it", not "the renderer
+    // took it" — the durable log's `kind: 'terminal-handoff'` shape and its
+    // `delivered` field are unchanged; only what `delivered` MEANS changed.
+    const delivered = this.handoff?.({
       id: msg.id,
       from: msg.from,
       to: targetId,

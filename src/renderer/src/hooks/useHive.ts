@@ -23,7 +23,6 @@ import {
   terminalAutomationBlockFor,
   disposeOrphanedTerminals
 } from '@/components/terminalPool';
-import { deliverWithAcknowledgement } from '@shared/queueDelivery';
 import { OFFICE_CAST, DEFAULT_CHARACTER } from '@/scene/office/cast';
 
 const GOD_ID = 'god';
@@ -270,32 +269,6 @@ function enrichTaskPrompt(text: string): string {
   ].join('\n');
 }
 
-function terminalWorkOrderPrompt(msg: {
-  id: string;
-  from: string;
-  act: string;
-  subject: string;
-  body: string;
-  requiresReply: boolean;
-  createdAt: string;
-}): string {
-  return [
-    'WORK ORDER FROM HIVE',
-    `Message: ${msg.id}`,
-    `From: ${msg.from}`,
-    `Subject: ${msg.subject}`,
-    `Act: ${msg.act}${msg.requiresReply ? ' (reply expected)' : ''}`,
-    `Issued: ${msg.createdAt}`,
-    '',
-    msg.body,
-    '',
-    'Notes:',
-    '- This arrived through your terminal because this provider does not support hive inbox.',
-    '- Work in your current cwd.',
-    '- When done, report changes, validation, blockers, and next step in this terminal.'
-  ].join('\n');
-}
-
 /** Tool name → where the avatar walks + what it carries. */
 const TOOL_STATION: Record<string, { station: StationKind; carry?: ToolKind }> = {
   Read: { station: 'shelf', carry: 'Read' },
@@ -405,7 +378,6 @@ export function useHive(config: HarnessConfig | null): void {
   // Agents whose one-time TUI protocol seed (Crush, seedDelivery:'type-into-tui')
   // has already been typed — guards effect #3b against re-seeding. (ondev-b)
   const seeded = useRef<Set<string>>(new Set());
-  const seenTerminalHandoffs = useRef<Set<string>>(new Set());
   // Per-pty timestamp guarding auto-revive (effect #7) against a double-respawn
   // when power-resume + screen-unlock arrive back-to-back: an id revived (or
   // mid-revive) within REVIVE_DEBOUNCE_MS is skipped. Set BEFORE the async spawn
@@ -702,33 +674,25 @@ export function useHive(config: HarnessConfig | null): void {
     });
   }, []);
 
-  // 2e) Non-Claude providers cannot drain hive inbox. Direct hive mail to them
-  //     arrives here as a terminal work order and is queued through the same
-  //     idle-only PTY drain as human-composed messages.
-  useEffect(() => {
-    if (!config?.onboardingComplete) return;
-    return window.cth.onHiveTerminalHandoff((msg) => {
-      if (seenTerminalHandoffs.current.has(msg.id)) return;
-      const { agents, enqueueMessage, messageQueues } = useStore.getState();
-      const target = agents.find((a) => a.id === msg.to);
-      if (target?.ptyId) {
-        const marker = `Message: ${msg.id}`;
-        if ((messageQueues[target.id] ?? []).some((queued) => queued.text.includes(marker))) return;
-        seenTerminalHandoffs.current.add(msg.id);
-        enqueueMessage(target.id, terminalWorkOrderPrompt(msg));
-        return;
-      }
-      seenTerminalHandoffs.current.add(msg.id);
-      enqueueMessage(
-        GOD_ID,
-        [
-          `Terminal handoff failed for ${msg.to}: ${msg.subject}`,
-          '',
-          `Message ${msg.id} from ${msg.from} could not be queued because ${msg.to} has no live PTY. Route it manually or respawn the agent.`
-        ].join('\n')
-      );
-    });
-  }, [config?.onboardingComplete]);
+  // 2e) THE TERMINAL HANDOFF IS MAIN'S NOW (D-11 gap 1). About 25 lines stood
+  //     here: a hive-terminal-handoff IPC subscription that queued a hive
+  //     message addressed to a non-Claude (hookless or proxy-tier) agent as a
+  //     work-order prompt, deduped through an "already handled" id set that
+  //     existed because this subscription re-fires every window reload. It
+  //     died with the window — a headless floor (DAEMON-01) has no renderer
+  //     to hear that event at all, so every one of those messages silently
+  //     bounced to god with a subject blaming "renderer unavailable", which
+  //     was never the true cause once main had no window to ask.
+  //
+  //     `HiveManager`'s injected `handoff` dep (`src/main/floor/boot.ts`) is
+  //     the replacement: it formats the same work-order text (moved
+  //     byte-identical into `src/shared/queueDelivery.ts`) and calls
+  //     `delivery.enqueue()` — the SAME main-owned queue this file's queue
+  //     view (effect 4, below) already reads. No id-dedup set needed there:
+  //     the hive-side handoff method has exactly two call sites, both inside
+  //     one `hive.ts` `send()` pass, so main is called once per routed
+  //     message — the renderer's re-subscribe-on-reload problem does not
+  //     exist in main.
 
   // 2e) THE PTY-quiescence IDLE BACKSTOP IS MAIN'S NOW (#5). It used to be a 4 s
   //     setInterval here that listed every PTY over IPC and flipped any 'working'

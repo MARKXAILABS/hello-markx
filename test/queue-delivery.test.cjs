@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const loadTs = require('./load-ts.cjs');
 
-const { deliverWithAcknowledgement } =
+const { deliverWithAcknowledgement, terminalWorkOrderPrompt } =
   loadTs('src/shared/queueDelivery.ts');
 
 test('queue item is acknowledged only after delivery succeeds', async () => {
@@ -30,4 +30,24 @@ test('failed delivery remains unacknowledged for retry', async () => {
   );
   assert.equal(sent, false);
   assert.equal(acknowledged, false);
+});
+
+// ─── D-11: terminalWorkOrderPrompt, moved byte-identical from useHive.ts ───
+
+const order = (extra = {}) => ({
+  id: 'msg-1', from: 'pam', to: 'worker', act: 'inform', subject: 'do the thing',
+  body: 'the body text', requiresReply: false, createdAt: '2026-08-23T00:00:00.000Z',
+  ...extra
+});
+
+test('terminalWorkOrderPrompt renders the message id, subject and body', () => {
+  const text = terminalWorkOrderPrompt(order());
+  assert.match(text, /Message: msg-1/);
+  assert.match(text, /Subject: do the thing/);
+  assert.match(text, /the body text/);
+});
+
+test('terminalWorkOrderPrompt appends "(reply expected)" only when requiresReply is true', () => {
+  assert.doesNotMatch(terminalWorkOrderPrompt(order({ requiresReply: false })), /\(reply expected\)/);
+  assert.match(terminalWorkOrderPrompt(order({ requiresReply: true })), /\(reply expected\)/);
 });

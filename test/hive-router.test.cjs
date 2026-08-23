@@ -111,3 +111,50 @@ test('startRouter schedules routeOnce on an interval and stopRouter clears it', 
   const deliveredAfterStop = messagesIn(inbox(root, 'michael'));
   assert.equal(deliveredAfterStop.length, 1, 'no further routing happens once stopRouter has run');
 });
+
+// ─── D-11 gap 1: the terminal-handoff dep, headless (`emit` always false) ──
+
+/** `emit: () => false` — exactly what a headless floor's renderer emitter
+ *  returns (no window to send to). If `handoff` alone routes correctly with
+ *  `emit` never delivering, the mail is provably not depending on a window. */
+function headlessFloor(t, handoff) {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'md-hive-router-handoff-')));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const hive = new HiveManager(() => home, () => false, handoff);
+  hive.ensureHive();
+  return { hive, home, root: path.join(home, 'hive') };
+}
+
+test('D-11: a hookless agent\'s mail is handed off, not bounced, when handoff accepts it', async (t) => {
+  const calls = [];
+  const { hive, root } = headlessFloor(t, (order) => { calls.push(order); return true; });
+  await hive.ensureAgent(agent('michael', { isGod: true }));
+  // kimi: canReceiveInbox: false (src/shared/agentProvider.ts) — the hookless
+  // branch this task's D-11 gap 1 fix targets.
+  await hive.ensureAgent(agent('worker', { provider: 'kimi' }));
+
+  hive.send({ to: 'worker', act: 'inform', subject: 'do the thing', body: 'go' }, 'michael');
+
+  assert.equal(calls.length, 1, 'handoff was not called exactly once');
+  assert.equal(calls[0].to, 'worker', 'handoff was called with the wrong target');
+  const godInbox = messagesIn(inbox(root, 'michael'));
+  const bounces = godInbox.filter((m) => m.subject.includes('[undeliverable'));
+  assert.equal(bounces.length, 0,
+    'a handoff that main accepted must not ALSO bounce to god — that would be the double-delivery '
+    + 'D-11\'s fix exists to prevent');
+});
+
+test('D-11: a hookless agent\'s mail bounces to god, with a true cause, when handoff refuses it', async (t) => {
+  const { hive, root } = headlessFloor(t, () => false);
+  await hive.ensureAgent(agent('michael', { isGod: true }));
+  await hive.ensureAgent(agent('worker', { provider: 'kimi' }));
+
+  hive.send({ to: 'worker', act: 'inform', subject: 'do the thing', body: 'go' }, 'michael');
+
+  const godInbox = messagesIn(inbox(root, 'michael'));
+  const bounces = godInbox.filter((m) => m.subject.includes('[undeliverable'));
+  assert.equal(bounces.length, 1, 'a refused handoff must bounce to god exactly once');
+  assert.doesNotMatch(bounces[0].subject, /renderer unavailable/,
+    'the bounce subject still blames "renderer unavailable" — that stopped being the true cause '
+    + 'once main, not the renderer, is the thing refusing the handoff');
+});

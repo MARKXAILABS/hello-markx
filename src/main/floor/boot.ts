@@ -34,7 +34,7 @@ import {
   DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
   type AccountSwitch, type LiveAgentPty
 } from '../delivery';
-import type { QueuedDelivery } from '../../shared/queueDelivery';
+import { terminalWorkOrderPrompt, type QueuedDelivery, type TerminalWorkOrder } from '../../shared/queueDelivery';
 import { HookServer } from '../hooks';
 import { CircuitBreaker, type BreakerInput } from '../breaker';
 import { TelemetryCollector } from '../telemetry';
@@ -1076,9 +1076,26 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   ptyManager = new PtyManager();
 
   ptyToAgent = new Map<string, string>();
+  // The `handoff` dep (D-11 gap 1) copies index.ts:411-434's
+  // `claudeAccount:failover` interception in shape and comment discipline:
+  // the failure the OLD renderer path caused was a headless floor's emitter
+  // always returning `false` (no window to send to), so every message to a
+  // hookless or proxy-tier engine bounced to god blaming a UI that was never
+  // there to answer. The renderer is no longer the executor because with it
+  // gone there is exactly ONE enqueuer of terminal-typed mail (ADR-0001) —
+  // two would risk delivering the same work order twice. `delivery` is a
+  // module-scope `let`, not yet assigned this early in bootFloor's body, but
+  // this closure only ever RUNS during message routing (well after boot
+  // completes), so it always sees the real instance by the time it fires.
+  const handoff: (order: TerminalWorkOrder) => boolean = (order) => {
+    const r = delivery.enqueue({ agentId: order.to, text: terminalWorkOrderPrompt(order) });
+    if (!r.ok) console.error('[hive] terminal handoff refused:', order.to, r.error);
+    return r.ok;
+  };
   hive = new HiveManager(
     () => readConfig().harnessHome,
-    (channel, payload) => deps.send(channel, payload)
+    (channel, payload) => deps.send(channel, payload),
+    handoff
   );
   control = new ControlRegistry();
   telemetry = new TelemetryCollector({
