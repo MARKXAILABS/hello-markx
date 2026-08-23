@@ -129,9 +129,9 @@ test('D-11: a hookless agent\'s mail is handed off, not bounced, when handoff ac
   const calls = [];
   const { hive, root } = headlessFloor(t, (order) => { calls.push(order); return true; });
   await hive.ensureAgent(agent('michael', { isGod: true }));
-  // kimi: canReceiveInbox: false (src/shared/agentProvider.ts) — the hookless
+  // copilot: canReceiveInbox: false (src/shared/agentProvider.ts) — the hookless
   // branch this task's D-11 gap 1 fix targets.
-  await hive.ensureAgent(agent('worker', { provider: 'kimi' }));
+  await hive.ensureAgent(agent('worker', { provider: 'copilot' }));
 
   hive.send({ to: 'worker', act: 'inform', subject: 'do the thing', body: 'go' }, 'michael');
 
@@ -147,7 +147,7 @@ test('D-11: a hookless agent\'s mail is handed off, not bounced, when handoff ac
 test('D-11: a hookless agent\'s mail bounces to god, with a true cause, when handoff refuses it', async (t) => {
   const { hive, root } = headlessFloor(t, () => false);
   await hive.ensureAgent(agent('michael', { isGod: true }));
-  await hive.ensureAgent(agent('worker', { provider: 'kimi' }));
+  await hive.ensureAgent(agent('worker', { provider: 'copilot' }));
 
   hive.send({ to: 'worker', act: 'inform', subject: 'do the thing', body: 'go' }, 'michael');
 

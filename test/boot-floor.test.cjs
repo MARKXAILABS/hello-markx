@@ -369,9 +369,9 @@ test('D-11 composed: a hookless agent\'s mail lands in the real queue file main 
   t.after(() => floor.shutdown());
 
   await floor.hive.ensureAgent({ id: 'michael', name: 'michael', cwd: env.harnessHome, capabilities: [], isGod: true });
-  // kimi: canReceiveInbox: false (src/shared/agentProvider.ts) — the hookless
+  // copilot: canReceiveInbox: false (src/shared/agentProvider.ts) — the hookless
   // branch D-11 gap 1 targets.
-  await floor.hive.ensureAgent({ id: 'worker', name: 'worker', cwd: env.harnessHome, capabilities: [], provider: 'kimi' });
+  await floor.hive.ensureAgent({ id: 'worker', name: 'worker', cwd: env.harnessHome, capabilities: [], provider: 'copilot' });
 
   const sent = floor.hive.send({ to: 'worker', act: 'inform', subject: 'do the thing', body: 'go' }, 'michael');
 
@@ -394,7 +394,7 @@ test('D-11 composed: an archived agent\'s mail bounces to god, over the real wir
   t.after(() => floor.shutdown());
 
   await floor.hive.ensureAgent({ id: 'michael', name: 'michael', cwd: env.harnessHome, capabilities: [], isGod: true });
-  await floor.hive.ensureAgent({ id: 'worker', name: 'worker', cwd: env.harnessHome, capabilities: [], provider: 'kimi' });
+  await floor.hive.ensureAgent({ id: 'worker', name: 'worker', cwd: env.harnessHome, capabilities: [], provider: 'copilot' });
 
   // Archive the worker — teardownPty does exactly this on PTY death. Then
   // route: `DeliveryDeps.knownAgent` (`!!a && !a.archived`) now refuses the
