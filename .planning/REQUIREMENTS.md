@@ -118,7 +118,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       $25 one-time option later and gates nothing.)*
 - [ ] **DAEMON-03**: Inbound Telegram/Discord messages route onto the existing webhook/Slack
       rails so an operator can answer an agent from their phone
-- [ ] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
+- [x] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
       agent card
 - [ ] **DAEMON-05**: The same PWA is reachable **over the public tunnel**, not only the LAN —
       operator's explicit decision. Because this puts an authenticated door to a floor of
@@ -136,7 +136,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 - [x] **PARITY-01a**: Every engine that *can* have a routed inbox has one — mail addressed to
       it arrives in its inbox and is delivered, not bounced to the god
-- [ ] **PARITY-01b**: For any engine that genuinely cannot receive mail, the UI says so
+- [x] **PARITY-01b**: For any engine that genuinely cannot receive mail, the UI says so
       **before** an operator assigns mail-dependent work — on the agent card and in the
       assignment flow, not only in documentation
       *(Split deliberately. The original "…**or** the UI states plainly…" let a skeptic be
@@ -445,10 +445,10 @@ goals and success criteria each requirement rolls up into.
 | DAEMON-01 | Phase 2 | Pending |
 | DAEMON-02 | Phase 2 | Pending |
 | DAEMON-03 | Phase 2 | Pending |
-| DAEMON-04 | Phase 2 | Pending |
+| DAEMON-04 | Phase 2 | Complete |
 | DAEMON-05 | Phase 2 | Pending |
 | PARITY-01a | Phase 2 | Complete |
-| PARITY-01b | Phase 2 | Pending |
+| PARITY-01b | Phase 2 | Complete |
 | PARITY-02 | Phase 2 | Complete |
 | PARITY-03 | Phase 2 | Pending |
 | SCALE-01 | Phase 3 | Pending |
