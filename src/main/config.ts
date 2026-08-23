@@ -399,6 +399,13 @@ export interface HarnessConfig {
    *  @deprecated The port is a property of the shared server, not of any one
    *  trigger; `webhookTriggers` are multiplexed over it by id. */
   webhookPort?: number;
+  /** Master switch for the cloudflared public tunnel (DAEMON-05). OFF by
+   *  default, and never set as a side effect of enabling Slack or a webhook
+   *  endpoint — `start()` on either server opens no tunnel at all; a tunnel
+   *  exists only where an operator explicitly presses the enable control.
+   *  Turning this on puts an authenticated door onto this floor of
+   *  bypassed-permission agent CLIs on the public internet. */
+  tunnelEnabled?: boolean;
 
   // ─── Triggers (src/shared/triggers.ts owns every type here) ────────────────
   /** Auto-compaction / auto-clearing of agent terminal context. Both halves ship
@@ -464,6 +471,7 @@ const DEFAULTS: HarnessConfig = {
   tvShowOffices: false,
   officeTheme: 'office',
   slackEnabled: false,
+  tunnelEnabled: false,
   slackSigningSecret: undefined,
   slackBotToken: undefined,
   slackChannelId: undefined,
