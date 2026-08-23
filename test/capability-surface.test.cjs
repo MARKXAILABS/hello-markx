@@ -279,3 +279,20 @@ test('mcpCardSummary: ⚿ is never rendered for an unkeyed grant, and the three 
   assert.equal(r3.granted[0].mark, '↻');
   assert.equal(r3.granted[0].pending, true);
 });
+
+test('AgentCard.tsx\'s aria-label carries both the gap sentences and the MCP clause, and the chip/MCP spans stay aria-hidden (A4)', () => {
+  const text = readStripped('src/renderer/src/components/AgentCard.tsx');
+  const ariaLabelLine = text.split('\n').find((l) => l.includes('aria-label={`${name}'));
+  assert.ok(ariaLabelLine, 'AgentCard.tsx must carry the container aria-label template literal');
+  // Both directions: the expression folds in gaps' sentences and an MCP
+  // clause; a template literal with neither would satisfy neither reference.
+  assert.match(ariaLabelLine, /gaps\.map/, 'aria-label must fold in the gap sentences (gaps.map(...))');
+  assert.match(ariaLabelLine, /mcpClause/, 'aria-label must fold in the MCP clause (mcpClause)');
+  // The chip and the MCP element both stay aria-hidden — announced ONCE, via
+  // the label above, per A4 ("the card's chips do NOT take A2's role=img —
+  // they are inside a labelled container and are silent by design").
+  const chipSpanIdx = text.indexOf('data-cth-chip="capability"');
+  assert.ok(chipSpanIdx >= 0, 'the capability chip span must exist');
+  const around = text.slice(Math.max(0, chipSpanIdx - 200), chipSpanIdx + 50);
+  assert.match(around, /aria-hidden="true"/, 'the capability chip span must carry aria-hidden="true"');
+});

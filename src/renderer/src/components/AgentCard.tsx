@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { PixelPanel } from './PixelPanel';
 import { PixelBadge, StatusKind } from './PixelBadge';
 import { useHasTerminalDraft } from './terminalPool';
@@ -10,6 +10,16 @@ import { OfficeCharacterName } from '@/scene/office/cast';
 import { useStore } from '@/store/store';
 import { agentRowForCard, isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
 import { shortModel } from './FullscreenTerminal';
+import {
+  inferAgentProvider,
+  providerPreset,
+  capabilityGaps,
+  capabilityChipText,
+  mcpCardSummary,
+  getMcpGrantsSnapshot,
+  subscribeMcpGrants,
+  ensureMcpGrants
+} from '@/store/config';
 
 export interface AgentCardProps {
   name: string;
@@ -78,6 +88,14 @@ const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
  * `FullscreenTerminal.tsx`'s roster row, where 52% is 52% of a much wider box.
  */
 const MODEL_CHIP_MAX_W = 96;
+
+/**
+ * S2a's STARTING value (UI-SPEC), not yet the measured final one — task 5 of
+ * plan 02-06 lands the real number in its own atomic commit with the budget
+ * derivation and the state of the ✎ button (`:441` as of this plan) it was
+ * measured against. 152 is a multiple of 4, per S2's own table.
+ */
+const MCP_CHIP_MAX_W = 152;
 
 /**
  * v0.3.4 compact redesign: one identity row (name + status), one context line
@@ -183,6 +201,85 @@ export function AgentCard({
   const liveAutoMode = useSyncExternalStore(subscribeLiveAutoMode, getLiveAutoMode, getLiveAutoMode);
   const autoMode = isAutoModeAgent(row?.provider, row?.command, liveAutoMode);
 
+  // PARITY-01b / DAEMON-04 (S1a/S2, D-30/D-31/D-32) — the ONE ranked
+  // derivation, over the SAME row this file already resolves for FLOOR-01
+  // above. `row === undefined` -> no chip and no MCP element: silence is the
+  // honest render for an unknown agent, because `inferAgentProvider(undefined,
+  // undefined)` returns 'claude', and a fallback would paint Claude's
+  // capability profile onto an agent this card cannot identify (the same
+  // class of defect as 01-14's dropped field).
+  // `window` itself (not just `window.cth`) is absent under the server-render
+  // harness `test/renderer-components.test.cjs` uses (renderToStaticMarkup,
+  // no DOM globals) — guarded here rather than assuming the real browser
+  // environment this component also runs in.
+  const platform = typeof window !== 'undefined' ? window.cth.platform : 'linux';
+  const gaps = row ? capabilityGaps(inferAgentProvider(row.command, row.provider), platform, name) : [];
+  const chipText = capabilityChipText(gaps);
+  // Hoisted ONCE: this <span> is referenced by BOTH branches of the
+  // isGod ? (...) : (...) third row below (mutually exclusive — never two
+  // chips at once), tagged for the live-DOM probe that is the only thing
+  // that can actually prove "at most one" (a source grep cannot).
+  const chipEl = chipText ? (
+    <span
+      aria-hidden="true"
+      data-cth-chip="capability"
+      title={gaps.map((g) => g.sentence).join('\n')}
+      style={{
+        fontFamily: 'var(--cth-font-ui)',
+        fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)',
+        background: 'var(--cth-cream-200)',
+        boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+        color: 'var(--cth-ink-700)',
+        padding: '1px 4px 0', flexShrink: 0
+      }}
+    >{chipText}</span>
+  ) : null;
+
+  // DAEMON-04's card half. Never fires more than once (module-latched);
+  // App.tsx (02-10) is the plan that should seed this eagerly on boot.
+  useEffect(() => { ensureMcpGrants(); }, []);
+  const mcpGrants = useSyncExternalStore(subscribeMcpGrants, getMcpGrantsSnapshot, getMcpGrantsSnapshot);
+  const mcpSummary = row
+    ? mcpCardSummary(mcpGrants, row.id, {
+      supportsMcp: providerPreset(inferAgentProvider(row.command, row.provider)).supportsMcp,
+      ptyId
+    })
+    : null;
+  // null (engine cannot take MCP at all) -> render NOTHING here; the `mcp`
+  // gap already produced the NO MCP chip above via capabilityGaps. Never a
+  // second, competing element, and never `MCP 0 safe` for a pi/custom agent.
+  const mcpEl = mcpSummary ? (
+    <span
+      aria-hidden="true"
+      title={[
+        `${mcpSummary.safeCount} safe server${mcpSummary.safeCount === 1 ? '' : 's'}`,
+        ...mcpSummary.granted.map((g) => `${g.id} (${g.tier})${g.pending ? ' — pending · restart' : ''}`)
+      ].join('\n')}
+      style={{
+        fontFamily: 'var(--cth-font-ui)',
+        fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)',
+        background: 'var(--cth-cream-200)',
+        boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+        color: 'var(--cth-ink-700)',
+        padding: '1px 4px 0', flexShrink: 0,
+        maxWidth: MCP_CHIP_MAX_W, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+      }}
+    >
+      {`MCP ${mcpSummary.safeCount} safe`}
+      {mcpSummary.granted.map((g) => ` · ${g.short}${g.mark ?? ''}`).join('')}
+    </span>
+  ) : null;
+
+  // A4 — the ONLY channel a screen-reader operator has for either fact, since
+  // both spans above are aria-hidden. Rank order, gap sentences first.
+  const mcpClause = mcpSummary
+    ? `MCP: ${mcpSummary.safeCount} safe server${mcpSummary.safeCount === 1 ? '' : 's'}`
+      + mcpSummary.granted
+        .map((g) => (g.pending ? `, and ${g.id} pending · restart` : g.mark === '⚿' ? `, and ${g.id} with a stored key` : g.mark === '⚠' ? `, and ${g.id} with no key stored` : ''))
+        .join('')
+      + '.'
+    : '';
+
   return (
     // A <div role="button">, not a <button>. The card carries THREE other
     // controls inside it — the task sticky note, the ✎ note editor, and (on
@@ -205,7 +302,7 @@ export function AgentCard({
       // An aria-label on this container REPLACES all inner text for a screen
       // reader, so the AUTO chip below is silent unless the state is folded in
       // here. The chip is aria-hidden for the same reason: announced once, here.
-      aria-label={`${name}${isGod ? ' (boss)' : ''} — ${status}${autoMode ? ` — Auto mode — ${name} runs with permissions bypassed` : ''}`}
+      aria-label={`${name}${isGod ? ' (boss)' : ''} — ${status}${autoMode ? ` — Auto mode — ${name} runs with permissions bypassed` : ''}${gaps.map((g) => ` — ${g.sentence}`).join('')}${mcpClause ? ` — ${mcpClause}` : ''}`}
       // The ring is the visual answer to "which terminal is open"; this is the
       // same answer for a screen reader. Matches SidebarRow in fullscreen.
       aria-current={selected ? 'true' : undefined}
@@ -399,6 +496,8 @@ export function AgentCard({
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
+                {chipEl}
+                {mcpEl}
                 <RealtimeMichaelToggle />
                 <CostHud compact />
               </div>
@@ -407,6 +506,8 @@ export function AgentCard({
                 onClick={(e) => e.stopPropagation()}
                 style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, minHeight: 14 }}
               >
+                {chipEl}
+                {mcpEl}
                 {noteFirstLine ? (
                   <span
                     title={note}
