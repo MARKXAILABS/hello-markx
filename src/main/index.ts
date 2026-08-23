@@ -48,15 +48,16 @@ import { listIssues, listCIRuns } from './github';
 import { SlackWebhookServer, SlackReplyServer, postSlackReply, type SlackEventFile } from './slack';
 import {
   WebhookServer,
-  type WebhookDispatch, type WebhookEndpointRef, type WebhookInbound, type WebhookTaskStatus
+  type PhoneAsk, type WebhookDispatch, type WebhookEndpointRef, type WebhookInbound, type WebhookTaskStatus
 } from './webhook';
 import { openTunnel, type TunnelOpener } from './tunnel';
 import { ensureCloudflared } from './cloudflared';
 import {
-  classifyInboundKind, isAutoAllowed,
+  classifyInboundKind, isAutoAllowed, isReservedEndpointId,
   DEFAULT_CONTEXT_TRIGGER, DEFAULT_ORG_TRIGGER, DEFAULT_TRIGGER_MODE, DEFAULT_WEBHOOK_SCHEMA,
+  DEFAULT_WEBHOOK_VERIFIER,
   type ContextRule, type ContextTriggerConfig, type InboundKind, type OrgTriggerConfig,
-  type TriggerHistoryEntry, type TriggerMode, type WebhookTrigger
+  type TriggerHistoryEntry, type TriggerMode, type WebhookTrigger, type WebhookVerifier
 } from '../shared/triggers';
 import {
   appendTriggerHistory, clearTriggerHistory, listTriggerHistory, updateTriggerHistory
@@ -591,6 +592,19 @@ function skillsResourceDir(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'skills')
     : join(app.getAppPath(), 'resources', 'skills');
+}
+
+/** Where the phone PWA bundle lives on disk — the same packaged/dev
+ *  resolution pair as `slackReplyScriptPath()`/`skillsResourceDir()` above,
+ *  injected into `webhook.ts` as `staticRoot` (D-23). Returns the path
+ *  whether or not the directory exists; a missing `resources/phone/` (dev,
+ *  before plan 02-09 lands) is what `webhook.ts` itself answers 404 for, not
+ *  a reason to special-case here. `electron-builder.yml`'s `extraResources`
+ *  entry is plan 02-09's file — none is added by this one. */
+function phoneRootPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'phone')
+    : join(app.getAppPath(), 'resources', 'phone');
 }
 
 /** Where the helper discovers `{ port, token }` for the loopback endpoint. Kept
@@ -1148,6 +1162,116 @@ function lookupWebhookStatus(token: string): WebhookTaskStatus | null {
   return null;
 }
 
+/**
+ * A locally declared, narrow shape of one `humanQA` entry — deliberately NOT
+ * imported from `./hive`'s `HumanQA`, because it adds an optional `askedBy`
+ * field that interface does not have yet. GSD-06 (plan 02-08, SAME WAVE) may
+ * or may not have landed `askedBy` on the real writer by the time this runs;
+ * reading through this narrow type compiles either way, and an entry written
+ * before 02-08 simply has no `askedBy` and falls through to today's
+ * behaviour exactly (back-compat is free). If 02-08 landed a shared helper by
+ * the time this executed, `grep -rn 'askedBy' src/shared src/main` would have
+ * found it — none existed at this plan's execution time.
+ */
+interface PhoneHumanQA {
+  q: string;
+  a?: string;
+  askedAt?: string;
+  answeredAt?: string;
+  dismissedAt?: string;
+  askedBy?: string;
+}
+
+/** The card's currently open question for the human. Mirrors
+ *  `TasksKanban.tsx`'s `openQuestion`/`waitsOnHuman` (the identical 4-line
+ *  rule) — a THIRD copy of this predicate now exists (renderer x2, main x1).
+ *  Recorded as known duplication with the fix named: one shared module, once
+ *  a single plan owns both `TasksKanban.tsx` and this file. Not smuggled into
+ *  `src/shared/triggers.ts`, which this plan does not own for that purpose. */
+function openAskOf(task: HiveTask): PhoneHumanQA | undefined {
+  const qa = (task as { humanQA?: PhoneHumanQA[] }).humanQA;
+  if (!Array.isArray(qa)) return undefined;
+  for (let i = qa.length - 1; i >= 0; i--) {
+    const e = qa[i];
+    if (e && typeof e.q === 'string' && !e.a && !e.dismissedAt) return e;
+  }
+  return undefined;
+}
+
+/** `GET /phone/api/asks`' data source (UI-SPEC S5 screen 1) — every card
+ *  blocked on an open human question, newest first. */
+function openPhoneAsks(): PhoneAsk[] {
+  const ledger = hive.tasks() as { tasks?: HiveTask[] };
+  const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
+  const asks: PhoneAsk[] = [];
+  for (const t of tasks) {
+    if (t.status !== 'blocked') continue;
+    const open = openAskOf(t);
+    if (!open) continue;
+    const ask: PhoneAsk = { taskId: t.id, title: t.title, question: open.q };
+    if (t.assignee) ask.agent = t.assignee;
+    if (open.askedAt) ask.askedAt = open.askedAt;
+    asks.push(ask);
+  }
+  asks.sort((a, b) => (b.askedAt ?? '').localeCompare(a.askedAt ?? ''));
+  return asks;
+}
+
+/**
+ * `POST /phone/api/answer`'s write path — does exactly what
+ * `AskMeTab.sendAnswer` does, from main: patch the open `humanQA` entry with
+ * the answer, then tell whoever asked. Returns false on any failure so the
+ * phone can report honestly (the draft stays, the button re-enables —
+ * UI-SPEC S5).
+ *
+ * D-39 binds: the god is ALSO informed, even when the recipient is someone
+ * else — one send is exactly the failure mode this decision closes.
+ */
+function answerPhoneAsk(taskId: string, answer: string): boolean {
+  try {
+    const ledger = hive.tasks() as { tasks?: HiveTask[] };
+    const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return false;
+    const open = openAskOf(task);
+    if (!open) return false;
+
+    const qa = ((task as { humanQA?: PhoneHumanQA[] }).humanQA ?? []).map((e) =>
+      e === open || (e.q === open.q && !e.a && !e.dismissedAt)
+        ? { ...e, a: answer, answeredAt: new Date().toISOString() }
+        : e
+    );
+    if (!hive.patchTask(taskId, { humanQA: qa })) return false;
+
+    const recipient = open.askedBy ?? task.assignee ?? 'god';
+    hive.send({
+      to: recipient,
+      act: 'inform',
+      subject: `HUMAN ANSWER on task "${task.title}"`,
+      body: [
+        `The human answered the open question on task ${task.id} ("${task.title}") from the phone:`,
+        `Q: ${open.q}`,
+        `A: ${answer}`,
+        "The answer is also recorded in the card's humanQA. Act on it, unblock the card, and continue the work."
+      ].join('\n')
+    }, 'phone');
+    // D-39: send a SECOND message to the god when the recipient above wasn't
+    // already the god, naming which message carries the actual unblock.
+    if (recipient !== 'god') {
+      hive.send({
+        to: 'god',
+        act: 'inform',
+        subject: `[phone] human answered "${task.title}" (asked by ${recipient})`,
+        body: `The human answered ${recipient}'s open question on task ${task.id} from the phone — ${recipient}'s inbox message above carries the unblock; the full exchange is also on the card's humanQA.`
+      }, 'phone');
+    }
+    return true;
+  } catch (e) {
+    console.error('[phone] could not record answer:', e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
 // ─── Webhook done-observer (the OUTBOUND half of the trigger ledger) ─────────
 // Mirrors `pollSlackDoneTasks`: watch the kanban for webhook-origin cards that
 // reach 'done' and write the reply side of the conversation, tagged with the
@@ -1157,27 +1281,53 @@ function lookupWebhookStatus(token: string): WebhookTaskStatus | null {
 // is the record of what we've already paired, so a card that finished while the
 // app was closed still gets its outbound row on the next boot, and re-seeding
 // from the ledger makes a duplicate impossible.
+/** Construct (never start/bind) the shared WebhookServer instance if one does
+ *  not already exist. Split out of `startWebhookServer` so `phone:pairing`
+ *  can mint an enrollment token against a REAL instance BEFORE the local
+ *  server ever binds — arming has to happen first, which is D-23's own
+ *  circularity: `start()` refuses to bind with zero endpoints, and the phone
+ *  needs the server up with none configured. The three injected thunks are
+ *  what keep `webhook.ts` at zero `electron` imports (D-23): `staticRoot`
+ *  resolves the packaged/dev split the same way `slackReplyScriptPath()`
+ *  already does; `openAsks`/`answerAsk` reach the hive from HERE, never from
+ *  inside the transport class. */
+function ensureWebhookServerInstance(): WebhookServer {
+  if (webhookServer) return webhookServer;
+  const cfg = readConfig();
+  const server = new WebhookServer({
+    port: cfg.webhookPort && cfg.webhookPort > 0 ? cfg.webhookPort : WEBHOOK_DEFAULT_PORT,
+    endpoints: enabledWebhookEndpoints(),
+    onMessage: handleWebhookMessage,
+    lookupStatus: lookupWebhookStatus,
+    staticRoot: () => phoneRootPath(),
+    openAsks: () => openPhoneAsks(),
+    answerAsk: (taskId, answer) => answerPhoneAsk(taskId, answer)
+  });
+  webhookServer = server;
+  return server;
+}
+
 /** Build the shared WebhookServer from the enabled endpoints and start it. A
  *  server that is already up is RE-POINTED rather than restarted (see
  *  `reconcileWebhookServer`): restarting would mint a fresh tunnel URL and break
  *  every other endpoint's caller. The public tunnel is opened only here — never
- *  on a default; a webhook reaches the wire only once the operator enables it. */
-async function startWebhookServer(): Promise<{ ok: boolean; url?: string; error?: string }> {
+ *  on a default; a webhook reaches the wire only once the operator enables it.
+ *
+ *  `forPhone` allows an empty endpoint list to reach `.start()` at all —
+ *  `WebhookServer.start()`'s own `!phoneArmed()` half of its guard is what
+ *  actually lets an all-zero-endpoint bind through (armed by `phone:pairing`
+ *  BEFORE this is ever called for that path); this function's own early
+ *  return just has to get out of the way for that one caller. */
+async function startWebhookServer(opts?: { forPhone?: boolean }): Promise<{ ok: boolean; url?: string; error?: string }> {
   const endpoints = enabledWebhookEndpoints();
-  if (endpoints.length === 0) return { ok: false, error: 'no enabled webhook endpoints' };
-  if (webhookServer) {
-    webhookServer.setEndpoints(endpoints);
-    return { ok: true, url: webhookServer.publicUrl() ?? lastWebhookUrl };
+  if (endpoints.length === 0 && !opts?.forPhone) return { ok: false, error: 'no enabled webhook endpoints' };
+  const alreadyListening = webhookServer?.listening() ?? false;
+  const server = ensureWebhookServerInstance();
+  if (alreadyListening) {
+    server.setEndpoints(endpoints);
+    return { ok: true, url: server.publicUrl() ?? lastWebhookUrl };
   }
   pruneHeldTokens();
-  const cfg = readConfig();
-  const server = new WebhookServer({
-    port: cfg.webhookPort && cfg.webhookPort > 0 ? cfg.webhookPort : WEBHOOK_DEFAULT_PORT,
-    endpoints,
-    onMessage: handleWebhookMessage,
-    lookupStatus: lookupWebhookStatus
-  });
-  webhookServer = server;
   const res = await server.start();
   // start() means exactly ONE thing now (DAEMON-05): the local server bound
   // its port. It no longer conflates that with the tunnel, so ok:false is
@@ -1196,7 +1346,15 @@ async function startWebhookServer(): Promise<{ ok: boolean; url?: string; error?
  *  stop when it empties. Never restarts a healthy server. */
 function reconcileWebhookServer(): void {
   const endpoints = enabledWebhookEndpoints();
-  if (endpoints.length === 0) { stopWebhookServer(); return; }
+  if (endpoints.length === 0) {
+    // The phone can be keeping this server alive with zero webhook triggers
+    // configured (D-23's circularity) — disabling or deleting the operator's
+    // last WEBHOOK trigger must not tear down a door the phone paired
+    // through.
+    if (webhookServer?.phoneArmed()) { webhookServer.setEndpoints(endpoints); return; }
+    stopWebhookServer();
+    return;
+  }
   if (webhookServer) { webhookServer.setEndpoints(endpoints); return; }
   void startWebhookServer().then((r) => {
     if (!r.ok) console.error('[webhook] start failed:', r.error);
@@ -3603,6 +3761,11 @@ function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): Webho
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Partial<WebhookTrigger>;
   const id = typeof r.id === 'string' ? r.id.trim() : '';
+  // `phone` (case-insensitively) is the phone route's own reservation
+  // (D-23) — refused HERE, before the charset test, so the UI cannot save
+  // it even though it would also pass that test. The server independently
+  // refuses it too (`WebhookServer.setEndpoints`); this is the other half.
+  if (isReservedEndpointId(id)) return null;
   // The id is spliced into a public URL path. Restrict it to a boring charset
   // rather than escaping later: no slashes (which would forge a nested route),
   // no encoded traversal, nothing that could make two endpoints alias.
@@ -3610,6 +3773,7 @@ function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): Webho
   const prior = existing.find((t) => t.id === id);
   const secret = typeof r.secret === 'string' && r.secret.trim() ? r.secret.trim() : prior?.secret ?? '';
   const mode = isTriggerMode(r.mode) ? r.mode : prior?.mode ?? DEFAULT_TRIGGER_MODE;
+  const verifier = isWebhookVerifier(r.verifier) ? r.verifier : prior?.verifier ?? DEFAULT_WEBHOOK_VERIFIER;
   return {
     id,
     name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : prior?.name ?? id,
@@ -3618,8 +3782,13 @@ function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): Webho
     enabled: secret ? (typeof r.enabled === 'boolean' ? r.enabled : prior?.enabled ?? false) : false,
     mode,
     schema: typeof r.schema === 'string' && r.schema.trim() ? r.schema : prior?.schema ?? DEFAULT_WEBHOOK_SCHEMA,
-    createdAt: typeof r.createdAt === 'number' && r.createdAt > 0 ? r.createdAt : prior?.createdAt ?? Date.now()
+    createdAt: typeof r.createdAt === 'number' && r.createdAt > 0 ? r.createdAt : prior?.createdAt ?? Date.now(),
+    verifier
   };
+}
+
+function isWebhookVerifier(v: unknown): v is WebhookVerifier {
+  return v === 'shared-secret' || v === 'telegram' || v === 'discord';
 }
 
 function isTriggerMode(v: unknown): v is TriggerMode {
@@ -3846,6 +4015,37 @@ ipcMain.handle('tunnel:status', () => ({
   running: webhookServer?.publicUrl() != null,
   url: webhookServer?.publicUrl() ?? null
 }));
+
+/**
+ * Mint a fresh phone pairing — the QR's whole payload. Strict order (D-19,
+ * D-23): ARM first (mint the enrollment token against a real instance),
+ * THEN start-or-reuse the local server — `WebhookServer.start()`'s own
+ * `!phoneArmed()` guard-half is what lets an all-zero-endpoint bind through,
+ * and it only holds true if minting ran first. Returns `{ ok:false }` with a
+ * reason, never a URL the operator cannot use, when no public tunnel is up —
+ * this handler does not open one itself; it reports what `tunnel:start`
+ * already produced.
+ *
+ * Return shape is a CROSS-WAVE CONTRACT: plan 02-10 renders `url` as a QR.
+ * `url` = `<publicUrl>/phone/#<token>` — the enrollment token rides in the
+ * URL FRAGMENT, never a query param (D-19: fragments are never sent to a
+ * server, so it never touches this app's own access surface either).
+ */
+ipcMain.handle('phone:pairing', async () => {
+  const server = ensureWebhookServerInstance();
+  const { token, expiresAt } = server.mintEnrollment();
+
+  const started = await startWebhookServer({ forPhone: true });
+  if (!started.ok) return { ok: false, error: started.error };
+
+  const publicUrl = server.publicUrl() ?? lastWebhookUrl;
+  if (!publicUrl) {
+    return { ok: false, error: 'no public tunnel is open — enable the tunnel, then pair again' };
+  }
+  let host = '';
+  try { host = new URL(publicUrl).host; } catch { host = ''; }
+  return { ok: true, url: `${publicUrl.replace(/\/+$/, '')}/phone/#${token}`, host, token, expiresAt };
+});
 
 // ─── IPC: Free Flow (voice dictation → message queue) ────────────────────────
 // Entry point B is hold-Option-to-talk, handled entirely in the renderer

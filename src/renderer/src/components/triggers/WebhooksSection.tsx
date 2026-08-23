@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { PixelButton } from '../PixelButton';
 import { useStore } from '@/store/store';
-import { TRIGGER_MODES, type TriggerMode, type WebhookTrigger } from '@shared/triggers';
+import {
+  DEFAULT_WEBHOOK_VERIFIER, TRIGGER_MODES, WEBHOOK_VERIFIERS,
+  type TriggerMode, type WebhookTrigger, type WebhookVerifier
+} from '@shared/triggers';
 import {
   deleteWebhook, generateWebhookSecret, listWebhooks, newWebhook, saveWebhooks,
   webhooksStatus, type WebhooksStatus
 } from './api';
 import { JsonEditor } from './JsonEditor';
 import {
-  Callout, Field, Hint, MiniButton, ModePicker, Muted, SecretField, SubCard, SubHeader,
+  Callout, Field, Hint, MiniButton, ModePicker, Muted, Select, SecretField, SubCard, SubHeader,
   Toggle, inputStyle
 } from './ui';
 
@@ -115,6 +118,39 @@ export function WebhooksSection({ onSummary }: { onSummary?: (s: string) => void
 
 /* ─────────────────────────────── one endpoint ────────────────────────────── */
 
+/** POST TO's own boxed-mono style — a single shared object, so the VERIFIER
+ *  chip below (UI-SPEC S4c) literally reuses it rather than carrying a
+ *  second copy of the same five properties. */
+const postToBoxStyle = {
+  padding: '4px 6px',
+  background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
+  fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)',
+  lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-900)'
+};
+
+/** The SECRET field's Hint names the right credential per verifier — a flat
+ *  sentence today, wrong for two of the three strategies. */
+function secretHintFor(v: WebhookVerifier): string {
+  if (v === 'telegram') return "Telegram's own secret_token — paste what you set via setWebhook.";
+  if (v === 'discord') return "Discord's 64-character hex application public key.";
+  return 'Callers echo this in the x-md-webhook-secret header.';
+}
+
+/** Same shape as `ui.tsx`'s `ModePicker` — the verifier discriminant's own
+ *  select + blurb, reading labels from the ONE module main, preload and
+ *  renderer all share (`WEBHOOK_VERIFIERS`). */
+function VerifierPicker({ value, onChange }: { value: WebhookVerifier; onChange: (v: WebhookVerifier) => void }) {
+  const current = WEBHOOK_VERIFIERS.find((v) => v.value === value) ?? WEBHOOK_VERIFIERS[0];
+  return (
+    <>
+      <Select value={value} onChange={(v) => onChange(v as WebhookVerifier)} style={{ width: '100%' }}>
+        {WEBHOOK_VERIFIERS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
+      </Select>
+      <Hint>{current.blurb}</Hint>
+    </>
+  );
+}
+
 function WebhookRow({ hook, url, serverRunning, onPatch, onDelete }: {
   hook: WebhookTrigger;
   url: string;
@@ -176,6 +212,8 @@ function WebhookRow({ hook, url, serverRunning, onPatch, onDelete }: {
   };
 
   const modeLabel = TRIGGER_MODES.find((m) => m.value === hook.mode)?.label ?? hook.mode;
+  const verifierLabel = WEBHOOK_VERIFIERS.find((v) => v.value === (hook.verifier ?? DEFAULT_WEBHOOK_VERIFIER))?.label
+    ?? DEFAULT_WEBHOOK_VERIFIER;
 
   return (
     <SubCard>
@@ -204,11 +242,8 @@ function WebhookRow({ hook, url, serverRunning, onPatch, onDelete }: {
             {url ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{
-                  flex: 1, minWidth: 0, padding: '4px 6px',
-                  background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
-                  fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)',
-                  lineHeight: 'var(--cth-lh-mono)',
-                  color: 'var(--cth-ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                  flex: 1, minWidth: 0, ...postToBoxStyle,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
                 }}>{url}</span>
                 <MiniButton onClick={() => copy('url', url)} tone={copied === 'url' ? 'good' : 'plain'}>
                   {copied === 'url' ? 'copied' : 'copy'}
@@ -231,11 +266,25 @@ function WebhookRow({ hook, url, serverRunning, onPatch, onDelete }: {
               onCopy={() => copy('secret', hook.secret)}
               copied={copied === 'secret'}
             />
-            <Hint>Callers echo this in the x-md-webhook-secret header.</Hint>
+            <Hint>{secretHintFor(hook.verifier ?? DEFAULT_WEBHOOK_VERIFIER)}</Hint>
           </Field>
 
           <Field label="TRUST">
             <ModePicker value={hook.mode} onChange={(mode: TriggerMode) => onPatch({ mode })} />
+          </Field>
+
+          <Field label="VERIFIER">
+            {/* UI-SPEC S4c: one <code>-style chip, reusing POST TO's own style
+                object rather than a second copy — the current verifier's
+                label from the shared module (WEBHOOK_VERIFIERS), so main and
+                renderer cannot disagree about what a value means. */}
+            <div style={{ marginBottom: 6 }}>
+              <code style={postToBoxStyle}>{verifierLabel}</code>
+            </div>
+            <VerifierPicker
+              value={hook.verifier ?? DEFAULT_WEBHOOK_VERIFIER}
+              onChange={(verifier) => onPatch({ verifier })}
+            />
           </Field>
 
           <Field label="BODY SCHEMA">

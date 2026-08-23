@@ -1319,6 +1319,16 @@ const api = {
     return () => ipcRenderer.removeListener('tunnel:changed', listener);
   },
 
+  // ─── Phone pairing (DAEMON-02/DAEMON-05) ────────────────────────────────────
+  /** Mint a fresh phone pairing: arms the phone (a single-use enrollment
+   *  token), starts-or-reuses the local webhook server, and returns the QR's
+   *  whole payload. `{ ok:false }` (no `url`) when no public tunnel is up —
+   *  plan 02-10 renders `url` as a QR and must not draw a stale one on a
+   *  failure. The enrollment token rides in `url`'s fragment, never a query
+   *  param (D-19). */
+  phonePairing: (): Promise<{ ok: boolean; url?: string; host?: string; token?: string; expiresAt?: number; error?: string }> =>
+    ipcRenderer.invoke('phone:pairing'),
+
   // ─── Triggers: context (auto-compact / auto-clear) ──────────────────────────
   /** The two context rules (cadence + pressure gate + message), deep-filled. */
   getContextTrigger: (): Promise<ContextTriggerConfig> =>
