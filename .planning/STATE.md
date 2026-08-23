@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-08-23T13:06:16.485Z"
+stopped_at: Completed 02-07-PLAN.md
+last_updated: "2026-08-23T13:45:48.087Z"
 last_activity: 2026-08-23
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 34
+  completed_plans: 35
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plan: 5 of 12
+Plan: 6 of 12
       none — its D-09 gate is unrun). The counter is NOT a cursor: this was a PARALLEL
       gap-closure wave, so plan numbers did not advance in order.
       **ALL EIGHT gap-closure plans have landed:** 01-24, 01-26, 01-27 (wave 1), 01-25, 01-28,
@@ -155,7 +155,7 @@ Status: Ready to execute
 Last activity: 2026-08-23
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [████████░░] 79%
+Progress: [████████░░] 81%
 
 ## Performance Metrics
 
@@ -211,6 +211,7 @@ Progress: [████████░░] 79%
 | Phase 02 P02 | 70min | 3 tasks | 11 files |
 | Phase 02 P03 | 3h40m | 5 tasks | 16 files |
 | Phase 02 P04 | 55min | 5 tasks | 14 files |
+| Phase 02 P07 | 50min | 4 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -485,6 +486,7 @@ Recent decisions affecting current work:
 - [Phase 02]: terminalWorkOrderPrompt moved into the EXISTING src/shared/queueDelivery.ts, not a new file — deliberate deviation from 02-PATTERNS.md:35 -- queueDelivery.ts already owns every way a renderer may touch the main-owned queue, and a terminal work order is exactly that kind of object
 - [Phase 02]: DAEMON-05: the tunnel closes via a spawned cloudflared child + procKill.hardKillTree, not the deleted tunnelmole library call — tunnelmole exposed no process handle to close; running the tunnel as a child process makes the OS process handle the disposer the library never gave
 - [Phase 02]: DAEMON-05's off-by-default clause is structural, not a config check: start() opens no tunnel at all — a tunnel exists only where an operator action passes an opener into startTunnel(), so no other feature can bring the public origin up as a side effect
+- [Phase 02]: PARITY-01a's kimi bridge ships LIVE-UNVERIFIED (no Moonshot account on this machine); zero engines converted for PARITY-02 (BridgeDescriptor is mutually exclusive, hooks XOR proxy dispatch); PARITY-03's marker ledger pinned exactly at 14 sites across 5 files, driven red four ways. — D-33/D-34/D-35/D-40 all required the ruling and the pin to be written in source and driven red before being trusted, not merely asserted in the plan.
 
 ### Pending Todos
 
@@ -606,8 +608,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-23T13:05:55.210Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-08-23T13:45:48.066Z
+Stopped at: Completed 02-07-PLAN.md
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the

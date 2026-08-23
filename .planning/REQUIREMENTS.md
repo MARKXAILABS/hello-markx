@@ -134,7 +134,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 ### PARITY — Every engine a first-class citizen
 
-- [ ] **PARITY-01a**: Every engine that *can* have a routed inbox has one — mail addressed to
+- [x] **PARITY-01a**: Every engine that *can* have a routed inbox has one — mail addressed to
       it arrives in its inbox and is delivered, not bounced to the god
 - [ ] **PARITY-01b**: For any engine that genuinely cannot receive mail, the UI says so
       **before** an operator assigns mail-dependent work — on the agent card and in the
@@ -142,7 +142,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       *(Split deliberately. The original "…**or** the UI states plainly…" let a skeptic be
       unable to distinguish "we routed the inbox" from "we wrote a label". Each half is now
       separately checkable, and the plan must say which engines fall under which.)*
-- [ ] **PARITY-02**: All eleven engines report cost to the ledger and to the breaker
+- [x] **PARITY-02**: All eleven engines report cost to the ledger and to the breaker
 - [ ] **PARITY-03**: The four `live-unverified` bridges (pi, opencode, crush, qwen) are
       either verified against a real session and unmarked, or still marked — never silently
       unmarked
@@ -447,9 +447,9 @@ goals and success criteria each requirement rolls up into.
 | DAEMON-03 | Phase 2 | Pending |
 | DAEMON-04 | Phase 2 | Pending |
 | DAEMON-05 | Phase 2 | Pending |
-| PARITY-01a | Phase 2 | Pending |
+| PARITY-01a | Phase 2 | Complete |
 | PARITY-01b | Phase 2 | Pending |
-| PARITY-02 | Phase 2 | Pending |
+| PARITY-02 | Phase 2 | Complete |
 | PARITY-03 | Phase 2 | Pending |
 | SCALE-01 | Phase 3 | Pending |
 | SCALE-02 | Phase 3 | Pending |
