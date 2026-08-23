@@ -702,13 +702,15 @@ test('a codex agent gets a usage sample through the collector fallback', () => {
  */
 function breakerInputLiteral() {
   const root = path.resolve(__dirname, '..');
-  const main = fs.readFileSync(path.join(root, 'src/main/index.ts'), 'utf8');
+  // 02-02 moved runBreakerBeat out of index.ts into src/main/floor/boot.ts's
+  // bootFloor() module — the literal itself is unchanged, only its file.
+  const main = fs.readFileSync(path.join(root, 'src/main/floor/boot.ts'), 'utf8');
 
   const at = main.indexOf('const inputs: BreakerInput[]');
   assert.ok(
     at > 0,
     'runBreakerBeat no longer builds a BreakerInput[] — re-derive the anchor with: '
-    + 'grep -n "const inputs: BreakerInput\\[\\]" src/main/index.ts'
+    + 'grep -n "const inputs: BreakerInput\\[\\]" src/main/floor/boot.ts'
   );
 
   const push = main.indexOf('inputs.push({', at);
@@ -759,12 +761,14 @@ test('FLOOR-09: the number the budget arm enforces against includes the proxy ti
   // requirements are pinned together: FLOOR-10's arm is only meaningful
   // while FLOOR-09's sink is still wired.
   const root = path.resolve(__dirname, '..');
-  const main = fs.readFileSync(path.join(root, 'src/main/index.ts'), 'utf8')
+  // 02-02 moved the HookServer construction out of index.ts into
+  // src/main/floor/boot.ts's bootFloor(); the wiring itself is unchanged.
+  const main = fs.readFileSync(path.join(root, 'src/main/floor/boot.ts'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
   assert.match(
     main, /telemetry\.recordCostSample\(/,
-    'src/main/index.ts no longer hands HookServer the proxy-tier cost sink. The ledger still '
+    'src/main/floor/boot.ts no longer hands HookServer the proxy-tier cost sink. The ledger still '
     + 'fills, but getAgentUsage never sees qwen/crush spend, so budgetForAgent under-reports '
     + "and a per-card cap silently exempts every proxy-tier agent — asserted on the CALL and "
     + 'not on a mention, because this source is comment-stripped first.'

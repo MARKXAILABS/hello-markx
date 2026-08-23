@@ -719,8 +719,10 @@ test('sink 2: the generic resume branch refuses BOTH the flag and the subcommand
 });
 
 test('sink 3: the breaker beat refuses to record an unsafe id from the collector', () => {
+  // 02-02 moved runBreakerBeat out of index.ts into src/main/floor/boot.ts's
+  // bootFloor() module — the guard itself is unchanged, only its file.
   const beat = region(
-    stripped('src/main/index.ts'),
+    stripped('src/main/floor/boot.ts'),
     'hive.appendCostLedger(sample)',
     'if (id === reg.godId) continue;'
   );

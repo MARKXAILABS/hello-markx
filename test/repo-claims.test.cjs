@@ -409,13 +409,17 @@ test('the Stop-drain wiring HIVE.md now describes is still there (#5, FLOOR-02)'
   // correcting the docs — and a deletion would make every removed denial
   // retroactively true. Pin the positive direction in the same file so that
   // refactor fails the suite instead of quietly winning the argument.
-  const index = readStripped('src/main/index.ts');
+  //
+  // 02-02 moved the composition root (the DeliveryService/HookServer wiring)
+  // out of index.ts into src/main/floor/boot.ts's bootFloor(); the wiring text
+  // itself is unchanged, only its file.
+  const boot = readStripped('src/main/floor/boot.ts');
   const hooks = readStripped('src/main/hooks.ts');
   const delivery = readStripped('src/main/delivery.ts');
 
   assert.ok(
-    /drainForStop\(/.test(index) && /delivery\.drainAtStop\(/.test(index),
-    'src/main/index.ts no longer wires the Stop-drain (hive.drainForStop into DeliveryService.deps.drain, '
+    /drainForStop\(/.test(boot) && /delivery\.drainAtStop\(/.test(boot),
+    'src/main/floor/boot.ts no longer wires the Stop-drain (hive.drainForStop into DeliveryService.deps.drain, '
     + 'and delivery.drainAtStop into HookServer). HIVE.md §2.5/§3/§5/§7/§8 now all say it runs'
   );
   assert.ok(
@@ -1040,17 +1044,21 @@ test('both composition-root seams are still fed — FLOOR-09 and FLOOR-10 are no
   // and plan 10 fed the breaker beat in wave 5. A handoff that is written but
   // never applied leaves a requirement closed on paper with dead code beneath it,
   // and BOTH greps read 0 when this plan was written.
-  const index = readStripped('src/main/index.ts');
+  //
+  // 02-02 moved both feed sites (the HookServer construction and the breaker
+  // beat) out of index.ts into src/main/floor/boot.ts's bootFloor()/
+  // runBreakerBeat(); the wiring itself is unchanged, only its file.
+  const boot = readStripped('src/main/floor/boot.ts');
 
   assert.ok(
-    index.includes('recordCostSample'),
-    'src/main/index.ts never calls recordCostSample. The HookServer sink exists and is unit-tested, '
+    boot.includes('recordCostSample'),
+    'src/main/floor/boot.ts never calls recordCostSample. The HookServer sink exists and is unit-tested, '
     + 'but nothing in production feeds it: proxy-tier spend stops reaching getAgentUsage and the '
     + 'budget cap becomes a false cap (#19, FLOOR-09).'
   );
   assert.ok(
-    index.includes('budgetForAgent'),
-    'src/main/index.ts never calls hive.budgetForAgent. The accessor exists and is unit-tested, '
+    boot.includes('budgetForAgent'),
+    'src/main/floor/boot.ts never calls hive.budgetForAgent. The accessor exists and is unit-tested, '
     + 'but the breaker beat is never handed a budget: BreakerInput.budget becomes an optional '
     + 'field nothing ever sets, and the FLOOR-10 arm is dead code behind a green suite (#34).'
   );

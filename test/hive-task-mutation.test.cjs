@@ -131,12 +131,15 @@ test('renderer task actions never send a whole stale ledger back to main', () =>
   // The contract this test guards is untouched: nothing writes a whole ledger.
   assert.doesNotMatch(sources[3], /hiveAddTask\s*\(/,
     'the Slack-origin card promotion belongs to main now; a renderer that mints it does not mint it with the window closed');
-  const hook = main.indexOf('onQueueDelivered:');
+  // 02-02 moved the DeliveryService construction (onQueueDelivered included)
+  // out of index.ts into src/main/floor/boot.ts's bootFloor(); the hook itself
+  // is unchanged, only its file.
+  const boot = fs.readFileSync(path.join(root, 'src/main/floor/boot.ts'), 'utf8');
+  const hook = boot.indexOf('onQueueDelivered:');
   assert.ok(hook > 0,
     'main lost its post-delivery hook — Slack-origin work would stop becoming a kanban card at all');
-  // Sliced to that hook's own block: index.ts is ~5,600 lines and already calls
-  // hive.addTask inside the `hive:addTask` IPC handler, so an unsliced match
-  // here would stay green with the promotion deleted.
-  assert.match(main.slice(hook, main.indexOf('\n  },', hook)), /hive\.addTask\(/,
+  // Sliced to that hook's own block, so an unsliced match here would stay
+  // green with the promotion deleted.
+  assert.match(boot.slice(hook, boot.indexOf('\n  },', hook)), /hive\.addTask\(/,
     "main's Slack-origin promotion must go through the atomic addTask, never a whole-ledger rewrite");
 });

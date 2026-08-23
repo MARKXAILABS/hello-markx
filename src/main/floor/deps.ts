@@ -82,4 +82,22 @@ export interface FloorDeps {
    * keep-awake toggle rather than throwing.
    */
   syncKeepAwake?: () => void;
+  /**
+   * Spawn (or respawn) an agent PTY — index.ts's `spawnAgentCore`: real PTY +
+   * webContents wiring, ~480 lines deep in IPC/renderer concerns, too large and
+   * too Electron-shaped to relocate under `src/main/floor/**`. Injected so
+   * `respawnOnAccount`'s failover DECISION can live in boot.ts while the spawn
+   * mechanics itself stays index.ts-owned. `opts`/`owner` are `unknown` here on
+   * purpose — their real shapes (`AgentSpawnOptions`, `Electron.WebContents`)
+   * are index.ts/boot.ts-local and this file stays free of both.
+   */
+  respawnCore: (opts: unknown, owner: unknown) => Promise<{ ok: boolean; error?: string; account?: string }>;
+  /**
+   * Start the ephemeral-worker spawn-request watcher (index.ts's
+   * `startEphemeralWorkerWatcher`). A callback rather than something `bootFloor`
+   * owns directly, for the same too-large-to-relocate reason as `respawnCore`:
+   * it spawns via `spawnAgentCore` too. Optional so a floor booted without it
+   * (every test) just never polls for spawn-requests.
+   */
+  startWorkerWatcher?: () => void;
 }

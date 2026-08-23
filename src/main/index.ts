@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, safeStorage, screen, shell, Notification } from 'electron';
 import { spawn } from 'node:child_process';
 import {
   rmSync, existsSync, readFileSync, readdirSync, statSync, cpSync, writeFileSync,
@@ -102,6 +102,19 @@ import {
   codexRemoteSocketFits,
   withCodexRemoteArgs
 } from '../shared/codexRemote';
+
+import {
+  bootFloor, startHiveServices, shutdown as floorShutdown,
+  hive, delivery, control, telemetry, breaker, accountPool, hookServer, memory, reflector,
+  persist, ptyManager, integrationBroker, roster,
+  ptyToAgent, worktreePaths, worktreeOrigins, worktreeBases, spawnRecipes, liveWorkers, preservedWorktrees,
+  teardownPty, respawnOnAccount, informGod, syncMissions, syncContextTriggers,
+  archiveOrphanedAgents, ensureDefaultMissions, breakerToast, condenseBoardIfOversized,
+  ptyForAgent, isFloorQuiet, lastCoordinationAt, looksStuck, readDeliveryCursor,
+  notifyTriggerHistoryUpdated, savePreservedWorktrees, clearMissionTimers, clearContextTimers,
+  stopWebhookDoneObserver, startWebhookDoneObserver, armAlwaysOnBeats, removeWorkerScratch
+} from './floor/boot';
+import type { FloorDeps } from './floor/deps';
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
 
@@ -216,8 +229,6 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[main] unhandledRejection (kept alive):', reason);
 });
-
-const ptyManager = new PtyManager();
 
 function runCodexDaemonCommand(
   executable: string,
@@ -355,262 +366,17 @@ async function enableCodexRemoteForSpawn(
     return false;
   }
 }
-/** Live PTY id → its hive agent id, recorded at spawn. The pty:kill handler only
- *  gets the PTY id, so this lets a closed tab archive the right registry agent. */
-const ptyToAgent = new Map<string, string>();
 /** PTY id → the spawn it should auto restart-and-continue into once a first-time
  *  CLI install finishes. The missing-CLI short-circuit runs the engine's installer
  *  in this PTY; when it exits cleanly the exit handler re-runs the SAME spawn (with
  *  install disabled) so the freshly-installed CLI launches in the SAME pty/window —
  *  no user click. Cleared the moment it's consumed, so it can never loop installs. */
 const pendingInstallRelaunch = new Map<string, { opts: AgentSpawnOptions; owner: Electron.WebContents | null; bin: string }>();
-const hive = new HiveManager(
-  () => readConfig().harnessHome,
-  (channel, payload) => {
-    const wc = liveWebContents();
-    if (!wc) return false;
-    try { wc.send(channel, payload); return true; } catch { return false; }
-  }
-);
-// #7C — operator control state (pause/gate/steer/halt), read by the HookServer
-// when deciding hook returns.
-const control = new ControlRegistry();
-// Stage 7A — the live observability tap. Receives Claude Code's first-party OTel
-// over loopback OTLP/JSON and exposes the locked usage-provider seam. resolveCwd
-// lets the transcript fallback find an agent's cwd from the hive registry.
-const telemetry = new TelemetryCollector({
-  emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } },
-  resolveCwd: (agentId) => hive.registry().agents[agentId]?.cwd ?? null
-});
-// Usage provider (Seam 1) — the INTEGRATION swap: Oscar's telemetry collector (#7)
-// IS the provider, replacing Lane A's interim StubUsageProvider. Same
-// getAgentUsage(agentId) pull seam, so the breaker + cost ledger consumers are
-// untouched; telemetry has a transcript fallback built in, so it works before any
-// live OTel arrives.
-const usageProvider: UsageProvider = telemetry;
-// Circuit breaker (Lane A #6.6b) — the REAL policy (replaces Lane C's interim
-// glue). POLICY only; the heartbeat beat feeds it signals (via usageProvider) +
-// enforces its decisions. Config read live so a settings change applies next beat.
-const breaker = new CircuitBreaker(() => {
-  const c = readConfig();
-  return { ...(c.circuitBreaker ?? {}), costCapUsd: c.costCapUsd, costCapTokens: c.costCapTokens, agentTokenCaps: c.agentTokenCaps };
-});
-// Always-on beats (decoupled from the optional heartbeat): the live fleet snapshot
-// Michael reads + the breaker beat, so guardrails + monitoring work even when the
-// heartbeat mission is disabled (it ships off).
-let fleetTimer: ReturnType<typeof setInterval> | null = null;
-let breakerBeatTimer: ReturnType<typeof setInterval> | null = null;
-// Feed the breaker's api_error-storm trip from Oscar's OTel api_error spans —
-// Jim's one breaker input with no on-branch source (telemetry.onApiError seam).
-telemetry.onApiError((agentId) => breaker.recordError(agentId));
-// Claude account pool (v0.4.5 PR 2) — health + policy + failover. Pure logic in
-// src/shared/claudeAccountPool.ts; this is the main-process owner: persisted in
-// its own userData JSON (never the secret broker), fed by the collector's
-// api_error (429 → cooling, 401 → dead) + usage pushes, and it tells the
-// renderer which agents to respawn on which account (`claudeAccount:failover`).
-// Only PTY-backed, non-archived Claude agents count as "live" here — an agent
-// on the login account (no pin) is outside the pool and never moved.
-const accountPool = new AccountPoolManager({
-  statePath: () => join(app.getPath('userData'), 'claude-account-pool.json'),
-  accounts: () => readConfig().claudeAccounts ?? [],
-  tokenPresent: (id) => integrations.hasSecret(claudeAccountSecretRef(id)),
-  liveAgents: () => Object.entries(hive.enabled() ? hive.registry().agents : {})
-    .filter(([id, a]) => !a.archived && isClaudeProvider(a.provider ?? 'claude') && !!ptyForAgent(id))
-    .map(([id, a]) => ({ agentId: id, name: a.name, account: a.account })),
-  emit: (channel, payload) => {
-    // #5 — MAIN owns the kill→respawn now. The plan used to be shipped to the
-    // renderer, which executed it from a React effect: reload the window between
-    // kill and respawn and the agent stayed dead, pinned at "switching…" forever
-    // (upstream #151). We run it here and tell the renderer what happened on
-    // `hive:failover` instead, so `claudeAccount:failover` is deliberately NOT
-    // forwarded — two executors would respawn the same agent twice.
-    if (channel === 'claudeAccount:failover') {
-      const plan = payload as { reason?: string; switches?: AccountSwitch[] };
-      delivery.failover(plan.switches ?? [], plan.reason ?? 'account failover');
-      return;
-    }
-    try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ }
-  },
-  alert: (title, body) => breakerToast(title, body),
-  sanitize: redactSecrets
-});
-telemetry.onApiError((agentId, info) => accountPool.handleApiError(agentId, info));
-telemetry.onAgentUsage((sample) => accountPool.recordUsage(sample));
-/**
- * The floor's autonomy loop (#5): inbox wake, the guarded Stop drain, and the
- * account-failover executor — all in MAIN, so none of it dies with the window.
- * Everything Electron/hive/PTY-shaped is injected here; the service itself is
- * import-free enough for `node --test` (test/delivery-main.test.cjs).
- */
-const delivery = new DeliveryService({
-  liveAgents: (): LiveAgentPty[] => {
-    if (!hive.enabled()) return [];
-    const ptys = new Map(ptyManager.list().map((p) => [p.id, p]));
-    const out: LiveAgentPty[] = [];
-    for (const [id, a] of Object.entries(hive.registry().agents)) {
-      // The prep assistant is SEND-ONLY — it never drains an inbox, so nudging it
-      // would type at a terminal that has nothing to read.
-      if (a.archived || a.isAssistant) continue;
-      const ptyId = ptyForAgent(id);
-      const p = ptyId ? ptys.get(ptyId) : undefined;
-      if (!ptyId || !p) continue;
-      out.push({
-        agentId: id,
-        ptyId,
-        provider: inferAgentProvider(p.command, a.provider),
-        hasOutput: p.hasOutput,
-        idleMs: Math.max(0, Date.now() - p.lastOutputAt),
-        lastOutputAt: p.lastOutputAt
-      });
-    }
-    return out;
-  },
-  // `hive.inbox`/`drainForStop` resolve paths under a hive root that may not
-  // exist yet (no harness home): guard both rather than let a TypeError out of a
-  // timer or a hook socket.
-  inbox: (agentId) => (hive.enabled() ? hive.inbox(agentId).map((m) => ({ id: m.id, from: m.from })) : []),
-  write: (ptyId, data) => ptyManager.write(ptyId, data),
-  paused: (agentId) => control.isAutoDeliveryPaused(agentId),
-  drain: (agentId) => {
-    if (!hive.enabled()) return { block: false };
-    // Snapshot what the cursor is about to pass BEFORE draining, so the renderer
-    // can be told exactly which messages moved. `drainForStop` advances the cursor
-    // and returns only the continuation prompt.
-    const before = readDeliveryCursor(agentId);
-    const pending = hive.inbox(agentId).filter((m) => !before || m.id > before);
-    const res = hive.drainForStop(agentId);
-    return { ...res, delivered: res.block ? pending.map((m) => ({ id: m.id, from: m.from })) : [] };
-  },
-  respawn: respawnOnAccount,
-  // FLOOR-02 — the MD queue is MAIN's now, so it needs a durable home. One plain
-  // JSON file beside the hive's other live files (`log.jsonl`,
-  // `cost-ledger.jsonl`, `fleet.json`, `roster.json`), named for what it holds.
-  // A thunk because harnessHome is legitimately null before onboarding and can
-  // change in Settings afterwards; a path captured at module scope would be
-  // relative (i.e. the process CWD) and would then stay pointed at the old hive.
-  queuePath: () => {
-    const home = readConfig().harnessHome;
-    return home ? join(home, 'delivery-queue.json') : null;
-  },
-  // T-P08-05 — resolve the recipient against MAIN's roster rather than trusting
-  // the agent id a renderer sent. `isAssistant` agents are excluded for the same
-  // reason `liveAgents` skips them: the prep assistant is send-only.
-  knownAgent: (agentId) => {
-    if (!hive.enabled()) return false;
-    const a = hive.registry().agents[agentId];
-    return !!a && !a.archived;
-  },
-  // Promote a genuine Slack-origin work item to a stamped kanban card the first
-  // time it is delivered, carrying the origin thread so the done-observer can
-  // post its one summary reply in-thread. This ran in the renderer's drain until
-  // FLOOR-02 moved the drain here — and a promotion that only happens when a
-  // window is open is exactly the class of hole this migration closes.
-  //
-  // `addTask` is a no-op on a colliding id, which is the whole reason the
-  // renderer version had to read `hiveTasks()` first. That read is gone with it.
-  // ADDITIVE + best-effort: a failure here must never affect a delivery that
-  // already happened.
-  onQueueDelivered: (item) => {
-    if (!item.slack || !hive.enabled()) return;
-    const title = item.text.length > 80 ? `${item.text.slice(0, 79)}…` : item.text;
-    hive.addTask({
-      id: `slack-${item.slack.thread_ts}-${item.id}`,
-      title,
-      description: item.text,
-      status: 'todo',
-      dependsOn: [],
-      priority: 1,
-      createdAt: new Date().toISOString(),
-      slack: item.slack
-    });
-  },
-  breakerLevel: (agentId) => breaker.levelFor(agentId),
-  // The DURABLE half of the idle-quiesce backstop (#5). `emit` below reaches a
-  // renderer that may not exist — the whole point of moving the backstop out of
-  // useHive.ts is that it has to work with the window closed — so the transition
-  // is written to the hive log, which main owns and which outlives every window.
-  // Deliberately NOT registry.json: that file's `status` is written 'idle' once at
-  // spawn and never transitions (see isFloorQuiet below), so rewriting it here
-  // would be a no-op against a field nothing advances.
-  setStatus: (agentId, status) => {
-    if (!hive.enabled()) return;
-    hive.appendLog({ kind: 'agent_quiesced', agentId, status, reason: 'pty_silent' });
-  },
-  emit: (channel, payload) => { try { liveWebContents()?.send(channel, payload); } catch { /* window tore down */ } }
-});
-// HookServer needs BOTH: Oscar's control registry (HITL pause/gate/steer/halt via
-// hook returns) AND Jim's breaker (feed recordToolUse on each PostToolUse). It also
-// owns the Stop boundary, so it carries the guarded inbox drain (#5) and the
-// click-to-focus notification target (#42).
-const hookServer = new HookServer(
-  hive, () => liveWebContents(), () => readConfig(), control, breaker,
-  (agentId) => delivery.drainAtStop(agentId),
-  (agentId) => focusAgent(agentId),
-  (s) => telemetry.recordCostSample(s)          // FLOOR-09 (#19) — proxy-tier cost sink
-);
-// GATE-01 — the hook token is minted PER SPAWN and lives in exactly one PTY's
-// env, replacing the single floor-wide secret every PTY used to inherit. Wired
-// at the PtyManager rather than at each `ptyManager.spawn(…)` call site on
-// purpose: pty.ts:664 is the one place every agent PTY is actually created, so a
-// spawn site added later gets a token automatically instead of going silently
-// dead-hooked, and pty.ts already owns the session teardown where the matching
-// revoke belongs. Injected as callbacks so pty.ts keeps no dependency on hooks.ts.
-ptyManager.setHookTokenSource(
-  (agentId) => hookServer.mintToken(agentId),
-  (token) => hookServer.revokeToken(token)
-);
-// 01-25 — the same wiring for the collector's own, SEPARATE telemetry
-// capability. Placed here rather than at the collector's construction because
-// both `ptyManager` (above) and `telemetry` are already initialised at this
-// point: no temporal dead zone, and no startup window in which a legitimately
-// authenticated OTLP batch would be refused. A telemetry token is not a hook
-// token: leaking one buys "post telemetry as the agent that already holds it",
-// never the hook socket.
-ptyManager.setOtelTokenSource(
-  (agentId) => telemetry.mintAgentToken(agentId),
-  (token) => telemetry.revokeAgentToken(token)
-);
-const memory = new MemoryManager(
-  () => readConfig().harnessHome,
-  () => { const c = readConfig(); return { enabled: c.semanticMemory !== false, model: c.embeddingModel ?? 'minilm' }; },
-  // FLOOR-07: the FTS5 keyword index lives in the PersistStore this process is
-  // ALREADY holding open — no second database, no new dependency. Lazy on
-  // purpose: `persist` is declared below and is not open until whenReady, and
-  // the mine loop is the only caller.
-  () => persist,
-  // The project half of D-33's `WHERE agent_id = ? AND project = ?` predicate.
-  // The registry cwd is what an agent is actually working in; without it the
-  // project column would ship permanently empty and the predicate would be
-  // decoration rather than a filter.
-  (agentId) => hive.registry().agents[agentId]?.cwd ?? null
-);
 // Knowledge store — file-backed corpus + agent CLI, keyword search (default OFF).
+// Fully independent of the hive/delivery/telemetry singleton graph (no injected
+// deps at all), so unlike them it stays constructed here rather than inside
+// bootFloor.
 const knowledge = new KnowledgeManager();
-/** Reads the reflect tunables from config each tick (defaults baked in here so a
- *  pre-existing config.json without the keys still gets sane values). */
-function reflectSettings(): ReflectSettings {
-  const c = readConfig();
-  return {
-    enabled: c.reflectEnabled !== false,
-    intervalMs: c.reflectIntervalMs ?? 1_800_000,
-    byteTriggerPct: c.reflectByteTriggerPct ?? 50,
-    sectionTrigger: c.reflectSectionTrigger ?? 50,
-    recentKeep: c.reflectRecentKeep ?? 12,
-    minBytes: c.reflectMinBytes ?? 16_384
-  };
-}
-// Finishes the janitor's missing condense half: bounds each agent's memory.md
-// (Haiku tail-summary, backup→verify→atomic-swap) so it never grows unbounded.
-const reflector = new MemoryReflector(
-  () => readConfig().harnessHome,
-  () => readConfig().defaultCommand ?? 'claude',
-  () => memory.env(),
-  reflectSettings,
-  (event) => { try { hive.appendLog(event); } catch { /* best-effort */ } }
-);
-// Durable harness state (SQLite, main process). Phase A: window bounds (kv) +
-// net-new command history. Opened in whenReady, closed in the teardown blocks.
-const persist = new PersistStore();
 /** The PRIMARY window — the one running the hive/god orchestration and the sink
  *  for process-global timer events (missions, breaker, Slack ingestion). It is
  *  the most-recently-focused live window, so global events follow the user.
@@ -627,58 +393,6 @@ let floorSeq = 0;
 /** When true, skip the quit interceptor (user already confirmed). */
 let allowQuit = false;
 
-/** Agents spawned with `isolate: true` get a dedicated git worktree; this maps
- *  the agent/pty id → the worktree path so we can tear it down on kill. */
-const worktreePaths = new Map<string, string>();
-/** id → the original repo cwd the worktree was created from (needed to run
- *  `git worktree remove` from the parent tree, not the worktree itself). */
-const worktreeOrigins = new Map<string, string>();
-/** id → the branch the worktree was cut from. Recorded at creation rather than
- *  re-derived at teardown: the user may have switched the parent repo's branch
- *  in the meantime, and this is the ref the "is there unintegrated work here?"
- *  gate compares against (#1). */
-const worktreeBases = new Map<string, string>();
-
-/**
- * ptyId → the EXACT options its last successful spawn came through, plus the
- * window that owns its output. Recorded at the top of spawnAgentCore, before it
- * mutates `opts` (cwd → worktree, env += secrets), so what we keep is the
- * caller's recipe and NEVER a materialized token.
- *
- * This is what lets MAIN respawn an agent on its own (issue #5's account
- * failover). The registry knows an agent's id/cwd/role but not the command, the
- * model flags, the args or the terminal geometry — which is why the respawn used
- * to be renderer-owned, and why it died with the window.
- */
-const spawnRecipes = new Map<string, { opts: AgentSpawnOptions; owner: Electron.WebContents | null }>();
-
-/** A live god-triggered ephemeral worker, tracked from spawn to teardown. */
-interface WorkerRec {
-  workerId: string;       // == the PTY id == hive agent id (`worker-<reqId>`)
-  reqId: string;          // the spawn-request id
-  name?: string;          // display name (for the worker tab)
-  slack?: { channel: string; thread_ts: string };
-  baseBranch: string;     // the branch its worktree was cut from (for ahead-of-base)
-  spawnedAt: number;      // epoch ms
-  releasing?: boolean;    // kill issued; awaiting teardownPty (skip re-processing)
-  /** Per-worker TOTAL-token cap from the spawn-request (overrides the config
-   *  default). 0/undefined = no per-request cap. P4 plumbing — unlimited today. */
-  tokenCap?: number;
-}
-/** Live ephemeral workers by id. Populated by the spawn-request watcher; consulted
- *  by teardownPty so a finished/crashed/reaped worker's worktree is PRESERVED (not
- *  force-removed) when it holds unintegrated work — god is the sole integrator. */
-const liveWorkers = new Map<string, WorkerRec>();
-
-/** The loopback secret broker (Phase 2). Workers reach registered integrations through
- *  it without ever seeing a credential. getRecord/getSecret are injected so the broker
- *  stays electron-free + unit-testable. Started in bootstrapHiveServices; each worker is
- *  granted a per-worker capability token at spawn (revoked in teardownPty). */
-const integrationBroker = new IntegrationBroker({
-  getRecord: integrations.getRecord,
-  getSecret: integrations.getSecret
-});
-
 /** BYOK backend model-providers whose API keys the non-Claude CLI engines
  *  (OpenCode/Crush/pi/qwen) read from standard env vars. Keys are stored
  *  WRITE-ONLY in the same encrypted secret broker as integrations, under
@@ -692,258 +406,36 @@ const BACKEND_KEY_ENV: Record<string, string> = {
 };
 const providerKeyRef = (backend: string): string => `apikey:${backend}`;
 
-/** A worker worktree that teardown PRESERVED because it held unintegrated work.
- *  Tracked so the GC sweep can reclaim it (+ its scratch dir) once the work lands
- *  in base or the worktree is removed by hand — see gcPreservedWorktrees(). */
-interface PreservedWorktree {
-  workerId: string;
-  wtPath: string;
-  origCwd: string;        // the parent repo to run `git worktree remove` from
-  baseBranch: string;     // re-checked against this for "integrated yet?"
-  scratchDir: string | null; // HIVE_ROOT/agents/<workerId> — removed alongside the worktree
-  slack?: { channel: string; thread_ts: string };
-  preservedAt: number;    // epoch ms
-}
-/** Preserved worker worktrees awaiting integration, keyed by worktree path. The GC
- *  sweep drains this: an entry is removed (worktree + scratch GC'd) only when the
- *  work is provably integrated, or when the worktree is already gone from disk. */
-const preservedWorktrees = new Map<string, PreservedWorktree>();
-/** kv key for the ledger below. */
-const PRESERVED_KV = 'worktrees.preserved';
-/** Persist the ledger. It was in-memory only, so a quit between "this worker
- *  ended holding unintegrated work" and "that work landed in base" dropped the
- *  entry forever — the worktree and its scratch dir then leaked in the user's
- *  real repo with nothing left that knew they were reclaimable (#14). */
-function savePreservedWorktrees(): void {
-  try { persist.setKv(PRESERVED_KV, [...preservedWorktrees.values()]); }
-  catch (e) { console.error('[worker gc] could not persist preserved worktrees:', e); }
-}
-/** Reload it at boot. Entries whose worktree is already gone are reclaimed by
- *  the normal GC sweep (its path-gone branch), so nothing here needs to touch
- *  the disk. A live in-memory entry always wins over the snapshot. */
-function loadPreservedWorktrees(): void {
-  try {
-    const rows = persist.getKv<PreservedWorktree[]>(PRESERVED_KV);
-    if (!Array.isArray(rows)) return;
-    for (const r of rows) {
-      if (!r || typeof r.wtPath !== 'string' || !r.wtPath || typeof r.workerId !== 'string') continue;
-      if (!preservedWorktrees.has(r.wtPath)) preservedWorktrees.set(r.wtPath, r);
-    }
-    if (preservedWorktrees.size > 0) {
-      console.log(`[worker gc] reloaded ${preservedWorktrees.size} preserved worktree(s) awaiting integration`);
-    }
-  } catch (e) { console.error('[worker gc] could not reload preserved worktrees:', e); }
-}
-
-/**
- * Tear down everything tied to a PTY id: archive its hive agent, remove its
- * isolated git worktree, and drop the bookkeeping-map entries. Runs on BOTH an
- * explicit `pty:kill` AND a natural PTY exit (the child finished, crashed, or
- * was killed externally) — without this the agent stays "active" (broadcasts
- * keep mailing a dead inbox), the worktree orphans (plus a dangling `git
- * worktree` registration in the user's real repo), and the maps leak an entry
- * per dead PTY.
+/** A natural PTY exit must run the same teardown as an explicit kill — EXCEPT when
+ *  the PTY was the missing-CLI installer: a clean exit there means the engine CLI was
+ *  just installed, so auto restart-and-continue by re-running the SAME spawn into the
+ *  SAME pty/window (no user click). Provider-agnostic. Idempotent by construction: the
+ *  relaunch carries `noAutoInstall`, so the installer can never fire (let alone loop) a
+ *  second time — a binary that's somehow still missing just spawns and exits normally.
  *
- * Idempotent: guarded on map presence and the already-idempotent
- * `hive.setArchived`, so the second call (kill() also makes node-pty fire
- * onExit) is a harmless no-op. Best-effort — every step is wrapped so a teardown
- * error can never crash the caller (an IPC handler or node-pty's onExit).
- */
-function teardownPty(id: string): void {
-  // 0) Revoke this id's broker capability (if any). Idempotent + harmless for a
-  //    non-worker PTY; ensures a dead worker's token can never reach an integration.
-  try { integrationBroker.revoke(id); } catch { /* best-effort */ }
-  // 1) Archive the agent — retained + flagged; only live-PTY agents are active.
-  const agentId = ptyToAgent.get(id);
-  if (agentId) {
-    ptyToAgent.delete(id);
-    // Drop breaker state so a dead agent can't leak/zombie a tripped level.
-    try { breaker.forget(agentId); } catch { /* best-effort */ }
-    // …and the other two registries keyed by the same id (#14). Ids are REUSED:
-    // "Restart & Continue", a model change and an account failover all respawn
-    // under the SAME agent id, so a stale pause would deny every PreToolUse of
-    // the fresh session ("Paused by operator") with nothing in the UI to explain
-    // it, and dead sessions would keep summing into the live telemetry sample
-    // the breaker diffs.
-    try { control.forget(agentId); } catch { /* best-effort */ }
-    try { telemetry.forget(agentId); } catch { /* best-effort */ }
-    // W1 — kill this agent's proxy-bridge sidecar (qwen), if any, so a dead
-    // PTY never leaves an orphan loopback listener. No-op for non-proxy agents.
-    try { hive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
-    if (hive.enabled()) {
-      try { hive.setArchived(agentId, true); } catch (e) { console.error('[hive] setArchived failed:', e); }
+ *  Wired post-boot (right after `bootFloor()` resolves in `whenReady`), not at
+ *  module scope: `ptyManager` is now constructed inside `bootFloor`, and this
+ *  handler's auto-relaunch path calls `spawnAgentCore` — too large/IPC-shaped
+ *  to move under `src/main/floor/**`, so it stays here alongside the wiring. */
+function wirePtyExitHandler(): void {
+  ptyManager.setExitHandler((id, exitCode) => {
+    const pending = pendingInstallRelaunch.get(id);
+    if (pending) {
+      pendingInstallRelaunch.delete(id);
+      if (exitCode === 0) {
+        // Re-arm the renderer's pooled terminal (clear the "process exited" line +
+        // re-enable input) so the freshly-spawned CLI paints onto a clean, typeable
+        // grid, then re-run the normal spawn — which now finds the installed binary.
+        const wc = (pending.owner && !pending.owner.isDestroyed()) ? pending.owner : liveWebContents();
+        try { wc?.send(`pty:relaunch:${id}`); } catch { /* window gone */ }
+        void spawnAgentCore({ ...pending.opts, noAutoInstall: true }, pending.owner);
+        return; // an install PTY has no agent/worktree to tear down
+      }
+      // Non-zero exit = install failed; leave its honest manual-fix message on screen.
     }
-  }
-  // 2) Remove the isolated worktree, if any. Non-blocking; errors are logged.
-  const wtPath = worktreePaths.get(id);
-  if (wtPath) {
-    const origCwd = worktreeOrigins.get(id) ?? wtPath;
-    worktreePaths.delete(id);
-    worktreeOrigins.delete(id);
-    // EVERY isolated agent gets a SAFETY-GATED teardown: never auto-remove a
-    // worktree that holds unintegrated work. This sits INSIDE teardownPty so it
-    // covers ALL teardown routes — finished (controller kill), crashed, idle-
-    // reaped, breaker-stopped, or respawned by an account failover all land here.
-    // Normal agents used to take an immediate `worktree remove --force` on that
-    // same path, so an isolated agent whose CLI died after an hour lost every
-    // untracked and dirty file it had produced (#1).
-    const worker = liveWorkers.get(id);
-    const baseBranch = worktreeBases.get(id) ?? 'main';
-    worktreeBases.delete(id);
-    if (worker) {
-      liveWorkers.delete(id);
-      void finalizeWorkerWorktree(wtPath, origCwd, worker);
-    } else {
-      void finalizeAgentWorktree(id, wtPath, origCwd, baseBranch);
-    }
-  }
-  // A worker whose isolation failed (non-repo cwd) has no worktree to gate above —
-  // still clear its tracking entry so the controller stops watching a dead PTY.
-  if (liveWorkers.has(id)) liveWorkers.delete(id);
-  // Drop the spawn recipe + the autonomy loop's per-PTY bookkeeping. A failover
-  // reads the recipe BEFORE it kills, so this never races its own respawn.
-  spawnRecipes.delete(id);
-  delivery.forgetPty(id);
-  syncKeepAwake();
+    teardownPty(id);
+  });
 }
-
-/** Send an inform to the god agent (the human's proxy). The ephemeral-worker
- *  controller uses this to surface every terminal failure AND to carry the Slack
- *  {channel,thread_ts} so god can post a 'couldn't complete' reply — closing the
- *  Slack loop (the success path is the worker replying in-thread itself). */
-function informGod(subject: string, body: string, slack?: { channel: string; thread_ts: string }): void {
-  try {
-    const slackLine = slack
-      // The bundled-node launcher, spelled as an ABSOLUTE PATH — NOT bare `node`
-      // (absent from the PATH of any machine whose node comes from nvm) and NOT
-      // `$HIVE_NODE` (POSIX-only: cmd.exe/PowerShell expand it to nothing, so the
-      // whole reply command was dead on Windows).
-      ? `\n\n[SLACK] Close the loop — post a reply to channel ${slack.channel} thread ${slack.thread_ts} via:\n  "${hive.nodeCommand()}" "${slackReplyScriptPath()}" --channel ${slack.channel} --thread ${slack.thread_ts} --text "<your message>"`
-      : '';
-    hive.send({ to: 'god', act: 'inform', subject, body: body + slackLine }, 'ephemeral-worker');
-  } catch (e) {
-    console.error('[worker] informGod failed:', e);
-  }
-}
-
-/** Gated worktree teardown for an ephemeral worker: remove it ONLY when it holds no
- *  unintegrated work; otherwise leave it (and its branch) in place and ping god, the
- *  sole integrator. Async + best-effort; on any uncertainty it KEEPS the worktree
- *  (fail-safe — never auto-discard possibly-valuable work). */
-async function finalizeWorkerWorktree(wtPath: string, origCwd: string, worker: WorkerRec): Promise<void> {
-  try {
-    const work = await worktreeHasUnintegratedWork(wtPath, worker.baseBranch);
-    if (work.keep) {
-      console.warn(`[worker] PRESERVING worktree with unintegrated work: ${wtPath} (${work.detail})`);
-      // Track it so the GC sweep can reclaim it (+ scratch dir) once integrated —
-      // the worker is gone from liveWorkers by now, so its identity lives here.
-      preservedWorktrees.set(wtPath, {
-        workerId: worker.workerId, wtPath, origCwd, baseBranch: worker.baseBranch,
-        scratchDir: workerScratchDir(worker.workerId), slack: worker.slack, preservedAt: Date.now()
-      });
-      savePreservedWorktrees();
-      informGod(
-        `[worker worktree preserved] ${worker.workerId}`,
-        `Ephemeral worker ${worker.workerId} ended but its worktree holds unintegrated work, so it was NOT auto-removed (you are the sole integrator).\n`
-        + `Worktree: ${wtPath}\nBranch: ${work.branch}\nState: ${work.detail}\n`
-        + `Review/merge it — it will be auto-reclaimed once its work lands in ${worker.baseBranch}, or remove it now with: git -C "${origCwd}" worktree remove "${wtPath}"`,
-        worker.slack
-      );
-      return;
-    }
-    const r = await removeWorktree(origCwd, wtPath);
-    if (!r.ok) { console.error('[worker] removeWorktree failed:', r.error); return; }
-    // Worktree is gone (clean/integrated at teardown), but DEFER its scratch-dir
-    // cleanup to the throttled GC sweep rather than deleting it synchronously here:
-    // HIVE_ROOT/agents/<id> holds the worker's memory.md and the MemPalace miner
-    // ingests it asynchronously, so an immediate delete can beat the miner and
-    // permanently lose the worker's durable notes from the shared palace. Register
-    // it (its worktree path is now absent) so the sweep's path-gone branch reclaims
-    // the scratch after a window — same throttled path the preserved case uses.
-    preservedWorktrees.set(wtPath, {
-      workerId: worker.workerId, wtPath, origCwd, baseBranch: worker.baseBranch,
-      scratchDir: workerScratchDir(worker.workerId), slack: worker.slack, preservedAt: Date.now()
-    });
-    savePreservedWorktrees();
-  } catch (e) {
-    console.error('[worker] finalizeWorkerWorktree threw (worktree left in place):', e);
-  }
-}
-
-/** Gated worktree teardown for a NORMAL (non-worker) isolated agent: remove it
- *  only when `worktreeHasUnintegratedWork` proves there is nothing to lose —
- *  the same fail-safe gate ephemeral workers get, through the same tested
- *  function. Async + best-effort; ANY uncertainty keeps the worktree.
- *
- *  Deliberately does NOT register in `preservedWorktrees`: that sweep also
- *  reclaims HIVE_ROOT/agents/<id>, which for a real agent is its memory and
- *  inbox rather than a worker's disposable scratch. So a kept worktree is kept
- *  until a human (or the agent's own restore, which re-enters this exact path)
- *  deals with it — and the log line says exactly how. */
-async function finalizeAgentWorktree(
-  id: string, wtPath: string, origCwd: string, baseBranch: string
-): Promise<void> {
-  try {
-    const work = await worktreeHasUnintegratedWork(wtPath, baseBranch);
-    if (work.keep) {
-      console.warn(
-        `[worktree] PRESERVING ${id}'s worktree — it holds unintegrated work: ${wtPath} `
-        + `(branch ${work.branch}, ${work.detail}). Restarting this agent re-enters it; `
-        + `once the work has landed, remove it with: git -C "${origCwd}" worktree remove "${wtPath}"`
-      );
-      return;
-    }
-    const r = await removeWorktree(origCwd, wtPath);
-    if (!r.ok) console.error('[worktree] removeWorktree failed:', r.error);
-  } catch (e) {
-    console.error('[worktree] finalizeAgentWorktree threw (worktree left in place):', e);
-  }
-}
-
-/** The hive scratch dir for a worker (its inbox/outbox/memory): HIVE_ROOT/agents/<id>.
- *  Null when there's no hive root. */
-function workerScratchDir(workerId: string): string | null {
-  const root = hive.root();
-  return root ? join(root, 'agents', workerId) : null;
-}
-
-/** Best-effort removal of a worker's scratch (hive agent) dir. Guarded to ONLY ever
- *  delete a path that resolves to exactly HIVE_ROOT/agents/<workerId> and never a
- *  still-live worker — so a crafted/mismatched id can't escape the agents root. */
-function removeWorkerScratch(workerId: string): void {
-  if (liveWorkers.has(workerId)) return; // never wipe a live worker's mailbox
-  const dir = workerScratchDir(workerId);
-  const root = hive.root();
-  if (!dir || !root) return;
-  const agentsRoot = join(root, 'agents');
-  // Path-safety: the resolved dir must sit directly under agents/ with basename == id.
-  if (resolve(dir) !== join(resolve(agentsRoot), basename(dir)) || basename(dir) !== workerId) return;
-  try { rmSync(dir, { recursive: true, force: true }); }
-  catch (e) { console.error('[worker] removeWorkerScratch failed:', e); }
-}
-// A natural PTY exit must run the same teardown as an explicit kill — EXCEPT when
-// the PTY was the missing-CLI installer: a clean exit there means the engine CLI was
-// just installed, so auto restart-and-continue by re-running the SAME spawn into the
-// SAME pty/window (no user click). Provider-agnostic. Idempotent by construction: the
-// relaunch carries `noAutoInstall`, so the installer can never fire (let alone loop) a
-// second time — a binary that's somehow still missing just spawns and exits normally.
-ptyManager.setExitHandler((id, exitCode) => {
-  const pending = pendingInstallRelaunch.get(id);
-  if (pending) {
-    pendingInstallRelaunch.delete(id);
-    if (exitCode === 0) {
-      // Re-arm the renderer's pooled terminal (clear the "process exited" line +
-      // re-enable input) so the freshly-spawned CLI paints onto a clean, typeable
-      // grid, then re-run the normal spawn — which now finds the installed binary.
-      const wc = (pending.owner && !pending.owner.isDestroyed()) ? pending.owner : liveWebContents();
-      try { wc?.send(`pty:relaunch:${id}`); } catch { /* window gone */ }
-      void spawnAgentCore({ ...pending.opts, noAutoInstall: true }, pending.owner);
-      return; // an install PTY has no agent/worktree to tear down
-    }
-    // Non-zero exit = install failed; leave its honest manual-fix message on screen.
-  }
-  teardownPty(id);
-});
 
 /** Keep the system from suspending the harness while agents are running.
  *  Windows Modern Standby suspends desktop apps (and their child `claude`
@@ -981,393 +473,6 @@ function syncKeepAwake(): void {
   }
 }
 
-/** A mission's live scheduler handles: the initial `setTimeout` that waits out
- *  the time remaining until its next due fire, and the steady `setInterval`
- *  armed once it has fired. Both are tracked so shutdown can clear whichever is
- *  pending. */
-interface MissionTimer {
-  timeout?: NodeJS.Timeout;
-  interval?: NodeJS.Timeout;
-}
-
-/** Active scheduler timers keyed by mission id. */
-const missionTimers = new Map<string, MissionTimer>();
-
-/** Clear and forget every armed mission timer (both the setTimeout and the
- *  setInterval handle). Safe to call from syncMissions and from shutdown
- *  teardown so a tick never fires into half-torn-down services. */
-function clearMissionTimers(): void {
-  for (const t of missionTimers.values()) {
-    if (t.timeout) clearTimeout(t.timeout);
-    if (t.interval) clearInterval(t.interval);
-  }
-  missionTimers.clear();
-}
-
-/** Rebuild the scheduler from persisted config: clear every existing timer,
- *  then arm each enabled mission honoring its lastFiredAt — a setTimeout for the
- *  time remaining until its next due fire, which then settles into a steady
- *  interval. Each tick dispatches the mission to its target agent and stamps
- *  lastFiredAt back into config. Called on boot (after the router starts) and
- *  after every missions:save. */
-function syncMissions(): void {
-  clearMissionTimers();
-  const missions = readConfig().missions ?? [];
-  for (const m of missions) {
-    if (!m.enabled || !(m.intervalMs > 0)) continue;
-    // Heartbeat (Lane A #1) opts out of the fixed setInterval and self-reschedules
-    // with an adaptive cadence. Registered into the same missionTimers map so
-    // clearMissionTimers() tears it down identically on quit/reset.
-    if (m.kind === 'heartbeat') { armHeartbeat(m); continue; }
-    const fire = (): void => {
-      try {
-        // A 'compact' maintenance mission (maint-1) is compaction-ONLY: it carries
-        // no dispatch body/target, so skip the hive.send and just fire auto-compact.
-        // Gate on `kind!=='compact'` ALONE — that already excludes the compact mission;
-        // we deliberately do NOT add `&& m.body`, so other (dispatch) missions keep
-        // their prior behaviour, including the historical empty-body send (Pam N1).
-        if (m.kind !== 'compact' && hive.enabled()) {
-          hive.send({ to: m.to, act: 'request', subject: m.label, body: m.body }, 'scheduler');
-        }
-        // Auto-compact: do NOT jam /compact into busy terminals. Hand it to the
-        // renderer, which queues a /compact per agent (deduped — never two at
-        // once) and delivers it only when that agent goes idle (its drain loop),
-        // so a working agent compacts between steps, never mid-step.
-        //
-        // The CADENCE now belongs to the context trigger, not to a mission — but
-        // the legacy per-mission `autoCompact` flag keeps working, routed through
-        // the same emit so there is exactly ONE path from main to the renderer.
-        // It carries the context trigger's current rule so a mission-driven
-        // compaction obeys the same pressure thresholds as a trigger-driven one.
-        if (m.autoCompact || m.kind === 'compact') {
-          emitContextTrigger('compact', contextRule('compact'));
-        }
-        const current = readConfig().missions ?? [];
-        const next = current.map((x) =>
-          x.id === m.id ? { ...x, lastFiredAt: Date.now() } : x
-        );
-        writeConfig({ missions: next });
-        // Let the SCHEDULES panel refresh its "last fired" without a reload (#2.3).
-        try { liveWebContents()?.send('missions:updated'); } catch { /* window gone */ }
-      } catch (e) {
-        console.error('[scheduler] mission', m.id, e);
-      }
-    };
-    // Honor lastFiredAt so a partially-elapsed interval is not restarted from
-    // zero on reboot or when an unrelated mission is edited: wait only the time
-    // remaining until the next due fire, then settle into a steady interval.
-    const remaining = Math.max(0, m.intervalMs - (Date.now() - (m.lastFiredAt ?? 0)));
-    const entry: MissionTimer = {};
-    entry.timeout = setTimeout(() => {
-      fire();
-      entry.interval = setInterval(fire, m.intervalMs);
-    }, remaining);
-    missionTimers.set(m.id, entry);
-  }
-}
-
-// ─── Context trigger (auto-compact / auto-clear own their own timers) ────────
-// Compaction used to ride on a mission (`compact-maintenance`), which meant the
-// operator had TWO competing controls for one behaviour — a schedule with an
-// interval and a trigger with a cadence. The mission is retired (see the
-// retirement migration in ensureDefaultMissions); these timers are the single
-// remaining source of scheduled context maintenance.
-//
-// Main owns only the CADENCE. The pressure gate (`minContextPct`) needs each
-// agent's live context usage, which only the renderer has, so the whole rule
-// rides along in the event and the renderer decides which agents actually get
-// the command. That split is why the payload carries the rule rather than a bare
-// "go" signal.
-
-/** Timers for the two halves, keyed by action. Same two-phase shape as
- *  `missionTimers` (a setTimeout for the remaining time, then a steady interval)
- *  so a partially-elapsed cadence survives a re-arm. */
-const contextTimers = new Map<'compact' | 'clear', MissionTimer>();
-
-/** `ContextRule` has no `lastFiredAt` (unlike `ScheduledMission`), so the last-run
- *  instants live in the durable kv store instead. Without them every re-arm —
- *  boot, a settings edit, a wake from sleep — would restart a 2h cadence from
- *  zero, and an operator who edits the rule twice a day would never see it fire. */
-const CONTEXT_LAST_RUN_KV_KEY = 'triggers.context.lastRun';
-let contextLastRun: Record<string, number> | null = null;
-
-function contextRunMap(): Record<string, number> {
-  if (!contextLastRun) {
-    try { contextLastRun = persist.getKv<Record<string, number>>(CONTEXT_LAST_RUN_KV_KEY) ?? {}; }
-    catch { contextLastRun = {}; }
-  }
-  return contextLastRun;
-}
-
-/** When the rule last ran. An UNRECORDED half is stamped NOW rather than read as
- *  the epoch: `remaining` would otherwise clamp to 0 and compact every terminal
- *  the instant the app boots. It is the same trap `ensureDefaultMissions` avoids
- *  by stamping `lastFiredAt` when it seeds a mission — a first launch should wait
- *  a full cadence, not open with an interruption. */
-function contextLastRunAt(action: 'compact' | 'clear'): number {
-  const map = contextRunMap();
-  const v = map[action];
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  return stampContextRun(action);
-}
-
-function stampContextRun(action: 'compact' | 'clear'): number {
-  const map = contextRunMap();
-  const at = Date.now();
-  map[action] = at;
-  try { persist.setKv(CONTEXT_LAST_RUN_KV_KEY, map); } catch { /* DB best-effort */ }
-  return at;
-}
-
-/** The live rule for one half, deep-filled. `readConfig` already fills both
- *  halves, so the default is only a belt-and-braces fallback. */
-function contextRule(action: 'compact' | 'clear'): ContextRule {
-  return readConfig().contextTrigger?.[action] ?? DEFAULT_CONTEXT_TRIGGER[action];
-}
-
-/** Clear and forget both context timers (setTimeout + setInterval handles). */
-function clearContextTimers(): void {
-  for (const t of contextTimers.values()) {
-    if (t.timeout) clearTimeout(t.timeout);
-    if (t.interval) clearInterval(t.interval);
-  }
-  contextTimers.clear();
-}
-
-/** Ask the renderer to run one half of the context trigger.
- *
- *  Both callers funnel through here — the legacy per-mission `autoCompact` flag
- *  and the context trigger's own timer — so there is exactly one path from main
- *  to the renderer for each action. */
-function emitContextTrigger(action: 'compact' | 'clear', rule: ContextRule): void {
-  try { liveWebContents()?.send('trigger:context', { action, rule }); } catch { /* window gone */ }
-  // TRANSITIONAL ALIAS: the renderer still carries the pre-Triggers
-  // `mission:autoCompact` listener as a fallback. Both fire for compact until
-  // every consumer has moved to `trigger:context`; then this line goes.
-  if (action === 'compact') {
-    try { liveWebContents()?.send('mission:autoCompact'); } catch { /* window gone */ }
-  }
-}
-
-/** (Re)arm both context timers from persisted config. Clear-then-arm, so calling
- *  it after a settings change, on boot, or on wake from sleep can never stack
- *  duplicates. Honors elapsed-time-since-last-run exactly like mission arming:
- *  an overdue rule fires ONCE and then settles into its steady cadence. */
-function syncContextTriggers(): void {
-  clearContextTimers();
-  for (const action of ['compact', 'clear'] as const) {
-    const rule = contextRule(action);
-    if (!rule.enabled || !(rule.everyMs > 0)) continue;
-    const fire = (): void => {
-      try {
-        stampContextRun(action);
-        // Re-read: the operator may have edited the message/thresholds since the
-        // timer was armed, and the renderer should act on what's current.
-        emitContextTrigger(action, contextRule(action));
-      } catch (e) {
-        console.error('[triggers] context', action, e);
-      }
-    };
-    const remaining = Math.max(0, rule.everyMs - (Date.now() - contextLastRunAt(action)));
-    const entry: MissionTimer = {};
-    entry.timeout = setTimeout(() => {
-      fire();
-      entry.interval = setInterval(fire, rule.everyMs);
-    }, remaining);
-    contextTimers.set(action, entry);
-  }
-}
-
-/** Startup migration (#57/#58): archive every agent entry that is `archived:false`
- *  but has NO live PTY. This runs in bootstrapHiveServices, BEFORE the renderer can
- *  respawn anything, so at this point NO agent owns a PTY — every `archived:false`
- *  entry is therefore a stale carry-over from a prior session that quit/crashed
- *  WITHOUT archiving (e.g. the pre-acc13a3 'assistant' Dwight entry). Left as-is
- *  they have no live PTY, so the breaker beat steers them and the steer bounces to
- *  GOD as a requires_reply GOD can't clear → inbox flood.
- *
- *  "No live PTY" = ptyForAgent(id) === undefined (ptyToAgent is populated only at
- *  spawn and pruned on teardown). God is never archived. A user's real agents are
- *  unaffected: the "restore team" flow respawns them through ensureAgent, which
- *  re-clears `archived` — restorability does not depend on the archived flag. */
-function archiveOrphanedAgents(): void {
-  if (!hive.enabled()) return;
-  try {
-    const reg = hive.registry();
-    for (const [id, a] of Object.entries(reg.agents)) {
-      if (a.archived) continue;
-      if (id === reg.godId) continue;        // god is never archived
-      if (ptyForAgent(id)) continue;         // has a live PTY → genuinely active
-      hive.setArchived(id, true);            // stale archived:false orphan → archive
-      console.log('[migration] archived orphaned agent (no live PTY):', id);
-    }
-  } catch (e) {
-    console.error('[migration] archiveOrphanedAgents failed:', e);
-  }
-}
-
-/** One-time migration: ensure the built-in hourly ops standup exists for installs
- *  that predate it. Guarded by `opsStandupSeeded` so a user who later deletes the
- *  mission doesn't get it re-added on every boot. Stamps lastFiredAt = now so the
- *  first standup waits a full interval instead of firing (and compacting every
- *  terminal) immediately on launch. */
-function ensureDefaultMissions(): void {
-  const cfg = readConfig();
-  if (!cfg.opsStandupSeeded) {
-    const missions = cfg.missions ?? [];
-    const has = missions.some((m) => m.id === OPS_STANDUP_MISSION.id);
-    writeConfig({
-      missions: has ? missions : [...missions, { ...OPS_STANDUP_MISSION, lastFiredAt: Date.now() }],
-      opsStandupSeeded: true
-    });
-  }
-  // Seed the built-in heartbeat (Lane A #1) once. Shipped DISABLED, so it just
-  // appears in the SCHEDULES panel for the user to turn on; lastFiredAt = now so
-  // it doesn't fire on the very first launch after a user enables it.
-  const cfg2 = readConfig();
-  if (!cfg2.heartbeatSeeded) {
-    const missions = cfg2.missions ?? [];
-    const has = missions.some((m) => m.id === HEARTBEAT_MISSION.id);
-    writeConfig({
-      missions: has ? missions : [...missions, { ...HEARTBEAT_MISSION, lastFiredAt: Date.now() }],
-      heartbeatSeeded: true
-    });
-  }
-
-  // maint-1 RETIREMENT: `compact-maintenance` is no longer a mission. Scheduled
-  // compaction is now the CONTEXT TRIGGER's job, so the operator has exactly one
-  // control (a cadence + a pressure gate + an editable message) instead of two
-  // that could disagree — a mission saying "hourly" while the trigger said "2h"
-  // was a real, unresolvable conflict.
-  //
-  // The carry-over preserves the operator's decisions: whether compaction was ON
-  // and how often. It runs at most once per install, and its guard is the
-  // mission's own ABSENCE — nothing seeds `compact-maintenance` any more, so once
-  // this has removed it there is nothing left to carry and a later hand-edit of
-  // the trigger can never be clobbered. That keeps the `*Seeded` convention's
-  // promise (exactly once, ever) without a config flag that would only ever be
-  // read here; `compactMaintenanceSeeded` is left set so nothing re-seeds it.
-  const cfg3 = readConfig();
-  const missions3 = cfg3.missions ?? [];
-  const retiring = missions3.find((m) => m.id === COMPACT_MAINTENANCE_MISSION.id);
-  if (retiring) {
-    const current = cfg3.contextTrigger ?? DEFAULT_CONTEXT_TRIGGER;
-    writeConfig({
-      missions: missions3.filter((m) => m.id !== COMPACT_MAINTENANCE_MISSION.id),
-      contextTrigger: {
-        ...current,
-        compact: {
-          ...current.compact,
-          enabled: retiring.enabled,
-          // A hand-tuned interval is a decision; only a missing/absurd one falls
-          // back to whatever the trigger already carries.
-          everyMs: retiring.intervalMs > 0 ? retiring.intervalMs : current.compact.everyMs
-        }
-      },
-      compactMaintenanceSeeded: true
-    });
-    // …and its elapsed time, so retiring the mission mid-cycle doesn't restart a
-    // 2h cadence from zero (the timers honour last-run exactly as arming did).
-    if (typeof retiring.lastFiredAt === 'number' && retiring.lastFiredAt > 0) {
-      const map = contextRunMap();
-      map.compact = retiring.lastFiredAt;
-      try { persist.setKv(CONTEXT_LAST_RUN_KV_KEY, map); } catch { /* DB best-effort */ }
-    }
-    console.log('[triggers] retired the compact-maintenance mission into contextTrigger.compact',
-      `(enabled: ${retiring.enabled}, everyMs: ${retiring.intervalMs})`);
-  }
-
-  // autoCompact RETIREMENT: the flag above was only ever half-removed. Retiring
-  // `compact-maintenance` left `autoCompact: true` sitting on the ops standup, so
-  // a default install still asked for compaction on TWO cadences — hourly from the
-  // standup, 2-hourly from the trigger — which is precisely the disagreement that
-  // retirement claims to have ended. (config.ts even documented a migration that
-  // strips this; it did not exist.)
-  //
-  // Strip it wherever it survives. This is a pure de-duplication, not a behaviour
-  // change: contextTrigger.compact still runs, still on the user's own cadence and
-  // pressure gate, and it is what actually performed every one of these
-  // compactions already — both paths have called emitContextTrigger since Triggers
-  // landed. Idempotent, so it costs one no-op scan per boot once clean.
-  const cfg4 = readConfig();
-  const missions4 = cfg4.missions ?? [];
-  if (missions4.some((m) => m.autoCompact)) {
-    writeConfig({
-      missions: missions4.map(({ autoCompact, ...rest }) => {
-        void autoCompact;
-        return rest;
-      })
-    });
-    console.log('[triggers] dropped the legacy per-mission autoCompact flag —',
-      'contextTrigger.compact is now the only schedule that compacts');
-  }
-}
-
-// ─── Heartbeat (Lane A #1) + circuit-breaker beat (#6.6b) ────────────────────
-
-/** Is the floor quiet? Derived ONLY from signals the main process owns or can
- *  stat — log.jsonl mtime (the master signal: every routed msg/drain/spawn/task
- *  append touches it), each agent's inbox + outbox/.sent mtimes, and every live
- *  PTY's lastOutputAt (an agent printing/thinking counts as activity). Crucially
- *  NOT registry.status, which is written 'idle' once at spawn and never
- *  transitions in main — reading it would see the floor quiet forever. */
-function isFloorQuiet(thresholdMs: number): boolean {
-  const root = hive.root();
-  if (!root) return false;
-  const times: number[] = [];
-  const pushMtime = (p: string): void => { try { times.push(statSync(p).mtimeMs); } catch { /* missing */ } };
-  pushMtime(join(root, 'log.jsonl'));
-  const agentsDir = join(root, 'agents');
-  if (existsSync(agentsDir)) {
-    for (const id of readdirSync(agentsDir)) {
-      pushMtime(join(agentsDir, id, 'inbox'));
-      pushMtime(join(agentsDir, id, 'outbox', '.sent'));
-    }
-  }
-  for (const t of ptyManager.list()) times.push(t.lastOutputAt);
-  if (times.length === 0) return false; // nothing to judge → don't fire
-  return Date.now() - Math.max(...times) > thresholdMs;
-}
-
-/** Newest coordination-file mtime for one agent (inbox + inbox/.done, outbox +
- *  outbox/.sent, memory.md) — FILES only, deliberately excluding PTY output, so
- *  "no-progress" means "not coordinating" even while the agent is busy printing
- *  tokens. inbox/.done and the outbox dir count because handling mail (moving a
- *  message to .done, drafting an outbox message) IS coordination — without them
- *  an inbox-ack turn reads as no-progress (issue #109's second trigger). */
-function lastCoordinationAt(agentId: string): number {
-  const root = hive.root();
-  if (!root) return 0;
-  const times: number[] = [0];
-  const pushMtime = (p: string): void => { try { times.push(statSync(p).mtimeMs); } catch { /* missing */ } };
-  const dir = join(root, 'agents', agentId);
-  pushMtime(join(dir, 'inbox'));
-  pushMtime(join(dir, 'inbox', '.done'));
-  pushMtime(join(dir, 'outbox'));
-  pushMtime(join(dir, 'outbox', '.sent'));
-  pushMtime(join(dir, 'memory.md'));
-  return Math.max(...times);
-}
-
-/** PTY id owning a given agent id, or undefined. */
-function ptyForAgent(agentId: string): string | undefined {
-  for (const [ptyId, a] of ptyToAgent) if (a === agentId) return ptyId;
-  return undefined;
-}
-
-/** The agent's durable delivery cursor (`agents/<id>/cursor.json`, advanced by
- *  `hive.drainForStop`), or null when it has never been advanced. Read-only —
- *  the drain owns every write to it. */
-function readDeliveryCursor(agentId: string): string | null {
-  const root = hive.root();
-  if (!root) return null;
-  try {
-    const raw = readFileSync(join(root, 'agents', agentId, 'cursor.json'), 'utf8');
-    const cur = JSON.parse(raw) as { lastProcessed?: unknown };
-    return typeof cur.lastProcessed === 'string' ? cur.lastProcessed : null;
-  } catch { return null; }
-}
-
 /** Raise the floor and put an agent in front of the human. Called from a
  *  notification click (#42): the OS toast is only useful if it lands you on the
  *  agent that needs you. Main can do the window half by itself; the renderer
@@ -1381,390 +486,6 @@ function focusAgent(agentId: string): void {
     }
     liveWebContents()?.send('ui:focusAgent', { agentId });
   } catch { /* window gone — the toast is still better than nothing */ }
-}
-
-/**
- * Kill an agent's PTY and respawn it on `account`, resuming its session (#5).
- *
- * This is the renderer's old failover executor, moved into main. It reuses the
- * SAME pieces the renderer stitched together — kill (→ teardownPty's gated
- * worktree handling), re-enter the worktree if it survived, then the shared
- * `spawnAgentCore` with `isolate:false, resume:true` — but it reads the spawn
- * recipe main already recorded instead of rebuilding it from a store that only
- * exists inside a live window. Same pty id, same session, new account.
- */
-async function respawnOnAccount(
-  agentId: string,
-  account: string
-): Promise<{ ok: boolean; error?: string; account?: string }> {
-  const ptyId = ptyForAgent(agentId);
-  if (!ptyId) return { ok: false, error: 'agent has no live PTY' };
-  const rec = spawnRecipes.get(ptyId);
-  if (!rec) return { ok: false, error: 'no spawn recipe recorded for this agent' };
-  // Read the worktree BEFORE the kill — teardownPty clears the map (and may
-  // reclaim the directory) as part of its safety-gated teardown.
-  const worktree = worktreePaths.get(ptyId);
-  try { ptyManager.kill(ptyId); } catch { /* already dead — teardown still runs */ }
-  teardownPty(ptyId);
-  // Killing a git-isolated agent tears its worktree down; give that a beat and
-  // re-probe so we never respawn into a directory that just vanished.
-  if (worktree) {
-    await new Promise((r) => setTimeout(r, 750));
-  }
-  const cwd = worktree && existsSync(worktree) ? worktree : rec.opts.cwd;
-  const opts: AgentSpawnOptions = {
-    ...rec.opts,
-    // Copies, not aliases — spawnAgentCore appends to `args` in place, and the
-    // recipe has to stay pristine for the NEXT failover.
-    ...(rec.opts.args ? { args: [...rec.opts.args] } : {}),
-    ...(rec.opts.env ? { env: { ...rec.opts.env } } : {}),
-    cwd,
-    isolate: false, // the worktree (if any) already exists — re-enter, never re-cut
-    resume: true,   // continue the interrupted session; falls back to fresh when none
-    hive: rec.opts.hive ? { ...rec.opts.hive, cwd, account } : undefined
-  };
-  // Route the respawned PTY's output at a window that still EXISTS: pty.ts drops
-  // every chunk aimed at a destroyed owner, so a failover that happened while the
-  // floor was closed would come back mute even after the user reopens it.
-  const owner = rec.owner && !rec.owner.isDestroyed() ? rec.owner : liveWebContents();
-  const res = await spawnAgentCore(opts, owner);
-  if (!res.ok) return { ok: false, error: res.error };
-  const landed = res.account ?? account;
-  // Michael's pin lives in config — move it with him so the engine row and the
-  // next boot agree with where he actually runs.
-  if (rec.opts.hive?.isGod && landed && landed !== readConfig().godAccount) {
-    try { writeConfig({ godAccount: landed }); } catch { /* best-effort */ }
-  }
-  return { ok: true, account: landed };
-}
-
-/** "Stuck" = some worker's PTY is actively printing (recent output) while its
- *  coordination files have gone stale — working-but-not-coordinating. Tightens
- *  the heartbeat cadence so we notice a wedged agent sooner. */
-function looksStuck(windowMs: number): boolean {
-  const reg = hive.registry();
-  const now = Date.now();
-  for (const [id, a] of Object.entries(reg.agents)) {
-    if (a.archived || id === reg.godId) continue;
-    const ptyId = ptyForAgent(id);
-    if (!ptyId) continue;
-    const idle = ptyManager.idleFor(ptyId) ?? Infinity;
-    if (idle < 15_000 && now - lastCoordinationAt(id) > windowMs) return true;
-  }
-  return false;
-}
-
-// ─── board.md size policy (#35) ──────────────────────────────────────────────
-// `board.md` is god's shared plan and god RE-READS IT EVERY TURN, so its size is
-// a per-turn token bill — and nothing ever bounded it. Same treatment as
-// reflect.ts gives memory.md (backup → rewrite → verify-don't-trust → atomic
-// rename), with one deliberate difference: the rewrite here is deterministic
-// section surgery, not an LLM summary, so there is no non-deterministic step to
-// protect against and the backup is taken immediately BEFORE the swap instead of
-// at the top — a rejected pass then costs nothing and leaves no backup litter.
-// The backups land in `hive/backups/<stamp>/`, which reflect.ts's own pruner
-// already trims to the newest generations.
-
-/** Ceiling on board.md. ~32 KB is ~8k tokens re-read on every single god turn —
- *  generous for a plan, and far past where a human would still call it a plan. */
-const BOARD_BUDGET_BYTES = 32 * 1024;
-/** Don't re-attempt more often than this: a board that can't be condensed (one
- *  giant section, a rejected verify) must not re-read + re-copy on every beat. */
-const BOARD_CONDENSE_RETRY_MS = 10 * 60_000;
-let lastBoardCondenseAt = 0;
-
-/** Condense board.md when it outgrows its budget. Best-effort and silent on a
- *  healthy floor: the size check is one statSync per beat. */
-function condenseBoardIfOversized(): void {
-  const root = hive.root();
-  if (!root) return;
-  const board = join(root, 'board.md');
-  let oldBytes = 0;
-  try { oldBytes = statSync(board).size; } catch { return; } // no board yet
-  if (oldBytes <= BOARD_BUDGET_BYTES) return;
-  const now = Date.now();
-  if (now - lastBoardCondenseAt < BOARD_CONDENSE_RETRY_MS) return;
-  lastBoardCondenseAt = now;
-
-  let original: string;
-  try { original = readFileSync(board, 'utf8'); } catch { return; }
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  const archiveRef = `backups/${stamp}/board.md`;
-  const rebuilt = condenseBoardText(original, archiveRef);
-  if (!rebuilt) {
-    // Over budget but ≤ K sections — one enormous section, which only god can
-    // split. Say so once per retry window rather than silently doing nothing.
-    console.warn(`[board] ${Math.round(oldBytes / 1024)}KB and over budget, but it has`,
-      `${BOARD_KEEP_SECTIONS} or fewer '## ' sections — nothing to evict.`);
-    return;
-  }
-  const verdict = verifyBoard({ rebuilt, original, keep: BOARD_KEEP_SECTIONS });
-  if (!verdict.ok) {
-    console.error('[board] condense REJECTED by the verify gate:', verdict.reason);
-    try { hive.appendLog({ kind: 'board-condense-abort', reason: verdict.reason, oldBytes }); }
-    catch { /* best-effort */ }
-    return;
-  }
-  const backup = join(root, 'backups', stamp, 'board.md');
-  try {
-    mkdirSync(dirname(backup), { recursive: true });
-    copyFileSync(board, backup);
-  } catch (e) {
-    console.error('[board] backup failed — leaving board.md untouched:', e);
-    return;
-  }
-  try {
-    const tmp = `${board}.tmp-${randomBytes(4).toString('hex')}`;
-    writeFileSync(tmp, rebuilt, 'utf8');
-    renameSync(tmp, board); // atomic swap — god may be mid-read
-  } catch (e) {
-    console.error('[board] atomic swap failed — board.md left as it was:', e);
-    return;
-  }
-  const newBytes = Buffer.byteLength(rebuilt, 'utf8');
-  console.log(`[board] condensed ${Math.round(oldBytes / 1024)}KB → ${Math.round(newBytes / 1024)}KB (backup: ${archiveRef})`);
-  try { hive.appendLog({ kind: 'board-condense', oldBytes, newBytes, backup: archiveRef }); }
-  catch { /* best-effort */ }
-}
-
-/** Bounded digest for god — paths + counts, never full files (reference-passing,
- *  #6.2). A few hundred tokens at most. */
-function buildHeartbeatDigest(quietMs: number, actionable = 0): string {
-  const reg = hive.registry();
-  const active = Object.entries(reg.agents).filter(([id, a]) => !a.archived && id !== reg.godId);
-  const names = active.map(([, a]) => a.name).join(', ') || '—';
-  const boardHead = hive.board().split('\n').slice(0, 10).join('\n').trim();
-  const log = hive.logTail(8).map((e) => { try { return JSON.stringify(e); } catch { return ''; } }).filter(Boolean).join('\n');
-  const withInbox = active.filter(([id]) => hive.inbox(id).length > 0).map(([, a]) => a.name);
-  // When real agent/human mail is waiting, lead with an explicit call-to-action
-  // instead of the "quiet" line — this beat fired BECAUSE of unread actionable
-  // inbox, not because the floor went quiet, and god must read it now.
-  const header = actionable > 0
-    ? `Floor heartbeat — ${actionable} actionable inbox message(s) awaiting you (worker/human mail). Drain your inbox NOW and act on them.`
-    : `Floor heartbeat — quiet ~${Math.round(quietMs / 60000)}m.`;
-  return [
-    header,
-    `Active agents (${active.length}): ${names}.`,
-    withInbox.length ? `Undrained inbox: ${withInbox.join(', ')}.` : 'No undrained inboxes.',
-    '',
-    'Board (head):',
-    boardHead || '(empty)',
-    '',
-    'Recent log:',
-    log || '(none)',
-    '',
-    'Re-engage anyone stalled or blocked and keep the board accurate — or rest if the work is genuinely done.'
-  ].join('\n');
-}
-
-/** Senders whose mail is the scheduler's OWN noise (heartbeat beats, ops-standup
- *  via 'scheduler', breaker steers, generic 'system') — never a reason to wake
- *  god. Everything else (a worker agent id, 'webhook', a human reply) is real
- *  mail god must act on. Kept narrow so any future real sender counts by default. */
-const SYSTEM_SENDERS = new Set(['heartbeat', 'scheduler', 'breaker', 'system']);
-
-/** Count of UNREAD actionable messages in god's inbox — real agent/human mail,
- *  excluding the scheduler's own beats. Drives an inbox-aware re-engage so a
- *  worker's reply (or a human answer) doesn't sit unread while the floor is busy:
- *  the floor-quiet gate alone misses that case — any active agent keeps the floor
- *  "loud", so god was never re-engaged until everything else went idle. */
-function godActionableInboxCount(): number {
-  try {
-    const godId = hive.registry().godId;
-    if (!godId) return 0;
-    return hive.inbox(godId).filter((m) => !SYSTEM_SENDERS.has(m.from)).length;
-  } catch { return 0; }
-}
-
-/** Re-engage a quiet floor: drop a durable digest into god's inbox. We never
- *  type directly into god's PTY here — if he's busy that would jam mid-step. The
- *  inbox message is delivered by the renderer's busy-aware inbox-wake (it nudges
- *  god to read his inbox only once he's idle), so the heartbeat defers around a
- *  working god instead of interrupting him. */
-function reengageGod(digest: string): void {
-  if (!hive.enabled()) return;
-  hive.send({ to: 'god', act: 'request', subject: 'Heartbeat', body: digest }, 'heartbeat');
-}
-
-/** A native toast for breaker constrain/stop, gated on the notifications setting. */
-function breakerToast(title: string, body: string): void {
-  if (!readConfig().notifications) return;
-  try { if (Notification.isSupported()) new Notification({ title, body }).show(); }
-  catch { /* unsupported platform */ }
-}
-
-/** Throttle for the beat's argv-safety refusal below (plan 01-25 sink 3), in the
- *  same shape `hooks.ts` throttles its own reject log: one line per interval, so
- *  a single poisoned session id cannot fill the log from a ~30s loop. */
-const UNSAFE_SID_LOG_INTERVAL_MS = 60_000;
-let lastUnsafeSidWarn = 0;
-
-/** One circuit-breaker beat: pull a fresh usage sample per active agent, append
- *  it to the durable cost ledger (the SOLE durable cost store), tick the breaker,
- *  emit each BreakerState on control:breakerState (Seam 2), and enforce any
- *  escalation. God is in the LEDGER (cost visibility) but NOT the breaker inputs
- *  (the heartbeat manages god; we never auto-steer/kill the orchestrator). */
-function runBreakerBeat(progressWindowMs: number): void {
-  if (!hive.enabled()) return;
-  const reg = hive.registry();
-  const now = Date.now();
-  const inputs: BreakerInput[] = [];
-  for (const [id, a] of Object.entries(reg.agents)) {
-    if (a.archived) continue;
-    // #57/#58: skip assistant + orphaned shells. The breaker must only evaluate
-    // live, real agents. An assistant entry (e.g. the pre-acc13a3 headless
-    // 'Dwight') or any orphaned entry left archived:false with NO live PTY would
-    // otherwise be steered, and that steer bounces to GOD as a requires_reply GOD
-    // can't clear → inbox flood. ptyForAgent(id) === undefined means no live PTY.
-    // God is exempt from this orphan check (it keeps its own flow + the godId skip
-    // below) so its ledger row is unaffected. Live real agents always own a PTY
-    // (ptyToAgent is set at spawn), so their breaker behavior is unchanged.
-    if (a.isAssistant) continue;
-    if (id !== reg.godId && !ptyForAgent(id)) continue;
-    const sample = usageProvider.getAgentUsage(id);
-    // #56: only append a ledger row for a LIVE session sample. A dead/orphaned
-    // agent with a frozen transcript still yields a sample via the transcript
-    // fallback, but with an EMPTY sessionId (aggregateLive returns null → no live
-    // OTel session). Appending it every ~30s rewrote the identical row forever
-    // (2,417 dupes observed). A truthy sessionId is set only by a live session
-    // (aggregateLive picks the most-recent live session id), so this gates on
-    // "is there a live session" without changing any live-agent behavior.
-    if (sample?.sessionId) hive.appendCostLedger(sample); // ledger covers everyone incl. god
-    // Second source for the resume key. recordSession() is otherwise reachable
-    // ONLY from the hook shim, so any window where hooks don't land leaves the
-    // registry with no sessionId and "Restart & Continue" refuses to continue —
-    // while this very sample proves the app knew the live session id all along
-    // (it was already being written to the cost ledger one line above). Same id,
-    // same liveness gate; recordSession writes only on change, so this is a
-    // no-op once the hooks are flowing.
-    //
-    // Sink 3 of 4 (plan 01-25). `sample.sessionId` is read off an OTLP batch, so
-    // it is only as trustworthy as the collector's own gate — and recordSession
-    // git-COMMITS it into registry.json, from where `hive.lastSession()` feeds it
-    // straight back into argv on the next restart. Refuse the same shape the two
-    // spawn sinks refuse, at the writer, so a poisoned id never becomes durable
-    // state. Throttled: this runs on the ~30s breaker beat, and an unthrottled
-    // line would repeat forever for one bad id.
-    if (sample?.sessionId) {
-      if (SPAWN_SAFE_SESSION_ID.test(sample.sessionId)) hive.recordSession(id, sample.sessionId);
-      else if (Date.now() - lastUnsafeSidWarn >= UNSAFE_SID_LOG_INTERVAL_MS) {
-        lastUnsafeSidWarn = Date.now();
-        console.warn(`[resume] refusing to record a session id that is not argv-safe for ${id} `
-          + `(length ${sample.sessionId.length}) — telemetry is reporting an id no CLI can be handed`);
-      }
-    }
-    if (id === reg.godId) continue;            // breaker skips god
-    // Progress = fresh coordination files OR a recent OTel tool span. The span
-    // leg closes the background-work blind spot: subagent/Workflow tool calls
-    // never reach the parent session's PostToolUse hook (so the breaker's own
-    // distinct-tool clock stays stale) but their spans DO flow through the
-    // collector under this agent's id — an idle parent supervising a hard-
-    // working background fleet is progressing, not wedged. Observed live: the
-    // one residual no-progress false positive after the #109 fixes.
-    const spans = telemetry.getSpans(id);
-    const lastSpanAt = spans.length ? spans[spans.length - 1].ts : 0;
-    inputs.push({
-      agentId: id,
-      sample,
-      budget: hive.budgetForAgent(id) ?? undefined,   // FLOOR-10 (#34) — per-card token cap
-      progressing: now - lastCoordinationAt(id) < progressWindowMs || now - lastSpanAt < progressWindowMs
-    });
-  }
-  for (const d of breaker.tick(inputs, now)) {
-    try { liveWebContents()?.send('control:breakerState', d.state); } catch { /* window gone */ }
-    if (d.action === 'none') continue;
-    const name = reg.agents[d.state.agentId]?.name ?? d.state.agentId;
-    const reason = d.state.reason;
-    if (d.action === 'steer') {
-      hive.send({ to: d.state.agentId, act: 'request', subject: 'Circuit breaker: steer',
-        body: `Automated guardrail: ${reason}. Re-check your approach — if you're looping or stuck, STOP repeating, summarize what you've tried, and ask god for direction.` }, 'breaker');
-    } else if (d.action === 'constrain') {
-      hive.send({ to: d.state.agentId, act: 'request', subject: 'Circuit breaker: constrain',
-        body: `Automated guardrail escalated: ${reason}. Stop active work now: switch to read-only/plan, write a short plan of your next step, and send it to god for sign-off BEFORE running more tools.` }, 'breaker');
-      breakerToast(`${name} constrained`, reason);
-    } else if (d.action === 'stop') {
-      const ptyId = ptyForAgent(d.state.agentId);
-      if (ptyId) { try { ptyManager.kill(ptyId); } catch { /* already gone */ } teardownPty(ptyId); }
-      breakerToast(`${name} stopped by circuit breaker`, reason);
-    }
-  }
-}
-
-/** Build + write the live fleet snapshot Michael reads (`<hive>/fleet.json`).
- *  Always-on (independent of the heartbeat) since `claude agents` can't see the
- *  hive's sibling sessions. PII-free; never throws (called from a timer). */
-function writeFleetSnapshot(): void {
-  if (!hive.enabled()) return;
-  try {
-    const reg = hive.registry();
-    const snap = telemetry.snapshot();
-    const usageById = new Map(snap.usage.map((u) => [u.agentId, u]));
-    const now = Date.now();
-    const agents = Object.entries(reg.agents)
-      .filter(([, a]) => !a.archived)
-      .map(([id, a]) => {
-        const u = usageById.get(id);
-        const spans = snap.spans[id] ?? [];
-        const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
-        return {
-          id,
-          name: a.name,
-          role: a.role ?? (a.isGod ? 'orchestrator' : 'agent'),
-          cwd: a.cwd,
-          isGod: !!a.isGod,
-          breaker: breaker.levelFor(id),
-          tokens,
-          usd: u ? Number(u.usd.toFixed(4)) : 0,
-          lastTool: spans.length ? spans[spans.length - 1].tool : null,
-          lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
-          inboxBacklog: hive.inboxBacklog(id),
-          // Account pool (v0.4.5): the assigned pool-account id (null = /login
-          // account) + the OPAQUE account uuid observed in telemetry. Ids only —
-          // tokens never reach fleet.json.
-          account: a.account ?? null,
-          accountUuid: u?.accountUuid ?? null
-        };
-      });
-    hive.writeFleetSnapshot({ ts: now, agents });
-  } catch (e) {
-    console.error('[fleet] snapshot failed:', e);
-  }
-}
-
-/** Arm the heartbeat with an adaptive, self-rescheduling cadence (recursive
- *  setTimeout instead of a fixed setInterval). Each beat runs the cost/breaker
- *  pass, re-engages a quiet floor, stamps lastFiredAt, then re-arms: ~base on a
- *  normal beat, base/4 (min 30s) when an agent looks stuck, base*2.5 right after
- *  a re-engage. Registered into missionTimers so shutdown tears it down. */
-function armHeartbeat(m: ScheduledMission): void {
-  const base = m.intervalMs;
-  const quiet = m.quietThresholdMs ?? 300_000;
-  const beat = (): void => {
-    let next = base;
-    try {
-      // (the breaker beat + cost ledger now run on their own always-on timer)
-      // Re-engage god when the floor is quiet OR when real agent/human mail is
-      // waiting in god's inbox — the latter is independent of floor-quiet so a
-      // worker's reply doesn't sit unread while other agents keep the floor busy.
-      const actionable = godActionableInboxCount();
-      if (isFloorQuiet(quiet) || actionable > 0) {
-        reengageGod(buildHeartbeatDigest(quiet, actionable));
-        next = Math.round(base * 2.5);            // back off after re-engaging
-      } else if (looksStuck(quiet)) {
-        next = Math.max(30_000, Math.round(base / 4)); // tighten when an agent is wedged
-      }
-      const cur = readConfig().missions ?? [];
-      writeConfig({ missions: cur.map((x) => (x.id === m.id ? { ...x, lastFiredAt: Date.now() } : x)) });
-      try { liveWebContents()?.send('missions:updated'); } catch { /* window gone */ }
-    } catch (e) {
-      console.error('[heartbeat]', e);
-    }
-    const entry = missionTimers.get(m.id) ?? {};
-    entry.timeout = setTimeout(beat, next);
-    missionTimers.set(m.id, entry);
-  };
-  const remaining = Math.max(0, base - (Date.now() - (m.lastFiredAt ?? 0)));
-  missionTimers.set(m.id, { timeout: setTimeout(beat, remaining) });
 }
 
 /** The live renderer webContents, or null if the window is gone/destroyed.
@@ -2241,12 +962,6 @@ function heldTokenHashFor(entryId: string): string | undefined {
   return undefined;
 }
 
-/** Tell the Triggers tab its ledger moved, so history live-refreshes instead of
- *  waiting for the operator to re-open the tab. */
-function notifyTriggerHistoryUpdated(): void {
-  try { liveWebContents()?.send('triggerHistory:updated'); } catch { /* window gone */ }
-}
-
 /**
  * Create the stamped kanban card for an inbound message and route it to god.
  *
@@ -2412,72 +1127,6 @@ function lookupWebhookStatus(token: string): WebhookTaskStatus | null {
 // is the record of what we've already paired, so a card that finished while the
 // app was closed still gets its outbound row on the next boot, and re-seeding
 // from the ledger makes a duplicate impossible.
-let webhookDoneTimer: ReturnType<typeof setInterval> | null = null;
-let webhookOutboundRecorded: Set<string> | null = null;
-
-function seedWebhookOutbound(): Set<string> {
-  const seen = new Set<string>();
-  try {
-    for (const e of listTriggerHistory()) {
-      if (e.direction === 'outbound' && e.taskId) seen.add(e.taskId);
-    }
-  } catch { /* unreadable ledger → treat as empty; appends are still deduped by taskId */ }
-  return seen;
-}
-
-function pollWebhookDoneTasks(): void {
-  let tasks: HiveTask[];
-  try {
-    const ledger = hive.tasks() as { tasks?: HiveTask[] };
-    tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
-  } catch { return; } // unreadable/missing tasks.json → skip this tick
-  const done = tasks.filter((t) =>
-    t.status === 'done' && (t.webhook != null || t.id.startsWith('webhook-')));
-  if (done.length === 0) return;
-  const recorded = webhookOutboundRecorded ?? (webhookOutboundRecorded = seedWebhookOutbound());
-  const fresh = done.filter((t) => !recorded.has(t.id));
-  if (fresh.length === 0) return;
-
-  const history = listTriggerHistory();
-  let wrote = false;
-  for (const t of fresh) {
-    const inbound = history.find((e) => e.direction === 'inbound' && e.taskId === t.id);
-    // No inbound row = a card from before the ledger existed. Nothing to pair it
-    // with, so mark it handled rather than writing a half of a conversation.
-    if (!inbound) { recorded.add(t.id); continue; }
-    appendTriggerHistory({
-      source: inbound.source,
-      sourceId: inbound.sourceId,
-      sourceName: inbound.sourceName,
-      direction: 'outbound',
-      peer: inbound.peer,
-      title: t.title,
-      body: (t.result ?? '').trim() || '(finished with no result recorded)',
-      kind: inbound.kind,
-      correlationId: inbound.correlationId,
-      taskId: t.id
-    });
-    recorded.add(t.id);
-    wrote = true;
-  }
-  if (wrote) notifyTriggerHistoryUpdated();
-}
-
-/** Begin watching the kanban for webhook-origin done-transitions (idempotent). */
-function startWebhookDoneObserver(): void {
-  if (webhookDoneTimer) return;
-  webhookOutboundRecorded = seedWebhookOutbound();
-  webhookDoneTimer = setInterval(() => {
-    try { pollWebhookDoneTasks(); } catch (e) { console.error('[webhook] done-observer:', e); }
-  }, 5000);
-}
-
-/** Stop watching the kanban. Safe to call when not running. */
-function stopWebhookDoneObserver(): void {
-  if (webhookDoneTimer) { clearInterval(webhookDoneTimer); webhookDoneTimer = null; }
-  webhookOutboundRecorded = null;
-}
-
 /** Build the shared WebhookServer from the enabled endpoints and start it. A
  *  server that is already up is RE-POINTED rather than restarted (see
  *  `reconcileWebhookServer`): restarting would mint a fresh tunnel URL and break
@@ -3827,7 +2476,7 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);
   if (!hiveWasEnabled && hive.enabled()) {
     console.log('[hive] harnessHome configured — bootstrapping hive services');
-    try { bootstrapHiveServices(); } catch (e) { console.error('[hive] bootstrap after onboarding:', e); }
+    try { startHiveServices(); } catch (e) { console.error('[hive] bootstrap after onboarding:', e); }
   }
   return next;
 });
@@ -3894,7 +2543,7 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
     } catch (e) {
       // Copy failed: recover IN PLACE against the unchanged old home (config never
       // repointed) so the user loses nothing, and surface the error — no relaunch.
-      bootstrapHiveServices();
+      startHiveServices();
       const cfg = readConfig();
       if (cfg.slackEnabled && cfg.slackSigningSecret) void startSlackServer();
       reconcileWebhookServer();
@@ -4087,46 +2736,9 @@ ipcMain.handle('git:checkout', async (_evt, cwd: unknown, ref: unknown, detach: 
 // IPC could resolve, so the read is `ipcMain.on` + `returnValue` — one blocking
 // round trip at boot, in exchange for the roster being correct on first paint
 // instead of flashing an empty floor and then filling in.
-const roster = new RosterStore(() => readConfig().harnessHome);
 ipcMain.on('roster:readSync', (evt) => { evt.returnValue = roster.read(); });
 ipcMain.handle('roster:read', () => roster.read());
 ipcMain.handle('roster:write', (_evt, snap: unknown) => roster.write(snap));
-
-/**
- * FLOOR-02 — one-shot adoption of messages parked BEFORE the queue moved to main.
- *
- * The renderer used to own the MD queue and mirrored it into `roster.json`'s
- * `queues` field. Anyone upgrading across this change has real messages sitting
- * there, and a migration that silently drops them turns "the queue survives an
- * app restart" into a lie on the one restart that matters. Guarded on the queue
- * file's absence, so it runs at most once per hive and can never resurrect a
- * message the operator deleted afterwards.
- */
-function adoptRendererQueues(): void {
-  try {
-    const home = readConfig().harnessHome;
-    if (!home) return;
-    if (existsSync(join(home, 'delivery-queue.json'))) return;
-    const queues = roster.read()?.queues;
-    if (!queues) return;
-    let adopted = 0;
-    for (const [agentId, items] of Object.entries(queues)) {
-      for (const m of (Array.isArray(items) ? items : []) as Partial<QueuedDelivery>[]) {
-        if (typeof m?.text !== 'string' || !m.text.trim()) continue;
-        const res = delivery.enqueue({
-          agentId,
-          text: m.text,
-          ...(m.slack ? { slack: m.slack } : {}),
-          ...(m.instruction ? { instruction: m.instruction } : {})
-        });
-        if (res.ok) adopted += 1;
-      }
-    }
-    if (adopted) console.log(`[delivery] adopted ${adopted} message(s) parked by the renderer`);
-  } catch (e) {
-    console.error('[delivery] queue adoption failed', e);
-  }
-}
 
 // ─── IPC: hive (multi-agent coordination) ───────────────────────────────────
 ipcMain.handle('hive:registry', () => hive.registry());
@@ -4397,35 +3009,21 @@ ipcMain.handle('history:search', (_evt, query: unknown, limit: unknown) =>
 
 // ─── IPC: quit confirmation ─────────────────────────────────────────────────
 /** Every background service this app starts, in the order it must be stopped.
- *  ONE list, because there are two teardown paths — the quit and the full reset
- *  — and they were hand-maintained copies that had DRIFTED: resetAll stopped
- *  neither the webhook server nor the proxy-bridge sidecars, so a reset left the
- *  public tunnel open and every qwen sidecar running against a hive that had
- *  just been wiped (#34). Now a new service can only be added in one place. */
-const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
-  { name: 'clearMissionTimers', stop: () => clearMissionTimers() },
-  { name: 'clearContextTimers', stop: () => clearContextTimers() },
-  { name: 'stopWebhookDoneObserver', stop: () => stopWebhookDoneObserver() },
-  { name: 'stopWorkerWatcher', stop: () => stopEphemeralWorkerWatcher() },
-  { name: 'broker.stop', stop: () => integrationBroker.stop() },
-  { name: 'stopRouter', stop: () => hive.stopRouter() },
-  { name: 'hookServer.stop', stop: () => hookServer.stop() },
-  { name: 'telemetry.stop', stop: () => telemetry.stop() },
-  { name: 'slack.stop', stop: () => stopSlackServer() },
-  { name: 'webhook.stop', stop: () => stopWebhookServer() },
-  { name: 'memory.stop', stop: () => memory.stop() },
-  { name: 'reflector.stop', stop: () => reflector.stop() },
-  { name: 'delivery.stop', stop: () => delivery.stop() },
-  { name: 'stopAllProxyBridges', stop: () => hive.stopAllProxyBridges() },
-  { name: 'persist.close', stop: () => persist.close() },
-  { name: 'killAll', stop: () => ptyManager.killAll() }
-];
-
-/** Run the whole list, best-effort: a throw in one step (a dying child, a
- *  half-torn-down socket) must never abort the rest, the quit, or pop a crash
- *  dialog. `tag` keeps quit and reset distinguishable in the log. */
+ *  `floorShutdown()` (boot.ts's `SHUTDOWN_STEPS`) covers everything `bootFloor`
+ *  constructed; the three steps below never lived in `bootstrapHiveServices`
+ *  either — Slack/webhook start are config-gated in `whenReady`, and the worker
+ *  watcher is coupled to `spawnAgentCore` — so this stays ONE list split across
+ *  the same seam as construction, not two hand-maintained copies (#34: a reset
+ *  used to stop neither the webhook server nor the proxy-bridge sidecars, so it
+ *  left the public tunnel open and every qwen sidecar running against a wiped
+ *  hive). */
 function runShutdown(tag: 'quit' | 'reset'): void {
-  for (const step of SHUTDOWN_STEPS) {
+  try { floorShutdown(); } catch (e) { console.error(`[${tag}] floor.shutdown:`, e); }
+  for (const step of [
+    { name: 'stopWorkerWatcher', stop: () => stopEphemeralWorkerWatcher() },
+    { name: 'slack.stop', stop: () => stopSlackServer() },
+    { name: 'webhook.stop', stop: () => stopWebhookServer() }
+  ]) {
     try { step.stop(); } catch (e) { console.error(`[${tag}] ${step.name}:`, e); }
   }
 }
@@ -5384,7 +3982,7 @@ async function processSpawnRequest(filePath: string): Promise<void> {
  *  provider — 0 when unknown. Mirrors the breaker's `tokensOf`. Used only by the
  *  (default-off) per-worker token cap. */
 function workerTokensUsed(workerId: string): number {
-  const s = usageProvider.getAgentUsage(workerId);
+  const s = telemetry.getAgentUsage(workerId);
   return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;
 }
 
@@ -5598,68 +4196,6 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
   return { ok: true };
 });
 
-/** Start every hive-bound background service against the current harnessHome.
- *  Called on boot, and again to recover in place if a folder-change copy fails
- *  (config:changeHome tears these down before copying). No-op without a home. */
-function bootstrapHiveServices(): void {
-  if (!hive.enabled()) return;
-  hive.ensureHive();
-  loadPreservedWorktrees(); // worktrees awaiting integration survive a restart (#14)
-  control.replaceAutoDeliveryPauses(readConfig().autoDeliveryPausedAgents ?? []);
-  archiveOrphanedAgents(); // #57/#58: archive stale archived:false entries with no live PTY
-  hive.startRouter();
-  startEphemeralWorkerWatcher(); // poll HIVE_ROOT/spawn-requests → ephemeral workers
-  // Phase 2: the loopback secret broker. Bind it BEFORE workers spawn so each spawn can
-  // be granted a capability token + the broker URL in its env. Loopback-only, idempotent.
-  void integrationBroker.start().then((r) => {
-    if (r.ok) console.log('[broker] integration broker listening on', integrationBroker.url());
-    else console.error('[broker] failed to start:', r.error);
-  });
-  ensureDefaultMissions(); // one-time: seed the built-in hourly ops standup
-  syncMissions(); // arm recurring auto-dispatch missions now the router is live
-  syncContextTriggers(); // …and the context trigger's own compact/clear cadences
-  // Pair replies to inbound webhook messages in the ledger. Tied to the FEATURE
-  // (any endpoint configured), not to the server: an approved message's card can
-  // finish long after the operator switched the public surface back off, and its
-  // reply still belongs in the history.
-  if ((readConfig().webhookTriggers ?? []).length > 0) startWebhookDoneObserver();
-  hookServer.start();
-  // Bind the telemetry collector BEFORE the renderer spawns any agent, then point
-  // the hive at it so every subsequent spawn is instrumented. Best-effort — a bind
-  // failure just leaves telemetry off (transcript reconciler stays). No breaker.start():
-  // the breaker is POLICY-only, ticked by the heartbeat beat (#1, ships disabled).
-  void telemetry.start().then((r) => {
-    if (r.ok && r.endpoint) { hive.setOtelEndpoint(r.endpoint); console.log('[telemetry] collector listening', r.endpoint); }
-    else console.error('[telemetry] collector failed to start:', r.error);
-  });
-  memory.start(); // init shared palace + mine loop (no-op without mempalace)
-  reflector.start(); // bound oversized memory.md files on a timer (no-op until threshold)
-  delivery.start(); // #5 — the inbox wake + failover executor, in MAIN
-  adoptRendererQueues(); // FLOOR-02 — one-shot: don't lose messages parked before the move
-
-  armAlwaysOnBeats();
-}
-
-/** (Re)arm the always-on beats (decoupled from the optional heartbeat): the live
- *  fleet snapshot Michael reads (~8s) + the breaker/cost-ledger beat (~30s).
- *  Guarded (clear-then-set) so a re-bootstrap (changeHome recovery) OR a
- *  powerMonitor resume can't stack duplicate timers — these are setInterval
- *  handles that freeze during true system sleep and must be re-armed on wake. */
-function armAlwaysOnBeats(): void {
-  if (fleetTimer) clearInterval(fleetTimer);
-  writeFleetSnapshot();
-  fleetTimer = setInterval(writeFleetSnapshot, 8_000);
-  if (breakerBeatTimer) clearInterval(breakerBeatTimer);
-  breakerBeatTimer = setInterval(() => {
-    try { runBreakerBeat(300_000); } catch (e) { console.error('[breaker beat]', e); }
-    // Account pool beat: lapse cooldowns (→ resume nudges), retry moves whose
-    // 10-min rate-limit window passed, refresh the renderer's snapshot.
-    try { accountPool.tick(); } catch (e) { console.error('[account-pool beat]', e); }
-    // #35 — keep board.md inside its budget. One statSync when it's healthy.
-    try { condenseBoardIfOversized(); } catch (e) { console.error('[board beat]', e); }
-  }, 30_000);
-}
-
 /** Wall-clock instant we last observed the machine suspend or lock, so a resume
  *  can report how long we were out. Best-effort context for the renderer follow-on
  *  (auto-revive); null until the first suspend/lock of the session. */
@@ -5741,6 +4277,44 @@ function onSystemResume(reason: string): void {
   }, 15_000);
 }
 
+/**
+ * Build {@link FloorDeps} from the real Electron APIs — the one place index.ts
+ * wires the floor's whole Electron surface. Every field mirrors what used to be
+ * an inline emitter/thunk at module scope (`liveWebContents()?.send(...)`,
+ * `app.getPath(...)`, `safeStorage`, `new Notification(...)`) exactly; nothing
+ * behavioral changes, only WHERE the wiring lives.
+ */
+function electronDeps(): FloorDeps {
+  return {
+    paths: () => ({
+      userData: app.getPath('userData'),
+      logs: app.getPath('logs'),
+      appPath: app.getAppPath()
+    }),
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    secrets: {
+      available: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),
+      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()
+    },
+    notify: ({ title, body }) => {
+      try { if (Notification.isSupported()) new Notification({ title, body }).show(); }
+      catch { /* unsupported platform */ }
+    },
+    send: (channel, payload) => {
+      const wc = liveWebContents();
+      if (!wc) return false;
+      try { wc.send(channel, payload); return true; } catch { return false; }
+    },
+    quit: () => app.quit(),
+    focus: (agentId) => focusAgent(agentId),
+    syncKeepAwake: () => syncKeepAwake(),
+    respawnCore: (opts, owner) => spawnAgentCore(opts as AgentSpawnOptions, owner as Electron.WebContents | null),
+    startWorkerWatcher: () => startEphemeralWorkerWatcher()
+  };
+}
+
 app.whenReady().then(() => {
   // No-op when the module-load attempt already succeeded; the retry only matters
   // on a platform where app.getPath('logs') isn't resolvable before 'ready'.
@@ -5789,21 +4363,24 @@ app.whenReady().then(() => {
   // closed rather than a feature lost; and the qwen proxy sidecar
   // (`hive.ts` startProxyBridge) is dead-hooked until 01-06 threads its agent's
   // token through that spawn site.
-  // Open the durable store first — createWindow() reads the saved window bounds.
-  // Guarded: a DB failure (e.g. a bad native build) must degrade to defaults,
-  // never block app startup.
-  try { persist.open(); } catch (e) { console.error('[db] open failed:', e); }
-  // Claude account pool health (cooling/dead + switch counts) survives restarts
-  // in its own userData JSON; load it before any agent spawns so a cooling
-  // account is not handed out again at boot. Guarded — unreadable = fresh.
-  try { accountPool.load(); } catch (e) { console.error('[account-pool] load failed:', e); }
   // Auto-update from GitHub releases (packaged builds only; gated on the
   // `autoUpdate` config flag). Download-in-background + restart-to-apply toast;
   // never restarts on its own. Falls back to a notify-only releases/latest
   // check where native updating isn't possible (win-portable, dev-ish builds).
   initAutoUpdater(() => liveWebContents());
-  // Bootstrap the hive (if harnessHome is configured) and start the message router.
-  bootstrapHiveServices();
+  // Construct the whole floor (persist.open, accountPool.load, hive/delivery/
+  // telemetry/… and bootstrapHiveServices()'s old tail) and start the message
+  // router. `bootFloor` has no real `await` inside it — its body runs to
+  // completion synchronously before this call returns control here, exactly
+  // like the synchronous `bootstrapHiveServices()` it replaces — so
+  // `createWindow()` below sees a fully-populated floor. Not awaited, to match
+  // that same fire-and-forget shape (`integrationBroker.start()`/
+  // `telemetry.start()` are themselves fire-and-forget inside it).
+  void bootFloor(electronDeps());
+  // `spawnAgentCore`-coupled wiring that cannot live under `src/main/floor/**`
+  // (too large/IPC-shaped to move — see boot.ts's header) — wired right after
+  // construction, exactly where it used to run.
+  wirePtyExitHandler();
   // Survive sleep/lock. macOS freezes libuv timers during true system sleep, so a
   // locked/idle/slept Mac stops firing schedules and can wedge PTYs. On wake we
   // re-arm the scheduler (catching up missed missions ONCE) + beats + keep-awake,

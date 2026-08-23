@@ -184,15 +184,16 @@ test('log.jsonl rotates once past its cap and logTail reads only the tail', (t) 
 // argument absent — which is precisely why nothing but an assertion on the
 // composition root can hold it in place.
 test('the composition root passes a cost sink at the sole new HookServer() call (FLOOR-09)', () => {
-  const src = fs.readFileSync(path.resolve(__dirname, '..', 'src/main/index.ts'), 'utf8');
+  // 02-02 moved the composition root (bootFloor, including this construction)
+  // out of index.ts into src/main/floor/boot.ts; the call itself is unchanged.
+  const src = fs.readFileSync(path.resolve(__dirname, '..', 'src/main/floor/boot.ts'), 'utf8');
 
   const at = src.indexOf('new HookServer(');
-  assert.ok(at > 0, 'src/main/index.ts no longer constructs a HookServer at all');
+  assert.ok(at > 0, 'src/main/floor/boot.ts no longer constructs a HookServer at all');
   assert.equal(src.indexOf('new HookServer(', at + 1), -1,
     'a SECOND HookServer construction appeared — this pin only guards the first');
 
-  // Sliced to that call's own argument list before matching: index.ts is ~5,600
-  // lines and an unsliced search would be satisfied by any unrelated mention.
+  // Sliced to that call's own argument list before matching.
   const args = src.slice(at, src.indexOf('\n);', at));
   assert.match(args, /recordCostSample/,
     'proxy-tier spend never reaches getAgentUsage — FLOOR-09 (#19) is open, and the budget cap that reads it is a false cap');
