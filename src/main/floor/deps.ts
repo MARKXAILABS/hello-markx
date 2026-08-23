@@ -50,18 +50,22 @@ export interface FloorDeps {
    * Send an event to the live renderer webContents (a no-op — returns `false` —
    * when no window is attached). Returns `boolean`, NOT `void`.
    *
-   * This is load-bearing, not a style choice: `hive.ts:1580-1589`'s
-   * `emitTerminalHandoff` computes `this.emit?.(...) === true` to decide whether
-   * mail bounces to the god, and `index.ts`'s existing `HiveManager` emitter
-   * already returns `boolean` (`const wc = liveWebContents(); if (!wc) return
-   * false; try { wc.send(...); return true; } catch { return false; }`).
-   * `accountPool`'s own emitter follows the same shape.
+   * This is load-bearing, not a style choice: `index.ts`'s existing
+   * `HiveManager` emitter already returns `boolean` (`const wc =
+   * liveWebContents(); if (!wc) return false; try { wc.send(...); return
+   * true; } catch { return false; }`), and `accountPool`'s own emitter
+   * follows the same shape — several `=== true` decisions read this return
+   * value. (Terminal-handoff mail, formerly one of those decisions, is D-11
+   * gap 1's fix: it now routes through `HiveManager`'s own injected
+   * `handoff` dep, not through this one — see `hive.ts`'s `terminalHandoff`
+   * and its wiring in `boot.ts` — but `send` keeps its `boolean` return for
+   * everything that still does.)
    *
    * `delivery.ts:153`'s `DeliveryDeps.emit` is `(channel, payload) => void` —
    * that is the LOCAL CONVENTION this field deliberately departs from. Copying
    * it here would make every `=== true` comparison permanently false and
-   * silently re-route all terminal-handoff mail to the god (D-11's bug). Do not
-   * "fix" this back to `void`.
+   * silently misread every one of them as refused. Do not "fix" this back to
+   * `void`.
    */
   send: (channel: string, payload: unknown) => boolean;
   /**
