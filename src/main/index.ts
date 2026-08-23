@@ -3368,7 +3368,11 @@ const closingTime = new ClosingTimeController(
   // at their next hook boundary instead of waiting for a Stop.
   control
 );
-hive.setRoutedObserver((msg, targets) => closingTime.onRouted(msg, targets));
+// `hive.setRoutedObserver(...)` is NOT wired here — `hive` is constructed inside
+// `bootFloor()` and is `undefined` at module scope, so calling it here threw
+// `TypeError: Cannot read properties of undefined (reading 'setRoutedObserver')`
+// on every launch of the PACKAGED app. Wired post-boot beside
+// `wirePtyExitHandler()` instead — see the `whenReady` block.
 ipcMain.handle('app:startClosingTime', () => closingTime.start());
 ipcMain.handle('app:cancelClosingTime', () => closingTime.cancel());
 
@@ -4845,6 +4849,12 @@ app.whenReady().then(() => {
   // (too large/IPC-shaped to move — see boot.ts's header) — wired right after
   // construction, exactly where it used to run.
   wirePtyExitHandler();
+  // Closing-time needs the routed-message stream, and `hive` is constructed
+  // inside `bootFloor()` — so this MUST be post-boot. At module scope `hive`
+  // is still `undefined` and this threw on every packaged launch (the dev
+  // server masked it because the uncaughtException handler kept the process
+  // alive with the window already open).
+  hive.setRoutedObserver((msg, targets) => closingTime.onRouted(msg, targets));
   // Survive sleep/lock. macOS freezes libuv timers during true system sleep, so a
   // locked/idle/slept Mac stops firing schedules and can wedge PTYs. On wake we
   // re-arm the scheduler (catching up missed missions ONCE) + beats + keep-awake,
