@@ -64,7 +64,14 @@ export interface FloorDeps {
    * "fix" this back to `void`.
    */
   send: (channel: string, payload: unknown) => boolean;
-  /** Quit the app (Electron `app.quit()`). */
+  /**
+   * Quit the app (Electron `app.quit()`). With no window there is no
+   * renderer to confirm a quit — `Floor.teardownAndQuit()` is D-09's
+   * non-interactive path, and this is its last step, called only after
+   * `shutdown()` has already run. Nobody may re-add a renderer confirmation
+   * in front of it; that is the exact deadlock `quitDecision`'s `'teardown'`
+   * arm exists to close.
+   */
   quit: () => void;
   /**
    * Raise the app window and tell the renderer to select an agent — issue #42's

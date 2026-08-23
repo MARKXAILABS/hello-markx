@@ -138,6 +138,16 @@ export interface Floor {
    *  neither the webhook server nor the sidecars (drift between two
    *  hand-maintained teardown paths) is the bug this shape exists to prevent. */
   shutdown: () => void;
+  /** D-09's non-interactive quit path: `shutdown()` (whose `SHUTDOWN_STEPS`
+   *  ends in `ptyManager.killAll()`, which routes every live PTY through
+   *  `teardownPty`'s ADR-0003 gate exactly like a confirmed quit does) then
+   *  `deps.quit()`. Synchronous by construction (`shutdown`'s `for` loop has
+   *  no `await` in it), which is why the caller — `index.ts`'s `before-quit`
+   *  — never needs `preventDefault`: by the time this call returns, the
+   *  floor is already torn down and `deps.quit()` has already re-entered
+   *  `before-quit` with `allowQuit` set, so the re-entrant pass takes
+   *  `quitDecision`'s `'allow'` arm and the quit proceeds. */
+  teardownAndQuit: () => void;
 }
 
 // ─── Module state — every field is declared here (typed, unconstructed) and
@@ -1226,7 +1236,8 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     memory, reflector, accountPool, integrationBroker, roster,
     ptyToAgent, worktreePaths, worktreeOrigins, worktreeBases, preservedWorktrees,
     spawnRecipes, missionTimers, contextTimers, liveWorkers,
-    shutdown
+    shutdown,
+    teardownAndQuit: () => { shutdown(); deps.quit(); }
   };
 }
 

@@ -112,9 +112,11 @@ import {
   archiveOrphanedAgents, ensureDefaultMissions, breakerToast, condenseBoardIfOversized,
   ptyForAgent, isFloorQuiet, lastCoordinationAt, looksStuck, readDeliveryCursor,
   notifyTriggerHistoryUpdated, savePreservedWorktrees, clearMissionTimers, clearContextTimers,
-  stopWebhookDoneObserver, startWebhookDoneObserver, armAlwaysOnBeats, removeWorkerScratch
+  stopWebhookDoneObserver, startWebhookDoneObserver, armAlwaysOnBeats, removeWorkerScratch,
+  type Floor
 } from './floor/boot';
 import type { FloorDeps } from './floor/deps';
+import { isHeadless, quitDecision, shouldQuitOnLastWindowClose } from './floor/headless';
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
 
@@ -392,6 +394,21 @@ let floorSeq = 0;
 
 /** When true, skip the quit interceptor (user already confirmed). */
 let allowQuit = false;
+
+/** The `Floor` `bootFloor()` resolved with — undefined until `whenReady`'s
+ *  `bootFloor(electronDeps())` call settles (a microtask away, never awaited
+ *  in place; see the call site). `before-quit` bails rather than throw if a
+ *  quit somehow races ahead of it — D-09's `'teardown'` arm needs a live
+ *  `Floor` to call `teardownAndQuit()` on. */
+let floor: Floor | undefined;
+
+/** DAEMON-01: `--headless` gates window creation and the window-all-closed
+ *  quit policy. Module scope (not inside `whenReady`'s callback) because
+ *  `window-all-closed`/`second-instance` are registered as separate top-level
+ *  `app.on(...)` listeners outside that closure and need to read it too. Read
+ *  once, off process.argv — see `src/main/floor/headless.ts` for why the
+ *  deadlock D-09 closes existed. */
+const HEADLESS = isHeadless(process.argv);
 
 /** BYOK backend model-providers whose API keys the non-Claude CLI engines
  *  (OpenCode/Crush/pi/qwen) read from standard env vars. Keys are stored
@@ -1309,6 +1326,11 @@ if (!gotInstanceLock) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
+    } else {
+      // A second launch of a --headless floor is the operator's re-attach
+      // request — the same story dock-click ('activate', above) tells on
+      // macOS. D-10's third named edit.
+      createWindow();
     }
     const link = argv.find((a) => a.startsWith('hellomarkx://'));
     if (link) void handleHireLink(link);
@@ -3314,10 +3336,17 @@ ipcMain.handle('app:openLogs', async () => {
     return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
   }
 });
-/** Toggle macOS "Open at Login" — fully programmatic, no permission prompt.
- *  Returns the resulting state so the renderer toggle reflects reality. */
+/** Toggle "Open at Login" — fully programmatic, no permission prompt.
+ *  Returns the resulting state so the renderer toggle reflects reality.
+ *  `args: ['--headless']` (D-10) means a floor that starts at login boots
+ *  windowless and re-attaches on a second launch (`second-instance`, above) —
+ *  the operator's machine does not get an office window before they are at
+ *  it. NO-OP on Linux: `setLoginItemSettings` is unimplemented there, so
+ *  `getLoginItemSettings().openAtLogin` always reads back `false` and the
+ *  toggle visibly refuses to stick — a partial truth this plan states in
+ *  source rather than papering over (02-10 owns the matching UI sentence). */
 ipcMain.handle('app:setLoginItem', (_evt, enabled: unknown) => {
-  app.setLoginItemSettings({ openAtLogin: enabled === true });
+  app.setLoginItemSettings({ openAtLogin: enabled === true, args: ['--headless'] });
   return app.getLoginItemSettings().openAtLogin;
 });
 
@@ -4341,6 +4370,25 @@ app.whenReady().then(() => {
   const startupHireLink = process.argv.find((a) => a.startsWith('hellomarkx://'));
   if (startupHireLink) void handleHireLink(startupHireLink);
 
+  // D-10 + RESEARCH §8: an operator who enabled "start at login" BEFORE this
+  // phase has a login item registered with NO `args` — setLoginItemSettings
+  // does not rewrite an existing item's args on its own, so it would launch
+  // windowed forever. Re-register once at boot so it gains `--headless`.
+  // Guarded on the CURRENT state reading true: this can only ADD args to an
+  // item that is already on. It must be impossible for this line to turn the
+  // login item ON for an operator who has it off.
+  if (app.getLoginItemSettings().openAtLogin === true) {
+    app.setLoginItemSettings({ openAtLogin: true, args: ['--headless'] });
+  }
+
+  // DAEMON-01 + RESEARCH §7: a headless floor should not claim a Dock slot —
+  // UNVERIFIED, no macOS machine available to confirm `setActivationPolicy`
+  // actually suppresses the icon as Apple's docs describe. Same register as
+  // hive.ts's LIVE-UNVERIFIED markers: stated in source, not claimed working.
+  if (process.platform === 'darwin' && HEADLESS) {
+    app.setActivationPolicy('accessory');
+  }
+
   // Hand every spawned agent the path to the Slack reply discovery file via the
   // inherited env (pty merges process.env). The path is stable whether or not the
   // server is running; the FILE only exists while it is, so the helper degrades
@@ -4376,7 +4424,8 @@ app.whenReady().then(() => {
   // `createWindow()` below sees a fully-populated floor. Not awaited, to match
   // that same fire-and-forget shape (`integrationBroker.start()`/
   // `telemetry.start()` are themselves fire-and-forget inside it).
-  void bootFloor(electronDeps());
+  const floorPromise = bootFloor(electronDeps());
+  void floorPromise.then((f) => { floor = f; });
   // `spawnAgentCore`-coupled wiring that cannot live under `src/main/floor/**`
   // (too large/IPC-shaped to move — see boot.ts's header) — wired right after
   // construction, exactly where it used to run.
@@ -4393,7 +4442,7 @@ app.whenReady().then(() => {
   // Multi-window floors (opt-in): install the menu carrying "New Floor". When
   // off, the app keeps Electron's default menu — zero behavior change.
   if (readConfig().multiWindow) installAppMenu();
-  createWindow();
+  if (!HEADLESS) createWindow();
   // Auto-start the Slack webhook server when configured. Best-effort: a tunnel
   // failure (offline) is logged, not fatal. The tunnel URL is ephemeral and
   // changes per restart, so the user re-pastes it via Settings → Start.
@@ -4413,26 +4462,47 @@ app.whenReady().then(() => {
       else console.log('[webhook] listening', r.url ? `(tunnel: ${r.url})` : '(no tunnel)');
     });
   }
+  // Deliberately NOT gated on HEADLESS: dock-click re-attach on macOS is the
+  // same re-attach story `second-instance` tells on Windows/Linux (below) —
+  // clicking the icon on a headless floor should open a window, not no-op.
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 // before-quit covers Cmd-Q / dock-quit; the per-window close handler covers
-// the red close button. Both routes hit the same warning UX.
+// the red close button. Both routes hit the same warning UX — except D-09's
+// 'teardown' arm, which exists for exactly the case neither of those routes
+// can serve: no window to warn.
 app.on('before-quit', (e) => {
-  if (allowQuit) return;
-  const count = ptyManager.list().length;
-  if (count === 0) return;
+  // The floor has not finished booting (or booted with nothing to protect,
+  // or a quit is already in flight) — nothing this handler can add.
+  if (!floor) return;
+  const decision = quitDecision({
+    allowQuit,
+    livePtyCount: ptyManager.list().length,
+    hasWindow: !!mainWindow
+  });
+  if (decision === 'allow') return;
+  if (decision === 'teardown') {
+    // No window to ask — D-09. Set allowQuit BEFORE tearing down: the
+    // shutdown is synchronous and `teardownAndQuit()`'s own `deps.quit()`
+    // re-enters this handler; without allowQuit already true that re-entrant
+    // pass would recompute 'teardown' again and loop.
+    allowQuit = true;
+    floor.teardownAndQuit();
+    return;
+  }
+  // decision === 'ask-renderer' — today's interactive confirmation.
   e.preventDefault();
   if (mainWindow) {
     mainWindow.focus();
-    mainWindow.webContents.send('app:closeRequested', { ptyCount: count });
+    mainWindow.webContents.send('app:closeRequested', { ptyCount: ptyManager.list().length });
   }
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (shouldQuitOnLastWindowClose({ platform: process.platform, headless: HEADLESS })) {
     ptyManager.killAll();
     app.quit();
   }

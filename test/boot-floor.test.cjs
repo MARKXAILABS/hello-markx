@@ -254,7 +254,7 @@ test('every subsystem bootFloor started appears in the shutdown list (#34 covera
 
   const offenders = [];
   for (const key of Object.keys(floor)) {
-    if (key === 'shutdown') continue;
+    if (key === 'shutdown' || key === 'teardownAndQuit') continue;
     if (dataFields.has(key)) continue;
     if (resourceFreeFields.has(key)) continue;
     if (!shutdownSource.includes(`${key}.`)) offenders.push(key);
@@ -286,4 +286,147 @@ test('no outbound tunnel: the boot sequence never starts Slack/webhook servers',
   // the floor booted with no network surface beyond the loopback broker/
   // telemetry/hook servers RESEARCH names as safe to run for real.
   assert.equal(floor.hookServer.constructor.name, 'HookServer');
+});
+
+// ─── D-09: the windowless quit decision, and its composed proof ────────────
+
+const { quitDecision, shouldQuitOnLastWindowClose } = loadTs('src/main/floor/headless.ts');
+
+test('quitDecision: headless with live PTYs takes the non-interactive teardown path', () => {
+  assert.equal(
+    quitDecision({ allowQuit: false, livePtyCount: 2, hasWindow: false }),
+    'teardown',
+    'D-09\'s fix — no window, live PTYs, not already quitting — must take \'teardown\', or a headless '
+    + 'floor with a live PTY can never quit'
+  );
+});
+
+test('quitDecision: a window present asks the renderer, even with live PTYs', () => {
+  assert.equal(
+    quitDecision({ allowQuit: false, livePtyCount: 2, hasWindow: true }),
+    'ask-renderer'
+  );
+});
+
+test('quitDecision: zero live PTYs always allows the quit', () => {
+  assert.equal(quitDecision({ allowQuit: false, livePtyCount: 0, hasWindow: false }), 'allow');
+  assert.equal(quitDecision({ allowQuit: false, livePtyCount: 0, hasWindow: true }), 'allow');
+});
+
+test('quitDecision: allowQuit already true always allows, regardless of PTYs/window', () => {
+  assert.equal(quitDecision({ allowQuit: true, livePtyCount: 5, hasWindow: true }), 'allow');
+});
+
+test('shouldQuitOnLastWindowClose: headless never quits on last-window-close off darwin', () => {
+  assert.equal(shouldQuitOnLastWindowClose({ platform: 'win32', headless: true }), false);
+  assert.equal(shouldQuitOnLastWindowClose({ platform: 'linux', headless: true }), false);
+});
+
+test('shouldQuitOnLastWindowClose: a normally-started floor keeps quit-on-last-window-close off darwin', () => {
+  assert.equal(shouldQuitOnLastWindowClose({ platform: 'win32', headless: false }), true);
+  assert.equal(shouldQuitOnLastWindowClose({ platform: 'linux', headless: false }), true);
+});
+
+test('shouldQuitOnLastWindowClose: darwin never quits on last-window-close, headless or not', () => {
+  assert.equal(shouldQuitOnLastWindowClose({ platform: 'darwin', headless: true }), false);
+  assert.equal(shouldQuitOnLastWindowClose({ platform: 'darwin', headless: false }), false);
+});
+
+test('floor.teardownAndQuit(): quit is called exactly once, and the socket is refused afterward '
+  + '(02-VALIDATION.md:61\'s composed case — D-09)', async (t) => {
+  const env = floorEnv(t);
+  const { deps, quitCalled } = fakeDeps(env);
+  const floor = await bootFloor(deps);
+
+  assert.equal(quitCalled(), false, 'deps.quit was called before teardownAndQuit() ever ran');
+  const sock = floor.hive.sockPath();
+
+  floor.teardownAndQuit();
+
+  assert.equal(quitCalled(), true, 'floor.teardownAndQuit() did not call deps.quit()');
+  await new Promise((resolve, reject) => {
+    const c = net.createConnection(sock);
+    c.once('connect', () => { c.end(); reject(new Error('socket still accepts connections after teardownAndQuit()')); });
+    c.once('error', () => resolve());
+  });
+});
+
+// ─── D-40: the ipcMain.handle pin — every count and channel name re-derived
+//     over comment-stripped, joined source, never a bare `grep -c` (task 1's
+//     B-ipc-joined vs raw B-ipc: 152 vs 153, google/* inside a `//` comment
+//     defeats the naive block-comment regex and swallows `pty:write`). This
+//     lives HERE, not in test/repo-claims.test.cjs — that file is one-owner-
+//     per-wave and 02-02 already owns wave 2's clauses in it (see <interfaces>).
+
+/** Same shape as test/repo-claims.test.cjs:53's stripComments, plus a
+ *  whitespace squeeze so a prettier-wrapped call site still joins to one
+ *  matchable line. */
+function joinedStripped(rel) {
+  const raw = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+  return raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/\s+/g, ' ');
+}
+
+const B_IPC_JOINED = 152;
+
+test('D-40: ipcMain.handle( count over joined, comment-stripped index.ts is exactly B-ipc-joined', () => {
+  const joined = joinedStripped('src/main/index.ts');
+  const count = (joined.match(/ipcMain\s*\.\s*handle\s*\(/g) ?? []).length;
+  assert.ok(B_IPC_JOINED >= 1, 'B-ipc-joined must itself be a positive lower bound, or this pin is vacuous');
+  assert.equal(count, B_IPC_JOINED,
+    `ipcMain.handle( count over joined index.ts is ${count}, expected B-ipc-joined (${B_IPC_JOINED}) — `
+    + 'a channel was added or removed without this pin being updated');
+});
+
+// B-ipc-names — task 1's exact command (`JC src/main/index.ts | grep -oE
+// "ipcMain\s*\.\s*handle\s*\(\s*'[^']*'" | sed ... | sort`), sorted, 152
+// entries, re-embedded here (not read off a mktemp file, which does not
+// survive between the executor's shell and a later `npm test` run).
+const B_IPC_NAMES = [
+  'app:cancelClose', 'app:cancelClosingTime', 'app:confirmClose', 'app:copyToClipboard',
+  'app:info', 'app:openExternal', 'app:openLogs', 'app:readClipboard', 'app:resetAll',
+  'app:setLoginItem', 'app:setNotifications', 'app:startClosingTime', 'claudeAccount:add',
+  'claudeAccount:clear', 'claudeAccount:has', 'claudeAccount:markActive',
+  'claudeAccount:poolState', 'claudeAccount:remove', 'claudeAccount:rotate',
+  'claudeAccount:set', 'clipboard:saveImage', 'config:changeHome', 'config:ensureHome',
+  'config:get', 'config:update', 'control:autoDelivery', 'control:gateTool', 'control:halt',
+  'control:pause', 'control:resume', 'control:setBreakerState', 'control:snapshot',
+  'control:steer', 'dialog:attachFiles', 'dialog:chooseFolder', 'freeflow:setConfig',
+  'freeflow:transcribe', 'fs:listDir', 'fs:readBinary', 'fs:readFile', 'fs:statAbs',
+  'fs:writeFile', 'git:aheadBehind', 'git:branch', 'git:branches', 'git:checkout',
+  'git:commitFiles', 'git:compareRefs', 'git:diff', 'git:isRepo', 'git:log', 'git:logGraph',
+  'git:mainRepo', 'git:showFile', 'git:status', 'git:worktrees', 'github:ciRuns',
+  'github:issues', 'hero:payload', 'hire:drainPending', 'hire:openFile', 'history:add',
+  'history:list', 'history:search', 'hive:addTask', 'hive:agentContext',
+  'hive:agentDirectory', 'hive:agentUsage', 'hive:board', 'hive:deleteTask', 'hive:inbox',
+  'hive:log', 'hive:memory', 'hive:memoryStatus', 'hive:messages', 'hive:mineNow',
+  'hive:notifyBlocked', 'hive:patchTask', 'hive:queue', 'hive:registry',
+  'hive:searchMemory', 'hive:send', 'hive:setArchived', 'hive:tasks', 'hive:textSearch',
+  'integrations:list', 'integrations:remove', 'integrations:setSecret',
+  'integrations:templates', 'integrations:test', 'integrations:upsert', 'kg:addFiles',
+  'kg:get', 'kg:ingestFiles', 'kg:list', 'kg:remove', 'kg:search', 'kg:status',
+  'missions:list', 'missions:save', 'org:getTrigger', 'org:setTrigger', 'providerKey:clear',
+  'providerKey:has', 'providerKey:set', 'pty:attach', 'pty:idleFor', 'pty:kill', 'pty:list',
+  'pty:redraw', 'pty:resize', 'pty:spawn', 'realtime:drainCompletions',
+  'realtime:setSessionLive', 'realtime:waitFor', 'roster:read', 'roster:write',
+  'session:resolveCwd', 'skills:catalog', 'skills:install', 'skills:local', 'skills:reveal',
+  'skills:uninstall', 'slack:reply', 'slack:replyScriptPath', 'slack:setConfig',
+  'slack:start', 'slack:status', 'slack:stop', 'telemetry:snapshot', 'telemetry:spans',
+  'telemetry:usage', 'terminal:openAtFolder', 'tools:status', 'triggerHistory:clear',
+  'triggerHistory:decide', 'triggerHistory:list', 'triggers:getContext',
+  'triggers:setContext', 'webhook:generateSecret', 'webhook:setConfig', 'webhook:start',
+  'webhook:status', 'webhook:stop', 'webhooks:delete', 'webhooks:generateSecret',
+  'webhooks:list', 'webhooks:save', 'webhooks:status', 'window:newFloor', 'workers:list',
+  'workers:stop'
+];
+
+test('D-40: the sorted ipcMain.handle channel-name list diffs empty against B-ipc-names', () => {
+  const joined = joinedStripped('src/main/index.ts');
+  const names = (joined.match(/ipcMain\s*\.\s*handle\s*\(\s*'[^']*'/g) ?? [])
+    .map((m) => m.replace(/.*'(.*)'/, '$1'))
+    .sort();
+  assert.ok(names.length >= 1, 'the channel-name list came back empty — the extractor broke, not the source');
+  assert.equal(names.length, B_IPC_JOINED);
+  assert.deepEqual(names, B_IPC_NAMES,
+    'the sorted ipcMain.handle channel-name list no longer matches B-ipc-names — a channel was '
+    + 'renamed, added or removed; update this baseline in the same commit that changes the channel');
 });
