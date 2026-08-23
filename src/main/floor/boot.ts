@@ -1009,6 +1009,20 @@ export function adoptRendererQueues(): void {
 const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
   { name: 'clearMissionTimers', stop: () => clearMissionTimers() },
   { name: 'clearContextTimers', stop: () => clearContextTimers() },
+  // NOT in the original SHUTDOWN_STEPS list either — a real gap (RESEARCH:
+  // "Timers that are not unref'd and must be cleared by Floor.shutdown()").
+  // Un-cleared, these two setIntervals keep the process alive after shutdown,
+  // which is exactly what T-P02-02-05 exists to catch (the boot test's
+  // explicit shutdown case fails by HANGING, not by a red assertion).
+  {
+    name: 'clearAlwaysOnBeats',
+    stop: () => {
+      if (fleetTimer) clearInterval(fleetTimer);
+      fleetTimer = null;
+      if (breakerBeatTimer) clearInterval(breakerBeatTimer);
+      breakerBeatTimer = null;
+    }
+  },
   { name: 'stopWebhookDoneObserver', stop: () => stopWebhookDoneObserver() },
   { name: 'broker.stop', stop: () => integrationBroker.stop() },
   { name: 'stopRouter', stop: () => hive.stopRouter() },
@@ -1263,5 +1277,6 @@ export {
   archiveOrphanedAgents, ensureDefaultMissions, breakerToast, condenseBoardIfOversized,
   ptyForAgent, isFloorQuiet, lastCoordinationAt, looksStuck, readDeliveryCursor,
   notifyTriggerHistoryUpdated, savePreservedWorktrees, clearMissionTimers,
-  clearContextTimers, stopWebhookDoneObserver, shutdown, removeWorkerScratch
+  clearContextTimers, stopWebhookDoneObserver, shutdown, removeWorkerScratch,
+  SHUTDOWN_STEPS
 };

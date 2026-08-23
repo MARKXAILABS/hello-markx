@@ -1170,3 +1170,78 @@ test('HiveManager still exposes commit()/flushCommit() as delegations, not the o
     );
   }
 });
+
+// ─── 02-02: bootFloor's module-scope discipline (T-P02-02-01, D-03) ─────────
+//
+// D-02's whole rationale: a file under src/main/floor/** that constructs at
+// MODULE SCOPE, or installs a process-global handler there, produces a boot
+// test that is green on a crashed boot — the exact repudiation threat
+// T-P02-02-01 names. Both clauses below were driven RED before being trusted
+// (planted violation / deleted call / deleted directory) — see the commit
+// message for the pasted runs; this file only carries the clauses themselves.
+//
+// This tree is CRLF (`core.autocrlf=true`, no `.gitattributes`) and
+// `readStripped` reads raw utf8 with no newline normalisation, so a wrapped
+// construction on disk is `=\r\n  new` — every pattern below is written with
+// `\r?` for that reason, not decoration.
+
+/** Every .ts file under src/main/floor/, as repo-relative POSIX paths. */
+function floorSourceFiles() {
+  const dir = path.join(root, 'src', 'main', 'floor');
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.tsx?$/.test(e.name))
+    .map((e) => `src/main/floor/${e.name}`);
+}
+
+test('no module-scope construction or process handler under src/main/floor/** (T-P02-02-01)', () => {
+  const files = floorSourceFiles();
+  // Positive half first: D-40's exact trap. Deleting src/main/floor/ entirely
+  // must FAIL this clause, not satisfy it — a directory with nothing in it
+  // trivially has zero matches for every negative pattern below.
+  assert.ok(files.length > 0,
+    'src/main/floor/ has no .ts files — either it was deleted or bootFloor never shipped. '
+    + 'A missing directory must fail this clause, not satisfy its negative half.');
+
+  const bareConstruction = /^(export )?(const|let|var) [A-Za-z_$][\w$]* *(:[^=\r\n]*)? *= *new /m;
+  const wrappedConstruction = /^(export )?(const|let|var) [A-Za-z_$][\w$]* *(:[^=\r\n]*)? *=\r?\n\s*new /m;
+  const processOrAppOn = /(^|[^.\w$])(process|app)\.on\(/;
+
+  for (const rel of files) {
+    const raw = fs.readFileSync(path.join(root, rel), 'utf8');
+    const stripped = stripComments(raw);
+    assert.doesNotMatch(stripped, bareConstruction,
+      `${rel} constructs at module scope (\`const x = new X(...)\` outside any function) — `
+      + 'bootFloor must construct every subsystem INSIDE the function, or a boot test\'s import '
+      + 'alone would run the side effect D-02 exists to keep out');
+    assert.doesNotMatch(stripped, wrappedConstruction,
+      `${rel} constructs at module scope in WRAPPED form (\`const x: T =\\n  new X(...)\`) — `
+      + 'the bare-form check above cannot see a construction split across lines');
+    assert.doesNotMatch(stripped, processOrAppOn,
+      `${rel} installs a process-global or Electron app-global handler `
+      + '(process.on(/app.on() — T-P02-02-01: a crashed boot would report green because the '
+      + 'handler that would have surfaced the throw is exactly what this file is not allowed to install');
+  }
+
+  // Positive half for the construction check: boot.ts DOES construct, just
+  // inside bootFloor — at least 20 `new X(...)` sites (D-01: the 14 subsystems
+  // plus their Maps), so the negative checks above are proven non-vacuous.
+  const bootStripped = stripComments(fs.readFileSync(path.join(root, 'src/main/floor/boot.ts'), 'utf8'));
+  const newCount = (bootStripped.match(/\bnew [A-Za-z_$]/g) ?? []).length;
+  assert.ok(newCount >= 20,
+    `src/main/floor/boot.ts has only ${newCount} \`new X(...)\` sites (comment-stripped) — expected `
+    + 'at least 20 (the ~14 subsystems bootFloor constructs, plus their Maps). Fewer than that means '
+    + 'either bootFloor stopped constructing something, or the file was gutted.');
+});
+
+test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => {
+  const index = readStripped('src/main/index.ts');
+  assert.match(index, /bootFloor\(/,
+    'src/main/index.ts no longer calls bootFloor(...) — the composition root was extracted into '
+    + 'src/main/floor/boot.ts specifically so whenReady could inject it; a floor that never boots '
+    + 'this way is dead code behind a passing typecheck');
+  assert.doesNotMatch(index, /SHUTDOWN_STEPS/,
+    'src/main/index.ts still declares SHUTDOWN_STEPS — the declarative shutdown list moved to '
+    + 'src/main/floor/boot.ts\'s Floor.shutdown(); a second copy here is exactly the two-hand-'
+    + 'maintained-teardown-paths drift #34 exists to prevent'
+  );
+});
