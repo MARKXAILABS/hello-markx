@@ -1275,6 +1275,28 @@ const api = {
   }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('webhook:setConfig', patch),
 
+  // ─── Public tunnel (cloudflared) — DAEMON-05 ────────────────────────────────
+  /** Turn the public tunnel on: ensures the webhook local server is listening,
+   *  then opens a cloudflared tunnel over it (and over Slack's server too, if
+   *  Slack is already running — a separate child, a separate hostname).
+   *  Resolves to the webhook server's URL, the phone's origin (D-18, D-23). */
+  tunnelStart: (): Promise<{ ok: boolean; url?: string; error?: string }> =>
+    ipcRenderer.invoke('tunnel:start'),
+  /** Turn the public tunnel off: closes it on every server it was opened on. */
+  tunnelStop: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('tunnel:stop'),
+  /** `{ enabled, running, url }` for the current session — `url` is the
+   *  webhook server's public URL specifically. */
+  tunnelStatus: (): Promise<{ enabled: boolean; running: boolean; url: string | null }> =>
+    ipcRenderer.invoke('tunnel:status'),
+  /** Pushed whenever `tunnelStart`/`tunnelStop` change the state, so the
+   *  titlebar chip does not poll. Returns an unsubscribe fn. */
+  onTunnelChanged: (cb: (status: { enabled: boolean; running: boolean; url: string | null }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, status: { enabled: boolean; running: boolean; url: string | null }) => cb(status);
+    ipcRenderer.on('tunnel:changed', listener);
+    return () => ipcRenderer.removeListener('tunnel:changed', listener);
+  },
+
   // ─── Triggers: context (auto-compact / auto-clear) ──────────────────────────
   /** The two context rules (cadence + pressure gate + message), deep-filled. */
   getContextTrigger: (): Promise<ContextTriggerConfig> =>

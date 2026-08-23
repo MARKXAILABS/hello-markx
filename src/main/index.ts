@@ -50,6 +50,8 @@ import {
   WebhookServer,
   type WebhookDispatch, type WebhookEndpointRef, type WebhookInbound, type WebhookTaskStatus
 } from './webhook';
+import { openTunnel, type TunnelOpener } from './tunnel';
+import { ensureCloudflared } from './cloudflared';
 import {
   classifyInboundKind, isAutoAllowed,
   DEFAULT_CONTEXT_TRIGGER, DEFAULT_ORG_TRIGGER, DEFAULT_TRIGGER_MODE, DEFAULT_WEBHOOK_SCHEMA,
@@ -853,10 +855,10 @@ async function startSlackServer(): Promise<{ ok: boolean; url?: string; error?: 
     }
   });
   const res = await slackServer.start();
-  // ok:false means we never bound the port → drop the instance. ok:true with no
-  // url just means the tunnel is unavailable; the local handler is still live.
+  // ok:false means we never bound the port → drop the instance. start() opens
+  // no tunnel any more (DAEMON-05) — opening one, and keeping lastSlackUrl
+  // current, is the `tunnel:start` handler's job below.
   if (!res.ok) { slackServer = null; return res; }
-  if (res.url) lastSlackUrl = res.url;
   // Bring up the loopback reply endpoint (token-gated, never tunneled) and drop
   // the discovery file for the bundled helper. Best-effort: reply path being
   // unavailable must not sink ingestion.
@@ -915,6 +917,16 @@ let webhookServer: WebhookServer | null = null;
 /** Last public tunnel URL handed out — retained so Settings can re-show the
  *  endpoint after a reopen (the tunnel rotates it per restart). */
 let lastWebhookUrl: string | undefined;
+
+/** Mirrors the persisted public-tunnel enable flag (config.ts), for
+ *  `tunnel:status` to answer without a THIRD in-file reader of that config
+ *  key (only `tunnel:start`/`tunnel:stop` below write it). Starts `false`
+ *  regardless of what a prior
+ *  session left in config: nothing auto-reopens the public tunnel at launch
+ *  — DAEMON-05's off-by-default clause is structural, not just a default —
+ *  so a stale persisted `true` would be reporting a tunnel that is neither
+ *  running nor about to resume without the operator pressing start again. */
+let tunnelIsEnabled = false;
 
 /** Local port the shared server binds to. The port is a property of the SERVER,
  *  not of any one trigger — `webhookPort` stays the (legacy) override. */
@@ -1166,12 +1178,14 @@ async function startWebhookServer(): Promise<{ ok: boolean; url?: string; error?
   });
   webhookServer = server;
   const res = await server.start();
-  // ok:false covers BOTH "never bound the port" (fatal → drop the instance) and
-  // "bound fine, tunnel unavailable" (the security boundary is live and must stay
-  // reachable/stoppable — dropping it there would leak an unstoppable listener).
-  if (!res.ok && !server.listening()) { webhookServer = null; return res; }
+  // start() means exactly ONE thing now (DAEMON-05): the local server bound
+  // its port. It no longer conflates that with the tunnel, so ok:false is
+  // unambiguously fatal — drop the instance. The old
+  // `!res.ok && !server.listening()` workaround existed only because start()
+  // used to return ok:false for a tunnel failure too, while the local server
+  // stayed live; that conflation is gone along with the workaround for it.
+  if (!res.ok) { webhookServer = null; return res; }
   analytics.trackFeature('webhook_trigger');
-  if (res.url) lastWebhookUrl = res.url;
   startWebhookDoneObserver();
   return res;
 }
@@ -3644,6 +3658,100 @@ function upsertLegacyWebhookTrigger(patch: { secret?: string; enabled?: boolean 
     webhookTriggers: prior ? list.map((t) => (t.id === 'legacy' ? row : t)) : [...list, row]
   });
 }
+
+// ─── IPC: Public tunnel (cloudflared) — DAEMON-05 ────────────────────────────
+// The persisted enable flag below (config.ts) is the master switch for any
+// cloudflared child this app spawns. It is OFF by default (config.ts
+// DEFAULTS) and is never flipped by enabling Slack or a webhook endpoint —
+// `start()` on both servers opens no tunnel at all (task 2). A tunnel exists
+// only where the operator presses this control and one of the two handlers
+// below runs; they are the ONLY writers of that flag in this file.
+//
+// Four ceilings this feature does not clear, stated here rather than implied
+// away (D-17): the hostname is new on every open — there is no $0 stable-URL
+// option; Cloudflare documents quick tunnels as testing-and-development only;
+// the hard cap is 200 concurrent in-flight requests (HTTP 429 past it); and
+// there is no SSE support at all. Only ~30s of stability was ever verified in
+// this session's live check — no multi-hour soak.
+
+/** The digest-verified cloudflared binary, resolved and memoised on first
+ *  successful use — never at boot. Downloading ~50 MB for a feature that is
+ *  off by default would itself be the side effect DAEMON-05 forbids, wearing
+ *  a different hat. A FAILED resolution (offline, unsupported platform, a
+ *  digest mismatch) is deliberately NOT cached, so the next enable attempt
+ *  gets a fresh try instead of being stuck on a transient failure forever. */
+let cloudflaredBin: string | null = null;
+async function resolveCloudflaredBin(): Promise<string | null> {
+  if (cloudflaredBin) return cloudflaredBin;
+  cloudflaredBin = await ensureCloudflared(join(app.getPath('userData'), 'bin'));
+  return cloudflaredBin;
+}
+
+/** Push `{ enabled, running, url }` to the renderer so the titlebar chip
+ *  (plan 02-10) does not poll. Best-effort — a torn-down window must never
+ *  throw here. */
+function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {
+  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }
+}
+
+ipcMain.handle('tunnel:start', async () => {
+  writeConfig({ tunnelEnabled: true });
+  tunnelIsEnabled = true;
+  // Ensure the webhook local server is listening — the phone's origin
+  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has
+  // nothing to expose yet (a phone route family becomes servable in plan 02-05);
+  // that refusal is returned verbatim rather than papered over.
+  if (!webhookServer) {
+    const started = await startWebhookServer();
+    if (!started.ok) {
+      emitTunnelChanged({ enabled: true, running: false, url: null });
+      return started;
+    }
+  }
+  const bin = await resolveCloudflaredBin();
+  if (!bin) {
+    const error = 'cloudflared could not be acquired (offline, unsupported platform, or a digest mismatch — see the app log)';
+    emitTunnelChanged({ enabled: true, running: false, url: null });
+    return { ok: false, error };
+  }
+  const opener: TunnelOpener = (port) => openTunnel(port, { bin });
+
+  const res = await webhookServer!.startTunnel(opener);
+  // Keeps the pre-existing webhook:status badge (Settings) accurate now that
+  // start() itself never sets a url any more — this is the only remaining
+  // writer of lastWebhookUrl.
+  if (res.url) lastWebhookUrl = res.url;
+  // The Slack tunnel rides the SAME master switch, when Slack is already
+  // running — a SEPARATE cloudflared child and hostname (D-15/D-23: this
+  // plan does not unify the two origins). Best-effort: it must never shadow
+  // the webhook result this handler's caller actually asked about.
+  if (slackServer) {
+    try {
+      const slackRes = await slackServer.startTunnel(opener);
+      if (slackRes.url) lastSlackUrl = slackRes.url; // keeps slack:status accurate, same reason
+    } catch (e) { console.error('[tunnel] slack tunnel failed to open:', e); }
+  }
+  emitTunnelChanged({ enabled: true, running: res.ok && !!res.url, url: res.url ?? null });
+  return res;
+});
+
+ipcMain.handle('tunnel:stop', () => {
+  writeConfig({ tunnelEnabled: false });
+  tunnelIsEnabled = false;
+  webhookServer?.stopTunnel();
+  slackServer?.stopTunnel();
+  emitTunnelChanged({ enabled: false, running: false, url: null });
+  return { ok: true };
+});
+
+/** `url` is the WEBHOOK server's public URL specifically — the phone's
+ *  origin (D-18, D-23). Slack's own tunnel (if opened above) is not reported
+ *  here; the titlebar chip this data feeds is about the phone's reachability. */
+ipcMain.handle('tunnel:status', () => ({
+  enabled: tunnelIsEnabled,
+  running: webhookServer?.publicUrl() != null,
+  url: webhookServer?.publicUrl() ?? null
+}));
 
 // ─── IPC: Free Flow (voice dictation → message queue) ────────────────────────
 // Entry point B is hold-Option-to-talk, handled entirely in the renderer
