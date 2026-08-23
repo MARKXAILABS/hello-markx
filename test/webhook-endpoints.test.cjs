@@ -103,6 +103,9 @@ function request(server, { method = 'POST', url = '/', headers = {}, body = unde
 const auth = (secret) => ({ 'x-md-webhook-secret': secret });
 const post = (msg) => JSON.stringify(msg);
 
+/** The exact 401 body every /phone/api/** failure shares (D-19/D-24). */
+const PHONE_AUTH_FAIL_BODY_SHAPE = { ok: false, error: 'unauthorized' };
+
 /** A throwaway fixture directory holding a two-byte `index.html`, mirroring
  *  what `resources/phone/` will hold once plan 02-09 lands. `t` is the test's
  *  own context — cleanup rides `t.after`, the house `tempDir` pattern
@@ -127,6 +130,13 @@ function makePhoneServer(t, overrides = {}) {
   });
   if (!overrides.unarmed) server.mintEnrollment();
   return { server, seen, root };
+}
+
+/** An injectable clock so TTL/lockout cases move virtual time forward
+ *  without sleeping a real unit test. */
+function makeClock(start = 1_700_000_000_000) {
+  let t = start;
+  return { now: () => t, advance: (ms) => { t += ms; } };
 }
 
 test('each endpoint is gated by its OWN secret', async () => {
@@ -421,6 +431,172 @@ test("the phone has its own rate bucket, strictly below the global cap, and it b
     if (res.status === 429) limited++;
   }
   assert.ok(limited > 0, "the phone's own bucket must trip well before the global 120/window cap");
+});
+
+/* ────────────────────── enrollment → bearer → data API ──────────────────── */
+
+const enrollHeaders = (token) => ({ 'x-md-phone-enroll': token });
+const bearerHeaders = (bearer) => ({ authorization: `Bearer ${bearer}` });
+
+test('the enrollment token is single-use: a replay fails, a fresh mint still succeeds', async (t) => {
+  const { server } = makePhoneServer(t, { unarmed: true });
+  const { token } = server.mintEnrollment();
+
+  const first = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token) });
+  assert.equal(first.status, 200);
+  assert.match(first.body.bearer, /^[0-9a-f]{48,}$/);
+
+  const replay = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token) });
+  assert.equal(replay.status, 401);
+  assert.deepEqual(replay.body, PHONE_AUTH_FAIL_BODY_SHAPE);
+
+  // Positive half: burning everything cannot be what satisfies the negative
+  // half alone (D-40) — a freshly minted token still succeeds.
+  const { token: token2 } = server.mintEnrollment();
+  const second = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token2) });
+  assert.equal(second.status, 200);
+  assert.match(second.body.bearer, /^[0-9a-f]{48,}$/);
+  assert.notEqual(second.body.bearer, first.body.bearer);
+});
+
+test('an expired enrollment token fails against an already-armed phone; re-minting invalidates its predecessor', async (t) => {
+  // Armed independently of the token under test (a bearer already issued from
+  // an earlier pairing) — otherwise letting the ONLY-ever-minted token expire
+  // with nothing else armed correctly re-darkens the whole /phone/** surface
+  // (the dark-state 404, tested separately) rather than reaching the compare
+  // at all. This mirrors the realistic shape: an old/photographed token
+  // presented while the phone is currently live.
+  const clock = makeClock();
+  const { server } = makePhoneServer(t, { unarmed: true, opts: { now: clock.now } });
+  const bootstrap = server.mintEnrollment();
+  const armVia = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(bootstrap.token) });
+  assert.equal(armVia.status, 200);
+
+  const { token, expiresAt } = server.mintEnrollment();
+  assert.ok(expiresAt > clock.now());
+  clock.advance(11 * 60_000); // past the 10-minute TTL
+  const expired = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token) });
+  assert.equal(expired.status, 401);
+  assert.deepEqual(expired.body, PHONE_AUTH_FAIL_BODY_SHAPE);
+
+  // Re-mint invalidates the predecessor even before its own TTL would have
+  // lapsed.
+  const first = server.mintEnrollment();
+  const second = server.mintEnrollment();
+  const oldReq = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(first.token) });
+  assert.equal(oldReq.status, 401, 'the first mint is dead the instant the second is drawn');
+  const newReq = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(second.token) });
+  assert.equal(newReq.status, 200);
+});
+
+test('the ONLY-ever enrollment expiring with no bearer issued re-darkens the whole /phone/** surface', async (t) => {
+  const clock = makeClock();
+  const { server } = makePhoneServer(t, { unarmed: true, opts: { now: clock.now } });
+  server.mintEnrollment();
+  clock.advance(11 * 60_000);
+  const res = await request(server, { method: 'GET', url: '/phone/index.html' });
+  assert.equal(res.status, 404, 'nothing was ever completed, so the door goes dark again, not merely unauthorized');
+  assert.deepEqual(res.body, { ok: false, error: 'not found' });
+});
+
+test('the bearer is header-only: a query-param presentation is refused, the header is accepted', async (t) => {
+  const { server } = makePhoneServer(t, { unarmed: true });
+  const { token } = server.mintEnrollment();
+  const enrolled = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token) });
+  const bearer = enrolled.body.bearer;
+
+  const viaQuery = await request(server, { method: 'GET', url: `/phone/api/asks?token=${bearer}` });
+  assert.equal(viaQuery.status, 401, 'no phone credential may be accepted from a query parameter (D-20)');
+
+  const viaHeader = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(bearer) });
+  assert.equal(viaHeader.status, 200);
+});
+
+test('every auth failure on /phone/api/** is byte-identical: absent, wrong bearer, burned, expired, unknown route', async (t) => {
+  const clock = makeClock();
+  const { server } = makePhoneServer(t, { unarmed: true, opts: { now: clock.now } });
+  const { token } = server.mintEnrollment();
+  const enrolled = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token) });
+  const bearer = enrolled.body.bearer;
+
+  const absent = await request(server, { method: 'GET', url: '/phone/api/asks' });
+  const wrong = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders('f'.repeat(48)) });
+  const burned = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token) });
+  const { token: t2 } = server.mintEnrollment();
+  clock.advance(11 * 60_000);
+  const expired = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(t2) });
+  const unknownRoute = await request(server, { method: 'GET', url: '/phone/api/nope', headers: bearerHeaders(bearer) });
+
+  for (const [name, res] of [['absent', absent], ['wrong', wrong], ['burned', burned], ['expired', expired], ['unknown-route', unknownRoute]]) {
+    assert.equal(res.status, 401, name);
+    assert.deepEqual(res.body, PHONE_AUTH_FAIL_BODY_SHAPE, name);
+  }
+});
+
+test('GET /phone/api/asks returns exactly what openAsks() returned, newest first, and never throws', async (t) => {
+  const fixtureAsks = [
+    { taskId: 'a', title: 'A', question: 'q1' },
+    { taskId: 'b', title: 'B', question: 'q2' },
+    { taskId: 'c', title: 'C', question: 'q3' }
+  ];
+  const { server } = makePhoneServer(t, { opts: { openAsks: () => fixtureAsks } });
+  const mint = server.mintEnrollment();
+  const ex = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(mint.token) });
+  const res = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(ex.body.bearer) });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.asks, fixtureAsks);
+
+  const { server: throws } = makePhoneServer(t, { opts: { openAsks: () => { throw new Error('boom'); } } });
+  const m2 = throws.mintEnrollment();
+  const ex2 = await request(throws, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(m2.token) });
+  const res2 = await request(throws, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(ex2.body.bearer) });
+  assert.equal(res2.status, 200);
+  assert.deepEqual(res2.body, { ok: true, asks: [] });
+});
+
+test('POST /phone/api/answer calls answerAsk with the exact trimmed args, and refuses an oversized body', async (t) => {
+  const calls = [];
+  const { server } = makePhoneServer(t, {
+    opts: { answerAsk: (taskId, answer) => { calls.push({ taskId, answer }); return true; } }
+  });
+  const mint = server.mintEnrollment();
+  const ex = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(mint.token) });
+  const bearer = ex.body.bearer;
+
+  const res = await request(server, {
+    method: 'POST', url: '/phone/api/answer', headers: bearerHeaders(bearer),
+    body: JSON.stringify({ taskId: 'webhook-abc123', answer: '  yes, ship it  ' })
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { ok: true });
+  assert.deepEqual(calls, [{ taskId: 'webhook-abc123', answer: 'yes, ship it' }]);
+
+  const oversized = 'x'.repeat(9 * 1024);
+  const big = await request(server, {
+    method: 'POST', url: '/phone/api/answer', headers: bearerHeaders(bearer),
+    body: JSON.stringify({ taskId: 'webhook-abc123', answer: oversized })
+  });
+  assert.equal(big.status, 413);
+  assert.equal(calls.length, 1, 'answerAsk must never be invoked for an oversized body');
+});
+
+test('the lockout engages after PHONE_LOCKOUT_FAILURES and clears after PHONE_LOCKOUT_MS', async (t) => {
+  const clock = makeClock();
+  const { server } = makePhoneServer(t, { unarmed: true, opts: { now: clock.now } });
+  const { token } = server.mintEnrollment();
+  const enrolled = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(token) });
+  const bearer = enrolled.body.bearer;
+
+  for (let i = 0; i < 5; i++) {
+    const res = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders('bad'.repeat(20)) });
+    assert.equal(res.status, 401);
+  }
+  const stillLocked = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(bearer) });
+  assert.equal(stillLocked.status, 401, 'the NEXT VALID credential is still refused while locked out');
+
+  clock.advance(31_000);
+  const cleared = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(bearer) });
+  assert.equal(cleared.status, 200, 'the lockout provably clears');
 });
 
 test('start() alone opens no tunnel — DAEMON-05\'s off-by-default clause, proven as behaviour not grep', async (t) => {

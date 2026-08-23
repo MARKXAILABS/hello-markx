@@ -497,7 +497,160 @@ export class WebhookServer {
       json(res, 429, { ok: false, error: 'rate limited' }); return;
     }
     if (!this.phoneArmed()) { json(res, 404, { ok: false, error: 'not found' }); return; }
+    if (rest[0] === 'api') { this.handlePhoneApi(req, res, rest.slice(1)); return; }
     this.handlePhoneStatic(req, res, rest);
+  }
+
+  /**
+   * `/phone/api/**` — every failure here answers `PHONE_AUTH_FAIL_BODY` (401),
+   * byte-identical to the main endpoint gate's: an expired enrollment token, a
+   * burned one, a wrong bearer, an absent header and an unknown route are all
+   * indistinguishable (D-19/D-24). The static shell above gives up
+   * no-enumeration by necessity (T-P02-05-10); this surface keeps it.
+   */
+  private handlePhoneApi(req: IncomingMessage, res: ServerResponse, rest: string[]): void {
+    const route = rest[0] ?? '';
+    const method = req.method ?? '';
+    if (route === 'enroll' && method === 'POST') { this.handlePhoneEnroll(req, res); return; }
+    if (route === 'asks' && method === 'GET') { this.handlePhoneAsks(req, res); return; }
+    if (route === 'answer' && method === 'POST') { this.handlePhoneAnswer(req, res); return; }
+    json(res, 401, PHONE_AUTH_FAIL_BODY);
+  }
+
+  /** True while the shared `/phone/api/**` lockout is engaged. GLOBAL, not
+   *  per-client — every caller behind the tunnel presents the tunnel's own IP
+   *  (this class's own long-standing comment on `windows`), so per-client
+   *  lockout is not available here and this one is remotely DoS-able by
+   *  anyone who knows the URL. Accepted and bounded (T-P02-05-09): short,
+   *  and PROVABLY clears (see the paired unit test). */
+  private phoneLockedOut(): boolean {
+    return this.now() < this.phoneLockedUntil;
+  }
+
+  private recordPhoneAuthFailure(): void {
+    this.phoneAuthFailures += 1;
+    if (this.phoneAuthFailures >= PHONE_LOCKOUT_FAILURES) {
+      this.phoneLockedUntil = this.now() + PHONE_LOCKOUT_MS;
+    }
+  }
+
+  private recordPhoneAuthSuccess(): void {
+    this.phoneAuthFailures = 0;
+    this.phoneLockedUntil = 0;
+  }
+
+  /**
+   * The enrollment→bearer exchange (D-19). Single-use: the token is burned
+   * BEFORE the response is written, so a replayed or photographed QR cannot
+   * mint a second bearer (T-P02-05-03). An absent enrollment (never minted,
+   * already burned, or expired) still runs a real compare against the
+   * per-process decoy, so "nothing pending" costs the same as "wrong token".
+   * The bearer is generated (`randomBytes`), never chosen — there is no
+   * password on this surface and there must never be one (DAEMON-05).
+   */
+  private handlePhoneEnroll(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.allowRequest(PHONE_AUTH_BUCKET, PHONE_AUTH_RATE_LIMIT)) {
+      json(res, 429, { ok: false, error: 'rate limited' }); return;
+    }
+    if (this.phoneLockedOut()) { json(res, 401, PHONE_AUTH_FAIL_BODY); return; }
+
+    const provided = req.headers['x-md-phone-enroll'];
+    const live = this.phoneEnrollment && this.now() <= this.phoneEnrollment.expiresAt
+      ? this.phoneEnrollment : null;
+    const candidateHash = live ? live.hash : sha256(this.decoySecret);
+    const equal = typeof provided === 'string' && timingSafeEqual(sha256(provided), candidateHash);
+    if (!equal || !live) {
+      this.recordPhoneAuthFailure();
+      json(res, 401, PHONE_AUTH_FAIL_BODY);
+      return;
+    }
+
+    // Burn BEFORE responding — a replay of the same token must fail.
+    this.phoneEnrollment = null;
+    const bearer = randomBytes(24).toString('hex');
+    this.phoneBearerDigests.add(sha256(bearer).toString('hex'));
+    this.recordPhoneAuthSuccess();
+    json(res, 200, { ok: true, bearer });
+  }
+
+  /** Constant-time membership against every issued bearer digest.
+   *  `Authorization: Bearer <t>` ONLY — no query-param fallback, no cookie
+   *  (D-20 — the rejected alternatives stay rejected). The phone bearer never
+   *  rides a URL. */
+  private verifyPhoneBearer(req: IncomingMessage): boolean {
+    const header = req.headers['authorization'];
+    if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+    const token = header.slice('Bearer '.length).trim();
+    if (!token) return false;
+    const digest = sha256(token).toString('hex');
+    let matched = false;
+    for (const d of this.phoneBearerDigests) {
+      if (timingSafeEqual(Buffer.from(digest), Buffer.from(d))) matched = true;
+    }
+    return matched;
+  }
+
+  /** The auth bucket + lockout + bearer check every `/phone/api/**` data
+   *  route shares. Returns false (having already answered the response)
+   *  when the request should not proceed. */
+  private phoneAuthGate(req: IncomingMessage, res: ServerResponse): boolean {
+    if (!this.allowRequest(PHONE_AUTH_BUCKET, PHONE_AUTH_RATE_LIMIT)) {
+      json(res, 429, { ok: false, error: 'rate limited' }); return false;
+    }
+    if (this.phoneLockedOut() || !this.verifyPhoneBearer(req)) {
+      if (!this.phoneLockedOut()) this.recordPhoneAuthFailure();
+      json(res, 401, PHONE_AUTH_FAIL_BODY);
+      return false;
+    }
+    this.recordPhoneAuthSuccess();
+    return true;
+  }
+
+  /** GET /phone/api/asks — the floor's open human-feedback asks, newest
+   *  first (UI-SPEC S5 screen 1). Absent/throwing `openAsks` → an empty list,
+   *  never a 500. */
+  private handlePhoneAsks(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.phoneAuthGate(req, res)) return;
+    let asks: PhoneAsk[] = [];
+    try { asks = this.openAsksFn ? this.openAsksFn() : []; } catch { asks = []; }
+    json(res, 200, { ok: true, asks });
+  }
+
+  /** POST /phone/api/answer — write the phone's answer through the injected
+   *  `answerAsk` thunk. The body is capped far below `MAX_BODY_BYTES` (this
+   *  text becomes an instruction inside an agent's terminal — T-P02-05-11,
+   *  and the boundary is the only place it is bounded at all: no content
+   *  filtering exists past this cap) and `taskId` is charset-restricted;
+   *  both are refused with 400 BEFORE `answerAsk` is ever called. */
+  private handlePhoneAnswer(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.phoneAuthGate(req, res)) return;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let aborted = false;
+    req.on('data', (c: Buffer) => {
+      if (aborted) return;
+      size += c.length;
+      if (size > PHONE_MAX_BODY_BYTES) {
+        aborted = true; json(res, 413, { ok: false, error: 'too large' }); req.destroy(); return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      let parsed: unknown;
+      try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { json(res, 400, { ok: false, error: 'bad json' }); return; }
+      const body = (parsed ?? {}) as Record<string, unknown>;
+      const taskId = typeof body.taskId === 'string' ? body.taskId : '';
+      const answer = typeof body.answer === 'string' ? body.answer.trim() : '';
+      if (!PHONE_TASK_ID_RE.test(taskId) || !answer) {
+        json(res, 400, { ok: false, error: 'bad request' }); return;
+      }
+      let ok = false;
+      try { ok = this.answerAskFn ? this.answerAskFn(taskId, answer) : false; } catch { ok = false; }
+      json(res, 200, { ok });
+    });
+    req.on('error', () => { if (!aborted) { try { res.writeHead(400); res.end(); } catch { /* socket gone */ } } });
   }
 
   /**
