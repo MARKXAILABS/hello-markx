@@ -447,11 +447,9 @@ export function installGrokHooks(root: string | null, nodeRun: NodeRunFn): void 
   } catch (e) { console.error('[hive] installGrokHooks failed:', e); }
 }
 
-/** Claude Code settings that route every relevant hook through the shim, plus
- *  (W3) the default MCP bundle merged into this PER-SESSION settings file. cwd
- *  scopes the filesystem/git servers; cfg (the consent map) gates which servers
- *  are written. Claude-only — this is invoked solely on the Claude spawn path. */
-export function hookSettings(shim: string, cwd: string, cfg: McpDefaultsMap, theme: 'light' | 'dark' | undefined, nodeRun: NodeRunFn): unknown {
+/** Claude Code settings that route every relevant hook through the shim.
+ *  Claude-only — this is invoked solely on the Claude spawn path. */
+export function hookSettings(shim: string, theme: 'light' | 'dark' | undefined, nodeRun: NodeRunFn): unknown {
   // Bundled node, NOT bare `node` — see nodeLauncherPath(). Claude runs each of
   // these through `sh -c` with a stripped PATH, where `node` is often absent.
   const cmd = nodeRun(shim);
@@ -459,7 +457,6 @@ export function hookSettings(shim: string, cwd: string, cfg: McpDefaultsMap, the
     ...(matcher ? { matcher } : {}),
     hooks: [{ type: 'command', command: cmd }]
   });
-  const mcpServers = buildDefaultMcpServers(cwd, cfg);
   return {
     // The standing HITL backstop — see AGENT_DENY_RULES. `deny` is the one
     // permission surface that survives `--permission-mode bypassPermissions`,
@@ -471,11 +468,12 @@ export function hookSettings(shim: string, cwd: string, cfg: McpDefaultsMap, the
     // PER SESSION, so the user's global Claude theme (their own terminals
     // outside the app) is never touched.
     ...(theme ? { theme } : {}),
-    // W3 — default skills/MCP bundle. Written into the PER-SESSION settings file
-    // only (never ~/.claude), so the user's own MCP servers are never clobbered;
-    // Claude merges this additively. Omitted entirely when empty so a settings
-    // file with no enabled servers is unchanged from before.
-    ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
+    // MEASURED (scripts/mcp-live-probe.cjs, claude 2.1.236, plan 02-11): an
+    // `mcpServers` key inside this settings file is IGNORED — claude never
+    // spawns that server, in either a --strict-mcp-config or a plain run. The
+    // default-MCP bundle moved to `<agentDir>/mcp.json`, passed via
+    // `--mcp-config` at hive.ts's bootstrap seam. Do not put it back here
+    // without re-running the probe.
     // The status line gets the session status JSON after every response —
     // including context_window.{total_input_tokens,context_window_size},
     // the only clean programmatic source for the session's REAL context
@@ -505,10 +503,22 @@ export function hookSettings(shim: string, cwd: string, cfg: McpDefaultsMap, the
  * of the same name in the user's own ~/.claude is never clobbered. A write/secret
  * server is included ONLY on an explicit `enabled:true` consent — never via a
  * default — so a malformed/partial config can't silently arm a keyed server.
+ *
+ * D-28 (`opts.secretFor`, optional so every pre-W3 caller keeps compiling
+ * unchanged): a write/secret entry additionally needs its key RESOLVED. An
+ * entry declaring no env key arms exactly as before (the tier predicate
+ * above is untouched). An entry declaring exactly one env key is armed only
+ * when `secretFor(e.id)` returns a non-empty string, materialized into that
+ * one declared key. An entry declaring MORE than one env key is never
+ * armed — one grant is one key, and a multi-key entry has no consent surface
+ * to fill the second one. An unkeyed write/secret server is worse than an
+ * absent one: consent without a live credential is a card showing a server
+ * that can never start.
  */
 export function buildDefaultMcpServers(
   cwd: string,
-  cfg: McpDefaultsMap
+  cfg: McpDefaultsMap,
+  opts?: { secretFor?: (mcpId: string) => string | undefined }
 ): Record<string, { command: string; args: string[]; env?: Record<string, string> }> {
   const out: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
   for (const e of MCP_CATALOG) {
@@ -519,14 +529,41 @@ export function buildDefaultMcpServers(
     // never ride in on a default (the catalog already ships these OFF, but this
     // guards a hand-edited/partial mcpDefaults map too).
     if (e.tier !== 'safe-readonly' && consented !== true) continue;
+    const envKeys = e.spec.env ? Object.keys(e.spec.env) : [];
+    if (envKeys.length > 1) continue; // D-28: one grant is one key — never armed
+    let env: Record<string, string> | undefined;
+    if (envKeys.length === 1) {
+      const secret = opts?.secretFor?.(e.id);
+      if (!secret) continue; // D-28: not armed — consent without a resolvable key
+      env = { [envKeys[0]]: secret };
+    }
     // Replace the `<cwd>` placeholder (filesystem/git) with the agent cwd at merge
     // time so these stay strictly workspace-scoped.
     const args = e.spec.args.map((a) => (a === '<cwd>' ? cwd : a));
     out[`hellomarkx-${e.id}`] = {
       command: e.spec.command,
       args,
-      ...(e.spec.env ? { env: e.spec.env } : {})
+      ...(env ? { env } : {})
     };
+  }
+  return out;
+}
+
+/**
+ * D-27, exactly: "a change of WHERE the `cfg` boolean is read from" — never a
+ * rewrite of the predicate that reads it. Per catalog entry: `safe-readonly`
+ * reads the FLOOR-wide map (that tier stays floor-wide by decision; no
+ * per-agent override exists), everything else reads the per-AGENT grant map.
+ * Never invents a value neither map mentions — an id absent from both stays
+ * absent, so `buildDefaultMcpServers`' own `consented ?? e.defaultEnabled`
+ * keeps behaving exactly as it does today.
+ */
+export function effectiveMcpConsent(floor: McpDefaultsMap, grants: McpDefaultsMap): McpDefaultsMap {
+  const out: { [id: string]: { enabled: boolean } } = {};
+  for (const e of MCP_CATALOG) {
+    const source = e.tier === 'safe-readonly' ? floor : grants;
+    const entry = source?.[e.id];
+    if (entry) out[e.id] = entry;
   }
   return out;
 }

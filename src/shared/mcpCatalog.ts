@@ -1,7 +1,14 @@
 /**
  * Default MCP server catalog (Workstream 3). A dependency-free, importable-by-both
  * (main + renderer) registry of the MCP servers Hello MarkX can wire into each
- * agent's per-session `settings.json`. Keep it free of electron/UI/node imports.
+ * agent. Keep it free of electron/UI/node imports.
+ *
+ * MEASURED (scripts/mcp-live-probe.cjs, claude 2.1.236, plan 02-11): an
+ * `mcpServers` key inside a `--settings <file>.json` file is ignored — Claude
+ * Code never spawns that server. The bundle is written instead to
+ * `<agentDir>/mcp.json` and passed via `--mcp-config <file>` at hive.ts's
+ * bootstrap seam (DAEMON-04). Re-run the probe before ever trusting the
+ * `--settings` channel again.
  *
  * Tiers gate consent:
  *   - 'safe-readonly' → no secret, no destructive write OUTSIDE the agent cwd; shipped
@@ -169,4 +176,35 @@ export function defaultMcpDefaults(): Record<string, { enabled: boolean }> {
   const out: Record<string, { enabled: boolean }> = {};
   for (const e of MCP_CATALOG) out[e.id] = { enabled: e.defaultEnabled };
   return out;
+}
+
+/** The single derivation of an MCP grant's secret ref key, shared by
+ *  `mcp:grant`, `mcp:revoke` and `resetConfig`'s sweep (D-28) — so those three
+ *  call sites can never key an agent-server pair three slightly different
+ *  ways. Always used as `secretRefFor(mcpGrantKey(agentId, mcpId))`; nothing
+ *  else may construct one of these refs. */
+export function mcpGrantKey(agentId: string, mcpId: string): string {
+  return `mcp:${agentId}:${mcpId}`;
+}
+
+/** The prefix every MCP grant key shares — `secretRefFor(MCP_GRANT_PREFIX)` is
+ *  what `resetConfig` sweeps to drop the whole grant-secret family without
+ *  enumerating every agent/server pair that ever existed. */
+export const MCP_GRANT_PREFIX = 'mcp:';
+
+/** Providers whose spawn path actually writes `<agentDir>/mcp.json` and passes
+ *  `--mcp-config` — the one channel `scripts/mcp-live-probe.cjs` live-verified
+ *  (D-25). D-26: nine other engines have a DOCUMENTED per-agent MCP surface
+ *  and NONE of them are wired here. This answers "does this build write this
+ *  engine's channel" — a different question from Rule C-1b's `supportsMcp` on
+ *  the provider preset (`src/shared/agentProvider.ts`, plan 02-07's file, not
+ *  this one), which answers "can this engine take MCP at all". Conflating the
+ *  two is how a capability card starts lying about a channel nothing writes. */
+export const MCP_WIRED_PROVIDERS: readonly string[] = ['claude'];
+
+/** Whether `provider`'s spawn path is one of the wired channels above. Typed
+ *  as a bare `string` (not `AgentProvider`) so this module never imports
+ *  `agentProvider.ts` and stays dependency-free. */
+export function mcpWiredFor(provider: string): boolean {
+  return MCP_WIRED_PROVIDERS.includes(provider);
 }

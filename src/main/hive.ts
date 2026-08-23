@@ -36,7 +36,7 @@ import {
   bridgeOf,
   type AgentProvider
 } from '../shared/agentProvider';
-import { MCP_CATALOG } from '../shared/mcpCatalog';
+import { MCP_CATALOG, mcpWiredFor } from '../shared/mcpCatalog';
 import { expandTilde } from './fs';
 import { memoryBin } from './memory';
 import {
@@ -54,7 +54,8 @@ import {
   installOpenCodePlugin,
   installCrushConfig,
   installGrokHooks,
-  hookSettings
+  hookSettings,
+  buildDefaultMcpServers
 } from './hiveProvisioning';
 import type { TerminalWorkOrder } from '../shared/queueDelivery';
 
@@ -343,8 +344,12 @@ function shortRand(): string {
  *  SECRET_SCAN_MAX_LINES, commits UNSCANNED when the staged diff cannot be
  *  read, matches on a redactSecrets regex battery rather than on knowing what
  *  the file IS, and carries a `harnessAuthored` bypass — none of which is a
- *  substitute for the credential never being staged in the first place. */
-const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/', 'kimi-config.toml'];
+ *  substitute for the credential never being staged in the first place.
+ *  `mcp.json` (DAEMON-04, plan 02-11) is the same KIND of entry as
+ *  `kimi-config.toml`: a live per-agent credential (a write/secret MCP
+ *  server's API key, in `env`), not mere churn — same fail-closed reasoning,
+ *  same append-only migration for existing agents for free. */
+const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/', 'kimi-config.toml', 'mcp.json'];
 
 /** Idempotently ensure `<agentDir>/.gitignore` excludes the non-memory files.
  *  Append-only: writes only the missing lines, leaving any existing entries. */
@@ -1127,8 +1132,36 @@ export class HiveManager {
     if (sock && shim) {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
-      this.writeJson(settingsPath, hookSettings(shim, meta.cwd, opts.mcpDefaults, opts.theme, this.nodeRun.bind(this)));
+      this.writeJson(settingsPath, hookSettings(shim, opts.theme, this.nodeRun.bind(this)));
       args.push('--settings', settingsPath);
+
+      // DAEMON-04 — the default-MCP bundle rides `--mcp-config`, the channel
+      // scripts/mcp-live-probe.cjs live-verified spawns a server (claude
+      // 2.1.236); `mcpServers` inside --settings above is a measured no-op.
+      // Gated on mcpWiredFor: claude is the one engine this build wires
+      // (D-26 — nine other engines stay documented, not built).
+      const mcpPath = join(dir, 'mcp.json');
+      const mcpServers = mcpWiredFor(meta.provider ?? 'claude') ? buildDefaultMcpServers(meta.cwd, opts.mcpDefaults) : {};
+      if (Object.keys(mcpServers).length) {
+        this.writeJson(mcpPath, { mcpServers }, 0o600);
+        args.push('--mcp-config', mcpPath);
+        // POLICY (this plan, D-25/RESEARCH §5): --strict-mcp-config is
+        // deliberate, not incidental. Without it the operator's own
+        // ~/.claude.json servers would be silently inherited by every hive
+        // agent — one already running with --permission-mode
+        // bypassPermissions would then hold tools the card never showed,
+        // using the operator's own credentials. The cost is real and is
+        // recorded in the SUMMARY: an operator who relied on their personal
+        // MCP servers inside hive agents loses them here and re-grants the
+        // catalog equivalent per agent.
+        args.push('--strict-mcp-config');
+      } else {
+        // Nothing armed (no consent, an unwired provider, or a revoke) — a
+        // STALE file must not survive to re-arm the server on the next
+        // spawn. This is what mcpArmed() reads to answer "what did the
+        // running session actually get" (D-29).
+        try { rmSync(mcpPath, { force: true }); } catch { /* best-effort */ }
+      }
     }
     return { args, env };
   }
@@ -2151,6 +2184,23 @@ export class HiveManager {
     return this.listMessages(join(this.agentDir(id), 'outbox'));
   }
 
+  /** Catalog ids actually armed in `<agentDir>/mcp.json` RIGHT NOW — what the
+   *  RUNNING session got, read straight off disk. This is the fact half of
+   *  D-29's `granted` vs `armed` split: nothing hot-reloads, so `mcp:agentState`
+   *  reports both and the renderer computes `pending · restart` from the
+   *  difference — main never asserts a live connection. `[]` when the file is
+   *  absent or unparseable; never throws. */
+  mcpArmed(agentId: string): string[] {
+    const p = join(this.agentDir(agentId), 'mcp.json');
+    if (!existsSync(p)) return [];
+    try {
+      const parsed = JSON.parse(readFileSync(p, 'utf8')) as { mcpServers?: Record<string, unknown> };
+      return Object.keys(parsed.mcpServers ?? {}).map((k) => k.replace(/^hellomarkx-/, ''));
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Voice read-layer: recent message CONTENT (inbox + outbox bodies) for the
    * operator briefing, REDACTED main-side. This is the message-content half of
@@ -2661,12 +2711,15 @@ export class HiveManager {
    * onboarding as if the floor had never existed. tmp+rename costs one extra
    * file operation; the truncation window is worth more than that.
    */
-  private writeJson(p: string, data: unknown): void {
-    this.atomicWriteJson(p, data);
+  private writeJson(p: string, data: unknown, mode?: number): void {
+    this.atomicWriteJson(p, data, mode);
   }
-  private atomicWriteJson(p: string, data: unknown): void {
+  private atomicWriteJson(p: string, data: unknown, mode?: number): void {
     const tmp = `${p}.tmp-${shortRand()}`;
-    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    // `mode`, when given, goes on the TEMP file — integrations.ts:104-108's
+    // reasoning, copied verbatim: a credential (mcp.json) must never be
+    // briefly world-readable under its final name between write and rename.
+    writeFileSync(tmp, JSON.stringify(data, null, 2), mode !== undefined ? { encoding: 'utf8', mode } : 'utf8');
     renameSync(tmp, p);
   }
 
