@@ -90,10 +90,40 @@ const fmtK = (n: number): string => `${Math.round(n / 1000)}k`;
 const MODEL_CHIP_MAX_W = 96;
 
 /**
- * S2a's STARTING value (UI-SPEC), not yet the measured final one — task 5 of
- * plan 02-06 lands the real number in its own atomic commit with the budget
- * derivation and the state of the ✎ button (`:441` as of this plan) it was
- * measured against. 152 is a multiple of 4, per S2's own table.
+ * S2a's `maxWidth`, MEASURED — plan 02-06 task 5, live Electron + the real
+ * built components at 1280/1024/800 (both shas identical: this card's width
+ * is a fixed 322px, so its internal layout does not respond to viewport
+ * width — only the true-`window.innerWidth` positive control varies).
+ * `AgentCard.tsx:542`'s ✎ glyph was still below the 14px floor (a numeric
+ * size, not a token) inside a `width: 15, height: 14` button at measurement
+ * time (Phase 1 FLOOR-12 still owns raising it; re-measure this constant
+ * when that lands).
+ *
+ * 152 is UNCHANGED from S2a's starting value — confirmed sufficient, not
+ * assumed. The budget terms, from the only scenario reachable in the shipped
+ * app today (claude is the sole MCP-wired engine — `MCP_WIRED_PROVIDERS`,
+ * `mcpCatalog.ts` — and claude carries zero capability gaps, so no gap chip
+ * ever shares this row with a real MCP grant):
+ *   contentColumn 262, MCP element (3 granted servers, capped) 152,
+ *   ✎ button 15, two 4px row gaps 8 -> note = 262-152-15-8 = **87px**, no
+ *   horizontal overflow (`scrollWidth === clientWidth === 262` on the row,
+ *   `=== 322` on the card), at all three widths.
+ *
+ * STOP-AND-REPORT, per S2a's own binding text, on the scenario the pass
+ * condition is WRITTEN against — a gap chip present together with a
+ * fully-populated MCP element: measured chip widths (real rendered element,
+ * padding included) run 89-91px across every gap combination tried
+ * (single-gap "NO REMOTE" 91px, four-gap "NO MAIL +3" 89px — the plan's own
+ * ~64px estimate for a bare chip undershoots every real one measured this
+ * session). `floor4(262 - ~90 - 15 - 12 - 80)` lands at 60-64px, BELOW the
+ * always-present "MCP {n} safe" prefix's own measured width (77px at
+ * safeCount=6) — the exact condition S2a names as unsolvable by lowering
+ * `maxWidth` further. The card's 322x86 box is NOT grown to fix this (out of
+ * scope, explicitly forbidden in flight). This combined state is NOT
+ * reachable today for the same reason the budget above holds: no non-claude
+ * engine can carry a real MCP grant yet (`mcp:grant` refuses an unwired
+ * provider). Carried forward as a stated limitation for whenever a second
+ * engine is wired.
  */
 const MCP_CHIP_MAX_W = 152;
 
