@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Phase 2 PLANNED and execution-ready: 12 plans, 9 waves. Gates: 41/41 decisions, 12/12 requirements, 12/12 threat models, 54/54 tasks with automated verify, 0 same-wave file collisions, 0 package.json refs. Assertion layer verified by executing 761 extracted commands against the tree — zero genuinely unrunnable. ~280 assertion defects fixed across 4 rounds (8 workflow-verify + 27 targeted + 163 sweep + 80 residual), plus 3 deterministic mechanical passes: 152 joiners made CRLF-safe, 6 depends_on id sets normalized, 44 grep -c converted to grep -o|wc -l on joined text. Execution-breaking defect caught: 02-01 told the executor to preserve installPiExtension/installOpencodePlugin, neither of which exists (real: installPiHooks, installOpenCodePlugin) — would have renamed two live methods. D-06 blocker CLEARED: phase 1 reached 01-31 and 01-21 landed."
-last_updated: "2026-08-22T23:16:33.388Z"
-last_activity: 2026-08-22 -- Phase 2 planning complete
+stopped_at: "Completed 02-01-PLAN.md -- hive.ts split into hiveTemplates.ts/gitCommitter.ts/hiveProvisioning.ts, STRUCT-02 delivered, ADR-0004 pinned. Whole suite 638/631/0/7 -> 642/635/0/7, 0 fail throughout. Next: 02-02."
+last_updated: "2026-08-23T09:43:06.109Z"
+last_activity: 2026-08-23
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 30
+  completed_plans: 31
   percent: 0
 ---
 
@@ -21,12 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-20)
 
 **Core value:** You can leave it running and trust it.
-**Current focus:** Phase 01 — finish-the-floor
+**Current focus:** Phase 02 — the-daemon-and-the-protocol
 
 ## Current Position
 
-Phase: 01 (finish-the-floor) — **PARTIAL, not complete**; GAP-CLOSURE WAVE 24-31 **COMPLETE**
-Plan: 30 of 31 with a SUMMARY, counted off disk (`ls …/*-SUMMARY.md | wc -l` = 30; 01-01 has
+Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
+Plan: 2 of 12
       none — its D-09 gate is unrun). The counter is NOT a cursor: this was a PARALLEL
       gap-closure wave, so plan numbers did not advance in order.
       **ALL EIGHT gap-closure plans have landed:** 01-24, 01-26, 01-27 (wave 1), 01-25, 01-28,
@@ -152,10 +152,10 @@ Status: Ready to execute
         edited this file BY HAND; 01-27 measured the corruption twice with a backup-and-diff and it
         is deterministic (the multi-line `Status:` paragraph below becomes an unquoted, truncated
         YAML `status:` scalar). That defect is now register row A35 with a named owner.**
-Last activity: 2026-08-22 -- Phase 2 planning complete
+Last activity: 2026-08-23
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [███████░░░] 70%
+Progress: [███████░░░] 72%
 
 ## Performance Metrics
 
@@ -207,6 +207,7 @@ Progress: [███████░░░] 70%
 | Phase 01 P29 | 21m | 3 tasks | 6 files |
 | Phase 01 P30 | 21m | 3 tasks | 6 files |
 | Phase 01 P31 | 48m | 3 tasks | 8 files |
+| Phase 02 P01 | 50min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -469,6 +470,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [01-26]: C-1 resolved by MEASUREMENT, not the directive's letter — (a) restores 10 of C-1's 15 shapes, not all 15, so the ship is (a) plus (b)'s declaration discipline: sk-ant-/sk-proj-/sk-svcacct- unbounded, only the bare sk- residue carrying the word boundary, and the residual 5 shapes DECLARED in truths[0], in a pinned C1_DECLARED_LOSS block and in the source ceiling. Pure (b) measured strictly worse (15 lost) with identical false-positive behaviour.
 - [Phase ?]: [01-26]: Pattern 5 is byte-frozen against a constant, and non-subtraction is a property of STATEMENT ORDER — the two sk_/rk_ arms run as their own statements AFTER pattern 5. Measured: appended inside pattern 3's alternation they lose 5 of 38 rows and leak 20 bytes of a following sk-ant- key; the same prefix fix with an in-alternation append still loses the swallow row.
 - [Phase ?]: [01-26]: A security control that trades a detection must declare the trade in three places — the plan's truths, a pinned test, and the source ceiling. An undeclared trade is the defect class this phase exists to remove; a declared one is a legitimate engineering choice.
+- [Phase 02-01]: hive.ts split for the seam PARITY-01a/02 and DAEMON-04 need, not for testability (D-07) -- five test files already loaded it under node --test — STRUCT-02's real justification is that later plans must touch the router/installers/templates and this phase opens that seam regardless
+- [Phase 02-01]: GitCommitter extracted by composition (ADR-0004 shape A), never free functions — six runtime call sites (test/hive-durability.test.cjs, test/engine-parity.test.cjs) call HiveManager.flushCommit(root) directly; free functions would break all six and violate the single-committer invariant the moment a second caller imports them
+- [Phase 02-01]: GitCommitterDeps injects root/log/redactSecrets as plain functions rather than importing back from hive.ts — keeps gitCommitter.ts electron-free with zero circular-import risk, mirroring DeliveryDeps' style
 
 ### Pending Todos
 
@@ -590,8 +594,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-22T23:16:33.375Z
-Stopped at: Phase 2 PLANNED and execution-ready: 12 plans, 9 waves. Gates: 41/41 decisions, 12/12 requirements, 12/12 threat models, 54/54 tasks with automated verify, 0 same-wave file collisions, 0 package.json refs. Assertion layer verified by executing 761 extracted commands against the tree — zero genuinely unrunnable. ~280 assertion defects fixed across 4 rounds (8 workflow-verify + 27 targeted + 163 sweep + 80 residual), plus 3 deterministic mechanical passes: 152 joiners made CRLF-safe, 6 depends_on id sets normalized, 44 grep -c converted to grep -o|wc -l on joined text. Execution-breaking defect caught: 02-01 told the executor to preserve installPiExtension/installOpencodePlugin, neither of which exists (real: installPiHooks, installOpenCodePlugin) — would have renamed two live methods. D-06 blocker CLEARED: phase 1 reached 01-31 and 01-21 landed.
+Last session: 2026-08-23T09:43:06.091Z
+Stopped at: Completed 02-01-PLAN.md -- hive.ts split into hiveTemplates.ts/gitCommitter.ts/hiveProvisioning.ts, STRUCT-02 delivered, ADR-0004 pinned. Whole suite 638/631/0/7 -> 642/635/0/7, 0 fail throughout. Next: 02-02.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
@@ -601,4 +605,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: .planning/phases/02-the-daemon-and-the-protocol/02-01-PLAN.md
+Resume file: None

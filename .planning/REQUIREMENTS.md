@@ -161,7 +161,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 - [ ] **STRUCT-01**: `src/main/index.ts` is split along its seams (agent lifecycle, shutdown,
       scheduler, workers, IPC), each extraction landing tests that cannot exist today
-- [ ] **STRUCT-02**: `src/main/hive.ts` is split (git committer, messaging, provider
+- [x] **STRUCT-02**: `src/main/hive.ts` is split (git committer, messaging, provider
       provisioning, templates)
 
 ### GATE — the trust boundary: what an agent may do, and who says yes
@@ -457,7 +457,7 @@ goals and success criteria each requirement rolls up into.
 | SCALE-04 | Phase 3 | Pending |
 | SCALE-05 | Phase 3 | Pending |
 | STRUCT-01 | Phase 2 | Pending |
-| STRUCT-02 | Phase 2 | Pending |
+| STRUCT-02 | Phase 2 | Complete |
 | GATE-01 | Phase 1 | Pending |
 | GATE-02 | Phase 4 | Pending |
 | GATE-03 | Phase 4 | Pending |
