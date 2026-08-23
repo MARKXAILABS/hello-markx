@@ -40,6 +40,7 @@ import {
   encodeAccountChoice,
   decodeAccountChoice,
   fmtCountdown,
+  capabilityGaps,
   type AgentProvider,
   type ClaudeAccount,
   type PoolSnapshot
@@ -683,6 +684,32 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
             ))}
           </Select>
         </div>
+        {(() => {
+          // S1c — informs, never vetoes: the picker is a SUGGESTION the god
+          // may decline (this file's own dispatch() comment), so this line
+          // never disables the <Select> or the dispatch button below. The
+          // sentence comes from capabilityGaps' own 'mail' entry — never a
+          // second hand-written copy of it (D-32).
+          const suggested = dispatchTo ? agents.find((a) => a.id === dispatchTo) : undefined;
+          if (!suggested) return null;
+          const suggestedProvider = inferAgentProvider(suggested.command, suggested.provider);
+          const gaps = capabilityGaps(suggestedProvider, window.cth.platform, suggested.name);
+          const mailGap = gaps.find((g) => g.key === 'mail');
+          if (!mailGap) return null;
+          return (
+            <div
+              role="status"
+              style={{
+                display: 'flex', gap: 4, alignItems: 'baseline', marginBottom: 6,
+                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: 'var(--cth-text-body-md)' }}>⚠</span>
+              {mailGap.sentence}
+            </div>
+          );
+        })()}
         <textarea
           value={dispatchText}
           onChange={(e) => setDispatchText(e.target.value)}
