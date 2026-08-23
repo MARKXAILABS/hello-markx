@@ -24,7 +24,7 @@ jobs:
     name: Verify advertised download links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -47,7 +47,7 @@ jobs:
           - os: ubuntu-latest
             args: --linux
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Node 22, matching .nvmrc and package.json `engines`. Node 24 has no
       # better-sqlite3 prebuild and breaks node-pty's winpty gyp build.
@@ -201,7 +201,7 @@ jobs:
       id-token: write # mint the OIDC token Sigstore signs the provenance with
       attestations: write # persist the attestation against this repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
