@@ -127,6 +127,18 @@ export interface AgentProviderPreset {
    *  Required, deliberately: a new provider must state its answer instead of
    *  inheriting a flattering default. */
   costTracking: CostTracking;
+  /** Whether this ENGINE accepts MCP servers at all (the CLI-level capability —
+   *  can it be pointed at an MCP server config, at all).
+   *  This does NOT mean Hello MarkX actually DELIVERS an MCP server to it today:
+   *  D-25 live-verified, across three runs against a real `claude` binary, that
+   *  today's `mcpServers` bundle inside a `--settings` file is a complete no-op
+   *  for every engine — plan 02-11 owns the `--mcp-config` channel that would
+   *  make this bit mean something operationally. This field only answers the
+   *  CLI's own capability, surfaced to the UI as `ProviderCapabilities.mcp`
+   *  (UI-SPEC Rule C-1b).
+   *  Required, deliberately, for the same reason `costTracking` above is: a new
+   *  provider must state its answer instead of inheriting a flattering default. */
+  supportsMcp: boolean;
   /** Whether the router may DELIVER inbox mail to this provider (vs bouncing it
    *  to the god). Requires lifecycle status so the renderer can deliver only at a
    *  safe idle prompt: Claude natively, Antigravity/Codex/Grok via hook bridges.
@@ -184,6 +196,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'claude',
     costTracking: 'otel', // live OTel + the ~/.claude/projects transcript fallback
+    supportsMcp: true, // D-26: claude has native, documented, production MCP support
     label: 'Claude Code',
     defaultCommand: 'claude',
     commandGroups: CLAUDE_COMMAND_GROUPS,
@@ -210,6 +223,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'codex',
     costTracking: 'transcript', // rollouts under the per-agent CODEX_HOME (readCodexUsage)
+    supportsMcp: true, // D-26: codex documents MCP server support
     label: 'Codex · GPT',
     defaultCommand: 'codex',
     commandGroups: CODEX_COMMAND_GROUPS,
@@ -259,6 +273,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'grok',
     costTracking: 'none', // hook bridge carries lifecycle only, no usage
+    supportsMcp: true, // D-26: grok documents MCP server support
     label: 'Grok · xAI',
     defaultCommand: 'grok',
     commandGroups: GROK_COMMAND_GROUPS,
@@ -281,6 +296,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'kimi',
     costTracking: 'none',
+    supportsMcp: true, // D-26: kimi documents MCP server support
     label: 'Kimi Code',
     defaultCommand: 'kimi',
     commandGroups: [],
@@ -299,6 +315,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'antigravity',
     costTracking: 'none', // agy's hooks carry no usage; ~/.gemini has no token ledger we read
+    supportsMcp: true, // D-26: antigravity documents MCP support; per-agent surface UNVERIFIED (plan 02-11)
     label: 'Antigravity · Gemini',
     defaultCommand: 'agy',
     commandGroups: [],
@@ -319,6 +336,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // bridge (bridge.kind==='proxy'), with the OpenAI usage/tool-call shape.
     id: 'qwen',
     costTracking: 'proxy', // sidecar CostSample → telemetry.recordCostSample
+    supportsMcp: true, // D-26: qwen (gemini-cli fork) documents MCP server support
     label: 'Qwen (local available)',
     defaultCommand: 'qwen',
     commandGroups: [],
@@ -344,6 +362,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // its interactive TUI in a PTY (like codex), oriented by --prompt.
     id: 'opencode',
     costTracking: 'none', // the plugin bridge posts lifecycle events only
+    supportsMcp: true, // D-26: opencode documents MCP server support
     label: 'OpenCode',
     defaultCommand: 'opencode',
     commandGroups: [],
@@ -416,6 +435,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // loopback sidecar observes its LLM traffic and SYNTHESIZES the Stop→drain.
     id: 'crush',
     costTracking: 'proxy', // same sidecar path as qwen
+    supportsMcp: true, // D-26: crush documents MCP server support
     label: 'Crush · Charm',
     defaultCommand: 'crush',
     commandGroups: [],
@@ -462,6 +482,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // and auto-approves tools — a `hooks` bridge with a new `pi` shim.
     id: 'pi',
     costTracking: 'none', // the extension posts lifecycle events only
+    supportsMcp: false, // D-26: pi has no native MCP support — needs a third-party adapter
     label: 'Pi',
     defaultCommand: 'pi',
     commandGroups: [],
@@ -499,6 +520,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // hive identity+protocol rides in as the initial prompt via `-p`.
     id: 'copilot',
     costTracking: 'none', // spend sits on the user's Copilot plan; nothing per-agent reaches us
+    supportsMcp: true, // D-26: the GitHub Copilot CLI documents MCP server support
     label: 'Copilot',
     defaultCommand: 'copilot',
     commandGroups: [],
@@ -525,6 +547,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'custom',
     costTracking: 'none', // unknown binary — nothing to read
+    supportsMcp: false, // D-26: arbitrary binary — no known MCP surface to claim
     label: 'Custom',
     defaultCommand: '',
     commandGroups: [],

@@ -547,17 +547,49 @@ test('the capability line names the other two gaps too', () => {
   assert.match(capabilityLine('copilot'), /NO MAIL .*spend UNTRACKED.*NO COMPACT/);
 });
 
-test('every engine answers all four capability questions', () => {
+test('every engine answers all five capability questions', () => {
   for (const p of ['claude', 'codex', 'grok', 'kimi', 'antigravity', 'qwen',
     'opencode', 'crush', 'pi', 'copilot', 'custom']) {
     const c = providerCapabilities(p);
     assert.equal(typeof c.mail, 'boolean', p);
+    // FLOOR-18 / Rule C-1b — a missing bit reads as `undefined`, which is
+    // falsy, which would silently SHOUT the gap at every engine. Type it,
+    // don't truth it — same reasoning as the `remote` assertion below.
+    assert.equal(typeof c.mcp, 'boolean', p);
     assert.ok(['otel', 'proxy', 'transcript', 'none'].includes(c.spend), `${p}: ${c.spend}`);
     assert.ok(c.compact === null || typeof c.compact === 'string', p);
-    // FLOOR-18 — a missing `remote` reads as `undefined`, which is falsy, which
-    // would silently SHOUT the Windows gap at every engine. Type it, don't truth it.
     assert.equal(typeof c.remote, 'boolean', p);
   }
+});
+
+// Rule C-1b — the eleven `mcp` values against an explicit committed map, so a
+// preset that flips goes red rather than being absorbed by the `typeof` check
+// above. D-26's scoreboard: pi and custom have no native MCP surface; the
+// other nine do (antigravity's per-agent surface is UNVERIFIED but the CLI
+// capability itself is documented).
+test('the mcp bit matches D-26\'s per-engine scoreboard exactly', () => {
+  const expected = {
+    claude: true, codex: true, grok: true, kimi: true, antigravity: true,
+    qwen: true, opencode: true, crush: true, pi: false, copilot: true, custom: false
+  };
+  for (const [p, mcp] of Object.entries(expected)) {
+    assert.equal(providerCapabilities(p).mcp, mcp, `${p}: expected mcp=${mcp}`);
+  }
+});
+
+// Rule C-1b's closing sentence: capabilityLine's STRING is not extended with
+// an MCP clause. Named for what it pins, not for what it counts.
+test('capabilityLine did not grow an MCP clause', () => {
+  assert.equal(capabilityLine('claude').split(', ').length, 4);
+  assert.ok(!/mcp/i.test(capabilityLine('pi')), capabilityLine('pi'));
+});
+
+// Both arities pinned together (UI-SPEC Rule C-1a / D-40): providerCapabilities
+// gained an optional platform parameter for the renderer; capabilityLine did
+// not grow one, ever — it stays a one-argument prompt-string builder.
+test('providerCapabilities took an optional platform; capabilityLine stayed one argument', () => {
+  assert.equal(providerCapabilities.length, 2);
+  assert.equal(capabilityLine.length, 1);
 });
 
 // FLOOR-18 — Codex-on-Windows is a DECLARED limitation (D-39/D-40), so the

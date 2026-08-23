@@ -67,6 +67,19 @@ test('codex preset still resolves (no regression)', () => {
   assert.strictEqual(ap.providerPreset('codex').defaultCommand, 'codex');
 });
 
+test('every preset states a required supportsMcp bit (Rule C-1b)', () => {
+  const byId = Object.fromEntries(ap.AGENT_PROVIDER_PRESETS.map((p) => [p.id, p]));
+  assert.strictEqual(Object.keys(byId).length, 11, 'expected all eleven presets');
+  for (const p of ap.AGENT_PROVIDER_PRESETS) {
+    assert.strictEqual(typeof p.supportsMcp, 'boolean', `${p.id}.supportsMcp must be a boolean`);
+  }
+  assert.strictEqual(byId.pi.supportsMcp, false, 'pi has no native MCP support');
+  assert.strictEqual(byId.custom.supportsMcp, false, 'custom is an arbitrary binary — no known MCP surface');
+  for (const id of ['claude', 'codex', 'grok', 'kimi', 'antigravity', 'qwen', 'opencode', 'crush', 'copilot']) {
+    assert.strictEqual(byId[id].supportsMcp, true, `${id} documents MCP server support`);
+  }
+});
+
 if (failures > 0) {
   console.log(`\n${failures} test(s) failed`);
   process.exit(1);
