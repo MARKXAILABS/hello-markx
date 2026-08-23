@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-05-PLAN.md
-last_updated: "2026-08-23T17:34:01.634Z"
+stopped_at: Completed 02-06-PLAN.md
+last_updated: "2026-08-24T00:00:00.000Z"
 progress:
   total_phases: 6
   completed_phases: 0
@@ -25,12 +25,13 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plans complete: **7 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+Plans complete: **8 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
       The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
-      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-07, 02-11**.
-      Outstanding: 02-06, 02-08, 02-09, 02-10, 02-12.
-      Next wave: **the rest of wave 6 = 02-06, 02-08** (both depend on 02-11's MCP data contract;
-      02-05 — the phone's door — has now also landed in this same wave).
+      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-11**.
+      Outstanding: 02-08, 02-09, 02-10, 02-12.
+      Next wave: **02-08** (wave 6's other half, depends on 02-11's MCP data contract; 02-06 — this
+      plan — is a recovery closeout: 5 task commits had already landed from a prior killed session,
+      independently re-verified this session rather than re-executed, then closed out with a SUMMARY).
 
 Execution facts as of this line:
 
@@ -43,9 +44,10 @@ Execution facts as of this line:
 - `workflow.use_worktrees=false`, so every plan runs sequentially on the main tree. No worktree
   merges, no post-merge reconciliation.
 
-- Whole-suite figure re-measured by the ORCHESTRATOR after every plan, never SUMMARY-trusted:
-  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> 728/721/0/7 after 02-11 -> **753/746/0
-  fail/7 skipped** now (02-05's own +25 cases). `npm run typecheck`, `npm run build` and
+- Whole-suite figure re-measured after every plan, never SUMMARY-trusted:
+  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> 728/721/0/7 after 02-11 -> 753/746/0/7
+  after 02-05 -> **762/755/0 fail/7 skipped** after 02-06 (this plan's own +9 cases), re-confirmed by
+  a fresh `npm test` run in the closeout session. `npm run typecheck`, `npm run build` and
   `npm run lint` (`--max-warnings 0`) all exit 0 at every checkpoint. 0 failures is the bar; there is
   no pre-existing-failure allowance on this phase.
 
@@ -64,8 +66,22 @@ Execution facts as of this line:
   `--mcp-config` spawns a server and `--settings`' `mcpServers` key does not (claude 2.1.236, run twice
   this session). `<agentDir>/mcp.json` (0600, git-ignored), per-agent write/secret grants
   (`mcpAgentGrants`, a latched migration dropping the old floor-wide consent), and three IPC channels
-  are real. **DAEMON-04 stays OPEN in REQUIREMENTS.md** — 02-06 (wave 6) also declares it and owns the
-  consent-modal UI 02-11 only built a data contract for.
+  are real.
+
+- **02-06 closed DAEMON-04 and PARITY-01b (both flipped `[x]` in REQUIREMENTS.md).** `McpConsentModal.tsx`
+  (the consent step 02-11 only built a data contract for) plus the agent card's `⚿`/`⚠`/`↻` MCP element
+  complete DAEMON-04's operator-facing half. `capabilityGaps()` — one derivation over
+  `providerCapabilities(provider, platform)` — now renders on the agent card, the provider picker
+  (`AddAgentModal.tsx`) and the dispatch flow (`CommandCenterPanel.tsx`), closing PARITY-01b. This was a
+  **recovery closeout**: a prior session landed all 5 task commits and was killed before writing
+  SUMMARY.md; every claim was independently re-verified against the real tree (fresh greps, fresh
+  containment diff against the correct base `5832c5e`, fresh `npm test`/`build`/`typecheck`/`lint`/`e2e`
+  runs) before the requirements were flipped. One genuine STOP is on record and was independently
+  re-confirmed rather than waved through: S2a's `maxWidth` cannot hold ≥80px in the scenario its own
+  pass condition is written against (a capability gap chip AND a fully-populated MCP element on the same
+  row) without growing the frozen 322×86 card — not forced, carried forward as a stated limitation,
+  confirmed unreachable in the shipped app today because claude is the only MCP-wired engine and it
+  carries zero capability gaps.
 
 Requirements deliberately still OPEN, with the reason (none of these is an oversight):
 
@@ -79,9 +95,6 @@ Requirements deliberately still OPEN, with the reason (none of these is an overs
 - **DAEMON-03** — the verifier + payload-adapter mechanism is real and localhost-verified (02-05); the
   live half (a real Telegram bot token, a real Discord application) is operator-supplied and was not
   available this session.
-
-- **DAEMON-04** — mechanism landed (02-11) for the one live-verified engine (claude); the consent-modal
-  UI is 02-06's (wave 6), which also declares this requirement in its own frontmatter.
 
 - **DAEMON-05** — spans 02-04/02-05/02-10/02-12. 02-05 closed two of its five bullets (generated
   token, rate limiting + lockout on the auth endpoint) — both proven engaging and clearing. Live close
@@ -159,6 +172,7 @@ is installed on this machine, so this is the expected outcome under the zero-rec
 | Phase 02 P07 | 50min | 4 tasks | 12 files |
 | Phase 02 P11 | 55min | 4 tasks | 9 files |
 | Phase 02 P05 | 57min | 5 tasks | 8 files |
+| Phase 02 P06 | 58min | 5 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -449,6 +463,7 @@ Recent decisions affecting current work:
 - [Phase 02-05]: phoneArmed()/mintEnrollment() landed in task 2's commit (not task 3's) — task 2's own acceptance criteria need an armed state to test the 200/dark-404 split, and the plan's own action text already says task 2's branch reads phoneArmed().
 - [Phase 02-05]: The /phone/api/** auth lockout is one shared counter across enroll+asks+answer, not scoped to /enroll alone — a brute-force attacker can guess bearers exactly as cheaply as enrollment tokens.
 - [Phase 02-05]: None of DAEMON-02/03/05 marked complete in REQUIREMENTS.md: DAEMON-02/05 are shared with 02-09/02-10 (not landed); DAEMON-03's live half is operator-supplied and its stated purpose has no phone UI to exercise until 02-09/02-10 land.
+- [Phase ?]: PARITY-01b and DAEMON-04 flipped complete after 02-06's closeout (last declarer of both)
 
 ### Pending Todos
 
@@ -570,8 +585,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-23T17:34:01.620Z
-Stopped at: Completed 02-05-PLAN.md
+Last session: 2026-08-24T00:00:00.000Z
+Stopped at: Completed 02-06-PLAN.md (recovery closeout — see 02-06-SUMMARY.md)
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
