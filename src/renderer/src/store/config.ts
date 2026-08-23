@@ -24,6 +24,8 @@ import {
   type ClaudeAccount
 } from '@shared/claudeAccounts';
 import { fmtCountdown, describeHealth, type PoolSnapshot, type AccountHealth } from '@shared/claudeAccountPool';
+import { providerCapabilities, remoteControlAvailability } from '@shared/providerAutomation';
+import { MCP_CATALOG, type McpTier } from '@shared/mcpCatalog';
 
 export {
   AGENT_PROVIDER_PRESETS,
@@ -427,4 +429,238 @@ export function buildSpawnCommand(
   // auto, or agy's skip flag.
   if (config.autoMode && preset.autoFlag) cmd = `${cmd} ${preset.autoFlag}`;
   return cmd;
+}
+
+// ── PARITY-01b / DAEMON-04 (plan 02-06) ───────────────────────────────────────
+//
+// D-30: `capabilityLine()` (providerAutomation.ts) has zero production
+// consumers — it is a prompt line written for "a model skimming a roster",
+// and rendering its joined string on a 322px card would be five clauses of
+// mostly-good-news per agent (UI-SPEC Rule C-1). This section is the ONE
+// derivation the three D-31 surfaces (AgentCard, AddAgentModal,
+// CommandCenterPanel) all render from — the provider+platform capability
+// record `capabilityLine` is itself built from — so the card and the god's
+// roster line can never disagree. It does
+// NOT give `capabilityLine` a consumer; that string's one intended job stays
+// the god's roster injection (hive.ts, plans 02-07/02-08).
+
+export interface CapabilityGap {
+  key: 'mail' | 'mcp' | 'spend' | 'compact' | 'remote';
+  chip: string;
+  sentence: string;
+}
+
+/**
+ * Every false bit of `provider`'s capability record, ranked
+ * `mail > mcp > spend > compact > remote` (UI-SPEC S1a) — the order IS the
+ * operational cost: an engine that cannot receive mail cannot be given work
+ * at all, one that cannot take MCP cannot be given tools, invisible spend
+ * defeats the breaker, remote control is a convenience. `subject` is the
+ * agent's display name (or "a {Engine} worker" — AddAgentModal's call site,
+ * before any agent exists).
+ *
+ * `platform` MUST be supplied by the caller as `window.cth.platform`
+ * (UI-SPEC Rule C-1a): `providerCapabilities`'s platform parameter defaults
+ * through the Node process-globals object when omitted, which is a
+ * ReferenceError in the renderer. This function never reads that global
+ * itself, and forwards the SAME platform to both `providerCapabilities` and
+ * `remoteControlAvailability` — passing it to one and not the other throws on
+ * first paint for every non-claude, non-codex engine (D-40, T-P02-06-09).
+ */
+export function capabilityGaps(
+  provider: AgentProvider,
+  platform: string,
+  subject: string
+): CapabilityGap[] {
+  const caps = providerCapabilities(provider, platform);
+  const engine = providerPreset(provider).label;
+  const gaps: CapabilityGap[] = [];
+  if (!caps.mail) {
+    gaps.push({
+      key: 'mail',
+      chip: 'NO MAIL',
+      sentence: `${engine} cannot receive mail — work routed to ${subject} bounces back to you.`
+    });
+  }
+  if (!caps.mcp) {
+    gaps.push({ key: 'mcp', chip: 'NO MCP', sentence: `${engine} cannot take MCP servers.` });
+  }
+  if (caps.spend === 'none') {
+    gaps.push({
+      key: 'spend',
+      chip: 'NO SPEND',
+      sentence: `${engine} reports no cost — ${subject}'s spend is invisible to every budget and to the breaker.`
+    });
+  }
+  if (!caps.compact) {
+    gaps.push({
+      key: 'compact',
+      chip: 'NO COMPACT',
+      sentence: `${engine} cannot reclaim context — ${subject} has to be restarted when it fills up.`
+    });
+  }
+  if (!caps.remote) {
+    // Phase 1's 01-13 ruling (D-40), kept here verbatim: one shouted string
+    // for both branches would have blamed Windows for a gap that exists on
+    // every platform, so the chip is shared and only the sentence differs.
+    const availability = remoteControlAvailability(provider, platform);
+    gaps.push({
+      key: 'remote',
+      chip: 'NO REMOTE',
+      sentence:
+        availability === 'windows'
+          ? `${engine} has remote control, but not on Windows.`
+          : `${engine} has no remote control.`
+    });
+  }
+  return gaps;
+}
+
+/** The card's ONE gap chip (S1a): the highest-ranked false bit's chip text,
+ *  with a `+N` suffix when more than one bit is false. `null` renders nothing
+ *  — "a card with no gap chip means no gap" (Copywriting Contract). */
+export function capabilityChipText(gaps: CapabilityGap[]): string | null {
+  if (gaps.length === 0) return null;
+  const [first, ...rest] = gaps;
+  return rest.length > 0 ? `${first.chip} +${rest.length}` : first.chip;
+}
+
+/** `⚿` keyed and applied · `⚠` granted, no key stored, not armed · `↻`
+ *  granted, agent running, not yet proven applied · `null` no key mark at all
+ *  (a consent-tier entry that needs no secret — an extension to UI-SPEC S2's
+ *  mark table, arrived at from the catalog: rendering `⚠`/`⚿` for an entry
+ *  with no `spec.env` would be misleading/fabricated respectively). */
+export type McpMark = '⚿' | '⚠' | '↻' | null;
+
+export interface McpCardMark {
+  id: string;
+  short: string;
+  tier: McpTier;
+  mark: McpMark;
+  pending: boolean;
+}
+
+/** The catalog id up to its first `-`: `github-token` -> `github`,
+ *  `search-with-key` -> `search`, `email-calendar` -> `email`, `db` -> `db`. */
+function shortMcpId(id: string): string {
+  const dash = id.indexOf('-');
+  return dash === -1 ? id : id.slice(0, dash);
+}
+
+/**
+ * The renderer-side cache of per-agent MCP grant state (DAEMON-04). Two
+ * halves with two different sources, discovered against the REAL shapes in
+ * `src/main/config.ts` and `src/main/index.ts`'s `mcp:agentState` handler
+ * this session (D-01: not invented, not assumed) — a mirror that disagrees
+ * with main is the three-file-contract failure that shipped Critical #75:
+ *
+ *  - `mcpDefaults` mirrors the floor-wide safe-readonly consent map on
+ *    `HarnessConfig` (`src/main/config.ts:229`-ish / preload's own
+ *    `HarnessConfig.mcpDefaults`). Seeded by ONE `window.cth.getConfig()`
+ *    call (`ensureMcpGrants`) — config data, available synchronously to
+ *    every card on the floor without a per-agent round trip.
+ *  - `agents[agentId]` mirrors `mcp:agentState(agentId)`'s live response
+ *    (`granted: {id,tier,hasSecret}[]`, `armed: string[]`). `hasSecret` and
+ *    `armed` are NOT config fields — `hasSecret` reads the encrypted secret
+ *    store and `armed` reads `<agentDir>/mcp.json` off disk
+ *    (`hive.mcpArmed`), so `getConfig()` cannot supply either one. This half
+ *    is populated when `McpConsentModal` fetches an agent's state (on open,
+ *    and again after every successful grant/revoke — the modal calls
+ *    `setMcpGrants` to publish it, so the card repaints without its own
+ *    refetch). An agent whose modal has never been opened this session reads
+ *    as absent here: the card then shows its real floor-wide safe count and
+ *    NO granted-server marks for that agent — an under-report, never a
+ *    fabricated one. The eager, floor-wide seed belongs in `App.tsx`
+ *    alongside `setWebhookTriggers`/`setOrgTrigger` (02-10, wave 8); this
+ *    plan does not own that file.
+ */
+export interface McpGrantsSnapshot {
+  mcpDefaults: Record<string, { enabled: boolean }>;
+  agents: Record<string, { granted: { id: string; tier: McpTier; hasSecret: boolean }[]; armed: string[] }>;
+}
+
+function emptyMcpGrantsSnapshot(): McpGrantsSnapshot {
+  return { mcpDefaults: {}, agents: {} };
+}
+
+// Module-singleton + subscribe/getSnapshot pair, copying autoMode.ts:83-105's
+// shape exactly: plain functions (no hook import, no store import) so this
+// module still loads under `node --test`; a cached reference so the React
+// sync-external-store hook's snapshot getter stays referentially stable.
+let mcpGrantsSnapshot: McpGrantsSnapshot = emptyMcpGrantsSnapshot();
+const mcpGrantsListeners = new Set<() => void>();
+let mcpGrantsEnsureStarted = false;
+
+/** The last-published grants snapshot — a cached reference, never a fresh
+ *  object literal. */
+export function getMcpGrantsSnapshot(): McpGrantsSnapshot {
+  return mcpGrantsSnapshot;
+}
+
+/** Publish a new snapshot. No-ops when the reference is unchanged, so a
+ *  redundant publish cannot churn every subscriber. */
+export function setMcpGrants(next: McpGrantsSnapshot): void {
+  if (next === mcpGrantsSnapshot) return;
+  mcpGrantsSnapshot = next;
+  for (const l of [...mcpGrantsListeners]) l();
+}
+
+export function subscribeMcpGrants(listener: () => void): () => void {
+  mcpGrantsListeners.add(listener);
+  return () => {
+    mcpGrantsListeners.delete(listener);
+  };
+}
+
+/** Fires ONE `window.cth.getConfig()` to seed the floor-wide `mcpDefaults`
+ *  half of the snapshot; a no-op on every call after the first, and a no-op
+ *  with no `window.cth` at all (so this module keeps loading under
+ *  `node --test`, which is what the guard below is for). */
+export function ensureMcpGrants(): void {
+  if (mcpGrantsEnsureStarted) return;
+  mcpGrantsEnsureStarted = true;
+  if (typeof window === 'undefined' || !window.cth?.getConfig) return;
+  window.cth
+    .getConfig()
+    .then((cfg) => {
+      setMcpGrants({ ...getMcpGrantsSnapshot(), mcpDefaults: cfg.mcpDefaults ?? {} });
+    })
+    .catch(() => {
+      /* the card falls back to no safe-count data; a retry needs a future load */
+    });
+}
+
+/**
+ * The MCP element's data for one agent's card (S2). `null` when the engine
+ * cannot take MCP servers at all — the caller renders the `NO MCP` gap chip
+ * from `capabilityGaps` and MUST NEVER render an empty `MCP 0 safe`
+ * (Copywriting Contract).
+ *
+ * `pending`/`mark` follow the preload's own documented contract exactly
+ * (`src/preload/index.ts`, `mcpAgentState`'s doc comment): *"`pending ·
+ * restart` is `granted \ armed`, computed here in the renderer — main never
+ * claims a live connection (D-29)."* An agent with no live PTY is never
+ * `pending`: nothing is "not yet in effect" for an agent that is not running.
+ */
+export function mcpCardSummary(
+  cfg: McpGrantsSnapshot,
+  agentId: string,
+  opts: { supportsMcp: boolean; ptyId?: string }
+): { safeCount: number; granted: McpCardMark[] } | null {
+  if (!opts.supportsMcp) return null;
+  const safeCount = MCP_CATALOG.filter(
+    (e) => e.tier === 'safe-readonly' && (cfg.mcpDefaults[e.id]?.enabled ?? e.defaultEnabled)
+  ).length;
+  const agentState = cfg.agents[agentId];
+  if (!agentState) return { safeCount, granted: [] };
+  const granted: McpCardMark[] = [];
+  for (const entry of MCP_CATALOG) {
+    const g = agentState.granted.find((x) => x.id === entry.id);
+    if (!g) continue;
+    const pending = Boolean(opts.ptyId) && !agentState.armed.includes(entry.id);
+    const requiresSecret = Object.keys(entry.spec.env ?? {}).length > 0;
+    const mark: McpMark = pending ? '↻' : !requiresSecret ? null : g.hasSecret ? '⚿' : '⚠';
+    granted.push({ id: entry.id, short: shortMcpId(entry.id), tier: entry.tier, mark, pending });
+  }
+  return { safeCount, granted };
 }
