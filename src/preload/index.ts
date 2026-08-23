@@ -1576,7 +1576,18 @@ const api = {
     notes?: string;
     /** Preview the centered release page using the default drop template. */
     drop?: boolean;
-  }): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('update:simulate', opts)
+  }): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('update:simulate', opts),
+
+  /** UI-SPEC Rule C-1a step 2 — a plain string on the bridge so
+   *  `providerCapabilities(provider, platform)` never has to evaluate
+   *  `process.platform` in the renderer, where `process` is a ReferenceError
+   *  rather than `undefined`. Synchronous and available on first paint, so a
+   *  capability card never flickers from "no gaps" to e.g. `NO REMOTE` a tick
+   *  later once some async platform probe resolves. Step 1
+   *  (`providerCapabilities`'s optional `platform?` param) is plan 02-07's;
+   *  the two-argument renderer call sites are plan 02-06's (wave 6) — this
+   *  field has no consumer yet and is scheduled, not dead. */
+  platform: process.platform
 };
 
 contextBridge.exposeInMainWorld('cth', api);

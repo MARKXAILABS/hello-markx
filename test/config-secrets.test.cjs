@@ -43,12 +43,18 @@ require.cache[electron] = {
   }
 };
 
-// better-sqlite3 in this repo is built for Electron's ABI, so it cannot load under
-// plain node — and config.ts falls back to keeping mission stamps in config.json
-// when the store is unavailable, which would leave the diversion untested. Stand a
-// fake driver in for it: enough of the surface PersistStore.getKv/setKv touches,
-// and nothing else. (The fallback path itself is exercised every time this file is
-// run WITHOUT the fake, which is how it was first seen working.)
+// MEASURED (plan 02-11 task 4): `require('better-sqlite3')` DOES load under
+// plain node — `node -e "require('better-sqlite3')"` succeeds on Node v24.13.0
+// against the installed better-sqlite3@13.0.3, which ships N-API prebuilds
+// rather than an Electron-ABI-only native build. An earlier claim that the
+// driver was unloadable outside Electron was stale; the fake driver below is
+// NOT standing in for a load failure. It exists for DETERMINISM instead: no
+// native build step, no real file left behind, and no ABI question to
+// re-litigate across three CI platforms every time this file runs. Stand a
+// fake driver in for it: enough of the surface PersistStore.getKv/setKv
+// touches, and nothing else. (The real driver's own load-and-run path is
+// exercised every time this file is run WITHOUT the fake, which is how it was
+// first seen working.)
 const sqlite = require.resolve('better-sqlite3');
 require.cache[sqlite] = {
   id: sqlite,
