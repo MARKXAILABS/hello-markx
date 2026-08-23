@@ -49,7 +49,7 @@ export type AgentProvider =
  *               and `inboxDelivery` is how mail reaches it ('terminal' work-order
  *               handoff today; 'serve' reserved for a future HTTP push path). */
 export type BridgeDescriptor =
-  | { kind: 'hooks'; shim: 'agy' | 'codex' | 'pi' | 'opencode' | 'grok' }
+  | { kind: 'hooks'; shim: 'agy' | 'codex' | 'pi' | 'opencode' | 'grok' | 'kimi' }
   | {
       kind: 'proxy';
       api: 'openai' | 'anthropic';
@@ -97,10 +97,15 @@ export interface AgentProviderPreset {
    *                + response contract are already Claude-shaped).
    *    - 'grok'  → installGrokHooks() installs an AGENT_ID-scoped adapter for
    *                Grok's camelCase lifecycle payloads.
+   *    - 'kimi'  → installKimiConfig() writes a per-agent kimi config file
+   *                (`--config-file`) and reuses the Claude `cth-hook` shim
+   *                verbatim (Kimi's hook payload is already Claude-shaped
+   *                snake_case) — the CODEX case, not the grok case; its own
+   *                flat `[[hooks]]` TOML shape, not codex's nested one.
    *  Claude leaves this undefined (it uses its native `--settings` path, gated by
    *  hiveAware); `custom` leaves it undefined (no bridge → no hooks). This is the
    *  single switch hive.ensureAgent dispatches on to wire the bridge. */
-  hookBridge?: 'agy' | 'codex' | 'grok';
+  hookBridge?: 'agy' | 'codex' | 'grok' | 'kimi';
   /** Structured bridge descriptor (the forward-looking replacement for the legacy
    *  `hookBridge`). Set explicitly only for PROXY-tier providers (qwen) that
    *  have no hook file to install; agy/codex leave it undefined and `bridgeOf`
@@ -300,17 +305,35 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     label: 'Kimi Code',
     defaultCommand: 'kimi',
     commandGroups: [],
-    // Kimi --auto handles every approval and does not stop to ask questions,
-    // matching Hello MarkX's autonomous Claude/Codex default.
+    // LIVE-UNVERIFIED: `kimi` is not installed on this machine (task 1, this
+    // plan), so `--auto` has never been confirmed against a real
+    // `kimi --help`. Moonshot's docs also list `--yolo`/`-y`, `--yes`,
+    // `--auto-approve` and `--afk` as auto-approval spellings (RESEARCH §6.5).
+    // Left byte-identical rather than guessed at — swapping to a documentation-
+    // only alternate risks breaking a value that may well already be correct.
+    // One command settles it: `kimi --help`.
     autoModeFlag: '--auto',
     autoFlag: '--auto',
     supportsModel: true,
     modelFlag: '--model',
     hiveAware: false,
-    // Kimi's interactive TUI has no positional initial-prompt form. It supports
-    // lifecycle hooks, but Hello MarkX does not yet install a Kimi hook bridge,
-    // so mail must bounce rather than being delivered with no drain path.
-    canReceiveInbox: false
+    // Kimi's interactive TUI has no positional initial-prompt form (unlike
+    // codex/grok) — it is bridged as the CODEX case, not the grok case: a
+    // per-agent `--config-file` (installKimiConfig, hiveProvisioning.ts) seeds
+    // ~/.kimi/config.toml with a flat [[hooks]] table per event; HOOK_SHIM is
+    // reused VERBATIM because kimi's hook payload is already Claude-shaped
+    // snake_case, same as codex. LIVE-UNVERIFIED — no Moonshot account exists
+    // on this machine to run a live kimi session against it (D-33).
+    // CONSEQUENCE (D-33, ruled on here, not discovered): flipping
+    // canReceiveInbox also makes kimi GOD-eligible in the two pickers that
+    // filter on it (CommandCenterPanel.tsx, OnboardingWizard.tsx) even though
+    // it has no interactive initial-prompt form — a kimi god would spawn
+    // unoriented. It does NOT get seedDelivery:'type-into-tui' (unverifiable
+    // TUI-typing behaviour); ensureAgent's bare-spawn fall-through now records
+    // 'protocol-not-seeded' instead of silently dropping the protocol. The two
+    // picker surfaces themselves are handed to plan 02-06 by name.
+    hookBridge: 'kimi',
+    canReceiveInbox: true
   },
   {
     id: 'antigravity',

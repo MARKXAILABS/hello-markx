@@ -17,7 +17,7 @@
  */
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
-  symlinkSync, copyFileSync, rmSync
+  symlinkSync, copyFileSync, rmSync, chmodSync
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -235,6 +235,73 @@ export function installCodexHooks(dir: string, shimPath: string | null, nodeRunU
     writeFileSync(join(home, 'config.toml'), config, 'utf8');
   } catch (e) { console.error('[hive] installCodexHooks failed:', e); }
   return home;
+}
+
+/** Kimi Code (Moonshot AI) lifecycle-hook bridge — PARITY-01a. This is the
+ *  CODEX case, not the grok case (02-PATTERNS.md § "the seed-and-append TOML
+ *  pattern the kimi bridge copies": do NOT reach for GROK_HOOK_SHIM as the
+ *  analog). Kimi's hook payload is already Claude-shaped snake_case, so
+ *  `HOOK_SHIM` is reused VERBATIM — no translator, exactly like codex.
+ *
+ *  ISOLATION, same shape as `installCodexHooks`: rather than mutate the
+ *  user's own `~/.kimi/config.toml` — which ALSO holds their `kimi login`
+ *  OAuth credential, unlike codex, which keeps its credential in a
+ *  separately-symlinked `auth.json` — this writes a PER-AGENT config file
+ *  under `dir` and passes it with `--config-file` (a per-invocation flag, so
+ *  the operator's global config is never touched). Returns that file's own
+ *  path — a FILE, not a directory: kimi's `--config-file` takes a file where
+ *  codex's `CODEX_HOME` takes a directory, and getting that wrong produces an
+ *  argv kimi rejects.
+ *
+ *  WHY A STRING APPEND, NOT A PARSE: no TOML parser exists in Node core or in
+ *  this repo's dependencies, and D-06 forbids adding one for this. Reading the
+ *  user's file as plain text and appending our own `[[hooks]]` tables needs
+ *  none.
+ *
+ *  WHY THE SEED IS MANDATORY, NOT AN OPTIMISATION: `kimi login` stores its
+ *  OAuth credential INSIDE `config.toml` (unlike codex's separately-symlinked
+ *  `auth.json`). An UNSEEDED config would silently deauthenticate the
+ *  operator's agent — every field they configured (model, provider, trust,
+ *  and the login itself) has to survive into the per-agent copy.
+ *
+ *  LANDMINE 4 — THE TOML SHAPE IS NOT CODEX'S. Kimi's documented hook surface
+ *  (RESEARCH §6.1) is a FLAT array-of-tables — `[[hooks]]` with `event`,
+ *  `command`, optional `matcher`, and `timeout` IN SECONDS — not codex's
+ *  nested `[[hooks.<Event>]]` / `[[hooks.<Event>.hooks]]` shape. `timeout = 30`
+ *  matches Kimi's documented default; copying codex's nesting produces a file
+ *  Kimi cannot read, and the failure is silent — hooks simply never fire and
+ *  mail is delivered into an engine with no drain, exactly what PARITY-01a
+ *  exists to end.
+ *
+ *  LIVE-UNVERIFIED: no Moonshot account exists on this machine, so no kimi
+ *  session has ever run against a file this function wrote. D-33 / VALIDATION
+ *  rule that an unverified inbox beats a bounce, so the bridge ships anyway,
+ *  marked. */
+export function installKimiConfig(
+  { dir, shim, nodeRun, userHome }: { dir: string; shim: string | null; nodeRun: NodeRunFn; userHome: string }
+): string {
+  const configPath = join(dir, 'kimi-config.toml');
+  try {
+    mkdirSync(dir, { recursive: true });
+    const userConfigPath = join(userHome, '.kimi', 'config.toml');
+    let config = existsSync(userConfigPath) ? readFileSync(userConfigPath, 'utf8') : '';
+    if (shim) {
+      const events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop',
+        'SessionStart', 'UserPromptSubmit', 'PreCompact', 'PostCompact'];
+      config += '\n# --- hellomarkx-hive lifecycle hooks (auto-generated; do not edit) ---\n';
+      for (const ev of events) {
+        config += `\n[[hooks]]\nevent = "${ev}"\ncommand = '${nodeRun(shim)}'\ntimeout = 30\n`;
+      }
+    }
+    writeFileSync(configPath, config, 'utf8');
+    // The seed carries the operator's kimi login OAuth credential — restrict
+    // to owner-only, the same posture as any file holding a live credential.
+    // Explicit and unconditional (not just a create-time write mode) so the
+    // permission holds even when this file is REGENERATED over an existing
+    // one, where a create-time-only mode would be silently ignored.
+    try { chmodSync(configPath, 0o600); } catch { /* best-effort, e.g. unsupported on some fs */ }
+  } catch (e) { console.error('[hive] installKimiConfig failed:', e); }
+  return configPath;
 }
 
 /** Pi (earendil-works) bridge. Pi has a rich `pi.on(event, …)` lifecycle but no

@@ -288,6 +288,13 @@ write there become searchable by every agent. You don't run \`mine\` yourself.
 // A minimal pipe: read the hook payload on stdin, tag it with this agent's id,
 // forward it to the hive's UDS, and relay the response back to `claude`. All the
 // real logic lives in the main process (HookServer). Never blocks a stop on error.
+// Also consumed by codex (installCodexHooks) and, as of PARITY-01a, kimi
+// (installKimiConfig) — both reuse this shim VERBATIM because their hook
+// payload/response contracts are already Claude-shaped. LIVE-UNVERIFIED for
+// kimi specifically: RESEARCH §6.2 records that Moonshot documents a hook
+// BLOCK as exit code 2, where this shim (like Claude/codex) expresses a deny
+// through stdout JSON at exit 0 — that exit-code question is open and cannot
+// be settled without a live kimi session.
 export const HOOK_SHIM = `#!/usr/bin/env node
 'use strict';
 const net = require('net');

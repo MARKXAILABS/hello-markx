@@ -32,6 +32,8 @@ const { HookServer } = loadTs('src/main/hooks.ts');
 const { readCodexUsage } = loadTs('src/main/usage.ts');
 const { capabilityLine, providerCapabilities, remoteControlAvailability } =
   loadTs('src/shared/providerAutomation.ts');
+const { bridgeOf, canReceiveInbox } = loadTs('src/shared/agentProvider.ts');
+const { installKimiConfig } = loadTs('src/main/hiveProvisioning.ts');
 
 /** One proxy-sidecar CostSample, in the shape hooks.ts builds for the ledger. */
 function costSample(over = {}) {
@@ -527,11 +529,25 @@ test('the capability line is honest about a mail-capable engine', () => {
 });
 
 test('the capability line SHOUTS about a mail-incapable engine', () => {
-  // Kimi has no hook bridge, so routed mail bounces to the god — the exact
-  // failure #19 opens with (god assigns mail-dependent work to a Kimi worker).
+  // PARITY-01a gave kimi a hook bridge (below), so the mail-incapable case this
+  // test exists to cover is re-pointed at copilot — print mode exits per turn,
+  // no hook bridge captures idle, so a copilot worker's mail still bounces to
+  // the god. Re-pointed, never deleted: this is the only test of the gap
+  // vocabulary's shouting behaviour.
+  assert.equal(
+    capabilityLine('copilot'),
+    'copilot: NO MAIL (bounces to you), spend UNTRACKED (invisible to every budget), '
+    + 'NO COMPACT (context cannot be reclaimed), NO REMOTE CONTROL'
+  );
+});
+
+test('the capability line now reads mail ok for kimi (PARITY-01a)', () => {
+  // Kimi has a per-agent hook bridge as of this plan (installKimiConfig,
+  // hiveProvisioning.ts) — mail routed to a kimi worker is delivered, not
+  // bounced, even though the bridge itself ships LIVE-UNVERIFIED (D-33).
   assert.equal(
     capabilityLine('kimi'),
-    'kimi: NO MAIL (bounces to you), spend UNTRACKED (invisible to every budget), '
+    'kimi: mail ok, spend UNTRACKED (invisible to every budget), '
     + 'compacts /compact, NO REMOTE CONTROL'
   );
 });
@@ -631,6 +647,170 @@ test('the shouted gaps stay uppercase and the present capabilities stay quiet', 
     /NO MAIL .*spend UNTRACKED.*NO COMPACT.*NO REMOTE CONTROL/);
   assert.ok(!capabilityLine('claude').includes('NO '), capabilityLine('claude'));
   assert.equal(capabilityLine('claude').split(', ').length, 4);
+});
+
+// ── 3b. PARITY-01a: kimi's hook bridge ───────────────────────────────────────
+//
+// Kimi is bridged as the CODEX case (per-agent --config-file, HOOK_SHIM reused
+// verbatim), not the grok case (a translating adapter). Ships LIVE-UNVERIFIED —
+// no Moonshot account exists on this machine to run a live kimi session.
+
+test('bridgeOf resolves kimi to a hooks bridge, and kimi is now mail-eligible', () => {
+  assert.deepEqual(bridgeOf('kimi'), { kind: 'hooks', shim: 'kimi' });
+  assert.equal(canReceiveInbox('kimi'), true);
+});
+
+test('installKimiConfig seeds from the operator\'s own config.toml (auth survives)', () => {
+  const userHome = fs.mkdtempSync(path.join(os.tmpdir(), 'md-kimi-userhome-'));
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-kimi-agent-'));
+  try {
+    const kimiDir = path.join(userHome, '.kimi');
+    fs.mkdirSync(kimiDir, { recursive: true });
+    const sentinel = 'oauth_token = "SENTINEL-CREDENTIAL-abc123"';
+    const userConfigPath = path.join(kimiDir, 'config.toml');
+    fs.writeFileSync(userConfigPath, `model = "kimi-k2"\n${sentinel}\n`, 'utf8');
+    const before = { content: fs.readFileSync(userConfigPath, 'utf8'), mtime: fs.statSync(userConfigPath).mtimeMs };
+
+    const shim = path.join(agentDir, 'cth-hook.cjs');
+    const nodeRun = (s) => `"node" "${s}"`;
+    const result = installKimiConfig({ dir: agentDir, shim, nodeRun, userHome });
+
+    assert.equal(result, path.join(agentDir, 'kimi-config.toml'), 'must return a FILE path, not a directory');
+    const written = fs.readFileSync(result, 'utf8');
+
+    // The auth survives — byte-for-byte, not re-derived.
+    assert.ok(written.includes(sentinel), 'the operator\'s credential did not survive the seed');
+
+    // LANDMINE 4, both directions: a flat [[hooks]] table, never nested [[hooks.<Event>]].
+    assert.match(written, /\[\[hooks\]\]\s*\nevent = "Stop"/, 'no flat [[hooks]] table for Stop');
+    assert.ok(!written.includes('[[hooks.Stop]]'), 'wrote codex\'s NESTED shape — kimi cannot parse this');
+    assert.ok(!written.includes('[[hooks.'), 'wrote a nested [[hooks.*]] table somewhere');
+
+    // The operator's OWN file is never touched.
+    const after = { content: fs.readFileSync(userConfigPath, 'utf8'), mtime: fs.statSync(userConfigPath).mtimeMs };
+    assert.deepEqual(after, before, 'installKimiConfig wrote into the operator\'s own ~/.kimi/config.toml');
+
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(result).mode & 0o777, 0o600, 'the seeded credential file must be owner-only');
+    } else {
+      console.error('[engine-parity] kimi config mode case skipped — chmod 0o600 is not a POSIX permission on win32');
+    }
+  } finally {
+    fs.rmSync(userHome, { recursive: true, force: true });
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test('a kimi worker\'s spawn argv carries --config-file pointed at its own kimi-config.toml', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-kimi-spawn-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const realHome = process.env.HOME;
+  const realProfile = process.env.USERPROFILE;
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  t.after(() => {
+    if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
+    if (realProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = realProfile;
+  });
+
+  const hive = new HiveManager(() => home);
+  const spawned = await hive.ensureAgent({ id: 'kimi-1', name: 'K', provider: 'kimi', cwd: home });
+
+  const i = spawned.args.indexOf('--config-file');
+  assert.ok(i >= 0, `--config-file missing from argv: ${JSON.stringify(spawned.args)}`);
+  assert.ok(
+    spawned.args[i + 1] && spawned.args[i + 1].endsWith('kimi-config.toml'),
+    `--config-file's value does not end in kimi-config.toml: ${spawned.args[i + 1]}`
+  );
+});
+
+test('a kimi worker\'s dropped protocol is recorded, not silently swallowed (D-33)', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-kimi-log-'));
+  try {
+    const realHome = process.env.HOME;
+    const realProfile = process.env.USERPROFILE;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    try {
+      const hive = new HiveManager(() => home);
+      // Kimi has no initialPromptFlag, no seedDelivery and no positionalInitialPrompt
+      // — it falls all the way through ensureAgent's injection branch, exactly the
+      // shape 'protocol-not-seeded' exists to catch.
+      await hive.ensureAgent({ id: 'kimi-2', name: 'K2', provider: 'kimi', cwd: home });
+    } finally {
+      if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
+      if (realProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = realProfile;
+    }
+
+    const log = fs.readFileSync(path.join(home, 'hive', 'log.jsonl'), 'utf8')
+      .trim().split('\n').map((l) => JSON.parse(l));
+    const entry = log.find((e) => e.kind === 'protocol-not-seeded' && e.agentId === 'kimi-2');
+    assert.ok(entry, `no protocol-not-seeded entry for kimi-2 in log.jsonl: ${JSON.stringify(log)}`);
+    assert.equal(entry.provider, 'kimi');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('T-P02-07-01: a real hive commit never carries the seeded kimi credential', async (t) => {
+  // The live proof, not the intention: build a real hive, seed a sentinel
+  // credential into a fake ~/.kimi/config.toml, spawn a kimi worker for real
+  // (which calls installKimiConfig), drive the hive's own commit path, and
+  // inspect the REAL git history — not a mock of it.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-kimi-credential-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const realHome = process.env.HOME;
+  const realProfile = process.env.USERPROFILE;
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  t.after(() => {
+    if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
+    if (realProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = realProfile;
+  });
+  assert.equal(os.homedir(), home, 'home redirect failed — aborting before touching the real home');
+
+  const sentinel = 'SENTINEL-KIMI-OAUTH-token-9f3e';
+  const kimiDir = path.join(home, '.kimi');
+  fs.mkdirSync(kimiDir, { recursive: true });
+  fs.writeFileSync(path.join(kimiDir, 'config.toml'), `oauth_token = "${sentinel}"\n`, 'utf8');
+
+  const hive = new HiveManager(() => home);
+  await hive.ensureAgent({ id: 'kimi-cred', name: 'K', provider: 'kimi', cwd: home });
+
+  const root = path.join(home, 'hive');
+  const agentDir = path.join(root, 'agents', 'kimi-cred');
+
+  // (i) the credential really did get copied — the containment proof means
+  // nothing if the installer never wrote it in the first place.
+  const written = fs.readFileSync(path.join(agentDir, 'kimi-config.toml'), 'utf8');
+  assert.ok(written.includes(sentinel), 'installKimiConfig did not seed the sentinel credential onto disk');
+
+  // Drive the hive's own debounced commit body synchronously (same pattern as
+  // the GATE-01 backstop test above).
+  await hive.flushCommit(root);
+
+  // (ii) the commit path really ran.
+  const log = spawnSync('git', ['log', '--oneline'], { cwd: root, encoding: 'utf8' });
+  assert.equal(log.status, 0, `git log failed in the hive root: ${log.stderr}`);
+  const commitCount = log.stdout.trim().split('\n').filter(Boolean).length;
+  assert.ok(commitCount >= 1, 'nothing was committed — the containment proof below would prove nothing');
+
+  // (iii) the file was never staged.
+  const lsFiles = spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' });
+  assert.equal(lsFiles.status, 0, `git ls-files failed: ${lsFiles.stderr}`);
+  const tracked = lsFiles.stdout.split('\n').filter((f) => f.endsWith('kimi-config.toml'));
+  assert.deepEqual(tracked, [], `kimi-config.toml is tracked by git: ${JSON.stringify(tracked)}`);
+
+  // (iv) the sentinel never entered git history at all, even via a stray line
+  // inside some OTHER committed file.
+  const logP = spawnSync('git', ['log', '-p'], { cwd: root, encoding: 'utf8' });
+  assert.equal(logP.status, 0, `git log -p failed: ${logP.stderr}`);
+  assert.equal((logP.stdout.match(new RegExp(sentinel, 'g')) || []).length, 0,
+    'the seeded OAuth credential appears in git history');
+
+  // The ignore line itself, proven directly.
+  const gitignore = fs.readFileSync(path.join(agentDir, '.gitignore'), 'utf8');
+  assert.match(gitignore, /^kimi-config\.toml$/m, '.gitignore does not exclude kimi-config.toml');
 });
 
 // ── 4. codex spend is readable ───────────────────────────────────────────────

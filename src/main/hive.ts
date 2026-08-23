@@ -49,6 +49,7 @@ import { GitCommitter } from './gitCommitter';
 import {
   installAgyHooks,
   installCodexHooks,
+  installKimiConfig,
   installPiHooks,
   installOpenCodePlugin,
   installCrushConfig,
@@ -331,8 +332,19 @@ function shortRand(): string {
 
 /** Non-memory files `mempalace mine` must not ingest (Claude Code hooks config,
  *  cursor, raw inbox/outbox JSON). `mempalace mine` honors .gitignore, so we drop
- *  one in each agent dir; written on birth here and refreshed by the mine loop. */
-const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/'];
+ *  one in each agent dir; written on birth here and refreshed by the mine loop.
+ *  `kimi-config.toml` differs from its four neighbours in KIND, not degree: the
+ *  others are churn (session state, message queues); this one is a live
+ *  CREDENTIAL — `kimi login` stores its OAuth token INSIDE the file
+ *  installKimiConfig seeds (T-P02-07-01). This is the fail-closed guard, and it
+ *  runs BEFORE any spawn writes the config (ensureMineIgnore is called at agent
+ *  birth in ensureAgent, ahead of the install call). `scrubStagedSecrets` is
+ *  deliberately NOT relied on for this file: it commits UNSCANNED above
+ *  SECRET_SCAN_MAX_LINES, commits UNSCANNED when the staged diff cannot be
+ *  read, matches on a redactSecrets regex battery rather than on knowing what
+ *  the file IS, and carries a `harnessAuthored` bypass — none of which is a
+ *  substitute for the credential never being staged in the first place. */
+const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/', 'kimi-config.toml'];
 
 /** Idempotently ensure `<agentDir>/.gitignore` excludes the non-memory files.
  *  Append-only: writes only the missing lines, leaving any existing entries. */
@@ -992,6 +1004,20 @@ export class HiveManager {
               // never fire. Must precede the positional prompt.
               preArgs.push('--dangerously-bypass-hook-trust');
             }
+            else if (desc.shim === 'kimi') {
+              // Kimi Code (Moonshot) — the CODEX case (installKimiConfig,
+              // hiveProvisioning.ts), not the grok case: HOOK_SHIM is reused
+              // verbatim (kimi's hook payload is already Claude-shaped
+              // snake_case). `--config-file` is a PER-INVOCATION flag, so the
+              // operator's global ~/.kimi/config.toml is never mutated — the
+              // same per-agent isolation codex gets, and the property D-26
+              // originally disqualified kimi for. LIVE-UNVERIFIED: no
+              // Moonshot account exists on this machine to run a live kimi
+              // session against the file this writes.
+              preArgs.push('--config-file', installKimiConfig({
+                dir, shim: this.shimPath(), nodeRun: this.nodeRunUnquoted.bind(this), userHome: homedir()
+              }));
+            }
             else if (desc.shim === 'pi') {
               // Pi (earendil-works) has a rich pi.on(event) lifecycle. We drop a
               // bundled extension into a PER-AGENT PI_CODING_AGENT_DIR (so the user's
@@ -1060,6 +1086,13 @@ export class HiveManager {
       // If a provider somehow exposes neither a flag nor a positional prompt, spawn bare.
       if (flag) return { args: [...preArgs, flag, prompt], env };
       if (preset.positionalInitialPrompt) return { args: [...preArgs, prompt], env };
+      // Neither a flag, nor a positional, nor type-into-tui: the hive protocol
+      // was built above and is now DROPPED. This agent starts with no
+      // identity, no protocol and no orientation — survivable while kimi could
+      // only be a WORKER whose mail bounced (canReceiveInbox: false); not
+      // survivable now that kimi is god-eligible (D-33). Record it rather than
+      // silently spawning unoriented.
+      this.appendLog({ kind: 'protocol-not-seeded', agentId: meta.id, provider: meta.provider });
       return { args: preArgs, env };
     }
 
