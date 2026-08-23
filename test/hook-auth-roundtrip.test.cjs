@@ -190,18 +190,22 @@ function assertNoUrlsInShims(shims) {
   }
 }
 
-/** Every shim template in hive.ts, sliced by its REAL delimiters. The old
- *  version took `start + 6000` chars, which overruns the first template into the
- *  second — so ONE of them carrying the field would have passed for both. And it
- *  iterated a hardcoded three-element list while hive.ts has had six shims for
+/** Every shim template, sliced by its REAL delimiters. The old version took
+ *  `start + 6000` chars, which overruns the first template into the second —
+ *  so ONE of them carrying the field would have passed for both. And it
+ *  iterated a hardcoded three-element list while there have been six shims for
  *  some time, so its "fails loudly if a fourth shim is added" comment was false
  *  for the whole life of the file: three of the six had NEVER carried
  *  `sock_token` and the guard never once fired. Derived, so the claim is now
  *  true — and since 01-06 task 4 landed the three missing bodies, applied to
- *  EVERY template the derivation finds rather than to a chosen subset. */
+ *  EVERY template the derivation finds rather than to a chosen subset.
+ *
+ *  Reads src/main/hiveTemplates.ts, not hive.ts: STRUCT-02 (phase 2 plan
+ *  02-01) lifted all eight module-level template constants — these six shims
+ *  among them — into their own electron-free module, byte-identical. */
 function shimTemplates() {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src/main/hive.ts'), 'utf8');
-  const decl = /^const (\w+_SHIM|\w+_EXTENSION|\w+_PLUGIN) = `/gm;
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/main/hiveTemplates.ts'), 'utf8');
+  const decl = /^export const (\w+_SHIM|\w+_EXTENSION|\w+_PLUGIN) = `/gm;
   const out = new Map();
   for (let m = decl.exec(src); m; m = decl.exec(src)) {
     const end = src.indexOf('\n`;', m.index);
@@ -211,7 +215,7 @@ function shimTemplates() {
   return out;
 }
 
-test('every shim template in hive.ts is enumerated, and the wired ones send sock_token', () => {
+test('every shim template in hiveTemplates.ts is enumerated, and the wired ones send sock_token', () => {
   const shims = shimTemplates();
   assert.ok(
     shims.size >= 6,
@@ -302,5 +306,5 @@ test('commenting out the sock_token assignment turns the pin RED, in every shim'
     `the mutation loop ran ${mutated} times for ${shims.size} derived templates — a loop that `
     + 'skips a shim proves nothing about that shim'
   );
-  assert.ok(mutated >= 6, `the mutation loop covered only ${mutated} shims; hive.ts has at least 6`);
+  assert.ok(mutated >= 6, `the mutation loop covered only ${mutated} shims; hiveTemplates.ts has at least 6`);
 });
