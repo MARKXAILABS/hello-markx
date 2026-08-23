@@ -24,6 +24,13 @@
  * the gate deliberately lives at the socket, not inside `handle`, because
  * main-side callers that build their own payloads are already inside the trust
  * boundary.
+ *
+ * Property (1) — loopback-only binding — now has a companion (DAEMON-05):
+ * the public reach beyond that loopback bind is a cloudflared CHILD PROCESS
+ * this app spawned, and `stop()` genuinely closes it (`src/main/tunnel.ts`,
+ * `hardKillTree`). It is no longer a library call with "genuinely no handle
+ * to capture" — see the inverted case below, which used to be titled for the
+ * defect and is now titled for the fix.
  */
 
 const test = require('node:test');
@@ -84,16 +91,30 @@ test('the loopback siblings they were supposed to match still bind 127.0.0.1', a
   assert.equal(broker.server.address().address, '127.0.0.1');
 });
 
-test('stop() admits the public tunnel outlives it instead of pretending', () => {
+test('stop() genuinely closes the tunnel — the child\'s own stop() ran, and publicUrl() goes null', async (t) => {
   const server = new WebhookServer({
     port: 0,
     endpoints: [{ id: 'alpha', name: 'Alpha', secret: SECRET, schema: SCHEMA }],
     onMessage: () => ({ token: 't', pending: false }),
     lookupStatus: () => null
   });
-  server.tunnelUrl = 'https://orphan.tunnelmole.net';
-  assert.equal(server.stop().tunnelStillOpen, 'https://orphan.tunnelmole.net');
-  assert.equal(server.stop().tunnelStillOpen, null, 'idempotent: nothing left to admit');
+  t.after(() => server.stop());
+  const stopCalls = [];
+  const fakeHandle = { url: 'https://adams-medical-meeting-enormous.trycloudflare.com', stop: () => stopCalls.push(Date.now()) };
+  const fakeOpener = async () => fakeHandle;
+
+  await server.listen();
+  const res = await server.startTunnel(fakeOpener);
+  assert.equal(res.ok, true);
+  assert.equal(server.publicUrl(), fakeHandle.url);
+
+  server.stop();
+  assert.equal(stopCalls.length, 1, 'the tunnel handle\'s own stop() must run — this is what actually closes it');
+  assert.equal(server.publicUrl(), null);
+
+  // Idempotent: a second stop() must not re-close an already-closed tunnel.
+  server.stop();
+  assert.equal(stopCalls.length, 1, 'idempotent: nothing left to close');
 });
 
 // ─── 2. the hook socket authenticates ────────────────────────────────────────

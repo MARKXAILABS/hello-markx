@@ -16,8 +16,11 @@
  *   5. per-endpoint rate limiting, so one noisy caller burns its own budget;
  *   6. a held message answers 202 (accepted, not started) with its token.
  *
- * The HTTP handler is driven directly with stub req/res objects: `start()` opens
- * a real tunnel, and a unit test must never reach the network.
+ * The HTTP handler is driven directly with stub req/res objects — not because
+ * `start()` opens a tunnel (it no longer does; see the off-by-default case at
+ * the end of this file), but because a unit test must never reach the
+ * network, and driving the handler directly is the house way to prove that
+ * regardless of what `start()` does or does not do.
  */
 
 const test = require('node:test');
@@ -254,4 +257,13 @@ test('a secretless endpoint is never served', async () => {
     url: '/empty', headers: { 'x-md-webhook-secret': '' }, body: post({ message: 'hi' })
   });
   assert.equal(res.status, 401);
+});
+
+test('start() alone opens no tunnel — DAEMON-05\'s off-by-default clause, proven as behaviour not grep', async (t) => {
+  const { server } = makeServer();
+  t.after(() => server.stop());
+  const res = await server.start();
+  assert.equal(res.ok, true);
+  assert.equal(server.publicUrl(), null, 'start() must not have opened any tunnel as a side effect');
+  assert.equal(server.listening(), true, 'the local security boundary must still be live on its own');
 });
