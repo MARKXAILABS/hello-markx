@@ -55,7 +55,8 @@ import {
   installCrushConfig,
   installGrokHooks,
   hookSettings,
-  buildDefaultMcpServers
+  buildDefaultMcpServers,
+  effectiveMcpConsent
 } from './hiveProvisioning';
 import type { TerminalWorkOrder } from '../shared/queueDelivery';
 
@@ -860,8 +861,19 @@ export class HiveManager {
       kgCliPath?: string;
       theme?: 'light' | 'dark';
       /** Consent state for the default-MCP bundle (W3). Threaded from the live
-       *  HarnessConfig by the caller; undefined → catalog defaults apply. */
+       *  HarnessConfig by the caller; undefined → catalog defaults apply. Only
+       *  the `safe-readonly` tier is actually read from this map (D-27) — see
+       *  `effectiveMcpConsent`. */
       mcpDefaults?: { [id: string]: { enabled: boolean } };
+      /** This agent's per-server `write`/`secret` grants (D-27) — floor-wide
+       *  `mcpDefaults` above no longer arms these; only this map does. */
+      mcpAgentGrants?: { [mcpId: string]: { enabled: boolean } };
+      /** Resolves a granted catalog id to its live decrypted secret, or
+       *  undefined when unarmed/unavailable (D-28). Injected rather than
+       *  imported: `getSecret` pulls in electron's `safeStorage`, and this
+       *  module plus hiveProvisioning.ts stay electron-free so `node --test`
+       *  can load them directly. */
+      mcpSecret?: (mcpId: string) => string | undefined;
       /** App-resources `skills/` source dir (W3). The bundled read-only skills are
        *  copied into the agent's `.claude/skills/` per spawn; undefined or missing
        *  is a no-op (tolerated until Kevin populates the resource dir). */
@@ -1141,7 +1153,13 @@ export class HiveManager {
       // Gated on mcpWiredFor: claude is the one engine this build wires
       // (D-26 — nine other engines stay documented, not built).
       const mcpPath = join(dir, 'mcp.json');
-      const mcpServers = mcpWiredFor(meta.provider ?? 'claude') ? buildDefaultMcpServers(meta.cwd, opts.mcpDefaults) : {};
+      // D-27: the SAME predicate buildDefaultMcpServers already runs, fed a map
+      // assembled per agent — safe-readonly from the floor, write/secret from
+      // this agent's own grants. The resolver is main's, injected via opts.
+      const consent = effectiveMcpConsent(opts.mcpDefaults, opts.mcpAgentGrants);
+      const mcpServers = mcpWiredFor(meta.provider ?? 'claude')
+        ? buildDefaultMcpServers(meta.cwd, consent, { secretFor: opts.mcpSecret })
+        : {};
       if (Object.keys(mcpServers).length) {
         this.writeJson(mcpPath, { mcpServers }, 0o600);
         args.push('--mcp-config', mcpPath);

@@ -42,9 +42,58 @@ require.cache[electron] = {
   }
 };
 
+// config.ts's mission-stamp store (PersistStore) pulls in better-sqlite3.
+// Without a fake, whichever answer task 4 measures for "does it load under
+// plain node" is what happens here — and on a machine where it DOES load, a
+// real Database file opens under `userData` and never closes (config.ts
+// caches one PersistStore instance module-wide), which then EPERMs the
+// tmpdir cleanup on Windows. Same fake driver as test/config-secrets.
+// test.cjs:52-76 — enough of the surface PersistStore.getKv/setKv touches.
+const sqlite = require.resolve('better-sqlite3');
+require.cache[sqlite] = {
+  id: sqlite,
+  filename: sqlite,
+  loaded: true,
+  exports: class FakeDatabase {
+    constructor() { this.rows = new Map(); this.version = 0; }
+    pragma(q) {
+      if (q === 'user_version') return this.version;
+      if (q.startsWith('user_version =')) this.version = Number(q.split('=')[1].trim());
+      return undefined;
+    }
+    exec() { /* schema DDL — the Map is the schema here */ }
+    transaction(fn) { return fn; }
+    prepare() {
+      const rows = this.rows;
+      return {
+        get: (key) => rows.get(key),
+        run: (key, value) => rows.set(key, { value }),
+        all: () => []
+      };
+    }
+    close() { /* noop */ }
+  }
+};
+
 const { HiveManager } = loadTs('src/main/hive.ts');
 const { buildDefaultMcpServers, effectiveMcpConsent } = loadTs('src/main/hiveProvisioning.ts');
 const { MCP_CATALOG, mcpGrantKey, MCP_GRANT_PREFIX, mcpWiredFor } = loadTs('src/shared/mcpCatalog.ts');
+const { readConfig } = loadTs('src/main/config.ts');
+const mainIntegrations = loadTs('src/main/integrations.ts');
+const { secretRefFor } = loadTs('src/shared/integrations.ts');
+
+/** Point config.ts/integrations.ts's `app.getPath('userData')` at a fresh dir
+ *  for one test — exactly test/config-secrets.test.cjs's freshUserData. */
+function freshUserData(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-mcp-cfg2-'));
+  const prev = userData;
+  userData = dir;
+  t.after(() => {
+    userData = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return dir;
+}
 
 const POSIX = process.platform !== 'win32';
 
@@ -247,6 +296,100 @@ test('an empty server map removes any existing mcp.json rather than leaving a st
   assert.equal(fs.existsSync(mcp), false, 'a stale mcp.json must not survive an empty bundle');
   assert.equal(injection.args.includes('--mcp-config'), false);
   assert.deepEqual(hive.mcpArmed('a1'), []);
+});
+
+// ── config.ts: the per-agent grant migration (D-27) ─────────────────────────
+//
+// config.ts's migration latches (`mcpConsentMigrationRan`, mirroring
+// `triggersMigrationRan`) are IN-PROCESS, module-level state — and
+// test/load-ts.cjs caches a loaded module by filename for the lifetime of
+// this test FILE's process, not per-test. So config.ts's `readConfig` is
+// exercised in exactly ONE test below (first, and only, call in this file) —
+// splitting it across two tests would make the second one see an
+// already-tripped latch regardless of what its own fresh config.json says,
+// which is not the behaviour under test.
+
+test('migrateMcpConsentV1 drops floor-wide write/secret consent, leaves safe-readonly alone, invents no per-agent grant, and is latched', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-mcp-cfg2-'));
+  const prev = userData;
+  userData = dir;
+  try {
+    const secretEntry = MCP_CATALOG.find((e) => e.tier === 'secret');
+    const safeEntry = MCP_CATALOG.find((e) => e.tier === 'safe-readonly');
+
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
+      mcpDefaults: { [secretEntry.id]: { enabled: true }, [safeEntry.id]: { enabled: true } }
+    }));
+
+    const first = readConfig();
+    assert.equal(first.mcpDefaults[secretEntry.id].enabled, false, 'floor-wide write/secret consent must be dropped');
+    assert.equal(first.mcpDefaults[safeEntry.id].enabled, true, 'safe-readonly stays floor-wide, untouched — both directions matter');
+    assert.equal(first.mcpConsentMigratedV1, true);
+    assert.deepEqual(first.mcpAgentGrants ?? {}, {}, 'the migration must NOT invent a per-agent grant from what it dropped');
+
+    // The latch: overwrite the on-disk config with enabled:true again AND
+    // mcpConsentMigratedV1 reset to false, then read a second time. If the
+    // migration re-ran, this would come back false again; the in-process
+    // latch (not the on-disk flag) is what must stop it.
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
+      mcpDefaults: { [secretEntry.id]: { enabled: true }, [safeEntry.id]: { enabled: true } },
+      mcpConsentMigratedV1: false
+    }));
+    const second = readConfig();
+    assert.equal(second.mcpDefaults[secretEntry.id].enabled, true,
+      'a second readConfig() must not re-run the migration — the in-process latch, not the on-disk flag, is what holds');
+  } finally {
+    userData = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── D-28: cross-agent isolation, and the fail-closed grant order ────────────
+
+test('mcpGrantKey keys per agent-server pair: distinct refs, and revoking one agent leaves the other intact', (t) => {
+  freshUserData(t);
+  const secretEntry = MCP_CATALOG.find((e) => e.tier === 'secret');
+  const refA = secretRefFor(mcpGrantKey('agent-a', secretEntry.id));
+  const refB = secretRefFor(mcpGrantKey('agent-b', secretEntry.id));
+  assert.notEqual(refA, refB, 'the SAME server granted to two DIFFERENT agents must key differently');
+  assert.ok(refA.startsWith('int:' + MCP_GRANT_PREFIX) && refB.startsWith('int:' + MCP_GRANT_PREFIX));
+
+  assert.equal(mainIntegrations.setSecret(refA, 'tok-a').ok, true);
+  assert.equal(mainIntegrations.setSecret(refB, 'tok-b').ok, true);
+  assert.equal(mainIntegrations.hasSecret(refA), true);
+  assert.equal(mainIntegrations.hasSecret(refB), true);
+
+  mainIntegrations.deleteSecret(refA);
+  assert.equal(mainIntegrations.hasSecret(refA), false, 'agent A\'s grant was revoked');
+  assert.equal(mainIntegrations.hasSecret(refB), true, 'agent B\'s grant must survive — D-28 cross-agent isolation');
+});
+
+test('the fail-closed grant order mcp:grant is built on: an unavailable safeStorage refuses the secret, and no grant may be written on that refusal', (t) => {
+  // src/main/index.ts's ipcMain handlers are not loadable under node --test —
+  // no test file in this repo does, because module load pulls in the whole
+  // Electron main-process surface (BrowserWindow, autoUpdater, …) at module
+  // scope. This proves the fail-closed PRIMITIVE 'mcp:grant' composes,
+  // unconditionally, in that exact order (setSecret first; a { ok:false }
+  // from it is returned as-is and the grant write never runs) — verified by
+  // reading src/main/index.ts's 'mcp:grant' handler alongside this test.
+  freshUserData(t);
+  const secretEntry = MCP_CATALOG.find((e) => e.tier === 'secret');
+
+  const original = require.cache[electron].exports.safeStorage.isEncryptionAvailable;
+  require.cache[electron].exports.safeStorage.isEncryptionAvailable = () => false;
+  t.after(() => { require.cache[electron].exports.safeStorage.isEncryptionAvailable = original; });
+
+  const ref = secretRefFor(mcpGrantKey('agent-x', secretEntry.id));
+  const result = mainIntegrations.setSecret(ref, 'tok-x');
+  assert.equal(result.ok, false, 'an unavailable safeStorage must refuse the secret rather than write plaintext');
+
+  // Because setSecret failed, mcp:grant's own order never reaches writeConfig
+  // — no grant for this pair exists.
+  assert.equal(readConfig().mcpAgentGrants?.['agent-x']?.[secretEntry.id]?.enabled, undefined);
+
+  // And end-to-end: no grant + no resolvable secret arms nothing (D-28).
+  const servers = buildDefaultMcpServers('/cwd', { [secretEntry.id]: { enabled: true } }, { secretFor: () => undefined });
+  assert.ok(!(`hellomarkx-${secretEntry.id}` in servers));
 });
 
 // ── The probe script never reaches for `claude mcp list` (mirrors task 1) ───

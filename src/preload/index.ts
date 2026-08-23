@@ -1221,6 +1221,28 @@ const api = {
   hiveSetArchived: (id: string, archived: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('hive:setArchived', id, archived),
 
+  // ─── Per-agent MCP grants (DAEMON-04) ────────────────────────────────────────
+  /** This agent's MCP state: which engine channel is wired, the floor-wide
+   *  safe-readonly ids, this agent's write/secret grants (with a `hasSecret`
+   *  boolean only — never the secret or its ref), and what a running session
+   *  actually has armed on disk right now. `pending · restart` is `granted \
+   *  armed`, computed here in the renderer — main never claims a live
+   *  connection (D-29). */
+  mcpAgentState: (agentId: string): Promise<
+    | { ok: true; wired: boolean; safe: string[]; granted: { id: string; tier: string; hasSecret: boolean }[]; armed: string[] }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('mcp:agentState', agentId),
+  /** Grant a write/secret MCP server to one agent. `secret` is passed once and
+   *  is never readable back — main stores it encrypted and returns only
+   *  success/failure, never the value or its ref. */
+  mcpGrant: (opts: { agentId: string; mcpId: string; secret?: string }): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('mcp:grant', opts),
+  /** Revoke a granted server: drops the config entry AND deletes the stored
+   *  encrypted secret — a revoke that leaves a live credential behind is not
+   *  a revoke (D-28). */
+  mcpRevoke: (opts: { agentId: string; mcpId: string }): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('mcp:revoke', opts),
+
   // ─── Slack integration (Slack message → Michael's queue) ─────────────────────
   /** Register a listener for inbound Slack messages; returns an unsubscribe fn.
    *  The message carries the thread coordinates needed to reply in-thread. */

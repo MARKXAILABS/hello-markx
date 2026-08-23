@@ -71,6 +71,7 @@ import { analytics } from './analytics';
 import { IntegrationBroker } from './integrationBroker';
 import * as integrations from './integrations';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES } from '../shared/integrations';
+import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor } from '../shared/mcpCatalog';
 import { RosterStore } from './roster';
 import { ControlRegistry } from './control';
 import { fetchHireManifest, readHireManifestFile } from './hire';
@@ -1921,6 +1922,16 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           theme: readConfig().terminalTheme ?? 'light',
           // W3 — default-MCP consent state + the bundled skills source dir.
           mcpDefaults: readConfig().mcpDefaults,
+          // D-27/D-28 — this agent's per-server grants, and the resolver that
+          // turns a granted id into a live decrypted secret. Main is the only
+          // process that ever holds the plaintext; hive.ts calls
+          // effectiveMcpConsent(floor, grants) and threads this resolver into
+          // buildDefaultMcpServers's opts.secretFor. Neither hive.ts nor
+          // hiveProvisioning.ts imports electron, so the resolver has to be
+          // INJECTED here rather than reached for directly (integrations.ts's
+          // getSecret pulls in electron's safeStorage).
+          mcpAgentGrants: readConfig().mcpAgentGrants?.[opts.hive.id],
+          mcpSecret: (mcpId: string) => integrations.getSecret(secretRefFor(mcpGrantKey(opts.hive!.id, mcpId))),
           skillsDir: skillsResourceDir(),
           // Account pool: tag this agent's OTEL resource with its account LABEL
           // (sanitized; never the token) so usage groups per account.
@@ -2845,6 +2856,89 @@ ipcMain.handle('hive:setArchived', (_evt, id: unknown, archived: unknown) => {
   if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
   if (!hive.enabled()) return { ok: false, error: 'hive disabled (no harnessHome)' };
   hive.setArchived(id, archived === true);
+  return { ok: true };
+});
+
+// ─── IPC: Per-agent MCP grants (DAEMON-04) ──────────────────────────────────
+// Boundary validation throughout — T-P02-11-02: everything a grant/revoke call
+// asserts (the agent, the server, the tier) is attacker-controlled input from
+// main's point of view. Every refusal returns { ok:false, error }; no throw
+// crosses IPC. `safe-readonly` ids are refused by both grant and revoke — that
+// tier is floor-wide by decision (D-27) and there is no per-agent override to
+// accept one for.
+
+/** The single derivation `mcp:grant`/`mcp:revoke`/`mcp:agentState` all share
+ *  for "does this agent have a stored secret for this server" — kept OUT of
+ *  the `mcp:agentState` handler body itself (repo-fact clause, plan 02-11
+ *  task 3): that handler's returned payload must never carry a secret ref. */
+function mcpGrantHasSecret(agentId: string, mcpId: string): boolean {
+  return integrations.hasSecret(secretRefFor(mcpGrantKey(agentId, mcpId)));
+}
+
+ipcMain.handle('mcp:agentState', (_evt, agentId: unknown) => {
+  if (typeof agentId !== 'string' || !agentId) return { ok: false, error: 'invalid agentId' };
+  const provider = hive.registry().agents[agentId]?.provider ?? 'claude';
+  const wired = mcpWiredFor(provider);
+  const cfg = readConfig();
+  const safe = MCP_CATALOG
+    .filter((e) => e.tier === 'safe-readonly' && (cfg.mcpDefaults?.[e.id]?.enabled ?? e.defaultEnabled))
+    .map((e) => e.id);
+  const agentGrants = cfg.mcpAgentGrants?.[agentId] ?? {};
+  const granted = MCP_CATALOG
+    .filter((e) => e.tier !== 'safe-readonly' && agentGrants[e.id]?.enabled === true)
+    .map((e) => ({ id: e.id, tier: e.tier, hasSecret: mcpGrantHasSecret(agentId, e.id) }));
+  const armed = hive.mcpArmed(agentId);
+  return { ok: true, wired, safe, granted, armed };
+});
+
+ipcMain.handle('mcp:grant', (_evt, opts: unknown) => {
+  const p = (opts ?? {}) as { agentId?: unknown; mcpId?: unknown; secret?: unknown };
+  if (typeof p.agentId !== 'string' || !p.agentId) return { ok: false, error: 'invalid agentId' };
+  if (typeof p.mcpId !== 'string' || !p.mcpId) return { ok: false, error: 'invalid mcpId' };
+  const entry = mcpCatalogEntry(p.mcpId);
+  if (!entry) return { ok: false, error: `unknown MCP server: ${p.mcpId}` };
+  if (entry.tier === 'safe-readonly') {
+    return { ok: false, error: 'safe-readonly servers are floor-wide — there is no per-agent grant for one' };
+  }
+  const provider = hive.registry().agents[p.agentId]?.provider ?? 'claude';
+  if (!mcpWiredFor(provider)) return { ok: false, error: `${provider}'s MCP channel is not wired in this build` };
+
+  const ref = secretRefFor(mcpGrantKey(p.agentId, p.mcpId));
+  const needsSecret = Object.keys(entry.spec.env ?? {}).length > 0;
+  if (needsSecret) {
+    if (typeof p.secret !== 'string' || !p.secret) return { ok: false, error: 'secret required for this server' };
+    // Fail-closed order (T-P02-11-04): store the key FIRST. An unavailable
+    // safeStorage returns { ok:false } here — that error is returned as-is
+    // and the grant below is never written. A grant recorded without its key
+    // is a card showing a server that can never start (D-28).
+    const stored = integrations.setSecret(ref, p.secret);
+    if (!stored.ok) return stored;
+  }
+  const cfg = readConfig();
+  const grants: NonNullable<HarnessConfig['mcpAgentGrants']> = { ...(cfg.mcpAgentGrants ?? {}) };
+  grants[p.agentId] = { ...(grants[p.agentId] ?? {}), [p.mcpId]: { enabled: true, grantedAt: Date.now() } };
+  writeConfig({ mcpAgentGrants: grants });
+  return { ok: true };
+});
+
+ipcMain.handle('mcp:revoke', (_evt, opts: unknown) => {
+  const p = (opts ?? {}) as { agentId?: unknown; mcpId?: unknown };
+  if (typeof p.agentId !== 'string' || !p.agentId) return { ok: false, error: 'invalid agentId' };
+  if (typeof p.mcpId !== 'string' || !p.mcpId) return { ok: false, error: 'invalid mcpId' };
+  const entry = mcpCatalogEntry(p.mcpId);
+  if (!entry) return { ok: false, error: `unknown MCP server: ${p.mcpId}` };
+  if (entry.tier === 'safe-readonly') {
+    return { ok: false, error: 'safe-readonly servers are floor-wide — there is no per-agent grant to revoke' };
+  }
+  const cfg = readConfig();
+  const grants: NonNullable<HarnessConfig['mcpAgentGrants']> = { ...(cfg.mcpAgentGrants ?? {}) };
+  const forAgent = { ...(grants[p.agentId] ?? {}) };
+  delete forAgent[p.mcpId];
+  grants[p.agentId] = forAgent;
+  writeConfig({ mcpAgentGrants: grants });
+  // D-28: withdrawn consent that leaves a live encrypted credential behind is
+  // not a revoke.
+  integrations.deleteSecret(secretRefFor(mcpGrantKey(p.agentId, p.mcpId)));
   return { ok: true };
 });
 

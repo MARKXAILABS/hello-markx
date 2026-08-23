@@ -9,12 +9,13 @@ import {
   providerPreset,
   type AgentProvider
 } from '../shared/agentProvider';
-import { defaultMcpDefaults } from '../shared/mcpCatalog';
+import { defaultMcpDefaults, MCP_CATALOG, MCP_GRANT_PREFIX } from '../shared/mcpCatalog';
 import { expandTilde, normalizeHiveHome } from './fs';
 import { PersistStore } from './db';
 import { deleteSecret, deleteSecretsWithPrefix, getSecret, setSecret } from './integrations';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
 import type { IntegrationRecord } from '../shared/integrations';
+import { secretRefFor } from '../shared/integrations';
 import {
   DEFAULT_CONTEXT_TRIGGER,
   DEFAULT_ORG_TRIGGER,
@@ -214,8 +215,23 @@ export interface HarnessConfig {
   godModel?: string;
   /** Per-server consent state for the default MCP bundle, keyed by catalog id.
    *  Seeded from MCP_CATALOG (safe-readonly ON, write/secret OFF); the user flips
-   *  these in Settings. A server is wired into an agent only when enabled here. */
+   *  these in Settings. FLOOR-WIDE, and — since `migrateMcpConsentV1` — read only
+   *  for the `safe-readonly` tier (D-27); `write`/`secret` entries here are
+   *  inert leftovers a pre-migration config may still carry. */
   mcpDefaults?: { [id: string]: { enabled: boolean } };
+  /** Per-AGENT consent for `write`/`secret` MCP servers (D-27) — the safe tier
+   *  stays floor-wide in `mcpDefaults` above; no per-agent override of the safe
+   *  tier exists. The secret itself lives in the encrypted store and is NEVER
+   *  here: the ref is always DERIVED, `secretRefFor(mcpGrantKey(agentId, mcpId))`,
+   *  so `mcp:grant`, `mcp:revoke` and `resetConfig`'s sweep cannot key an
+   *  agent-server pair three slightly different ways (D-28). `grantedAt` is a
+   *  display-only timestamp — nothing reads it to decide anything. */
+  mcpAgentGrants?: { [agentId: string]: { [mcpId: string]: { enabled: boolean; grantedAt: number } } };
+  /** One-time guard for `migrateMcpConsentV1` (drops any floor-wide `enabled:true`
+   *  on a write/secret `mcpDefaults` entry — D-27 makes that tier per-agent, and
+   *  the migration does NOT invent a per-agent grant from what it drops; the
+   *  operator re-grants explicitly, per agent, fail closed). */
+  mcpConsentMigratedV1?: boolean;
   /** Enable semantic memory (MemPalace CLI). No-op if mempalace isn't installed. */
   semanticMemory: boolean;
   /** Embedding model for the palace: lightweight 'minilm' or multilingual 'embeddinggemma'. */
@@ -456,6 +472,8 @@ const DEFAULTS: HarnessConfig = {
   // Seeded from the MCP catalog so the consent defaults never drift from it
   // (safe-readonly ON, write/secret OFF).
   mcpDefaults: defaultMcpDefaults(),
+  mcpAgentGrants: {},
+  mcpConsentMigratedV1: false,
   maxConcurrentWorkers: 4,
   workerIdleTimeoutMinutes: 20,
   integrations: [],
@@ -795,6 +813,56 @@ function migrateTriggersV1(cfg: HarnessConfig): HarnessConfig {
   }
 }
 
+/** Set once `migrateMcpConsentV1` has run in THIS process — mirrors
+ *  `triggersMigrationRan` exactly, same reason: `persistConfig` below
+ *  re-enters `readConfig`, and without an in-memory latch the migration's own
+ *  write would re-run itself before `mcpConsentMigratedV1: true` reaches disk. */
+let mcpConsentMigrationRan = false;
+
+/**
+ * D-27: `write`/`secret` MCP consent moves from floor-wide (`mcpDefaults`) to
+ * per-agent (`mcpAgentGrants`). Fold that forward exactly once per install —
+ * the line-for-line shape of `migrateTriggersV1` above (one-shot, latched,
+ * try/catch-wrapped, never fatal).
+ *
+ * Every `mcpDefaults[id]` whose catalog tier is NOT `safe-readonly` and whose
+ * `enabled` is `true` is set to `false`. `safe-readonly` entries are left
+ * alone (that tier stays floor-wide — nothing to migrate). Ids absent from
+ * the catalog are left alone too (they can never be armed — `buildDefault
+ * McpServers` only ever iterates the catalog, so a stale id is inert either
+ * way). This does NOT create a per-agent grant from what it drops: an
+ * agent-scoped capability grant has to be made TO an agent, and inferring the
+ * grantee is how one floor-wide default becomes eleven silent grants. The
+ * operator re-grants explicitly, per agent — a real, operator-visible cost,
+ * recorded in the SUMMARY, not engineered around.
+ */
+function migrateMcpConsentV1(cfg: HarnessConfig): HarnessConfig {
+  if (cfg.mcpConsentMigratedV1 || mcpConsentMigrationRan) return cfg;
+  mcpConsentMigrationRan = true;
+  try {
+    const next: HarnessConfig = { ...cfg, mcpConsentMigratedV1: true };
+    const floor = cfg.mcpDefaults;
+    if (floor) {
+      let changed = false;
+      const droppedFloor: { [id: string]: { enabled: boolean } } = { ...floor };
+      for (const e of MCP_CATALOG) {
+        if (e.tier === 'safe-readonly') continue;
+        if (droppedFloor[e.id]?.enabled === true) {
+          droppedFloor[e.id] = { ...droppedFloor[e.id], enabled: false };
+          changed = true;
+        }
+      }
+      if (changed) next.mcpDefaults = droppedFloor;
+    }
+    persistConfig(next);
+    return next;
+  } catch {
+    // Leave the config exactly as read. The latch above stays set, so a
+    // failing migration retries on the next launch rather than every read.
+    return cfg;
+  }
+}
+
 /**
  * One-shot per damaged file: move an unreadable config aside instead of letting
  * the defaults we are about to return quietly overwrite it (#3).
@@ -831,7 +899,7 @@ export function readConfig(): HarnessConfig {
     return withTriggerDefaults({ ...DEFAULTS });
   }
   const merged = withMissionStamps(withSecrets(withTriggerDefaults({ ...DEFAULTS, ...parsed })));
-  return migrateTriggersV1(migrateSecrets(merged, parsed));
+  return migrateMcpConsentV1(migrateTriggersV1(migrateSecrets(merged, parsed)));
 }
 
 /** Fold a plaintext-era config forward: `persistConfig` does the actual moving
@@ -925,16 +993,23 @@ export function resetConfig(): HarnessConfig {
   // Drop every secret this module owns BEFORE the write. A reset used to erase
   // them simply by overwriting the whole file; now that they live in the
   // encrypted store, the per-endpoint webhook secrets would otherwise survive a
-  // "reset & start over" as orphans nothing references (#10).
+  // "reset & start over" as orphans nothing references (#10). The MCP grant
+  // family is #10 again with a different prefix: an id is `int:mcp:<agentId>:
+  // <mcpId>` (secretRefFor(mcpGrantKey(...))), which the `cfg:` sweep above
+  // never reaches — a reset would otherwise leave live encrypted MCP
+  // credentials behind with no config entry pointing at them.
   deleteSecretsWithPrefix(SECRET_PREFIX);
+  deleteSecretsWithPrefix(secretRefFor(MCP_GRANT_PREFIX));
   secretCache = null;
   // Straight through persistConfig, which is atomic and also clears the mission
   // fire stamps (DEFAULTS carry none), so reset has one write path like the rest.
   persistConfig({ ...DEFAULTS });
-  // Drop the migration latch too: the file on disk is back to `triggersMigratedV1:
-  // false`, and a latch left set would keep the flag from ever being written again
-  // in this process. The migration itself is a no-op on defaults either way.
+  // Drop the migration latches too: the file on disk is back to
+  // `triggersMigratedV1: false` / `mcpConsentMigratedV1: false`, and a latch
+  // left set would keep the flag from ever being written again in this
+  // process. Both migrations are no-ops on defaults either way.
   triggersMigrationRan = false;
+  mcpConsentMigrationRan = false;
   return withTriggerDefaults({ ...DEFAULTS });
 }
 
