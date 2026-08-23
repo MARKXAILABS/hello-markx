@@ -1097,3 +1097,68 @@ function jsxElements(src, tag) {
   }
   return out;
 }
+
+// ─── STRUCT-02 (phase 2 plan 02-01): ADR-0004 survives the git-committer split ──
+
+/** Comment-stripped source of every .ts/.tsx under src/, joined with a single
+ *  space so a construction or declaration wrapped across lines by a
+ *  formatter cannot defeat either clause below — same joined-text discipline
+ *  the plan's own shell criteria use, applied here in plain JS. */
+function joinedSrcText() {
+  return sourceFiles(path.join(root, 'src'))
+    .map((rel) => readStripped(rel))
+    .join(' ')
+    .replace(/\s+/g, ' ');
+}
+
+test('ADR-0004: exactly one GitCommitter is ever constructed, and hive.ts owns it (02-01)', () => {
+  const joined = joinedSrcText();
+  const total = (joined.match(/new GitCommitter\(/g) || []).length;
+  assert.equal(
+    total, 1,
+    `found ${total} \`new GitCommitter(\` construction(s) across src/**. ADR-0004 is a single- `
+    + 'committer model — a second construction races the first on the same git index, which is '
+    + 'index corruption plus a bypassed FLOOR-04 secret scrub. This must stay exactly 1.'
+  );
+
+  const hive = readStripped('src/main/hive.ts').replace(/\s+/g, ' ');
+  const inHive = (hive.match(/new GitCommitter\(/g) || []).length;
+  assert.ok(
+    inHive >= 1,
+    "src/main/hive.ts no longer constructs a GitCommitter. The negative half of this clause "
+    + '(exactly one, above) is satisfiable by deleting the committer outright — this positive '
+    + 'half fails that case: HiveManager must be the one owner.'
+  );
+});
+
+test('HiveManager still exposes commit()/flushCommit() as delegations, not the old inline git state (02-01)', () => {
+  const hive = readStripped('src/main/hive.ts');
+
+  // Positive half: the public API six tests and every hive-mutating method
+  // call did not move away.
+  assert.ok(
+    // The type annotation is required to distinguish the DECLARATION from an
+    // internal call site (`this.committer.commit(message)` has no `: string`)
+    // — a bare `commit(message` matches both and can never go red.
+    /\bcommit\(message: string/.test(hive),
+    'src/main/hive.ts no longer declares commit(message: string...) — every hive mutation (router '
+    + 'tick, writeTasks(), ensureAgent(), setArchived(), …) calls this by name'
+  );
+  assert.ok(
+    /\bflushCommit\(root: string/.test(hive),
+    'src/main/hive.ts no longer declares flushCommit(root: string...) — test/hive-durability.test.cjs '
+    + 'and test/engine-parity.test.cjs call this exact method, by this exact name, at runtime'
+  );
+
+  // Negative half: the debounce/retry state that used to live on HiveManager
+  // is gone from here — proving these are delegations, not a second copy of
+  // GitCommitter's internals sitting alongside the real one.
+  for (const moved of ['gitInFlight', 'committing']) {
+    assert.equal(
+      hive.includes(moved), false,
+      `src/main/hive.ts still contains "${moved}" — this field moved to GitCommitter `
+      + '(src/main/gitCommitter.ts) in plan 02-01. Its presence here means either the move was '
+      + 'incomplete or a second copy of the committer\'s internal state has been reintroduced.'
+    );
+  }
+});
