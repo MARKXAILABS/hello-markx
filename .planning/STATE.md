@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 02-01-PLAN.md -- hive.ts split into hiveTemplates.ts/gitCommitter.ts/hiveProvisioning.ts, STRUCT-02 delivered, ADR-0004 pinned. Whole suite 638/631/0/7 -> 642/635/0/7, 0 fail throughout. Next: 02-02."
-last_updated: "2026-08-23T09:43:06.109Z"
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-08-23T10:57:48.810Z"
 last_activity: 2026-08-23
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 31
+  completed_plans: 32
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plan: 2 of 12
+Plan: 3 of 12
       none — its D-09 gate is unrun). The counter is NOT a cursor: this was a PARALLEL
       gap-closure wave, so plan numbers did not advance in order.
       **ALL EIGHT gap-closure plans have landed:** 01-24, 01-26, 01-27 (wave 1), 01-25, 01-28,
@@ -155,7 +155,7 @@ Status: Ready to execute
 Last activity: 2026-08-23
 prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
 
-Progress: [███████░░░] 72%
+Progress: [███████░░░] 74%
 
 ## Performance Metrics
 
@@ -208,6 +208,7 @@ Progress: [███████░░░] 72%
 | Phase 01 P30 | 21m | 3 tasks | 6 files |
 | Phase 01 P31 | 48m | 3 tasks | 8 files |
 | Phase 02 P01 | 50min | 3 tasks | 8 files |
+| Phase 02 P02 | 70min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -473,6 +474,10 @@ Recent decisions affecting current work:
 - [Phase 02-01]: hive.ts split for the seam PARITY-01a/02 and DAEMON-04 need, not for testability (D-07) -- five test files already loaded it under node --test — STRUCT-02's real justification is that later plans must touch the router/installers/templates and this phase opens that seam regardless
 - [Phase 02-01]: GitCommitter extracted by composition (ADR-0004 shape A), never free functions — six runtime call sites (test/hive-durability.test.cjs, test/engine-parity.test.cjs) call HiveManager.flushCommit(root) directly; free functions would break all six and violate the single-committer invariant the moment a second caller imports them
 - [Phase 02-01]: GitCommitterDeps injects root/log/redactSecrets as plain functions rather than importing back from hive.ts — keeps gitCommitter.ts electron-free with zero circular-import risk, mirroring DeliveryDeps' style
+- [Phase ?]: FloorDeps needs focus/syncKeepAwake/respawnCore/startWorkerWatcher beyond the plan's 7 named fields
+- [Phase ?]: bootstrapHiveServices() ran from 3 places (whenReady, config:update onboarding transition, config:changeHome failure recovery) against the ALREADY-CONSTRUCTED floor; split bootFloor's tail into a separately-exported startHiveServices() so re-invocation re-arms instead of leaking the old listeners/timers
+- [Phase ?]: 01-21 lint-gate precondition verified against HEAD's own ancestry (git merge-base --is-ancestor), not literal main:eslint.config.js -- this project's milestone branching strategy keeps main 203 commits behind for the whole milestone
+- [Phase ?]: Fixed a real pre-existing race condition in IntegrationBroker/TelemetryCollector: server was assigned inside the async listening callback, so stop() racing an in-flight bind leaked the socket forever -- now assigned before listen()
 
 ### Pending Todos
 
@@ -594,8 +599,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-23T09:43:06.091Z
-Stopped at: Completed 02-01-PLAN.md -- hive.ts split into hiveTemplates.ts/gitCommitter.ts/hiveProvisioning.ts, STRUCT-02 delivered, ADR-0004 pinned. Whole suite 638/631/0/7 -> 642/635/0/7, 0 fail throughout. Next: 02-02.
+Last session: 2026-08-23T10:57:48.787Z
+Stopped at: Completed 02-02-PLAN.md
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
