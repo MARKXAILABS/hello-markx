@@ -26,137 +26,40 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plan: 6 of 12
-      none — its D-09 gate is unrun). The counter is NOT a cursor: this was a PARALLEL
-      gap-closure wave, so plan numbers did not advance in order.
-      **ALL EIGHT gap-closure plans have landed:** 01-24, 01-26, 01-27 (wave 1), 01-25, 01-28,
-      01-30 (wave 2), 01-29 (wave 3) and **01-31 (wave 4)**. Nothing is outstanding in the wave.
-      **The PHASE is still PARTIAL and this line must not be flipped.** The wave changed how much
-      is left inside each open requirement row, not how many rows are open: **10 of 23 close, 13
-      do not**, exactly as 01-23 adjudicated, and **no box was ticked** (`[x]`=10 / `[ ]`=61 before
-      and after 01-31, traceability 10 Complete / 61 Pending unchanged). **0 of 20** non-epic
-      floor-inspection issues are closable while `origin/main` still pins `electron ^32.2.0` and
-      the whole phase sits behind draft PR #77. Next action: **re-run `/gsd:verify-work 1`** — the
-      verdict is the verifier's, not any executor's.
-      01-31 (wave 4, the closer) re-derived ALL THIRTEEN doc anchors at wave-4 HEAD and found
-      **thirteen of thirteen stale** — including the four an earlier sweep certified correct,
-      because 01-24 inserts into hooks.ts, 01-25 into index.ts, 01-26 into hive.ts and 01-27/01-28
-      both edit delivery.ts. They are now written as `<file>.ts <symbol>()` and frozen by a
-      `STALE_ANCHORS` content-located denial table proven RED 6/6 against the pre-fix blobs, which
-      can never go red for a refactor reason because it names strings that were wrong in the PAST.
-      The last six "Enterprise Knowledge Graph" sites are renamed to kg-core.cjs's own words over a
-      NEW `shippedTextFiles()` walker — explicit roots plus an extension allow-list, 315 files,
-      with `dist/`/`out/`/`.planning/` outside by CONSTRUCTION — and DEMONSTRATED RED against
-      `resources/skills/capabilities/SKILL.md` specifically, the one file the `.ts`-only renderer
-      walker could never have read and the one that ships into every agent's skills directory, so
-      until this commit the agents themselves were told a RETIRED capability (V2-05) was available.
-      The gate now names EXACTLY the two deliberate exclusions (the audit record quoting the defect,
-      and the pin's own needle). A 1280 cross-check over the 43-file doc slice returns 0, confirming
-      01-25's DESIGN.md hand-off IS discharged; it carries its own inline pre-fix fixture so a
-      silently-broken matcher stays distinguishable from a clean tree. REQUIREMENTS.md rows restated
-      AT SOURCE with command and output pasted, and **GATE-01 ADJUDICATED DOWN** against 01-25's
-      `requirements-completed`: clause 2 ("the token … is not readable from any agent's shell") is
-      still false on Linux via `/proc/<pid>/environ`, the source says so at hooks.ts:29 and
-      telemetry.ts:40, and 01-24 declined it for the same reason. FLOOR-04 restated from 01-26's
-      LANDED SUMMARY — revision 4 WITHDREW the value widening and ships a PASSING test that a
-      quoted-key JSON token survives `git log -p`, so the old "covers JSON value position" sentence
-      would have been a ledger claim a green test contradicts; five ACTIVE bypasses named, caps
-      cited BY NAME, owner re-homed because "a plan that widens the matcher" resolves to nobody.
-      FLOOR-13 recorded the OPPOSITE of the tree and is corrected. FLOOR-02/09/10's own anchors had
-      expired a THIRD time and are now symbols. The win32 skip ceiling is DERIVED from the TAP at
-      **7** (not the 6 expected — the 7th is an ENVIRONMENT skip, EPERM on symlinkSync, which will
-      not appear on a runner with symlink permission), all seven named by title, reconciled with
-      01-30 title for title, and re-frozen at `≤`, never `>=`, with the move justified: `# pass`
-      went DOWN by exactly 2 because two win32 non-runs that node:test counted as PASSES became
-      real skips. AUTHORITATIVE whole-suite figure: **634 / 627 / 0 fail / 7 skipped**, identity
-      `pass = 531 − 2 + 98 = 627`; vs the 535/531/0/4 pre-gap baseline that is +99 tests, +96 pass,
-      +3 skipped. And ONE residual register now holds **48 rows** (35 code, 5 recorded behaviour
-      changes, 8 operator-blocked), DERIVED by sweeping all seven landed SUMMARYs rather than copied
-      from the seed: nine owners re-homed off already-landed plans or off a role ("hive maintainer"
-      is not an owner for something measurable from source), one seeded row RESOLVED and deleted
-      (01-25's fourth sink shipped — SPAWN_SAFE_SESSION_ID is in hooks.ts), and THREE rows the seed
-      did not carry — docs/adr/0001's delivery.ts:518 anchor (now stale too, reported not edited
-      because 01-31 does not own that file), DESIGN.md:686 being off by one with two live source
-      comments citing it (01-29 left it unverified on purpose; 01-31 checked it), and the
-      deterministic STATE.md clobber that 01-25/01-27/01-29 each hand-edited around with no owner
-      named. `nyquist_compliant: false` and `status: draft` in 01-VALIDATION.md are BYTE-IDENTICAL
-      — correctly; flipping either follows the verifier.
-      01-29 landed the last renderer half: the AUTO chip now reads the bypass the OPERATOR typed on
-      a custom agent (config.ts spawns that command verbatim), through one tokenized matcher shared
-      by every arm — whole argv tokens, both sides of an `=`, with an explicit empty-flag guard —
-      so `--auto` stops painting `--auto-compact` and `--permission-mode=bypassPermissions` starts
-      matching. Measured 6 of 12 table rows failing before, 0 of 12 after; the enshrining assertion
-      at the old `:138` was INVERTED. The model chip is bounded behind a named MODEL_CHIP_MAX_W with
-      its gate anchored on the chip’s OWN title, because the card emits four other elements already
-      carrying all three guards. The three-constant pin (MIN_WIN / SIDEBAR_COLLAPSE_WIDTH /
-      DESIGN.md’s two sentences) has been SEEN failing — against an INLINE FIXTURE of the pre-fix
-      declaration, never a `git show`, because every checkout in ci.yml is a depth-1 clone and that
-      object is absent on all three runners. `git status --porcelain src/main/index.ts DESIGN.md` is
-      empty before and after. And the 1024–1279 band 01-25 opened no longer eats the sidebar width:
-      `splitterReachableMax` bounds the RESIZE effect while the DRAG still clamps to `clampMax`,
-      taking 236 persisting writes for a stored 900 down to 0, with #38’s rescue (1100 → 976) and the
-      664 drag bound intact. Suite 626/619/0/7 → 632/625/0/7; e2e 2/2 against real Electron 43.
-      **01-31 must add FOUR residuals from 01-29’s register**, under the exact heading
-      `## Residuals — named, with anchors and owners` in 01-29-SUMMARY.md: (a) opencode’s chip still
-      lies in both directions; (b) `autoModeFlagForProvider` reads `autoModeFlag` while
-      `buildSpawnCommand` writes `autoFlag` (now guarded by an all-preset equality assertion);
-      (c) the splitter’s rescue path still writes through the persisting setter, whose complete fix
-      is a non-persisting setter in `store.ts`; (d) `b/WR-08`. FLOOR-01 and FLOOR-13 are recorded in
-      01-29-SUMMARY.md’s `requirements-completed` for 01-31 to close — REQUIREMENTS.md was NOT
-      touched.
-      01-30 landed the verification-surface half: two win32 non-runs are now CONDITIONAL runner
-      skips (one converted, one SPLIT — it RUNS on win32 and skips on POSIX), the shim
-      `sock_token` pin is comment-stripped and assignment-shaped and red for all six templates
-      against the real hive.ts, `npm test` is pinned byte-exact, and `latest*.yml` +
-      `*.blockmap` are inside the attestation with the built-nothing tripwire re-split so a
-      feed with no installers fails the job. Its headline number DROPS by design: suite went
-      623/617/0/6 → 626/619/0/7 on this win32 host, `# pass` +2 because one previously-false
-      pass became a skip. **01-31 must add THREE residuals from 01-30's register**, recorded
-      under the exact heading `## Residuals handed to plan 01-31's register — BY NAME` in
-      01-30-SUMMARY.md: (a) `test/proc-kill.test.cjs` — FIVE cases invisible to the TAP
-      counters on EVERY platform, owner a follow-up plan holding that file AND
-      `test/repo-claims.test.cjs`; (b) `test/engine-parity.test.cjs` — the byte-level drive for
-      the five shims that now have only a source-text pin; (c) NEW — `win-cmd-shim`'s converted
-      case pins the OUTCOME and not the REASON its title names (deleting `src/main/pty.ts:573`'s
-      guard does not turn it red), owner a follow-up plan with a POSIX runner. 01-31 also owns
-      `01-VALIDATION.md`'s `# skipped 4` (untouched by 01-30, by instruction) and must derive
-      the authoritative whole-suite figure from the TAP counter on its own host, not from any
-      plan's prose. 01-28 landed against 01-27 as planned: it verified 01-27's
-      loadQueue/queueReadError block and the harness() helper intact (34/34 green before
-      editing), re-derived quiesce's emit from :671 to :717, and renders 01-27's
-      'queue temporarily unreadable (EISDIR) — …' string verbatim in an asserted case.
-      01-31 must add TWO residuals from 01-28's register, recorded under the exact heading
-      `## Quiesce residuals — ACCEPTED, not fixed` in 01-28-SUMMARY.md: (a) a false `blocked`
-      landing AFTER the last real Stop is unrecoverable, because quiesce suppresses the repeat
-      per spell and useHive's Stop arm is the only clearer of breakerLevel; (b) quiesce's
-      DURABLE half still calls setStatus(id,'idle') unconditionally — the synthesized
-      discriminator reaches the renderer arm only. 01-29 inherited two things from 01-25, both now DISCHARGED: the splitter
-      re-clamp that persists a shrunken sidebar width across the newly reachable 1024-1279
-      band (fixed by splitterReachableMax), and the DESIGN.md line citations — 01-25 kept that file's line count identical
-      (numstat 2/2) precisely so 01-29's corrections stay valid, and all five were made. 01-31 must add one residual
-      to its register: hive.recordSession (hive.ts:1143-1156) still validates only
-      `!root || !sessionId`; both of its callers are now guarded, so it is defence in depth,
-      not an open hole.
-Status: Ready to execute
-        0 of 20 non-epic floor-inspection issues could be closed, because main is at 19dbdfb
-        and still pins electron ^32.2.0 while all Phase-1 commits sit behind draft PR #77. See
-        01-23-SUMMARY.md § THE VERDICT for the ten outstanding items and their owners.
-        SEPARATELY, the gap-closure wave opened by 01-VERIFICATION.md is now COMPLETE — all eight
-        plans (01-24 … 01-31) have landed. It did NOT change the verdict: 10 of 23 still close,
-        13 still do not, and no requirement box was ticked by any plan in the wave. The phase is
-        READY FOR RE-VERIFICATION (`/gsd:verify-work 1`) but this line must not be flipped to
-        "complete" by any executor — the verdict is the verifier's, and the operator items above
-        must clear regardless. `gsd-tools state advance-plan` tried to flip it on an earlier run
-        and was reverted, because it counts SUMMARYs where 31 plans exist and increments blindly in
-        a wave that does not run in plan order. **Every executor from 01-25 onward has therefore
-        edited this file BY HAND; 01-27 measured the corruption twice with a backup-and-diff and it
-        is deterministic (the multi-line `Status:` paragraph below becomes an unquoted, truncated
-        YAML `status:` scalar). That defect is now register row A35 with a named owner.**
-Last activity: 2026-08-23
-prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
+Plans complete: **5 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+      The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
+      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-07**.
+      Outstanding: 02-05, 02-06, 02-08, 02-09, 02-10, 02-11, 02-12.
+      Next wave: **wave 5 = 02-11** (MCP per-agent server bundle + grant gating).
 
-Progress: [████████░░] 81%
+Execution facts as of this line:
+- Branch `gsd/v1.0-floor-closure`; NOT `gsd/v1.0-milestone` (that branch is content-behind and would
+  regress two phase-1 source fixes plus all 12 phase-2 plans). Nothing is pushed — `gh pr checks` is
+  therefore MEASUREMENT UNAVAILABLE for every plan so far, recorded as such, never faked.
+- `workflow.use_worktrees=false`, so every plan runs sequentially on the main tree. No worktree
+  merges, no post-merge reconciliation.
+- Whole-suite figure re-measured by the ORCHESTRATOR after every plan, never SUMMARY-trusted:
+  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> **710/703/0 fail/7 skipped** now.
+  `npm run typecheck` and `npm run build` exit 0 at every checkpoint. 0 failures is the bar; there is
+  no pre-existing-failure allowance on this phase.
 
+Requirements deliberately still OPEN, with the reason (none of these is an oversight):
+- **DAEMON-01** — unit half green (02-03). `02-VALIDATION.md` requires BOTH `node --test` AND a live
+  Electron run with real PTYs; the live run has not happened. Tracked as a phase-close gate.
+- **DAEMON-05** — spans 02-04/02-05/02-10/02-12. Live close attempted for real this session, twice,
+  including outside the sandbox: exit 3, ANNOUNCED skip. Root cause is ENVIRONMENTAL, not code —
+  the LAN resolver (JioFiber router 192.168.31.1) returns NXDOMAIN for freshly-minted
+  `*.trycloudflare.com` subdomains while the apex resolves and general egress is fine. A public
+  resolver (8.8.8.8 / 1.1.1.1) would likely let this verification actually pass.
+- **STRUCT-01** — 02-02 and 02-03 closed the boot and agent-lifecycle seams; `spawnAgentCore`
+  (~480 lines, imports electron at module scope) and ~152 IPC handlers remain in `index.ts`.
+- **PARITY-03** — shared with 02-12, which owns the final honesty-ledger pin. 02-07 correctly
+  declined to flip it.
+
+Parity ledger after 02-07, reported in full per D-33/VALIDATION rather than as a bare win:
+engines that can receive mail **8 -> 9**; live-verified bridges **unchanged at zero**;
+LIVE-UNVERIFIED bridges **4 -> 5** (kimi joins pi, opencode, crush, qwen). None of those five CLIs
+is installed on this machine, so this is the expected outcome under the zero-recurring-cost rule.
 ## Performance Metrics
 
 **Velocity:**
