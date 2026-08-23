@@ -43,3 +43,18 @@ a function`, blocking window creation entirely.**
   built `tokens.css`, real Google Fonts CDN, but a trivial throwaway main process instead
   of booting `src/main/index.ts`'s hive/PTY machinery, which this specific verification has
   no use for).
+
+**Addendum, 02-06 closeout session (recovery dispatch, after the 5 task commits above):**
+`npm run e2e` was re-run from a clean shell in this session — `2 passed (16.2s)`, including
+`the wizard counts its steps honestly and Michael clocks in on the floor`, which is the exact
+assertion that requires `bootFloor()`/`hive.setRoutedObserver` to succeed and a `BrowserWindow`
+to open. **The boot-blocking crash above did NOT reproduce.** Read `git rev-parse HEAD` at the
+top of this closeout's own SUMMARY for the exact tree this was run against; no source file this
+bug's own repro pointed at (`src/main/index.ts`, `src/main/floor/boot.ts`) was touched by any of
+the 5 commits between the discovery above and this addendum. Likeliest explanation, unconfirmed:
+an environment-specific glitch in the discovering session (a stale `out/main/index.js` build, a
+leftover Electron/userData lock, or the same interactive shell's `ELECTRON_RUN_AS_NODE=1` export
+noted above interacting with the manual `electron.exe out/main/index.js` repro command in a way
+`e2e/smoke.spec.ts`'s own `sandboxEnv()` does not need to guard against for a `playwright test`
+invocation). Left as a real, confirmed-once observation above — not deleted — but a future reader
+should re-run `npm run e2e` before assuming the app cannot boot; on this session's tree it boots.
