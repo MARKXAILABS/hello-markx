@@ -15,6 +15,7 @@ import { AgentControlStrip } from './AgentControlStrip';
 import { BlockedBanner } from './BlockedBanner';
 import { GitTab } from './GitTab';
 import { Icon } from './Icon';
+import { McpConsentModal } from './McpConsentModal';
 import { useStore, type Agent } from '@/store/store';
 import { usePtyParser } from '@/hooks/usePtyParser';
 import {
@@ -34,6 +35,7 @@ export interface AgentDetailPanelProps {
 export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
   const [openTerminalState, setOpenTerminalState] = useState<'idle' | 'opening' | 'ok' | 'error'>('idle');
   const [openTerminalError, setOpenTerminalError] = useState<string | undefined>();
+  const [mcpModalOpen, setMcpModalOpen] = useState(false);
   // Claude account pool — offered only for Claude-engine agents once the
   // operator has registered accounts. Changing it updates the stored pin;
   // the running session keeps its current account until the next (re)start.
@@ -95,6 +97,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
   };
 
   return (
+    <>
     <PixelPanel
       variant="default"
       style={{
@@ -173,6 +176,13 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
             <Icon name="terminal" />
             {openTerminalState === 'opening' ? '...' : openTerminalState === 'ok' ? 'ok' : openTerminalState === 'error' ? 'err' : 'open'}
           </span>
+        </PixelButton>
+        {/* DAEMON-04 — the consent modal's launch point for a worker. No
+            correct restart implementation is in scope here (that closure is
+            CommandCenterPanel.tsx's), so onRestart is omitted; the modal's
+            own running-agent notice names where the control lives instead. */}
+        <PixelButton variant="secondary" size="sm" onClick={() => setMcpModalOpen(true)}>
+          MCP
         </PixelButton>
         {/* The only icon-only control in this panel, and it was the only button
             on the whole agent surface with an EMPTY accessible name — measured on
@@ -277,6 +287,10 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
         )}
       </div>
     </PixelPanel>
+    {mcpModalOpen && (
+      <McpConsentModal agent={agent} onClose={() => setMcpModalOpen(false)} />
+    )}
+    </>
   );
 }
 
