@@ -2151,7 +2151,20 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // Remember how to rebuild this agent (main-owned failover, #5) and hold the
     // autonomy typers off it while its TUI boots.
     spawnRecipes.set(opts.id, { opts: recipe, owner });
-    delivery.noteSpawn(opts.id);
+    // Crush's protocol seed (seedDelivery:'type-into-tui') is enqueued by
+    // main here, not typed by the renderer's setInterval (D-11 gap 2) —
+    // EXCEPT for the god, whose seed is one link in the renderer's ORDERED
+    // three-step boot chain (remote-control command -> seed -> orientation
+    // prompt, useHive.ts). Enqueuing the god's seed here would both duplicate
+    // the write and invert that order, since the queue cannot deliver before
+    // BOOT_GRACE_MS. `seedPrompt` is still returned below either way —
+    // useHive.ts's god chain still consumes it directly.
+    delivery.noteSpawn(
+      opts.id,
+      seedPrompt && !opts.hive?.isGod && opts.hive?.id
+        ? { agentId: opts.hive.id, text: seedPrompt }
+        : undefined
+    );
   }
   // A pinned account that was unhealthy at spawn got swapped above — count it
   // on the panel like a runtime failover (only once the process really started).

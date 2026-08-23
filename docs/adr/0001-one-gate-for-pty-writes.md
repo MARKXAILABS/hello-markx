@@ -2,6 +2,8 @@
 
 **Status:** Accepted · **Recorded:** 2026-08-20 (the decision itself is older; this
 record moves it out of `docs/message-queue.md` §1, which remains the full contract)
+· **Amended:** 2026-08-23 (DAEMON-01 — two more renderer-side automatic writers moved
+into main; see Decision and Exceptions below)
 
 ## Context
 
@@ -17,11 +19,11 @@ sentence and the two were submitted together as one garbled prompt.
 ## Decision
 
 **Exactly one place types automatic text into a live agent's PTY**: the drain loop,
-`DeliveryService.drainQueue()` in the main process (`src/main/delivery.ts:518`).
+`DeliveryService.drainQueue()` in the main process (`src/main/delivery.ts`).
 Everything else enqueues into the per-agent MD queue and lets the drain decide when.
 
-> **Amended 2026-08-21.** As written in 2025 this decision named `useHive.ts` effect
-> #4, in the RENDERER. The decision itself — one gate, never ad hoc — is unchanged and
+> **Amended 2026-08-21.** As written in 2025 this decision named a renderer-side hook
+> effect. The decision itself — one gate, never ad hoc — is unchanged and
 > is why this record exists. What changed is **where the gate lives**: Phase 1 plan
 > 01-08 deleted the renderer effect and moved the queue and its drain into main,
 > because a gate that dies with the window is not a gate for an app whose whole
@@ -30,14 +32,43 @@ Everything else enqueues into the per-agent MD queue and lets the drain decide w
 > this ADR was written about. The pure policy both processes read is
 > `src/shared/queueDelivery.ts`; the renderer keeps only a **veto** it reports up
 > (`hive:deliveryVeto`), because the xterm buffer and the operator's keystrokes are
-> the one fact main cannot see. The drain delivers the head of a queue only when the agent is
-`idle`, auto-delivery is not paused (or the message was manually released), the boot
-grace window has passed, `isTerminalAutomationSafe(ptyId)` says the user does not own
-the prompt, and 4.5 s have passed since the last delivery to that agent.
+> the one fact main cannot see. `drainQueue` gates each candidate on, by its own
+> source names: `bootGraceUntil` (the TUI is still booting), `idleMs >= IDLE_MS`
+> (mid-turn), `paused` (auto-delivery is off, unless the message was manually
+> released), `vetoed()` (the renderer-reported draft/picker veto above), and
+> `FLUSH_COOLDOWN_MS` (4.5 s since the last delivery to that agent) — restated here
+> against the names `src/main/delivery.ts` itself uses, so this record is checkable
+> against source rather than paraphrased from it.
 
-One documented exception: the god agent's boot sequence writes its remote-control
-command and orientation prompt directly. That PTY was spawned milliseconds earlier and
-is covered by the boot-grace window, so there is no human draft it could land on.
+> **Amended 2026-08-23 (DAEMON-01).** Two more renderer-side automatic writers moved
+> into main, both through this same `enqueue()` gate: `HiveManager`'s injected
+> `handoff` dep (D-11 gap 1 — a terminal work order for a hookless or proxy-tier
+> agent, formerly typed by a renderer IPC listener that could not run with no
+> window) and `DeliveryService.noteSpawn`'s `seed` param (D-11 gap 2 — a fresh
+> Crush worker's protocol seed, formerly typed by a renderer `setInterval`). Both
+> died with the window for the same reason the original 2026-08-21 amendment
+> records; both now enqueue through `src/main/floor/boot.ts` and
+> `src/main/index.ts` respectively, never through a second gate. **This does not
+> make the renderer typer-free** — see Exceptions below for what still is.
+
+## Exceptions
+
+Two things still write directly rather than enqueuing, both documented rather than
+silently exempted:
+
+- **The god agent's boot sequence** writes its remote-control command, protocol seed
+  (Crush) and orientation prompt directly, in that order. That PTY was spawned
+  milliseconds earlier and is covered by the boot-grace window, so there is no human
+  draft it could land on. This is the ONE renderer-side automatic writer this ADR
+  still calls correct, because it is the one thing that must run in an exact order
+  the queue's own delivery-order guarantee does not provide.
+- **`useHive.ts`'s `onClaudeAccountResumed` handler** types a one-line "your account
+  is usable again" nudge into an already-parked agent's PTY on an IPC event, gated on
+  `ptyIdleFor(...) >= PTY_QUIET_MS`. It is still the renderer typing on its own, and
+  its own comment says so ("if main ever takes it over this handler must go with it
+  or the agent gets the same sentence twice") — DAEMON-01 does not move it. Named
+  here rather than rounded off: the renderer's automatic writers are down from four
+  to two (the god boot chain, and this one), not to zero.
 
 ## Consequences
 
@@ -66,9 +97,14 @@ is covered by the boot-grace window, so there is no human draft it could land on
 ## Where it lives
 
 `src/main/delivery.ts` (`drainQueue()` — **the gate**, plus the inbox wake, the
-idle-quiesce backstop and account failover, all on one tick) ·
-`src/shared/queueDelivery.ts` (the pure drain policy both processes import) ·
-`src/renderer/src/hooks/useHive.ts` (effect #6, and the delivery veto it reports up) ·
+idle-quiesce backstop, account failover and `noteSpawn`'s protocol-seed enqueue, all
+on one tick) · `src/shared/queueDelivery.ts` (the pure drain policy both processes
+import, plus `terminalWorkOrderPrompt`, the terminal-handoff text renderer) ·
+`src/main/floor/boot.ts` (`HiveManager`'s injected `handoff` dep — D-11 gap 1's
+enqueuer) · `src/main/index.ts` (`spawnAgentCore`'s `noteSpawn(...)` call site — D-11
+gap 2's enqueuer, and the god boot chain's exception) ·
+`src/renderer/src/hooks/useHive.ts` (effect #6, the delivery veto it reports up, and
+the one surviving automatic writer — `onClaudeAccountResumed`, Exceptions above) ·
 `src/renderer/src/components/terminalAutomation.ts` (pure policy, unit-tested in
 `test/terminal-automation.test.cjs`) · `src/renderer/src/components/terminalPool.ts`
 (buffer reads, latches) · full contract in [`docs/message-queue.md`](../message-queue.md)
