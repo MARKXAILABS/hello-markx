@@ -424,7 +424,7 @@ function joinedStripped(rel) {
   return raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/\s+/g, ' ');
 }
 
-const B_IPC_JOINED = 152;
+const B_IPC_JOINED = 155;
 
 test('D-40: ipcMain.handle( count over joined, comment-stripped index.ts is exactly B-ipc-joined', () => {
   const joined = joinedStripped('src/main/index.ts');
@@ -471,7 +471,8 @@ const B_IPC_NAMES = [
   'slack:start', 'slack:status', 'slack:stop', 'telemetry:snapshot', 'telemetry:spans',
   'telemetry:usage', 'terminal:openAtFolder', 'tools:status', 'triggerHistory:clear',
   'triggerHistory:decide', 'triggerHistory:list', 'triggers:getContext',
-  'triggers:setContext', 'webhook:generateSecret', 'webhook:setConfig', 'webhook:start',
+  'triggers:setContext', 'tunnel:start', 'tunnel:status', 'tunnel:stop',
+  'webhook:generateSecret', 'webhook:setConfig', 'webhook:start',
   'webhook:status', 'webhook:stop', 'webhooks:delete', 'webhooks:generateSecret',
   'webhooks:list', 'webhooks:save', 'webhooks:status', 'window:newFloor', 'workers:list',
   'workers:stop'
