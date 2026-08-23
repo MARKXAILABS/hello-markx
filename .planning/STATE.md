@@ -3,14 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-07-PLAN.md
-last_updated: "2026-08-23T13:45:48.087Z"
-last_activity: 2026-08-23
+stopped_at: Completed 02-11-PLAN.md
+last_updated: "2026-08-23T14:40:10.306Z"
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 35
+  completed_plans: 37
   percent: 0
 ---
 
@@ -26,33 +25,51 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plans complete: **5 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+Plans complete: **6 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
       The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
-      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-07**.
-      Outstanding: 02-05, 02-06, 02-08, 02-09, 02-10, 02-11, 02-12.
-      Next wave: **wave 5 = 02-11** (MCP per-agent server bundle + grant gating).
+      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-07, 02-11**.
+      Outstanding: 02-05, 02-06, 02-08, 02-09, 02-10, 02-12.
+      Next wave: **wave 6 = 02-05, 02-06, 02-08** (all three depend on 02-11's just-landed MCP data
+      contract — `mcp:agentState`/`mcp:grant`/`mcp:revoke` + preload `platform`).
 
 Execution facts as of this line:
+
 - Branch `gsd/v1.0-floor-closure`; NOT `gsd/v1.0-milestone` (that branch is content-behind and would
   regress two phase-1 source fixes plus all 12 phase-2 plans). Nothing is pushed — `gh pr checks` is
   therefore MEASUREMENT UNAVAILABLE for every plan so far, recorded as such, never faked.
+
 - `workflow.use_worktrees=false`, so every plan runs sequentially on the main tree. No worktree
   merges, no post-merge reconciliation.
+
 - Whole-suite figure re-measured by the ORCHESTRATOR after every plan, never SUMMARY-trusted:
-  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> **710/703/0 fail/7 skipped** now.
+  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> **728/721/0 fail/7 skipped** now.
   `npm run typecheck` and `npm run build` exit 0 at every checkpoint. 0 failures is the bar; there is
   no pre-existing-failure allowance on this phase.
 
+- **02-11 landed DAEMON-04's mechanism for claude only.** `scripts/mcp-live-probe.cjs` live-reconfirmed
+  `--mcp-config` spawns a server and `--settings`' `mcpServers` key does not (claude 2.1.236, run twice
+  this session). `<agentDir>/mcp.json` (0600, git-ignored), per-agent write/secret grants
+  (`mcpAgentGrants`, a latched migration dropping the old floor-wide consent), and three IPC channels
+  are real. **DAEMON-04 stays OPEN in REQUIREMENTS.md** — 02-06 (wave 6) also declares it and owns the
+  consent-modal UI 02-11 only built a data contract for.
+
 Requirements deliberately still OPEN, with the reason (none of these is an oversight):
+
 - **DAEMON-01** — unit half green (02-03). `02-VALIDATION.md` requires BOTH `node --test` AND a live
   Electron run with real PTYs; the live run has not happened. Tracked as a phase-close gate.
+
+- **DAEMON-04** — mechanism landed (02-11) for the one live-verified engine (claude); the consent-modal
+  UI is 02-06's (wave 6), which also declares this requirement in its own frontmatter.
+
 - **DAEMON-05** — spans 02-04/02-05/02-10/02-12. Live close attempted for real this session, twice,
   including outside the sandbox: exit 3, ANNOUNCED skip. Root cause is ENVIRONMENTAL, not code —
   the LAN resolver (JioFiber router 192.168.31.1) returns NXDOMAIN for freshly-minted
   `*.trycloudflare.com` subdomains while the apex resolves and general egress is fine. A public
   resolver (8.8.8.8 / 1.1.1.1) would likely let this verification actually pass.
+
 - **STRUCT-01** — 02-02 and 02-03 closed the boot and agent-lifecycle seams; `spawnAgentCore`
   (~480 lines, imports electron at module scope) and ~152 IPC handlers remain in `index.ts`.
+
 - **PARITY-03** — shared with 02-12, which owns the final honesty-ledger pin. 02-07 correctly
   declined to flip it.
 
@@ -60,6 +77,7 @@ Parity ledger after 02-07, reported in full per D-33/VALIDATION rather than as a
 engines that can receive mail **8 -> 9**; live-verified bridges **unchanged at zero**;
 LIVE-UNVERIFIED bridges **4 -> 5** (kimi joins pi, opencode, crush, qwen). None of those five CLIs
 is installed on this machine, so this is the expected outcome under the zero-recurring-cost rule.
+
 ## Performance Metrics
 
 **Velocity:**
@@ -115,6 +133,7 @@ is installed on this machine, so this is the expected outcome under the zero-rec
 | Phase 02 P03 | 3h40m | 5 tasks | 16 files |
 | Phase 02 P04 | 55min | 5 tasks | 14 files |
 | Phase 02 P07 | 50min | 4 tasks | 12 files |
+| Phase 02 P11 | 55min | 4 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -122,6 +141,18 @@ is installed on this machine, so this is the expected outcome under the zero-rec
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+- [02-11]: DAEMON-04 is left OFF `requirements-completed` in 02-11's own SUMMARY, deliberately, even
+  though 02-11's own plan frontmatter declares it. 02-06-PLAN.md (wave 6) also declares
+  `requirements: [DAEMON-04]` and has not executed — it owns the consent-modal UI. `requirements
+  mark-complete` must not be called for DAEMON-04 until 02-06 lands too; two plans in the same phase
+  both claiming a requirement is exactly the STRUCT-01/PARITY-03 trap the production-stress mandate
+  names.
+
+- [02-11]: `spawnSync('claude', …)` needs `shell: process.platform === 'win32'` — `claude` resolves to
+  an npm-global `claude.cmd` shim on Windows, and Node's non-shell `spawnSync` does not append `.cmd`
+  via PATHEXT. Same fix `pty.ts`/`shellEnv.ts` already use for their `where` probe. Node's `shell:true`
+  no longer auto-quotes array args (DEP0190) — manual quoting is now required alongside it.
 
 - [01-29]: A safety indicator errs toward OVER-reporting, and the direction is written into the
   source comment and pinned as a case. `isAutoModeAgent` returned `false` for every `custom` agent
@@ -511,8 +542,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-23T13:45:48.066Z
-Stopped at: Completed 02-07-PLAN.md
+Last session: 2026-08-23T14:40:10.287Z
+Stopped at: Completed 02-11-PLAN.md
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the

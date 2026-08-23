@@ -572,7 +572,7 @@ after Phase 5 rather than closed in Phase 3.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Finish the Floor | 30/31 | **PARTIAL — all 8 gap-closure plans landed (01-24 … 01-31), phase NOT complete.** 10 of 23 requirements close, 13 do not; 0 of 20 floor-inspection issues closable while `origin/main` still pins `electron ^32.2.0` behind draft PR #77. 01-01 has no SUMMARY — its D-09 gate is unrun. Re-run `/gsd:verify-work 1`; the verdict is the verifier's |  |
-| 2. The Daemon and the Protocol | 5/12 | In Progress|  |
+| 2. The Daemon and the Protocol | 6/12 | In Progress|  |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |
 | 5. The Floor Gets Better at Its Own Job | 0/TBD | Not started | - |
