@@ -424,7 +424,7 @@ function joinedStripped(rel) {
   return raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/\s+/g, ' ');
 }
 
-const B_IPC_JOINED = 155;
+const B_IPC_JOINED = 158;
 
 test('D-40: ipcMain.handle( count over joined, comment-stripped index.ts is exactly B-ipc-joined', () => {
   const joined = joinedStripped('src/main/index.ts');
@@ -462,6 +462,7 @@ const B_IPC_NAMES = [
   'integrations:list', 'integrations:remove', 'integrations:setSecret',
   'integrations:templates', 'integrations:test', 'integrations:upsert', 'kg:addFiles',
   'kg:get', 'kg:ingestFiles', 'kg:list', 'kg:remove', 'kg:search', 'kg:status',
+  'mcp:agentState', 'mcp:grant', 'mcp:revoke',
   'missions:list', 'missions:save', 'org:getTrigger', 'org:setTrigger', 'providerKey:clear',
   'providerKey:has', 'providerKey:set', 'pty:attach', 'pty:idleFor', 'pty:kill', 'pty:list',
   'pty:redraw', 'pty:resize', 'pty:spawn', 'realtime:drainCompletions',
