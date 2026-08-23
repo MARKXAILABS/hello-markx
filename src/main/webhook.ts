@@ -42,7 +42,10 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { validateAgainstSchema, type InboundKind } from '../shared/triggers';
+import {
+  isReservedEndpointId, RESERVED_ENDPOINT_IDS, validateAgainstSchema,
+  type InboundKind, type WebhookVerifier
+} from '../shared/triggers';
 import type { TunnelHandle, TunnelOpener } from './tunnel';
 
 /** One servable endpoint — the structural subset of `WebhookTrigger` this class
@@ -55,6 +58,8 @@ export interface WebhookEndpoint {
   secret: string;
   /** User-editable JSON Schema (serialised) inbound bodies are checked against. */
   schema: string;
+  /** DAEMON-03: which verifier strategy gates this endpoint. Absent = 'shared-secret'. */
+  verifier?: WebhookVerifier;
 }
 
 /** What the dispatch handler is told about the endpoint a message arrived on.
@@ -129,6 +134,13 @@ const RATE_WINDOW_MS = 60_000;
  *  parked under this id, so a caller already pointed at the old URL is unaffected. */
 export const LEGACY_ENDPOINT_ID = 'legacy';
 
+/** The route prefix the phone bundle owns (D-23). Defined AS the shared
+ *  reservation list's own entry, never a second literal — an operator-chosen
+ *  endpoint id and this route prefix may never collide, or one silently
+ *  shadows the other. `setEndpoints` below and `index.ts`'s
+ *  `sanitizeWebhookTrigger` both refuse it independently. */
+export const PHONE_PREFIX = RESERVED_ENDPOINT_IDS[0];
+
 /** Rate-limit bucket shared by EVERY unknown id. One bucket, not one per id:
  *  per-id buckets for ids we don't serve would let a prober both grow our memory
  *  unboundedly and — worse — observe that unknown ids never hit the per-endpoint
@@ -170,6 +182,11 @@ export class WebhookServer {
     const next = new Map<string, WebhookEndpoint>();
     for (const e of list) {
       if (!e || typeof e.id !== 'string' || !e.id || typeof e.secret !== 'string' || !e.secret) continue;
+      // `phone` (case-insensitively) is the route prefix PHONE_PREFIX reserves
+      // for the phone bundle — an operator-configured endpoint here would
+      // either shadow that route or be silently unservable. Refused here AND
+      // in index.ts's sanitizeWebhookTrigger, so the UI cannot save it either.
+      if (isReservedEndpointId(e.id)) continue;
       next.set(e.id, e);
     }
     this.endpoints = next;

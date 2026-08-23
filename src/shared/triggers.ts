@@ -166,6 +166,46 @@ export interface WebhookTrigger {
   /** User-editable JSON Schema (serialised) that inbound bodies are checked against. */
   schema: string;
   createdAt: number;
+  /** DAEMON-03: which strategy verifies this endpoint. Optional — an existing
+   *  config row with no field means 'shared-secret' (today's behaviour), so no
+   *  migration is needed. `secret` carries a DIFFERENT credential depending on
+   *  the verifier: the shared secret itself, Telegram's `secret_token`, or
+   *  Discord's 64-character hex application public key — one field, three
+   *  meanings, so no second credential field (and no config.ts migration) is
+   *  needed to admit the other two providers. */
+  verifier?: WebhookVerifier;
+}
+
+/* ─────────────────────── inbound verification strategy ───────────────────── */
+
+/**
+ * How an inbound POST proves it's from who it claims to be (DAEMON-03).
+ *   shared-secret — the operator's own caller, `x-md-webhook-secret` (default).
+ *   telegram      — Telegram's `X-Telegram-Bot-Api-Secret-Token` header.
+ *   discord       — Discord's Ed25519 signature over `timestamp + rawBody`.
+ */
+export type WebhookVerifier = 'shared-secret' | 'telegram' | 'discord';
+
+export const WEBHOOK_VERIFIERS: { value: WebhookVerifier; label: string; blurb: string }[] = [
+  { value: 'shared-secret', label: 'shared secret', blurb: 'Caller echoes the secret in x-md-webhook-secret.' },
+  { value: 'telegram', label: 'telegram', blurb: "Telegram's own X-Telegram-Bot-Api-Secret-Token header." },
+  { value: 'discord', label: 'discord', blurb: "Discord's Ed25519 signature over the request." }
+];
+
+export const DEFAULT_WEBHOOK_VERIFIER: WebhookVerifier = 'shared-secret';
+
+/** Endpoint ids this module reserves for a route prefix rather than an
+ *  operator-configured webhook — currently just the phone bundle (D-23). An
+ *  operator-chosen id here would either shadow that route or be silently
+ *  unservable, so it is refused in BOTH directions: `WebhookServer.setEndpoints`
+ *  (server) and `sanitizeWebhookTrigger` (config round trip). */
+export const RESERVED_ENDPOINT_IDS = ['phone'] as const;
+
+/** Case-insensitive — a config row saying `Phone` must not shadow the route
+ *  either. */
+export function isReservedEndpointId(id: string): boolean {
+  const lower = id.toLowerCase();
+  return (RESERVED_ENDPOINT_IDS as readonly string[]).includes(lower);
 }
 
 /**

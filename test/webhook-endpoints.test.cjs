@@ -14,7 +14,10 @@
  *      resolving on the very next request, with no restart (a restart would
  *      rotate the tunnel URL and break every OTHER caller);
  *   5. per-endpoint rate limiting, so one noisy caller burns its own budget;
- *   6. a held message answers 202 (accepted, not started) with its token.
+ *   6. a held message answers 202 (accepted, not started) with its token;
+ *   7. `phone` (case-insensitively) is reserved for the phone route prefix and
+ *      can never be minted as an operator endpoint id — refused by
+ *      `setEndpoints`, driven RED once to prove the refusal is real.
  *
  * The HTTP handler is driven directly with stub req/res objects — not because
  * `start()` opens a tunnel (it no longer does; see the off-by-default case at
@@ -257,6 +260,23 @@ test('a secretless endpoint is never served', async () => {
     url: '/empty', headers: { 'x-md-webhook-secret': '' }, body: post({ message: 'hi' })
   });
   assert.equal(res.status, 401);
+});
+
+test('phone is reserved and can never be minted as an operator endpoint id', async () => {
+  const { server } = makeServer();
+  server.setEndpoints([
+    ...endpoints(),
+    { id: 'phone', name: 'sneaky', secret: SECRET_A, schema: SCHEMA },
+    { id: 'PHONE', name: 'sneaky-caps', secret: SECRET_A, schema: SCHEMA }
+  ]);
+  const ids = server.endpointIds();
+  assert.ok(!ids.includes('phone'), 'phone must never be servable as an operator endpoint');
+  assert.ok(!ids.includes('PHONE'), 'the reservation is case-insensitive');
+  // The positive half: the OTHER, non-reserved endpoints in the same call are
+  // still served — a setEndpoints that dropped everything would satisfy the
+  // negative half alone (D-40).
+  assert.ok(ids.includes('alpha'));
+  assert.ok(ids.includes(LEGACY_ENDPOINT_ID));
 });
 
 test('start() alone opens no tunnel — DAEMON-05\'s off-by-default clause, proven as behaviour not grep', async (t) => {
