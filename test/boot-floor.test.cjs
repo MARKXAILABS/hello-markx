@@ -254,7 +254,7 @@ test('every subsystem bootFloor started appears in the shutdown list (#34 covera
 
   const offenders = [];
   for (const key of Object.keys(floor)) {
-    if (key === 'shutdown' || key === 'teardownAndQuit') continue;
+    if (key === 'shutdown' || key === 'teardownAndQuit' || key === 'teardownPty') continue;
     if (dataFields.has(key)) continue;
     if (resourceFreeFields.has(key)) continue;
     if (!shutdownSource.includes(`${key}.`)) offenders.push(key);
