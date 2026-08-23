@@ -38,16 +38,35 @@ export type AgentProvider =
  *  events (live status + Stop→inbox-drain + cost), introduced alongside the legacy
  *  `hookBridge` so call sites can switch on `bridge.kind` without a big-bang
  *  rewrite. Two kinds:
- *   - 'hooks'  → a config-file hook shim is installed (agy/codex). Derived from the
- *               legacy `hookBridge` by `bridgeOf`, so agy/codex keep working with no
- *               preset change.
- *   - 'proxy'  → the CLI has NO hook surface (qwen), so a loopback reverse-proxy
- *               sidecar observes its LLM traffic and SYNTHESIZES the same HIVE_SOCK
- *               payloads the shims emit. `api` selects the usage/tool-call shape
- *               (OpenAI vs Anthropic), `baseUrlEnv` is the env var the CLI reads for
- *               its upstream base URL (the sidecar's loopback URL is injected there),
- *               and `inboxDelivery` is how mail reaches it ('terminal' work-order
- *               handoff today; 'serve' reserved for a future HTTP push path). */
+ *   - 'hooks'  → a config-file hook shim is installed (agy/codex/pi/opencode/
+ *               grok/kimi). Derived from the legacy `hookBridge` by `bridgeOf`
+ *               for agy/codex/grok/kimi, so those keep working with no preset
+ *               change; pi/opencode set the structured `bridge` directly.
+ *   - 'proxy'  → the CLI has NO hook surface (qwen, crush), so a loopback
+ *               reverse-proxy sidecar observes its LLM traffic and SYNTHESIZES
+ *               the same HIVE_SOCK payloads the shims emit. `api` selects the
+ *               usage/tool-call shape (OpenAI vs Anthropic), `baseUrlEnv` is
+ *               the env var the CLI reads for its upstream base URL (the
+ *               sidecar's loopback URL is injected there), and `inboxDelivery`
+ *               is how mail reaches it ('terminal' work-order handoff today;
+ *               'serve' reserved for a future HTTP push path).
+ *
+ *  MEASURED CONSTRAINT (D-34, PARITY-02): `bridgeOf` returns EXACTLY ONE
+ *  descriptor per engine — `preset.bridge` wins over `hookBridge` — and
+ *  hive.ts's `ensureAgent` dispatch is `hooks` XOR `proxy` (an `if`/`else if`
+ *  pair, never both). So converting a HOOKS engine to `bridge:{kind:'proxy'}`
+ *  to gain a cost number DELETES that engine's mail bridge — there is no
+ *  "just add proxy cost alongside the existing bridge". This rules out
+ *  **grok, kimi and opencode** (all hooks-bridged) as zero-code proxy
+ *  candidates; **antigravity** would additionally need a `gemini` api mode in
+ *  the proxy sidecar, which this phase does not deliver; and **copilot**
+ *  (spend sits on the user's Copilot plan) and **custom** (unknown binary)
+ *  have no number to report under ANY bridge. Zero engines were converted by
+ *  plan 02-07 — `test/engine-parity.test.cjs` pins both the mutual-exclusivity
+ *  (no preset sets both `bridge` and `hookBridge`) and the declaration-matches-
+ *  wiring invariant (`costTracking === 'proxy'` iff `bridgeOf(p)?.kind ===
+ *  'proxy'`) so a future edit that tries this anyway goes red instead of
+ *  silently deleting a mail path. */
 export type BridgeDescriptor =
   | { kind: 'hooks'; shim: 'agy' | 'codex' | 'pi' | 'opencode' | 'grok' | 'kimi' }
   | {
@@ -130,7 +149,15 @@ export interface AgentProviderPreset {
    *                     under-counts by however much they burn. Say so out loud
    *                     in the god's capability line rather than implying parity.
    *  Required, deliberately: a new provider must state its answer instead of
-   *  inheriting a flattering default. */
+   *  inheriting a flattering default.
+   *  LANDMINE 3 (measured): this field's ONLY consumer anywhere in `src/` is
+   *  `providerCapabilities` in `providerAutomation.ts` (`spend:
+   *  preset.costTracking`) — nothing in the actual spend path reads it. It is
+   *  a DECLARATION, in the same class as `capabilityLine` (D-30), kept honest
+   *  by a test rather than by a wire: `test/engine-parity.test.cjs` asserts
+   *  `costTracking === 'proxy'` iff `bridgeOf(provider)?.kind === 'proxy'`,
+   *  for every preset, in both directions — the one assertion that can go red
+   *  the day this label and the real spawn dispatch drift apart. */
   costTracking: CostTracking;
   /** Whether this ENGINE accepts MCP servers at all (the CLI-level capability —
    *  can it be pointed at an MCP server config, at all).

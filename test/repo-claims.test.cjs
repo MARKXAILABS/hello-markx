@@ -1245,3 +1245,85 @@ test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => 
     + 'maintained-teardown-paths drift #34 exists to prevent'
   );
 });
+
+// ─── 02-07 (wave 4): PARITY-03's LIVE-UNVERIFIED marker pin (D-35, D-40) ────
+//
+// THIS CLAUSE IS THE FILE'S ONE DELIBERATE EXCEPTION TO COMMENT-STRIPPING.
+// `LIVE-UNVERIFIED` lives INSIDE comments — every marker below is a comment
+// line, by construction (it is how a bridge is marked as unverified) — so a
+// `readStripped` read would delete every single one and this clause would
+// count zero forever, passing green against any ledger whatsoever (D-40). It
+// reads RAW source with `fs.readFileSync` directly and counts with a global
+// regex over the WHOLE file text, never per line (`grep -c` counts matching
+// LINES, so two markers sharing one line would silently score as one).
+//
+// Pinned in BOTH directions — tighter than D-35's one-directional marker
+// rule, per D-40 (#39): unmarking a bridge (the count drops) and silently
+// shipping a new unverified one (the count rises) both go red. There is no
+// `live-unverified` field anywhere in the provider table (D-35) — this
+// comment-and-regex pin is the only thing that can catch either drift.
+
+/** Every file under `src/` that carries at least one `LIVE-UNVERIFIED`
+ *  marker, mapped to its EXACT occurrence count. Re-measure with:
+ *  `grep -ro 'LIVE-UNVERIFIED' src/ | cut -d: -f1 | sort | uniq -c`
+ *  Measured in THIS session at `a13f952` (post plans 02-01 through 02-07
+ *  task 3) — never copied from a plan file or a prior SUMMARY. */
+const MARKER_LEDGER = {
+  'src/main/hive.ts': 3,
+  'src/main/hiveProvisioning.ts': 5,
+  'src/main/hiveTemplates.ts': 3,
+  'src/main/index.ts': 1,
+  'src/shared/agentProvider.ts': 2
+};
+
+/** Occurrence count of `needle` in the RAW file at `rel` — comments included,
+ *  counted per OCCURRENCE (global regex), never per LINE. */
+function rawOccurrences(rel, needle) {
+  const text = fs.readFileSync(path.join(root, rel), 'utf8');
+  return (text.match(new RegExp(needle, 'g')) || []).length;
+}
+
+test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo-wide (D-35/D-40)', () => {
+  let ledgerSum = 0;
+  for (const [rel, expected] of Object.entries(MARKER_LEDGER)) {
+    const full = path.join(root, rel);
+    assert.ok(
+      fs.existsSync(full) && fs.statSync(full).isFile() && fs.statSync(full).size > 0,
+      `${rel} is listed in MARKER_LEDGER but is missing or empty — deleting the bridges (or `
+      + 'deleting the file) must FAIL this clause, not satisfy it by removing every match'
+    );
+    const found = rawOccurrences(rel, 'LIVE-UNVERIFIED');
+    assert.equal(
+      found, expected,
+      `${rel}: expected exactly ${expected} LIVE-UNVERIFIED marker(s), found ${found}. A bridge `
+      + 'in this file was unmarked (fewer) or a new unverified one shipped (more) without this '
+      + 'ledger being updated to match.'
+    );
+    ledgerSum += expected;
+  }
+
+  // Repo-wide total, over EVERY .ts/.tsx under src/ — not just the files
+  // MARKER_LEDGER lists. This is the check that catches a marker moved INTO
+  // (or newly created in) a file the ledger does not mention: every per-file
+  // entry above can still balance exactly while this total drifts.
+  let repoTotal = 0;
+  for (const rel of sourceFiles(path.join(root, 'src'))) {
+    repoTotal += rawOccurrences(rel, 'LIVE-UNVERIFIED');
+  }
+
+  assert.ok(
+    repoTotal >= 1,
+    'zero LIVE-UNVERIFIED markers anywhere in src/ — either every bridge this project ships is '
+    + 'now genuinely live-verified (in which case replace this whole clause with the real '
+    + 'evidence) or the markers were silently deleted. An empty ledger must not read as "clean".'
+  );
+  assert.equal(
+    repoTotal, ledgerSum,
+    `src/ carries ${repoTotal} LIVE-UNVERIFIED marker(s) total (every .ts/.tsx file), but `
+    + `MARKER_LEDGER's per-file entries sum to ${ledgerSum}. A marker moved into, or a new one `
+    + 'was added in, a file this ledger does not list. Unmarking a bridge is a claim that a real '
+    + 'session ran against a real account — which account? Reconcile MARKER_LEDGER against a '
+    + '`grep -ro \'LIVE-UNVERIFIED\' src/ | cut -d: -f1 | sort | uniq -c` re-measurement before '
+    + 'trusting either number.'
+  );
+});

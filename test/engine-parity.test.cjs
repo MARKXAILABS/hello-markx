@@ -32,7 +32,7 @@ const { HookServer } = loadTs('src/main/hooks.ts');
 const { readCodexUsage } = loadTs('src/main/usage.ts');
 const { capabilityLine, providerCapabilities, remoteControlAvailability } =
   loadTs('src/shared/providerAutomation.ts');
-const { bridgeOf, canReceiveInbox } = loadTs('src/shared/agentProvider.ts');
+const { bridgeOf, canReceiveInbox, AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts');
 const { installKimiConfig } = loadTs('src/main/hiveProvisioning.ts');
 
 /** One proxy-sidecar CostSample, in the shape hooks.ts builds for the ledger. */
@@ -811,6 +811,58 @@ test('T-P02-07-01: a real hive commit never carries the seeded kimi credential',
   // The ignore line itself, proven directly.
   const gitignore = fs.readFileSync(path.join(agentDir, '.gitignore'), 'utf8');
   assert.match(gitignore, /^kimi-config\.toml$/m, '.gitignore does not exclude kimi-config.toml');
+});
+
+// ── 3c. PARITY-02: the cost declaration matches the wiring (D-34) ───────────
+//
+// `bridgeOf` returns ONE descriptor per engine and hive.ts's dispatch is
+// `hooks` XOR `proxy` (BridgeDescriptor's doc comment, agentProvider.ts), so
+// there is no zero-code way to add proxy-tier cost to a hooks-bridged engine
+// without deleting its mail bridge. This plan converts ZERO engines; these
+// four assertions are PARITY-02's entire automated half — the declaration
+// staying honest about the wiring, checked in both directions, for every
+// preset.
+
+test('PARITY-02: costTracking === "proxy" iff the wired bridge is a proxy, for every preset', () => {
+  for (const p of AGENT_PROVIDER_PRESETS) {
+    const desc = bridgeOf(p.id);
+    const wiredProxy = desc?.kind === 'proxy';
+    assert.equal(
+      p.costTracking === 'proxy', wiredProxy,
+      `${p.id}: costTracking=${p.costTracking} but bridgeOf=${JSON.stringify(desc)} — the `
+      + 'declaration and the spawn-time wiring have drifted apart'
+    );
+  }
+});
+
+test('PARITY-02: no preset sets both bridge and hookBridge (mutual exclusivity)', () => {
+  // The pin that stops a future "just add proxy cost to grok" edit from
+  // silently deleting grok's mail bridge — bridgeOf's `if (preset.bridge)
+  // return preset.bridge;` means a hookBridge alongside an explicit `bridge`
+  // is DEAD, never both-and.
+  for (const p of AGENT_PROVIDER_PRESETS) {
+    assert.ok(
+      !(p.bridge && p.hookBridge),
+      `${p.id} sets BOTH bridge (${JSON.stringify(p.bridge)}) and hookBridge `
+      + `(${p.hookBridge}) — bridgeOf returns preset.bridge only, so the hookBridge is dead `
+      + 'weight and whoever added it believes it still wires the hooks path'
+    );
+  }
+});
+
+test('PARITY-02: the costTracking:"none" set is an explicit, diff-visible list', () => {
+  const NONE_ENGINES = ['grok', 'kimi', 'antigravity', 'opencode', 'pi', 'copilot', 'custom'];
+  const actual = AGENT_PROVIDER_PRESETS.filter((p) => p.costTracking === 'none').map((p) => p.id);
+  assert.deepEqual(actual.sort(), [...NONE_ENGINES].sort(),
+    'an engine gained or lost a cost path — this list must be updated by hand, not silently');
+});
+
+test('PARITY-02: every costTracking kind is held by at least one engine (D-40 positive lower bound)', () => {
+  const kinds = new Set(AGENT_PROVIDER_PRESETS.map((p) => p.costTracking));
+  for (const k of ['otel', 'proxy', 'transcript', 'none']) {
+    assert.ok(kinds.has(k), `no preset uses costTracking: '${k}' — an empty list would satisfy the other three assertions vacuously`);
+  }
+  assert.equal(AGENT_PROVIDER_PRESETS.length, 11, 'expected all eleven presets');
 });
 
 // ── 4. codex spend is readable ───────────────────────────────────────────────
