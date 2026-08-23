@@ -293,14 +293,19 @@ test('ensureCloudflared returns null for a platform/arch with no acquirable arti
 
 // ─── DAEMON-05 repo-fact clauses (test/repo-claims.test.cjs is 02-07's this wave) ──
 
-test('repo-fact: exactly ONE openTunnel exists under src/main, and both servers call startTunnel(', () => {
-  let total = 0;
+test('repo-fact: exactly ONE openTunnel DEFINITION exists under src/main, and both servers call startTunnel(', () => {
+  // Counts DEFINITIONS ("function openTunnel("), not every reference — index.ts
+  // legitimately imports AND calls openTunnel (task 4's enable path), so a count
+  // of the bare identifier grows with every legitimate caller. A count of
+  // definitions still catches the class this plan deleted: a second COPY of the
+  // function body anywhere under src/main.
+  let definitions = 0;
   for (const f of tsFilesUnder(SRC_MAIN)) {
-    total += (stripped(path.relative(path.join(__dirname, '..'), f)).match(/\bopenTunnel\b/g) ?? []).length;
+    definitions += (stripped(path.relative(path.join(__dirname, '..'), f)).match(/\bfunction openTunnel\(/g) ?? []).length;
   }
-  assert.equal(total, 1,
-    'exactly one openTunnel (the export in tunnel.ts) must exist under src/main — deleting the tunnel '
-    + 'outright, or a second copy anywhere, both change this count');
+  assert.equal(definitions, 1,
+    'exactly one openTunnel definition (tunnel.ts\'s export) must exist under src/main — deleting the '
+    + 'tunnel outright, or a second copy anywhere, both change this count');
   assert.match(stripped('src/main/tunnel.ts'), /export async function openTunnel\(/);
   assert.match(stripped('src/main/slack.ts'), /startTunnel\(/);
   assert.match(stripped('src/main/webhook.ts'), /startTunnel\(/);
