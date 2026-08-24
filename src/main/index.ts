@@ -3983,11 +3983,24 @@ ipcMain.handle('tunnel:start', async () => {
   writeConfig({ tunnelEnabled: true });
   tunnelIsEnabled = true;
   // Ensure the webhook local server is listening — the phone's origin
-  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has
-  // nothing to expose yet (a phone route family becomes servable in plan 02-05);
-  // that refusal is returned verbatim rather than papered over.
+  // (D-18, D-23). A floor with no ENABLED webhook endpoint still has the
+  // phone route to expose — servable since plan 02-05, but only once
+  // `phoneArmed()` is true (`webhook.ts` `start()`'s own guard). Arm it
+  // here, the SAME mint-then-start order `phone:pairing` uses below, so
+  // this one explicit operator action ("expose to the internet") is
+  // self-sufficient on a fresh install: previously this deadlocked —
+  // `tunnel:start` refused with zero endpoints, and the only thing that
+  // could arm the phone (`phone:pairing`) is never invoked by the
+  // renderer until AFTER a tunnel is already reported running (02-12
+  // fix; the deadlock is otherwise unreachable from the shipped UI, which
+  // has exactly one control for this: `SettingsModal.tsx`'s "expose to
+  // the internet" button). A real webhook endpoint still takes the normal
+  // path unarmed — only the "nothing else configured" case arms the
+  // phone as part of fulfilling the operator's own request to expose.
   if (!webhookServer) {
-    const started = await startWebhookServer();
+    const noEndpoints = enabledWebhookEndpoints().length === 0;
+    if (noEndpoints) ensureWebhookServerInstance().mintEnrollment();
+    const started = await startWebhookServer({ forPhone: noEndpoints });
     if (!started.ok) {
       emitTunnelChanged({ enabled: true, running: false, url: null });
       return started;
