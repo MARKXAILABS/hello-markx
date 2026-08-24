@@ -294,4 +294,48 @@ test('SettingsModal.tsx: the tunnel panel QR is permanent, keyed, and never behi
     'a show/hide-QR toggle idiom was found — the QR must be a permanent region with no dismissal');
 });
 
+// ─── Task 5: the tunnel stays off by default (DAEMON-05, re-proven here) ────
+//
+// The other four DAEMON-05 clauses (generated token, rate limit + lockout,
+// stop() genuinely closing) are proven live in test/webhook-endpoints.test.cjs
+// and test/tunnel.test.cjs (re-run this session, see 02-10-SUMMARY.md for the
+// commands and their output). This is the fifth: the parsed config DEFAULT,
+// not a line-oriented grep, so a config shape that renamed the field around a
+// stale grep cannot pass silently. Both directions: the default is
+// absent-or-false (negative) AND the key exists at all (positive) — deleting
+// the key must not satisfy the clause.
+
+test('config.ts: tunnelEnabled defaults to false and the key genuinely exists (parsed, not grepped)', () => {
+  const fsNode = require('node:fs');
+  const osNode = require('node:os');
+  const userData = fsNode.mkdtempSync(path.join(osNode.tmpdir(), 'md-p10-tunnel-default-'));
+  const electronId = require.resolve('electron');
+  const priorElectron = require.cache[electronId];
+  require.cache[electronId] = {
+    id: electronId, filename: electronId, loaded: true,
+    exports: {
+      app: { getPath: () => userData },
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (s) => Buffer.from(`enc:${s}`, 'utf8'),
+        decryptString: (b) => b.toString('utf8').replace(/^enc:/, '')
+      }
+    }
+  };
+  try {
+    // A fresh cache entry so this file's own config.ts load is not poisoned
+    // by another test's electron stub or a previous readConfig() call.
+    for (const key of Object.keys(require.cache)) {
+      if (key.endsWith(path.join('src', 'main', 'config.ts'))) delete require.cache[key];
+    }
+    const { readConfig } = require('./load-ts.cjs')('src/main/config.ts');
+    const cfg = readConfig();
+    assert.ok('tunnelEnabled' in cfg, 'the tunnelEnabled key is entirely absent from a freshly-read config — deleting it must not satisfy this clause');
+    assert.equal(cfg.tunnelEnabled, false, `tunnelEnabled defaults to ${cfg.tunnelEnabled}, not false — the tunnel must be off on a fresh install`);
+  } finally {
+    if (priorElectron) require.cache[electronId] = priorElectron; else delete require.cache[electronId];
+    fsNode.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
 module.exports = { stripComments, VENDOR_PATH, VENDOR_REL, root, PROBE_HOST, PROBE_TOKEN, PROBE_PAYLOAD };
