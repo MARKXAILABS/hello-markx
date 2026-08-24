@@ -201,6 +201,46 @@ test('a second --q appends without touching the first entry\'s askedBy, and patc
   assert.equal(roundTripped[1].askedBy, 'pam-1');
 });
 
+// ─── D-36/D-37/D-39 — the answer reaches the asker, sourced as text (test/load-ts.cjs
+// cannot load AskMeTab.tsx — `Cannot find module '@/store/store'`, verified this
+// session — so these four clauses are asserted over comment-stripped source, not
+// executed behaviour) ───
+
+function askMeTabSource() {
+  const root = path.resolve(__dirname, '..');
+  return stripComments(fs.readFileSync(path.join(root, 'src/renderer/src/components/AskMeTab.tsx'), 'utf8'))
+    .replace(/\r/g, '')
+    .replace(/\n/g, ' ')
+    .replace(/ +/g, ' ');
+}
+
+test('AskMeTab: the to: \'god\' hardcode is gone and recipientOf() is wired and defined', () => {
+  const src = askMeTabSource();
+  assert.ok((src.match(/to: 'god'/g) ?? []).length <= 1, 'at most one literal to: \'god\' (the god-addressed send may still name it)');
+  assert.ok((src.match(/recipientOf\(/g) ?? []).length >= 2, 'recipientOf( must have at least two call sites');
+  assert.ok((src.match(/const recipientOf|function recipientOf/g) ?? []).length >= 1, 'recipientOf must actually be defined, not just called');
+});
+
+test('AskMeTab: recipientOf resolves the D-37 chain — askedBy, assignee, then god', () => {
+  const src = askMeTabSource();
+  assert.ok(src.includes('askedBy'));
+  assert.ok(src.includes('assignee'));
+  assert.ok(src.includes("'god'"));
+});
+
+test('AskMeTab: D-39 holds structurally — two sends, one god-addressed, the unblock phrase present', () => {
+  const src = askMeTabSource();
+  assert.ok((src.match(/hiveSend\(/g) ?? []).length >= 2, 'at least two hiveSend( calls (2a and 2b)');
+  assert.ok(src.includes("to: 'god'"), 'a god-addressed send must exist');
+  assert.ok((src.match(/unblock the card/g) ?? []).length >= 1, 'the unblock phrase must survive in the god\'s message');
+});
+
+test('AskMeTab: askedBy survives the answer write — the entry mapper spreads, not rebuilds', () => {
+  const src = askMeTabSource();
+  assert.ok((src.match(/\{ \.\.\.e, a: text/g) ?? []).length >= 1,
+    'sendAnswer must spread the existing humanQA entry ({ ...e, a: text… }) rather than rebuild it from named fields — a rebuild is exactly the mutation that would silently drop askedBy');
+});
+
 test('renderer task actions never send a whole stale ledger back to main', () => {
   const root = path.resolve(__dirname, '..');
   const preload = fs.readFileSync(path.join(root, 'src/preload/index.ts'), 'utf8');
