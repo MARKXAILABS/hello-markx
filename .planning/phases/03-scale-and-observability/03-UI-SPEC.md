@@ -445,7 +445,7 @@ actually requires — it is the same mechanism `Icon.tsx` uses to scale a 16-uni
 
 **Density encoding: quantised bar height, never opacity.** Each bucket draws a `<rect>` whose height
 is an **integer 1..8 viewBox units**, `Math.ceil(8 * value / trackMax)`, anchored to the track's
-bottom edge. Zero draws nothing. Rationale: `DESIGN.md:71` bans gradients on every surface but the
+bottom edge. Zero draws nothing. Rationale: `DESIGN.md:107-109` (§3.6) bans gradients on every surface but the
 title bar, and an opacity ramp is a gradient by another name; integer bar heights are the pixel-art
 correct encoding and they reuse the 0..8 quantisation the agent card's own context gauge already uses
 (`AgentCard.tsx:164`).
@@ -498,11 +498,11 @@ from.
    Electron renderer, so the -webkit- pseudo-elements are the complete set —
    a -moz- twin here would be dead code. */
 .cth-scrub { -webkit-appearance: none; appearance: none; width: 100%; height: 24px; background: transparent; }
-.cth-scrub::-webkit-slider-runnable-track { height: 4px; border: 0; background: var(--cth-ink-300); }
+.cth-scrub::-webkit-slider-runnable-track { height: 8px; border: 0; background: var(--cth-ink-300); }
 .cth-scrub::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 24px; height: 24px;          /* WCAG 2.2 SC 2.5.8 minimum target */
-  margin-top: -10px;                  /* centres a 24px thumb on a 4px track */
+  margin-top: -8px;                   /* (24 - 8) / 2 — centres the thumb, stays on the 4-grid */
   border: 0; border-radius: 0;        /* DESIGN.md §6: no border-radius */
   background: var(--cth-ink-900);
   box-shadow: inset 0 0 0 1px var(--cth-cream-100);
@@ -568,15 +568,34 @@ once. `<ol>` of `<li>`, three columns per row, all mono at token sizes:
 | Column | Token | Colour | Content |
 |--------|-------|--------|---------|
 | time | `--cth-text-mono-sm` | `--cth-ink-500` | `HH:mm:ss` |
-| kind | `--cth-text-mono-sm` | `--cth-ink-300` | `spawn` · `message` · `drain` · `escalate` · `approval` · `cost` |
+| kind | `--cth-text-mono-sm` | `--cth-ink-500` | `spawn` · `message` · `drain` · `escalate` · `approval` · `cost` |
 | text | `--cth-text-body-md` | `--cth-ink-700` | see below |
 
-The kind and text colours are `ActivityTab`'s existing two-column treatment verbatim
-(`CommandCenterPanel.tsx:1632-1634`), and the text strings reuse `ActivityTab`'s `fmt` vocabulary
-verbatim (`:1616-1625`) so a second event vocabulary cannot drift away from the first:
+**`kind` is `--cth-ink-500`, NOT `ActivityTab`'s `--cth-ink-300`, and the divergence is deliberate.**
+`ActivityTab` renders `kind` in `--cth-ink-300`; measured this session, `#A899B5` on the band's
+`--cth-cream-200` (`#F4E9C7`) plate is **2.19:1** by WCAG relative luminance — below the 4.5:1 AA bar
+`DESIGN.md:706` states and below even the 3:1 non-text bar. `--cth-ink-500` (`#6B5878`) on the same
+plate measures **5.26:1**, and against `text`'s `--cth-ink-700` it still reads as a distinct second
+step. Copying the existing treatment verbatim would be newly specifying inherited drift onto a new
+surface, and accessibility is a standing ROADMAP constraint, not optional polish. `--cth-ink-300`
+stays correct where this spec uses it as the scrubber *track* — non-text, where the ≥3:1 bar applies.
+
+The text colour is `ActivityTab`'s existing treatment verbatim
+(`CommandCenterPanel.tsx:1632-1634`), and the text strings reuse `ActivityTab`'s `fmt` vocabulary for
+the **five kinds that switch actually cases** (`:1616-1625`), so a second event vocabulary cannot
+drift away from the first.
+
+**`cost` is NEW, not reused, and the difference is load-bearing.** Verified this session: `fmt`'s
+switch cases `spawn`, `message`, `drain`, `escalate`, `approval` and then falls to
+`default: return JSON.stringify(e)` — there is **no `cost` case**. The `cost` string below is
+therefore this phase's own addition and has no existing wording to match. Do not describe it as
+reused, and do not "restore" it into `ActivityTab` — that tab is a live tail, and a cumulative-vs-diff
+mistake there would be ADR-0005's bug in a second place.
 
 - `spawn` → `spawned {name}`
-- `message` → `{from} → {to}: {subject}`
+- `message` → `{from} → {to}: {subject || act}` — the `|| e.act` fallback is part of the source
+  string (`:1619`) and must be carried; dropping it renders an empty colon for any envelope whose
+  subject is blank
 - `drain` → `{agentId} drained {n} msg(s)`
 - `escalate` → `escalated to human: {subject}`
 - `approval` → `approval granted` / `approval denied`
@@ -626,7 +645,8 @@ detail list is one bucket deep, capped at 200.
 Insertion point, in render order: the existing header row (portrait, name, `PixelBadge`, project,
 account `<select>`, IDE / open / MCP / kill) → the existing `openTerminalError` strip
 (`AgentDetailPanel.tsx:206-214`) → **the stat card** → the existing `BlockedBanner`
-(`:222-234`) → `SidebarTabs`. The error strip stays adjacent to the button that raises it, and the
+(`:222-234`) → the existing `AgentControlStrip` (`:236`, rendered under `isReal` — operator
+pause / halt / steer) → `SidebarTabs`. The error strip stays adjacent to the button that raises it, and the
 banner stays adjacent to the tabs — `:216-221` records that the banner sits above the tabs on purpose
 because "a prompt waiting on a human outranks whichever tab happens to be open".
 
@@ -653,6 +673,18 @@ markup over that derivation and computes nothing itself. This is not a style pre
 that FLOOR-13 unified the AUTO chip *through a shared module* and unified cost *by copying an
 expression into three files*, and only the copied half drifted.
 
+**The hook MUST pass a third `getServerSnapshot` argument, and the test needs a seam to seed it.**
+`03-VALIDATION.md` routes the SCALE-05 assertions — including "never `$0.00` for an unmeasured
+engine" — through `test/renderer-components.test.cjs`, which is a **server** render
+(`renderToStaticMarkup`, ceiling documented at `:24-40`: no effects, no events, no state updates).
+React 18 throws *"Missing getServerSnapshot"* on the server when `useSyncExternalStore` is called
+with two arguments, so a two-arg hook makes every one of those assertions fail to run rather than
+fail red. Every shipped call site already does this correctly — verified this session:
+`AgentCard.tsx:231`, `AgentCard.tsx:271`, `CommandCenterPanel.tsx:425`, `FullscreenTerminal.tsx:597`
+and `terminalFontSize.ts:53` all pass the getter three times — so following `autoMode.ts` faithfully
+is sufficient. The remaining requirement is a seeding seam so the test can set the module singleton's
+creation-time snapshot before render, the way the suite already seeds zustand.
+
 #### S2b — the five fields
 
 | Field | Measured branch | Declared-gap branch |
@@ -660,7 +692,7 @@ expression into three files*, and only the copied half drifted.
 | **cost** | `{kind:'measured', usd}` → `$1.23`, `--cth-ink-900` | `{kind:'unmeasured', reason}` → **`no cost meter`** in `--cth-ink-500`, `title={reason}` |
 | **up** | `spawnedAt` present → `2h 14m` / `4m` / `41s` | absent → **`not recorded`**, `--cth-ink-500` |
 | **context** | `contextTokens` and `contextLimit` both present → `{k} / {k} ({pct}%)` + a 4px rail | either absent → **`not reported`**, `--cth-ink-500` |
-| **account** | a resolved Claude account → its label | no pool for this engine → **`login`** (`LOGIN_ACCOUNT_LABEL`, `src/shared/claudeAccounts.ts:28`) |
+| **account** | a resolved Claude account → its label | no pool for this engine → **`Login account`** (render `LOGIN_ACCOUNT_LABEL`, `src/shared/claudeAccounts.ts:28`) |
 | **state** | breaker snapshot resolved → `healthy` · `steering` · `constrained` · `stopped` | not yet resolved → **`unknown`**, `--cth-ink-500` |
 
 **cost — `$0.00` is forbidden for an unmeasured engine, and the rule needs stating precisely.**
@@ -671,7 +703,7 @@ engines render the gap. The exact contract:
 - under `kind:'unmeasured'` the rendered text contains **no `$` character at all**;
 - `$0.00` **is** legitimate under `kind:'measured'` — an engine that reports and has spent nothing;
 - the `title` reuses the **existing** gap sentence rather than inventing a second wording. Verified at
-  `src/renderer/src/store/config.ts:495-499`:
+  `src/renderer/src/store/config.ts:491-492`:
   `` `${engine} reports no cost — ${subject}'s spend is invisible to every budget and to the breaker.` ``
   The chip vocabulary (`NO SPEND`) and its ranking already exist at `config.ts:447-514`; this field is
   a second **rendering** of that one derivation, never a second derivation.
@@ -904,7 +936,7 @@ contract.
 | 3 | Detail-row cap (CONTEXT discretion) | **200** | An uncapped list — refused, since no windowing library exists and D-37 forbids adding one. 200 matches the existing bound on the same data path (`preload/index.ts:787`) |
 | 4 | Tab label | **`day`** | `timeline` — 8 characters against 3 in the one container this phase risks overflowing, and off-register beside `monitor` / `tasks` / `graph` |
 | 5 | Tab icon | **`clock`, reused** | A new 16×16 path in `Icon.tsx`. Reuse is already the pattern in this exact array (`bell` ×2, `sparkle` ×2) and costs nothing |
-| 6 | Density encoding | **Integer 1..8 bar heights** | An opacity ramp — a gradient by another name, banned by `DESIGN.md:71`, and unreadable at 1-unit column width |
+| 6 | Density encoding | **Integer 1..8 bar heights** | An opacity ramp — a gradient by another name, banned by `DESIGN.md:107-109`, and unreadable at 1-unit column width |
 | 7 | Band technology | **One `<svg>` of `<rect>`s** | Pixi (D-28, refused on a measured bug) and 288 CSS `<div>`s (one DOM node per cell against one `<svg>` carrying a single `role="img"` name) |
 | 8 | Context threshold pair | **85 / 65** | 88/75 (`CommandCenterPanel.tsx:853`) and 87.5/75 (`AgentCard.tsx:165`) — neither carries a written reason. 85 does, and it names a real mechanism (`FullscreenTerminal.tsx:531`) |
 | 9 | Duplicate-name rows in the review sheet (CONTEXT discretion) | **Default UNCHECKED** | Default checked — `AddAgentModal.tsx:131-133` derives the agent id from the name plus a millisecond, so a same-name same-batch pair collides |
