@@ -597,14 +597,32 @@ function skillsResourceDir(): string {
 /** Where the phone PWA bundle lives on disk — the same packaged/dev
  *  resolution pair as `slackReplyScriptPath()`/`skillsResourceDir()` above,
  *  injected into `webhook.ts` as `staticRoot` (D-23). Returns the path
- *  whether or not the directory exists; a missing `resources/phone/` (dev,
- *  before plan 02-09 lands) is what `webhook.ts` itself answers 404 for, not
- *  a reason to special-case here. `electron-builder.yml`'s `extraResources`
- *  entry is plan 02-09's file — none is added by this one. */
+ *  whether or not the directory exists; a missing `resources/phone/` is what
+ *  `webhook.ts` itself answers 404 for, not a reason to special-case here.
+ *  `electron-builder.yml`'s `extraResources` entry (plan 02-09 task 1) is
+ *  what makes this resolve in a PACKAGED build — `files:` does not cover
+ *  `resources/` (#52). */
 function phoneRootPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'phone')
     : join(app.getAppPath(), 'resources', 'phone');
+}
+
+/** Where the phone's VAPID keypair persists (`src/main/push.ts`) — userData
+ *  ONLY, never the hive git repo, which is committed: a VAPID private key in
+ *  a commit is a permanent key compromise (T-P02-09-05). Mirrors
+ *  `slackReplyConfigPath()` below.
+ *
+ *  Not called anywhere in this file. R-push is ABSENT from the merged
+ *  `src/main/webhook.ts` (plan 02-05) — no VAPID-public-key route and no
+ *  subscription-intake callback exist in `WebhookServerOptions`, so there is
+ *  nothing that could ever capture a `PushSubscription` to call
+ *  `sendPush()` against. Wiring `ensureVapidKeys()`/`sendPush()` to a route
+ *  that does not exist would be dead code with no caller; this function
+ *  exists only so the userData path is settled ahead of the plan that adds
+ *  the intake (02-12's honesty ledger names the gap). */
+function pushStatePath(): string {
+  return join(app.getPath('userData'), 'push-state.json');
 }
 
 /** Where the helper discovers `{ port, token }` for the loopback endpoint. Kept
