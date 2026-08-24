@@ -420,6 +420,38 @@ planner rather than pre-locked:
 
 </decisions>
 
+<accepted_residuals>
+## Accepted Residuals
+
+Added during PLAN REVISION ROUND 2, after two red-team rounds. These are stated gaps, not silent
+ones — each has an owner and a reason it is not closed in Phase 3.
+
+- **Transcript-tier spend does not reach `cost-ledger.jsonl`.** `boot.ts`'s cost-ledger append gate
+  (`if (sample?.sessionId) hive.appendCostLedger(sample)`) stays exactly as it is today. An earlier
+  draft of 03-02 widened it to `if (sample) hive.appendCostLedger(sample)` so a transcript-fallback
+  sample (`sessionId: ''`, from codex/other transcript-tier engines) would also be credited. Across
+  two red-team rounds that single-line change produced **thirteen confirmed findings** (round 1 #3,
+  #4, #15, #35; round 2 #1, #12, #15, #16, #17, #21, #23, #30, #40) — every attempted fix (a
+  fallback-baseline seed, a monotonic floor, `resolveCodexHome` wiring) spawned two more defects of
+  the same class, and the money path it touches had zero test coverage the whole time. **Decision:
+  revert the widening rather than patch it a third time.** `applyCostRow` in `hive.ts` is unchanged.
+  The breaker's inputs and the fleet/agent-directory DISPLAY join (`writeFleetSnapshot`,
+  `hive:agentDirectory`) DO show transcript-tier cost as of 03-02 (`telemetry.getAgentUsage(id)`,
+  with a `costLifetime` discriminator) — D-36's "invisible to every UI" requirement is satisfied by
+  the display half. Only the durable ledger, and anything reading `taskSpend`/`budgetForAgent` off
+  it, still sees zero for these engines. **Owner: PARITY-02** (D-03) — that plan already owns
+  correcting `REQUIREMENTS.md:145`/`:452`'s "all eleven engines" overclaim, and closing this ledger
+  gap is the natural extension of that correction. The per-agent session filter it will need
+  (`ReadUsageOptions`) already exists at `transcript.ts:299` — a future plan can pass a real session
+  id into `readAgentUsage`/`readCodexUsage` per agent instead of the whole-cwd/whole-CODEX_HOME total,
+  which removes the double-billing hazard the widening attempt kept re-introducing.
+- **SCALE-05's agent card renders a DECLARED GAP for the ledger-sourced budget/spend-cap fields it
+  cannot trust for a transcript-tier engine**, per D-35 (never a faked `$0.00`). This is satisfied
+  fully by 03-02/03-08's discriminated display join — it does not depend on the ledger gap above
+  closing.
+
+</accepted_residuals>
+
 <canonical_refs>
 ## Canonical References
 
