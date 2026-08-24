@@ -136,3 +136,36 @@ test('the 512 icon has not drifted from its source (docs/logo.png) — run `npm 
   assert.equal(iconDigest, logoDigest,
     'resources/phone/icon-512.png no longer matches docs/logo.png — run `npm run brand`, then re-copy it as icon-512.png');
 });
+
+/**
+ * T-P02-09-07: the phone's CSP authorises its inline <script>/<style> by
+ * sha256 hash rather than 'unsafe-inline'. Recompute both digests from the
+ * COMMITTED file and assert they match the digests embedded in the meta
+ * CSP — an edited script/style with a stale hash ships a phone that
+ * silently executes nothing, and no other check in this plan would catch
+ * it (the file still parses, still has a <script> tag, still passes every
+ * other clause).
+ */
+test("the phone's CSP script-src/style-src hashes match the committed inline <script>/<style> content", () => {
+  const html = fs.readFileSync(path.join(PHONE_DIR, 'index.html'), 'utf8');
+  function extractBetween(open, close) {
+    const i = html.indexOf(open);
+    const j = html.indexOf(close, i);
+    assert.ok(i !== -1 && j !== -1, `could not find a ${open}...${close} block in index.html`);
+    return html.slice(i + open.length, j);
+  }
+  const styleText = extractBetween('<style>', '</style>');
+  const scriptText = extractBetween('<script>', '</script>');
+  const realStyleHash = crypto.createHash('sha256').update(styleText, 'utf8').digest('base64');
+  const realScriptHash = crypto.createHash('sha256').update(scriptText, 'utf8').digest('base64');
+
+  const scriptMatch = /script-src 'sha256-([^']*)'/.exec(html);
+  const styleMatch = /style-src 'sha256-([^']*)'/.exec(html);
+  assert.ok(scriptMatch, 'no script-src sha256 hash found in the CSP meta tag');
+  assert.ok(styleMatch, 'no style-src sha256 hash found in the CSP meta tag');
+
+  assert.equal(scriptMatch[1], realScriptHash,
+    'the CSP script-src hash does not match the committed <script> content — the phone would execute nothing');
+  assert.equal(styleMatch[1], realStyleHash,
+    'the CSP style-src hash does not match the committed <style> content — the phone would render unstyled');
+});

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; img-src 'self' data:; manifest-src 'self'; script-src 'sha256-814xuPrQRdE3Ai4P9zUi/93JhdTjScCbk0JCaGEGkDU='; style-src 'sha256-NLGNADNkRikjoVfjWqk8uOuc4YI/OiS94hXK806cBwg='; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; img-src 'self' data:; manifest-src 'self'; script-src 'sha256-EtyV4iwjHDyNCCr1Hm+KnT4nQXdYDHo/DsYAJH53NwQ='; style-src 'sha256-NLGNADNkRikjoVfjWqk8uOuc4YI/OiS94hXK806cBwg='; base-uri 'none'; form-action 'none'">
 <link rel="manifest" href="./manifest.webmanifest">
 <title>Hello MarkX</title>
 <style>
@@ -352,7 +352,7 @@ button { font-family: var(--p-font); }
   function screenListHtml() {
     var count = state.asks.length;
     var headingText = count > 0 ? 'NEEDS YOU' : COPY.emptyHeading;
-    var countBadge = count > 0 ? '<span class="p-count">' + count + '</span>' : '';
+    var countBadge = count > 0 ? ' <span class="p-count">' + count + '</span>' : '';
     var bannerHtml = state.banner
       ? '<p class="p-offline-bar">' + escapeHtml(state.banner) + '</p>'
       : '';
