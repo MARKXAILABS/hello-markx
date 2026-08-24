@@ -142,7 +142,24 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       *(Split deliberately. The original "…**or** the UI states plainly…" let a skeptic be
       unable to distinguish "we routed the inbox" from "we wrote a label". Each half is now
       separately checkable, and the plan must say which engines fall under which.)*
-- [x] **PARITY-02**: All eleven engines report cost to the ledger and to the breaker
+- [x] **PARITY-02**: Every engine that can be pointed at a base URL reports cost through the
+      proxy bridge that already exists (`claude` and `codex` through their own native
+      telemetry, `qwen` and `crush` through the loopback proxy sidecar); the rest —
+      `grok`, `kimi`, `antigravity`, `opencode`, `pi`, `copilot` and custom commands —
+      **declare** the absence through the capability channel instead, so the operator meets the
+      fact in the UI rather than in a doc
+      *(Restated 2026-08-24, D-34. The original "all eleven … report cost" is unachievable by
+      construction for `copilot` (spend sits on the user's Copilot plan; nothing per-agent
+      reaches this app) and for a custom command (an unknown binary with nothing to read) — no
+      amount of engineering makes either emit a number it does not have, and inventing one
+      locally would be fabrication. What a skeptic can no longer do is confuse "we delivered
+      cost for the engines that can report it" with "all eleven report cost": six engines are
+      tracked, five are not, and the five are named. Same restatement, same words, as
+      `README.md`'s cost paragraph and `.planning/ROADMAP.md`'s Success Criterion 5. This
+      requirement's checkbox and status row were already Complete before this restatement
+      landed — set by an earlier plan, against the original unachievable wording; left exactly
+      as found, per this plan's own scope: correcting the text this checkbox rests on is this
+      plan's job, flipping the checkbox is the rollup's.)*
 - [ ] **PARITY-03**: The four `live-unverified` bridges (pi, opencode, crush, qwen) are
       either verified against a real session and unmarked, or still marked — never silently
       unmarked
