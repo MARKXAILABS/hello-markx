@@ -328,7 +328,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 - [ ] **GSD-05**: A worker waiting on a human is not reaped for being quiet — the idle reaper is
       aware of card state *(today the reap measures PTY output silence only, so a worker blocked
       on a question dies in twenty minutes by construction)*
-- [ ] **GSD-06**: A human answer can be addressed to **any** agent, not only the god *(today
+- [x] **GSD-06**: A human answer can be addressed to **any** agent, not only the god *(today
       `AskMeTab.tsx:93` is literally `to: 'god'`, so no worker on the floor can ever be unblocked
       by a person)* — **prerequisite of DAEMON-02**: the phone's "answer from anywhere" has
       nowhere to land without it
@@ -487,7 +487,7 @@ goals and success criteria each requirement rolls up into.
 | GSD-03 | Phase 6 | Pending |
 | GSD-04 | Phase 6 | Pending |
 | GSD-05 | Phase 6 | Pending |
-| GSD-06 | Phase 2 | Pending |
+| GSD-06 | Phase 2 | Complete |
 | DESK-01 | Phase 6 | Pending |
 | DESK-02 | Phase 6 | Pending |
 | DESK-03 | Phase 6 | Pending |

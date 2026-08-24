@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-06-PLAN.md
-last_updated: "2026-08-24T00:00:00.000Z"
+stopped_at: Completed 02-08-PLAN.md (GSD-06 closed)
+last_updated: "2026-08-24T09:06:56.139Z"
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 38
+  completed_plans: 39
   percent: 0
 ---
 
@@ -25,13 +25,14 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plans complete: **8 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+Plans complete: **9 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
       The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
-      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-11**.
-      Outstanding: 02-08, 02-09, 02-10, 02-12.
-      Next wave: **02-08** (wave 6's other half, depends on 02-11's MCP data contract; 02-06 — this
-      plan — is a recovery closeout: 5 task commits had already landed from a prior killed session,
-      independently re-verified this session rather than re-executed, then closed out with a SUMMARY).
+      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-08,
+      02-11**.
+      Outstanding: 02-09, 02-10, 02-12.
+      Next wave: **02-09/02-10** (the phone bundle + pairing UI, wave 7/8 — 02-08 closed wave 6's other
+      half: `AskMeTab.tsx`'s hardcoded `to: 'god'` is gone and `capabilityLine()` has its first
+      production consumer anywhere in this repo, on the roster).
 
 Execution facts as of this line:
 
@@ -46,10 +47,11 @@ Execution facts as of this line:
 
 - Whole-suite figure re-measured after every plan, never SUMMARY-trusted:
   638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> 728/721/0/7 after 02-11 -> 753/746/0/7
-  after 02-05 -> **762/755/0 fail/7 skipped** after 02-06 (this plan's own +9 cases), re-confirmed by
-  a fresh `npm test` run in the closeout session. `npm run typecheck`, `npm run build` and
-  `npm run lint` (`--max-warnings 0`) all exit 0 at every checkpoint. 0 failures is the bar; there is
-  no pre-existing-failure allowance on this phase.
+  after 02-05 -> 762/755/0/7 after 02-06 -> **777/770/0 fail/7 skipped** after 02-08 (+13 cases: 5 in
+  task 1, 4 in task 2, 4 in task 3), matching the orchestrator's own pre-dispatch baseline of
+  757/0/7 plus this plan's additions exactly. `npm run typecheck`, `npm run build` and `npm run lint`
+  (`--max-warnings 0`) all exit 0 at every checkpoint. 0 failures is the bar; there is no
+  pre-existing-failure allowance on this phase.
 
 - **02-05 landed the phone's whole server-side door.** `/phone/**` routed ahead of `readEndpointId`
   off a five-file exact-filename allowlist; a single-use enrollment token (burned before its
@@ -82,6 +84,22 @@ Execution facts as of this line:
   row) without growing the frozen 322×86 card — not forced, carried forward as a stated limitation,
   confirmed unreachable in the shipped app today because claude is the only MCP-wired engine and it
   carries zero capability gaps.
+
+- **02-08 closed GSD-06 (flipped `[x]` in REQUIREMENTS.md).** `AskMeTab.tsx:92`'s hardcoded `to: 'god'`
+  is gone; a `recipientOf(task)` resolver — one function, shared by the mail `to:` field and the
+  header badge — routes the human's answer to whichever agent's `AGENT_ID` asked (via a new
+  `askedBy` field on the humanQA entry, written by `task.cjs`'s `--q` branch from the environment
+  only, never a flag). The god always gets a copy first and is still the one that unblocks the card;
+  the asker's copy tells it to continue its own work. `capabilityLine()` — a tested pure function
+  with **zero production consumers anywhere in this repo before this plan** — gets its first one, on
+  `rosterContext()`'s per-row output, gated on an actual capability gap so a fully-capable floor
+  renders byte-for-byte what it rendered before (measured: 469 content-only characters, identical
+  before/after). `godLine`'s prompt-cached sentence that this phase made false (*"arrives as an inbox
+  message to you"*) is rewritten with zero interpolated values, so ADR-0002 holds. D-01 correction:
+  kimi is no longer the NO-MAIL example the plan's own text named — 02-07's bridge landed first — so
+  copilot is used instead, live-verified. See `02-08-SUMMARY.md` for all 8 RED-drive runs, the
+  measured roster lengths, and the honest statement that the answer reaches the asker's **inbox**
+  (D-38), not its terminal (ROADMAP:221 is corrected there, not here).
 
 Requirements deliberately still OPEN, with the reason (none of these is an oversight):
 
@@ -173,6 +191,7 @@ is installed on this machine, so this is the expected outcome under the zero-rec
 | Phase 02 P11 | 55min | 4 tasks | 9 files |
 | Phase 02 P05 | 57min | 5 tasks | 8 files |
 | Phase 02 P06 | 58min | 5 tasks | 8 files |
+| Phase 02 P08 | 45min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -464,6 +483,8 @@ Recent decisions affecting current work:
 - [Phase 02-05]: The /phone/api/** auth lockout is one shared counter across enroll+asks+answer, not scoped to /enroll alone — a brute-force attacker can guess bearers exactly as cheaply as enrollment tokens.
 - [Phase 02-05]: None of DAEMON-02/03/05 marked complete in REQUIREMENTS.md: DAEMON-02/05 are shared with 02-09/02-10 (not landed); DAEMON-03's live half is operator-supplied and its stated purpose has no phone UI to exercise until 02-09/02-10 land.
 - [Phase ?]: PARITY-01b and DAEMON-04 flipped complete after 02-06's closeout (last declarer of both)
+- [Phase 02-08]: kimi is no longer this plan's NO-MAIL roster example — 02-07's inbox bridge landed first, so copilot is used instead for the capabilityLine() gap-carrying test case (canReceiveInbox permanently false, D-32/D-33/D-34)
+- [Phase 02-08]: an absolute roster-length assertion in a test embeds os.tmpdir()'s path length, which varies by machine/CI runner — strip the volatile preamble before comparing, or measure the SAME reused home directory for both before/after loads, never hardcode a raw byte count
 
 ### Pending Todos
 
@@ -585,8 +606,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-24T00:00:00.000Z
-Stopped at: Completed 02-06-PLAN.md (recovery closeout — see 02-06-SUMMARY.md)
+Last session: 2026-08-24T09:06:09.589Z
+Stopped at: Completed 02-08-PLAN.md (GSD-06 closed)
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
@@ -596,4 +617,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: None
+Resume file: 02-09-PLAN.md
