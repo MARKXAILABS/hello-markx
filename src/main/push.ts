@@ -17,7 +17,7 @@
  */
 import {
   createCipheriv, createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync,
-  hkdfSync, randomBytes, sign as cryptoSign,
+  hkdfSync, randomBytes, sign as cryptoSign, verify as cryptoVerify,
   type KeyObject
 } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -97,6 +97,31 @@ function vapidPrivateKeyObject(keys: VapidKeys): KeyObject {
   return createPrivateKey({ key: { kty: 'EC', crv: 'P-256', d: keys.privateKey, x, y }, format: 'jwk' });
 }
 
+/** Does the stored private key genuinely belong to the advertised public
+ *  point? `createPrivateKey({ format: 'jwk' })` does NOT answer that — it is
+ *  a SHAPE check only. Measured live on Node v24.13.0: it accepts an empty, a
+ *  4-byte, a non-base64, a 120-byte PKCS8-sized, and a foreign-keypair `d`
+ *  without complaint, and `createPublicKey()` on the result just echoes back
+ *  the `x`/`y` it was handed rather than deriving `d*G`, so comparing points
+ *  cannot catch it either. Signing a probe and verifying it against the
+ *  ADVERTISED point is therefore the check: one ECDSA sign + verify, once per
+ *  process start. Without it a mismatched stored key signs VAPID JWTs that
+ *  never verify against the `k=` we advertise — silent, permanent 401s from
+ *  every push service, with nothing left to trigger regeneration — or throws
+ *  `too small buffer` out of {@link vapidAuthHeader}. Non-throwing by
+ *  contract: every failure mode above is a `false`, never an exception.
+ *  Never logs either half of the pair. */
+function vapidKeysMatch(keys: VapidKeys): boolean {
+  try {
+    const probe = Buffer.from('vapid-keypair-probe', 'utf8');
+    const sig = cryptoSign('sha256', probe, { key: vapidPrivateKeyObject(keys), dsaEncoding: 'ieee-p1363' });
+    const pub = importP256Point(fromB64Url(keys.publicKey));
+    return cryptoVerify('sha256', probe, { key: pub, dsaEncoding: 'ieee-p1363' }, sig);
+  } catch {
+    return false;
+  }
+}
+
 /** Fresh application-server VAPID keypair. */
 export function generateVapidKeys(): VapidKeys {
   const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: CURVE });
@@ -122,11 +147,14 @@ export function ensureVapidKeys(deps: PushDeps): VapidKeys {
       if (typeof parsed.publicKey === 'string' && typeof parsed.privateKey === 'string') {
         const stored = { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
         // `typeof === 'string'` alone lets a corrupted or legacy-format file
-        // through, to blow up later inside the signing path. Re-import it here
-        // instead: the real key import is the shape check, and a throw lands in
-        // the catch below and regenerates. Never logs either half.
-        vapidPrivateKeyObject(stored);
-        return stored;
+        // through, to blow up later inside the signing path — and re-IMPORTING
+        // it is not enough either, because the JWK import validates only the
+        // PUBLIC point (see {@link vapidKeysMatch}). Only a real pair check
+        // catches a stored private key that is empty, truncated, non-base64,
+        // PKCS8-wrapped, or simply from a different keypair; each of those signs
+        // JWTs that never verify against the `k=` we advertise. Falls through to
+        // regenerate + rewrite the file. Never logs either half.
+        if (vapidKeysMatch(stored)) return stored;
       }
     }
   } catch { /* unreadable/corrupt — regenerate below */ }
@@ -140,18 +168,6 @@ export function ensureVapidKeys(deps: PushDeps): VapidKeys {
   return keys;
 }
 
-/**
- * The `Authorization: vapid t=<jwt>, k=<publicKey>` header (RFC 8292).
- * ES256 over `{"typ":"JWT","alg":"ES256"}`; claims `aud` = the endpoint's
- * ORIGIN (scheme + host, no path — a push service rejects a mismatched
- * audience), `exp` = `now + 12h` (well under the 24h ceiling most push
- * services enforce), `sub` = the caller's contact URI.
- *
- * `dsaEncoding: 'ieee-p1363'` — Node's default is DER. A push service
- * answers a DER-signed VAPID JWT with 401, and this is the single most
- * common way a hand-rolled VAPID implementation fails. Do not delete this
- * option as dead-looking noise.
- */
 /** Validate a push endpoint at the trust boundary and hand back its ORIGIN,
  *  or `null` if it is not a well-formed absolute `https:`/`http:` URL.
  *  `PushSubscription.endpoint` arrives unmodified from the browser client, so
@@ -168,6 +184,18 @@ export function endpointOrigin(endpoint: string): string | null {
   }
 }
 
+/**
+ * The `Authorization: vapid t=<jwt>, k=<publicKey>` header (RFC 8292).
+ * ES256 over `{"typ":"JWT","alg":"ES256"}`; claims `aud` = the endpoint's
+ * ORIGIN (scheme + host, no path — a push service rejects a mismatched
+ * audience), `exp` = `now + 12h` (well under the 24h ceiling most push
+ * services enforce), `sub` = the caller's contact URI.
+ *
+ * `dsaEncoding: 'ieee-p1363'` — Node's default is DER. A push service
+ * answers a DER-signed VAPID JWT with 401, and this is the single most
+ * common way a hand-rolled VAPID implementation fails. Do not delete this
+ * option as dead-looking noise.
+ */
 export function vapidAuthHeader(endpoint: string, keys: VapidKeys, subject: string, now?: number): string {
   const aud = endpointOrigin(endpoint);
   if (aud === null) throw new Error('malformed push endpoint');
@@ -284,29 +312,53 @@ export interface SendPushOpts {
   now?: () => number;
 }
 
+/** Why a STRING and not a boolean: the caller answers with it verbatim, and
+ *  each shape failure is a different operator-visible cause. Takes `unknown`
+ *  deliberately — the declared {@link PushSubscription} type is a WIRE
+ *  contract the browser is trusted to honour, not something the compiler can
+ *  enforce at run time, and `null`/`undefined`/a bare string do reach here.
+ *  Touches nothing but `typeof` on already-destructured locals, so it cannot
+ *  throw on its own; it is still called from inside the try, belt and
+ *  braces. Never echoes the endpoint (a capability URL). */
+function malformedSubscription(sub: unknown): string | null {
+  if (typeof sub !== 'object' || sub === null) return 'malformed push subscription';
+  const { endpoint, keys } = sub as Partial<PushSubscription>;
+  if (typeof endpoint !== 'string' || endpointOrigin(endpoint) === null) return 'malformed push endpoint';
+  if (typeof keys !== 'object' || keys === null) return 'malformed push subscription keys';
+  if (typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') return 'malformed push subscription keys';
+  return null;
+}
+
 /**
  * Encrypt and POST one push message. 404/410 mean the subscription is dead —
  * `gone: true` tells the caller to prune it (D-19: every tunnel restart kills
  * every subscription, so without pruning the state file only grows). 429 is
  * NOT `gone`: a rate limit is not a dead subscription, and pruning on it
- * would unsubscribe a working phone. A `sub.endpoint` that is not a
- * well-formed absolute `https:`/`http:` URL fails closed as `{ok:false}`
- * before any crypto or transport call. Never throws across this boundary;
- * never logs the private key, the auth secret, or the endpoint (a capability
- * URL).
+ * would unsubscribe a working phone. A `sub` that is not an object, or whose
+ * `endpoint` is not a well-formed absolute `https:`/`http:` URL, or whose
+ * `keys` are absent or not strings, fails closed as `{ok:false}` before any
+ * crypto or transport call. Never throws across this boundary — for ANY
+ * `sub`, `null` and `undefined` included; never logs the private key, the
+ * auth secret, or the endpoint (a capability URL).
  */
 export async function sendPush(
   sub: PushSubscription,
   payload: string | Buffer,
   opts: SendPushOpts
 ): Promise<{ ok: true } | { ok: false; status?: number; gone?: boolean; error: string }> {
-  if (endpointOrigin(sub.endpoint) === null) return { ok: false, error: 'malformed push endpoint' };
-  const enc = encryptPayload(payload, sub);
-  if (!enc.ok) return { ok: false, error: enc.error };
+  // EVERYTHING is inside the try, the guard's own dereference of `sub`
+  // included. A pre-try `sub.endpoint` read is precisely how the "never
+  // throws" contract was broken once already: `sendPush(null, ...)` REJECTED
+  // with a TypeError instead of resolving `{ok:false}`. `sub` is the browser's
+  // own `PushSubscription.toJSON()` forwarded unmodified, so its SHAPE is
+  // externally supplied too — not only the `endpoint` string inside it.
   try {
-    // Built INSIDE the try: `vapidAuthHeader` throws on a corrupt stored VAPID
-    // key, and out here that throw would escape the "never throws" contract
-    // above as a rejected promise, aborting a caller's whole send loop.
+    const bad = malformedSubscription(sub);
+    if (bad !== null) return { ok: false, error: bad };
+    const enc = encryptPayload(payload, sub);
+    if (!enc.ok) return { ok: false, error: enc.error };
+    // `vapidAuthHeader` throws on a corrupt stored VAPID key; in here that
+    // throw fails closed instead of aborting a caller's whole send loop.
     const headers: Record<string, string> = {
       TTL: String(opts.ttl ?? 60),
       'Content-Encoding': 'aes128gcm',
