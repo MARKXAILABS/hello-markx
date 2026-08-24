@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-08-PLAN.md (GSD-06 closed)
-last_updated: "2026-08-24T09:06:56.139Z"
+stopped_at: Completed 02-09-PLAN.md (phone PWA bundle + push.ts; DAEMON-02 left open, localhost-verified fallback recorded)
+last_updated: "2026-08-24T09:59:33.938Z"
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 39
-  percent: 0
+  completed_plans: 40
+  percent: 93
 ---
 
 # Project State
@@ -25,14 +25,16 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plans complete: **9 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+Plans complete: **10 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
       The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
       ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-08,
-      02-11**.
-      Outstanding: 02-09, 02-10, 02-12.
-      Next wave: **02-09/02-10** (the phone bundle + pairing UI, wave 7/8 — 02-08 closed wave 6's other
-      half: `AskMeTab.tsx`'s hardcoded `to: 'god'` is gone and `capabilityLine()` has its first
-      production consumer anywhere in this repo, on the roster).
+      02-09, 02-11**.
+      Outstanding: 02-10, 02-12.
+      Next wave: **02-10** (the pairing UI/QR, wave 8 — 02-09 closed wave 7: the five-file phone PWA
+      bundle, `src/main/push.ts`'s VAPID/aes128gcm implementation, and the `electron-builder.yml`
+      packaging entry, all real-verified on a live loopback socket and a real packaged
+      `dist/win-unpacked` tree. DAEMON-02 stays open — a localhost-verified auth path, never a device
+      verification; see `02-09-SUMMARY.md`).
 
 Execution facts as of this line:
 
@@ -47,11 +49,12 @@ Execution facts as of this line:
 
 - Whole-suite figure re-measured after every plan, never SUMMARY-trusted:
   638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> 728/721/0/7 after 02-11 -> 753/746/0/7
-  after 02-05 -> 762/755/0/7 after 02-06 -> **777/770/0 fail/7 skipped** after 02-08 (+13 cases: 5 in
+  after 02-05 -> 762/755/0/7 after 02-06 -> 777/770/0/7 after 02-08 (+13 cases: 5 in
   task 1, 4 in task 2, 4 in task 3), matching the orchestrator's own pre-dispatch baseline of
-  757/0/7 plus this plan's additions exactly. `npm run typecheck`, `npm run build` and `npm run lint`
-  (`--max-warnings 0`) all exit 0 at every checkpoint. 0 failures is the bar; there is no
-  pre-existing-failure allowance on this phase.
+  757/0/7 plus this plan's additions exactly -> **789/782/0 fail/7 skipped** after 02-09 (+12 cases: 4
+  in `build-assets.test.cjs`, 8 in the new `push-vapid.test.cjs`). `npm run typecheck`, `npm run build`
+  and `npm run lint` (`--max-warnings 0`) all exit 0 at every checkpoint. 0 failures is the bar; there
+  is no pre-existing-failure allowance on this phase.
 
 - **02-05 landed the phone's whole server-side door.** `/phone/**` routed ahead of `readEndpointId`
   off a five-file exact-filename allowlist; a single-use enrollment token (burned before its
@@ -60,9 +63,10 @@ Execution facts as of this line:
   Telegram's header compare and Discord's Ed25519 signature (live-verified this session through
   `node:crypto` alone, zero new dependencies). `webhook.ts` still imports nothing from `electron`.
   Curl-verified for real on loopback with the tunnel off (`scripts/phone-curl-check.cjs`, 6/6 OK).
-  **None of DAEMON-02/03/05 marked complete** — DAEMON-02/05 are shared with 02-09/02-10 (not yet
-  landed); DAEMON-03's live half is operator-supplied (no bot token, no Discord application tested)
-  and its own stated purpose has no phone UI to exercise until 02-09/02-10 land either.
+  **None of DAEMON-02/03/05 marked complete** — DAEMON-02/05 are shared with 02-09 (landed,
+  localhost-verified, see below) and 02-10 (pairing UI, not yet landed); DAEMON-03's live half is
+  operator-supplied (no bot token, no Discord application tested) and its own stated purpose has no
+  phone UI to exercise until 02-10 lands.
 
 - **02-11 landed DAEMON-04's mechanism for claude only.** `scripts/mcp-live-probe.cjs` live-reconfirmed
   `--mcp-config` spawns a server and `--settings`' `mcpServers` key does not (claude 2.1.236, run twice
@@ -101,14 +105,27 @@ Execution facts as of this line:
   measured roster lengths, and the honest statement that the answer reaches the asker's **inbox**
   (D-38), not its terminal (ROADMAP:221 is corrected there, not here).
 
+- **02-09 landed the phone PWA bundle + `src/main/push.ts`, DAEMON-02's client half.**
+  `resources/phone/{index.html,sw.js,manifest.webmanifest,icon-192.png,icon-512.png}` — two screens,
+  no framework, packaged via a real `dist/win-unpacked` build (sha256-identical to the committed
+  source). `src/main/push.ts` implements VAPID (RFC 8292) + `aes128gcm` (RFC 8291/8188) from
+  `node:crypto` alone; the DER-vs-raw-signature bug and a CEK-derivation bug were both reproduced live
+  and fixed under test. A real `WebhookServer` on a real loopback socket, driven by real `curl`,
+  against the real committed bundle (not a fixture) passed all 12 auth-path checks — full transcript
+  in `02-09-SUMMARY.md`. **R-push is ABSENT from the merged `webhook.ts`** (no VAPID-key route, no
+  subscription intake), so `push.ts` ships unit-verified but wired to no route — named for 02-12.
+  `phoneRootPath()`/the zero-endpoint guard were already plan 02-05's (commit `8577748`); this plan
+  changed neither. **DAEMON-02 is NOT flipped `[x]`** — no physical Android device was used.
+
 Requirements deliberately still OPEN, with the reason (none of these is an oversight):
 
 - **DAEMON-01** — unit half green (02-03). `02-VALIDATION.md` requires BOTH `node --test` AND a live
   Electron run with real PTYs; the live run has not happened. Tracked as a phase-close gate.
 
-- **DAEMON-02** — 02-05 landed the server's auth path, curl-verified on loopback; 02-09 (the phone
-  bundle/`resources/phone/**`) and 02-10 (the pairing UI/QR) both remain, and DAEMON-02's own text
-  names a real Android device as the honest completion bar, not yet attempted.
+- **DAEMON-02** — 02-05 landed the server's auth path, curl-verified on loopback; 02-09 landed the
+  client half (the phone bundle + push.ts), also localhost-verified, not device-verified. Only 02-10
+  (the pairing UI/QR) remains, and DAEMON-02's own text names a real Android device as the honest
+  completion bar, not yet attempted.
 
 - **DAEMON-03** — the verifier + payload-adapter mechanism is real and localhost-verified (02-05); the
   live half (a real Telegram bot token, a real Discord application) is operator-supplied and was not
@@ -192,6 +209,7 @@ is installed on this machine, so this is the expected outcome under the zero-rec
 | Phase 02 P05 | 57min | 5 tasks | 8 files |
 | Phase 02 P06 | 58min | 5 tasks | 8 files |
 | Phase 02 P08 | 45min | 3 tasks | 5 files |
+| Phase 02 P09 | ~5h | 5 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -485,6 +503,9 @@ Recent decisions affecting current work:
 - [Phase ?]: PARITY-01b and DAEMON-04 flipped complete after 02-06's closeout (last declarer of both)
 - [Phase 02-08]: kimi is no longer this plan's NO-MAIL roster example — 02-07's inbox bridge landed first, so copilot is used instead for the capabilityLine() gap-carrying test case (canReceiveInbox permanently false, D-32/D-33/D-34)
 - [Phase 02-08]: an absolute roster-length assertion in a test embeds os.tmpdir()'s path length, which varies by machine/CI runner — strip the volatile preamble before comparing, or measure the SAME reused home directory for both before/after loads, never hardcode a raw byte count
+- [Phase 02]: 02-09: DAEMON-02 lands as a localhost-verified auth path, deliberately not flipped [x] — no physical Android device was used this session, and the requirement's own text names a real device as the honest completion bar.
+- [Phase 02]: 02-09: R-push (a VAPID-key route + subscription-intake callback) is ABSENT from src/main/webhook.ts. push.ts ships fully unit-verified (VAPID + RFC 8291 aes128gcm, node:crypto only) but is wired to no route — named for plan 02-12's honesty ledger, not silently dropped.
+- [Phase 02]: 02-09: plan 02-05 already added the packaged/dev static-root resolver (as phoneRootPath(), not the phoneStaticDir() name this plan's own draft text used) and already widened the zero-endpoint guard for the phone in three places (traced to commit 8577748). This plan changes neither and does not rename the working symbol to match its own draft.
 
 ### Pending Todos
 
@@ -606,8 +627,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-24T09:06:09.589Z
-Stopped at: Completed 02-08-PLAN.md (GSD-06 closed)
+Last session: 2026-08-24T09:59:33.922Z
+Stopped at: Completed 02-09-PLAN.md (phone PWA bundle + push.ts; DAEMON-02 left open, localhost-verified fallback recorded)
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
@@ -617,4 +638,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: 02-09-PLAN.md
+Resume file: None
