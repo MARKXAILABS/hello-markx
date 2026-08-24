@@ -631,6 +631,40 @@ export function ensureMcpGrants(): void {
 }
 
 /**
+ * Grant a batch of MCP servers one at a time and report WHICH ids main actually
+ * accepted when one of them fails partway through (CR-01).
+ *
+ * The inline loop this replaced `return`ed on the first failure and threw that
+ * list away, so the caller could neither clear the plaintext secrets for the ids
+ * already granted nor republish the grants mirror every `AgentCard` reads — the
+ * floor kept showing a genuinely-granted server as ungranted for the rest of the
+ * session, wrong in the permissive direction. Partial success is reported, never
+ * discarded; the caller decides what to do with it.
+ *
+ * Stops at the first failure (a batch that has already failed is not one whose
+ * remaining grants should be attempted) and NEVER throws across this boundary:
+ * a rejected call is reported as `error` exactly like an `{ ok: false }`, so an
+ * IPC-level throw cannot leave the caller's `busy` flag stuck on.
+ */
+export async function grantMcpBatch(
+  ids: string[],
+  grant: (id: string) => Promise<{ ok: boolean; error?: string }>
+): Promise<{ granted: string[]; error: string | null }> {
+  const granted: string[] = [];
+  for (const id of ids) {
+    let res: { ok: boolean; error?: string };
+    try {
+      res = await grant(id);
+    } catch (e) {
+      return { granted, error: e instanceof Error ? e.message : String(e) };
+    }
+    if (!res.ok) return { granted, error: res.error ?? `${id}: grant failed` };
+    granted.push(id);
+  }
+  return { granted, error: null };
+}
+
+/**
  * The MCP element's data for one agent's card (S2). `null` when the engine
  * cannot take MCP servers at all — the caller renders the `NO MCP` gap chip
  * from `capabilityGaps` and MUST NEVER render an empty `MCP 0 safe`

@@ -296,3 +296,119 @@ test('AgentCard.tsx\'s aria-label carries both the gap sentences and the MCP cla
   const around = text.slice(Math.max(0, chipSpanIdx - 200), chipSpanIdx + 50);
   assert.match(around, /aria-hidden="true"/, 'the capability chip span must carry aria-hidden="true"');
 });
+
+// ─── CR-01 / CR-02 — the consent modal's partial-batch path and the defaults
+//     snapshot's staleness (02-REVIEW.md). Both are renderer-state defects on a
+//     capability surface, so they are pinned here rather than in a new file.
+//
+// THE CEILING, STATED UP FRONT: this repo renders components with
+// `renderToStaticMarkup` (test/renderer-components.test.cjs's own documented
+// constraint) — no effects, no events. `submitGrant` and `toggle` are closures
+// behind a click and CANNOT be invoked from any harness in this repo. So each
+// finding gets BOTH halves and neither is claimed to be the other: a real
+// behavioural test of the extracted logic, plus one source clause pinning the
+// component to it. The source clauses are the ones that go red on the bug.
+
+/** The body of `const <name> = ... => { ... }` in already-stripped source, matched
+ *  by brace depth. Returns null when the binding is not found. */
+function arrowBody(text, name) {
+  const head = text.indexOf(`const ${name} =`);
+  if (head < 0) return null;
+  const arrow = text.indexOf('=>', head);
+  if (arrow < 0) return null;
+  const open = text.indexOf('{', arrow);
+  if (open < 0) return null;
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return text.slice(open + 1, i);
+  }
+  return null;
+}
+
+/**
+ * The same body with every nested CLOSURE body blanked out — offsets preserved,
+ * whitespace kept — and every ordinary block (`if`, `for`, `try`) left intact.
+ *
+ * Both halves are load-bearing and were measured, not assumed. Blanking by plain
+ * brace depth (the first thing tried) blanks the `if (!res.ok) { ... return; }`
+ * INSIDE the `for` loop, which is exactly the early exit this clause exists to
+ * catch — the assertion then passes against the buggy source, vacuously. Blanking
+ * nothing instead trips on the `return next;` inside `setKeys((prev) => { ... })`,
+ * which is not an early exit at all, so a CORRECT fix would read as a violation.
+ * A closure opener is a `{` whose preceding non-space characters are `=>`.
+ */
+function withoutNestedClosures(body) {
+  const out = body.split('');
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== '{') continue;
+    let j = i - 1;
+    while (j >= 0 && /\s/.test(body[j])) j--;
+    if (!(j >= 1 && body[j] === '>' && body[j - 1] === '=')) continue;
+    let depth = 0;
+    for (let k = i; k < body.length; k++) {
+      if (body[k] === '{') depth++;
+      else if (body[k] === '}') depth--;
+      if (!/\s/.test(body[k])) out[k] = ' ';
+      if (depth === 0) { i = k; break; }
+    }
+  }
+  return out.join('');
+}
+
+test('CR-01 behaviour: grantMcpBatch reports the ids main actually granted when a later grant fails', async () => {
+  const { grantMcpBatch } = loadTs('src/renderer/src/store/config.ts');
+  assert.equal(typeof grantMcpBatch, 'function',
+    'grantMcpBatch is not exported — the partial-batch path has no testable seam at all');
+
+  const calls = [];
+  const partial = await grantMcpBatch(['github-token', 'db', 'email-calendar'], async (id) => {
+    calls.push(id);
+    return id === 'db' ? { ok: false, error: 'db: could not store the key' } : { ok: true };
+  });
+  // The whole of CR-01: main HAS granted github-token. Discarding that fact is what
+  // leaves every AgentCard rendering it as ungranted for the rest of the session.
+  assert.deepEqual(partial.granted, ['github-token'],
+    'a partial batch failure must still report the ids main genuinely granted');
+  assert.equal(partial.error, 'db: could not store the key', 'the failure must be surfaced, never swallowed');
+  assert.deepEqual(calls, ['github-token', 'db'],
+    'the batch must stop at the first failure — a later grant is not attempted past a failed one');
+
+  // Both directions: an all-ok batch reports every id and no error, so a fix that
+  // simply always reported [] would fail here instead of passing the clause above.
+  const all = await grantMcpBatch(['github-token', 'db'], async () => ({ ok: true }));
+  assert.deepEqual(all.granted, ['github-token', 'db']);
+  assert.equal(all.error, null);
+  assert.deepEqual(await grantMcpBatch([], async () => ({ ok: true })), { granted: [], error: null });
+});
+
+test('CR-01 behaviour: a REJECTED grant is reported like any other failure, never propagated', async () => {
+  const { grantMcpBatch } = loadTs('src/renderer/src/store/config.ts');
+  // An IPC-level throw is one of the failure modes 02-REVIEW.md names. If it escapes,
+  // the modal's `setBusy(false)` never runs and the dialog is wedged busy forever.
+  const res = await grantMcpBatch(['github-token', 'db'], async (id) => {
+    if (id === 'db') throw new Error('ipc channel closed');
+    return { ok: true };
+  });
+  assert.deepEqual(res.granted, ['github-token']);
+  assert.equal(res.error, 'ipc channel closed');
+});
+
+test('CR-01 wiring: submitGrant republishes the grants mirror on the partial-failure path too', () => {
+  const body = arrowBody(readStripped('src/renderer/src/components/McpConsentModal.tsx'), 'submitGrant');
+  assert.ok(body, 'submitGrant not found in McpConsentModal.tsx');
+  const flat = withoutNestedClosures(body);
+
+  const republish = flat.indexOf('load()');
+  assert.ok(republish >= 0,
+    'submitGrant no longer republishes via load() — the mcpGrantsSnapshot every AgentCard reads has no other writer on this path');
+  const earlyReturn = flat.search(/\breturn\b/);
+  assert.ok(earlyReturn === -1 || earlyReturn > republish,
+    'submitGrant returns before it republishes: after a partial batch failure the modal and every AgentCard keep showing an ALREADY-GRANTED server as ungranted, in the permissive direction (CR-01)');
+
+  assert.match(body, /grantMcpBatch\(/,
+    'submitGrant must route through grantMcpBatch — an inline loop has no test coverage in this repo');
+  const keysIdx = body.indexOf('setKeys(');
+  assert.ok(keysIdx >= 0 && body.slice(keysIdx, body.indexOf('load()')).includes('granted'),
+    'the secrets cleared after a batch must be the ids that actually succeeded (granted); clearing nothing leaves plaintext keys in React state, which this file documents as forbidden');
+});
