@@ -3382,18 +3382,17 @@ ipcMain.handle('window:newFloor', () => {
 // The third quit-dialog button. The god broadcasts closing time, every worker
 // saves its memory and ACKs, the god concludes with CLOSING-TIME-COMPLETE —
 // only then does the harness tear down. See closingTime.ts for the protocol.
-const closingTime = new ClosingTimeController(
-  hive,
-  // Roster source: agents with a live PTY right now (ptyToAgent is pruned on
-  // every teardown). The registry alone would include ghost workers from
-  // sessions that ended with a hard quit — never archived, never able to ACK.
-  () => [...new Set(ptyToAgent.values())],
-  () => liveWebContents(),
-  () => teardownAndQuit(),
-  // #7C.2 steering — the graceful interrupt that reaches deeply busy agents
-  // at their next hook boundary instead of waiting for a Stop.
-  control
-);
+//
+// CONSTRUCTED POST-BOOT, not here. `hive` and `control` are built inside
+// `bootFloor()` and are `undefined` at module scope, and ClosingTimeController
+// stores both BY VALUE — so constructing it here froze `undefined` into the
+// controller for the whole process lifetime. Nothing threw at load, which is
+// what made this worse than the `setRoutedObserver` crash below: the failure
+// landed later, the first time an operator pressed "closing time"
+// (`this.hive.registry()` on undefined). Assigned beside wirePtyExitHandler()
+// in `whenReady`; every use below sits inside a callback that cannot run
+// before that. Guarded by test/boot-order.test.cjs.
+let closingTime: ClosingTimeController;
 // `hive.setRoutedObserver(...)` is NOT wired here — `hive` is constructed inside
 // `bootFloor()` and is `undefined` at module scope, so calling it here threw
 // `TypeError: Cannot read properties of undefined (reading 'setRoutedObserver')`
@@ -4902,6 +4901,23 @@ app.whenReady().then(() => {
   // (too large/IPC-shaped to move — see boot.ts's header) — wired right after
   // construction, exactly where it used to run.
   wirePtyExitHandler();
+  // Closing time captures `hive`/`control` BY VALUE, so it must be built after
+  // bootFloor() has assigned them — the same synchronous-assignment guarantee
+  // wirePtyExitHandler() above relies on. Built at module scope it held
+  // `undefined` forever and failed the first time the operator pressed the
+  // button, with nothing thrown at load to point at the cause.
+  closingTime = new ClosingTimeController(
+    hive,
+    // Roster source: agents with a live PTY right now (ptyToAgent is pruned on
+    // every teardown). The registry alone would include ghost workers from
+    // sessions that ended with a hard quit — never archived, never able to ACK.
+    () => [...new Set(ptyToAgent.values())],
+    () => liveWebContents(),
+    () => teardownAndQuit(),
+    // #7C.2 steering — the graceful interrupt that reaches deeply busy agents
+    // at their next hook boundary instead of waiting for a Stop.
+    control
+  );
   // Closing-time needs the routed-message stream, and `hive` is constructed
   // inside `bootFloor()` — so this MUST be post-boot. At module scope `hive`
   // is still `undefined` and this threw on every packaged launch (the dev
