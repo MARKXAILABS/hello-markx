@@ -211,3 +211,60 @@ test('ensureVapidKeys persists atomically and re-reads the same keypair', () => 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('case 8 — a malformed endpoint or a corrupt VAPID key resolves {ok:false}, never rejects (the docstring contract)', async () => {
+  const { sub } = makeUaSubscription();
+  const keys = generateVapidKeys();
+
+  // `endpoint` arrives unmodified from the browser client, so it is
+  // externally-supplied data crossing a trust boundary.
+  for (const endpoint of ['not-a-url', '', 'wpush/abc123', 'file:///etc/passwd', 'javascript:alert(1)']) {
+    let calls = 0;
+    const res = await sendPush({ ...sub, endpoint }, 'x', {
+      vapid: keys,
+      subject: 'mailto:ops@example.com',
+      transport: async () => { calls += 1; return { status: 201 }; }
+    });
+    assert.equal(res.ok, false, `endpoint ${JSON.stringify(endpoint)} must fail closed, not throw`);
+    assert.equal(calls, 0, `a rejected endpoint must never reach the transport (${JSON.stringify(endpoint)})`);
+    assert.doesNotMatch(String(res.error), /etc\/passwd|alert\(1\)/, 'the error must not echo the endpoint — it is a capability URL');
+  }
+
+  // The other pre-`try` throw on the same line: a corrupt stored VAPID key.
+  const corrupt = await sendPush(sub, 'x', {
+    vapid: { publicKey: 'AAAA', privateKey: keys.privateKey },
+    subject: 'mailto:ops@example.com',
+    transport: async () => ({ status: 201 })
+  });
+  assert.equal(corrupt.ok, false, 'a malformed VAPID public key must fail closed, not throw');
+});
+
+test('case 9 — a corrupt/legacy VAPID state file regenerates rather than being trusted', () => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-push-vapid-corrupt-'));
+  const file = path.join(dir, 'push-state.json');
+  try {
+    // Shape-valid JSON, both fields strings — but not a P-256 keypair. The
+    // `typeof === 'string'` check alone passes this through and it blows up
+    // later, inside the signing path.
+    fs.writeFileSync(file, JSON.stringify({ publicKey: 'bm90LWEta2V5', privateKey: 'bm9wZQ' }));
+    const keys = ensureVapidKeys({ statePath: () => file });
+    assert.notEqual(keys.publicKey, 'bm90LWEta2V5', 'a corrupt stored key must not be handed back');
+    const point = fromB64url(keys.publicKey);
+    assert.equal(point.length, 65, 'the regenerated public key must be an uncompressed P-256 point');
+    assert.equal(point[0], 0x04);
+    // usable for the one thing the corrupt file could not do
+    assert.match(
+      vapidAuthHeader('https://push.example.com/wpush/abc123', keys, 'mailto:ops@example.com'),
+      /^vapid t=/, 'the regenerated keypair must actually sign'
+    );
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(file, 'utf8')), keys,
+      'the corrupt file must be replaced by the regenerated keypair'
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

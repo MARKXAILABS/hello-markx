@@ -120,7 +120,13 @@ export function ensureVapidKeys(deps: PushDeps): VapidKeys {
     if (existsSync(path)) {
       const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<VapidKeys>;
       if (typeof parsed.publicKey === 'string' && typeof parsed.privateKey === 'string') {
-        return { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
+        const stored = { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
+        // `typeof === 'string'` alone lets a corrupted or legacy-format file
+        // through, to blow up later inside the signing path. Re-import it here
+        // instead: the real key import is the shape check, and a throw lands in
+        // the catch below and regenerates. Never logs either half.
+        vapidPrivateKeyObject(stored);
+        return stored;
       }
     }
   } catch { /* unreadable/corrupt — regenerate below */ }
@@ -146,8 +152,25 @@ export function ensureVapidKeys(deps: PushDeps): VapidKeys {
  * common way a hand-rolled VAPID implementation fails. Do not delete this
  * option as dead-looking noise.
  */
+/** Validate a push endpoint at the trust boundary and hand back its ORIGIN,
+ *  or `null` if it is not a well-formed absolute `https:`/`http:` URL.
+ *  `PushSubscription.endpoint` arrives unmodified from the browser client, so
+ *  it is externally-supplied data: a non-URL string used to throw `Invalid
+ *  URL` out of {@link sendPush}, and a `file:`/`javascript:` URL would parse
+ *  yet still be handed to the injected transport. Callers fail closed on
+ *  `null`; the endpoint is never echoed into an error (a capability URL). */
+export function endpointOrigin(endpoint: string): string | null {
+  try {
+    const u = new URL(endpoint);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 export function vapidAuthHeader(endpoint: string, keys: VapidKeys, subject: string, now?: number): string {
-  const aud = new URL(endpoint).origin;
+  const aud = endpointOrigin(endpoint);
+  if (aud === null) throw new Error('malformed push endpoint');
   const iat = Math.floor((now ?? Date.now()) / 1000);
   const exp = iat + 12 * 60 * 60;
   const headerB64 = toB64Url(Buffer.from(JSON.stringify({ typ: 'JWT', alg: 'ES256' }), 'utf8'));
@@ -266,23 +289,30 @@ export interface SendPushOpts {
  * `gone: true` tells the caller to prune it (D-19: every tunnel restart kills
  * every subscription, so without pruning the state file only grows). 429 is
  * NOT `gone`: a rate limit is not a dead subscription, and pruning on it
- * would unsubscribe a working phone. Never throws across this boundary; never
- * logs the private key, the auth secret, or the endpoint (a capability URL).
+ * would unsubscribe a working phone. A `sub.endpoint` that is not a
+ * well-formed absolute `https:`/`http:` URL fails closed as `{ok:false}`
+ * before any crypto or transport call. Never throws across this boundary;
+ * never logs the private key, the auth secret, or the endpoint (a capability
+ * URL).
  */
 export async function sendPush(
   sub: PushSubscription,
   payload: string | Buffer,
   opts: SendPushOpts
 ): Promise<{ ok: true } | { ok: false; status?: number; gone?: boolean; error: string }> {
+  if (endpointOrigin(sub.endpoint) === null) return { ok: false, error: 'malformed push endpoint' };
   const enc = encryptPayload(payload, sub);
   if (!enc.ok) return { ok: false, error: enc.error };
-  const headers: Record<string, string> = {
-    TTL: String(opts.ttl ?? 60),
-    'Content-Encoding': 'aes128gcm',
-    'Content-Length': String(enc.body.length),
-    Authorization: vapidAuthHeader(sub.endpoint, opts.vapid, opts.subject, opts.now ? opts.now() : undefined)
-  };
   try {
+    // Built INSIDE the try: `vapidAuthHeader` throws on a corrupt stored VAPID
+    // key, and out here that throw would escape the "never throws" contract
+    // above as a rejected promise, aborting a caller's whole send loop.
+    const headers: Record<string, string> = {
+      TTL: String(opts.ttl ?? 60),
+      'Content-Encoding': 'aes128gcm',
+      'Content-Length': String(enc.body.length),
+      Authorization: vapidAuthHeader(sub.endpoint, opts.vapid, opts.subject, opts.now ? opts.now() : undefined)
+    };
     const res = await opts.transport(sub.endpoint, { method: 'POST', headers, body: enc.body });
     if (res.status === 404 || res.status === 410) return { ok: false, status: res.status, gone: true, error: 'subscription gone' };
     if (res.status >= 200 && res.status < 300) return { ok: true };
