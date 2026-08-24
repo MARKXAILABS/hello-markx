@@ -120,6 +120,7 @@ import {
   type Floor
 } from './floor/boot';
 import type { FloorDeps } from './floor/deps';
+import { releaseWorkerPty } from './floor/lifecycle';
 import { isHeadless, quitDecision, shouldQuitOnLastWindowClose } from './floor/headless';
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
@@ -4514,6 +4515,17 @@ async function gcPreservedWorktrees(): Promise<void> {
   }
 }
 
+/** Every worker release — reap or manual stop — goes through here (MAIN-01).
+ *  A function, not a module-scope const: `ptyManager`, `liveWorkers` and
+ *  `floor` are all bound later, so their reads must happen at call time. */
+function releaseWorker(workerId: string): { ok: boolean; error?: string } {
+  return releaseWorkerPty(workerId, {
+    killPty: (id) => ptyManager.kill(id),
+    teardownPty: (id) => { floor?.teardownPty(id); },
+    liveWorkers
+  });
+}
+
 /** One controller tick: (1) finish/reap live workers (frees slots), then (2) pull
  *  new requests up to the concurrency cap. Order matters so a freed slot is reused
  *  the same tick. */
@@ -4529,15 +4541,16 @@ async function ephemeralWorkerTick(): Promise<void> {
     const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0
       ? cfg.defaultWorkerTokenCap : 0;
 
-    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive
-    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.
+    // (1) Finish or reap. releaseWorker → kill + UNCONDITIONAL teardownPty →
+    //     gated worktree + archive + liveWorkers.delete. `releasing` guards
+    //     re-entry within the tick; teardown, not onExit, is what frees the slot.
     for (const [workerId, rec] of [...liveWorkers]) {
       if (rec.releasing) continue;
       if (workerSignaledDone(workerId, rec.spawnedAt)) {
         // Success: the worker already replied in-thread; just release it.
         rec.releasing = true;
         console.log(`[worker] ${workerId} signaled done — releasing`);
-        ptyManager.kill(workerId);
+        releaseWorker(workerId);
         continue;
       }
       // Token-cap reap (default-off plumbing). An effective cap > 0 → reap when the
@@ -4553,7 +4566,7 @@ async function ephemeralWorkerTick(): Promise<void> {
             `Worker ${workerId} used ${used.toLocaleString()} tokens (> its cap of ${tokenCap.toLocaleString()}) and was reaped. Any committed work on its branch is preserved for you.`,
             rec.slack
           );
-          ptyManager.kill(workerId);
+          releaseWorker(workerId);
           continue;
         }
       }
@@ -4567,7 +4580,7 @@ async function ephemeralWorkerTick(): Promise<void> {
           `Worker ${workerId} produced no output for ${Math.round(idleMs / 60000)} min (> the ${Math.round(idleTimeoutMs / 60000)} min cap) and never signaled done, so it was reaped. Any committed work on its branch is preserved for you.`,
           rec.slack
         );
-        ptyManager.kill(workerId);
+        releaseWorker(workerId);
       }
     }
 
@@ -4662,8 +4675,11 @@ ipcMain.handle('workers:list', (): { live: WorkerSnapshot[]; preserved: Preserve
 });
 
 /** Manually stop a live ephemeral worker. Mirrors the done-release path: mark
- *  releasing, then kill → teardownPty runs the SAFETY-GATED worktree teardown
- *  (committed work is preserved, never force-discarded). Idempotent. */
+ *  releasing, then `releaseWorker` → kill + teardownPty runs the SAFETY-GATED
+ *  worktree teardown (committed work is preserved, never force-discarded).
+ *  Idempotent — and a kill that FAILED is reported as a failure, never as the
+ *  `{ ok:true }` a stranded `releasing` used to answer for a worker that never
+ *  died (MAIN-01). */
 ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: string } => {
   if (typeof workerId !== 'string' || !workerId) return { ok: false, error: 'invalid worker id' };
   const rec = liveWorkers.get(workerId);
@@ -4671,8 +4687,7 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
   if (rec.releasing) return { ok: true }; // already stopping
   rec.releasing = true;
   console.log(`[worker] manual stop requested for ${workerId}`);
-  try { ptyManager.kill(workerId); } catch (e) { return { ok: false, error: String(e) }; }
-  return { ok: true };
+  return releaseWorker(workerId);
 });
 
 /** Wall-clock instant we last observed the machine suspend or lock, so a resume
