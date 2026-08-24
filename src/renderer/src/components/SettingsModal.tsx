@@ -1,4 +1,4 @@
-import { useState, useEffect, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { AGENT_MODELS, type HarnessConfig } from '@/store/config';
 import { useStore } from '@/store/store';
 import {
@@ -19,6 +19,7 @@ import { Icon } from './Icon';
 import { OfficeThemePicker } from './OfficeThemePicker';
 import { McpDefaultsSettings } from './McpDefaultsSettings';
 import { IntegrationsRegistry } from './IntegrationsRegistry';
+import { QrCode } from './QrCode';
 import { AiEnginesSettings } from './AiEnginesSettings';
 import { ClaudeAccountsSettings } from './ClaudeAccountsSettings';
 import { REALTIME_MODEL } from '@shared/realtimePricing';
@@ -302,6 +303,27 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
   // Whether the connect-steps help panel is expanded.
   const [showSlackHelp, setShowSlackHelp] = useState(false);
 
+  // --- Public tunnel (cloudflared, DAEMON-05) — the webhook server's own ------
+  // tunnel, distinct from Slack's `tunnelUrl` above: `tunnel:start` opens a
+  // SEPARATE cloudflared child and hostname over the webhook server, which is
+  // what the phone (02-09) reaches (D-18/D-23). `pubTunnelRunning` seeds from
+  // `tunnelStatus()` on open and then tracks `onTunnelChanged` for as long as
+  // this modal is mounted — never polled.
+  const [pubTunnelRunning, setPubTunnelRunning] = useState(false);
+  const [pubTunnelStarting, setPubTunnelStarting] = useState(false);
+  const [pubTunnelUrl, setPubTunnelUrl] = useState('');
+  /** Armed-then-confirm for `expose to the internet` — a button behind a
+   *  confirmation, never a toggle (DAEMON-05: never enabled as a side effect). */
+  const [pubTunnelArming, setPubTunnelArming] = useState(false);
+  const [pubTunnelNote, setPubTunnelNote] = useState('');
+  /** `https://<host>/phone/#<token>` from `phonePairing()`. Flows to exactly
+   *  two sinks below: <QrCode text={…}> and copyToClipboard — never rendered
+   *  as text, because it mints a bearer (T-P02-10-02). */
+  const [pairingLink, setPairingLink] = useState('');
+  /** Distinguishes an operator-initiated `stop tunnel` (no error copy) from
+   *  the tunnel dropping on its own (the locked "tunnel closed" copy, D-17). */
+  const pubTunnelStoppedByUserRef = useRef(false);
+
   // --- Webhook triggers (a LIST; src/shared/triggers.ts owns the type) ---------
   // The list itself lives in the store, not in local state: the Triggers tab
   // edits the same webhooks, and one of the two surfaces holding a private copy
@@ -491,6 +513,93 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     })();
     return () => { alive = false; };
   }, []);
+
+  // Seed the public tunnel's live state on open, then subscribe for as long as
+  // this modal stays mounted — the `onUpdateStatus`/`updateCurrent` precedent
+  // (preload/index.ts:1554-1561): a reloaded window subscribes AFTER main may
+  // already have emitted, so it pulls the current state instead of waiting.
+  useEffect(() => {
+    let alive = true;
+    window.cth.tunnelStatus().then((s) => {
+      if (!alive) return;
+      setPubTunnelRunning(s.running);
+      setPubTunnelUrl(s.url ?? '');
+    }).catch(() => { /* status unavailable - assume not running */ });
+    const unsubscribe = window.cth.onTunnelChanged((s) => {
+      setPubTunnelRunning((wasRunning) => {
+        if (wasRunning && !s.running) {
+          // Dropped, not stopped by this operator's own click here: show the
+          // locked "closed on its own" copy (D-17). A user-initiated stop
+          // clears the ref first and takes the silent branch.
+          if (pubTunnelStoppedByUserRef.current) {
+            pubTunnelStoppedByUserRef.current = false;
+          } else {
+            setPubTunnelNote(
+              'The tunnel closed. Your floor is private again — and the phone is paired to an '
+              + 'address that no longer exists. Start it and scan the new QR.'
+            );
+          }
+        }
+        return s.running;
+      });
+      setPubTunnelUrl(s.url ?? '');
+      setPubTunnelStarting(false);
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  // Re-mint the pairing QR the instant the tunnel host changes (D-19): a
+  // fresh token, never the previous one re-encoded, because the previous
+  // token is burned on first use and a QR encoding a burned token is a
+  // pairing failure the operator cannot diagnose. Also mints on the initial
+  // running transition, so opening Settings on an already-running tunnel
+  // shows a QR without a manual step.
+  useEffect(() => {
+    if (!pubTunnelRunning || !pubTunnelUrl) { setPairingLink(''); return; }
+    let alive = true;
+    window.cth.phonePairing().then((r) => {
+      if (!alive) return;
+      setPairingLink(r.ok && r.url ? r.url : '');
+    }).catch(() => { if (alive) setPairingLink(''); });
+    return () => { alive = false; };
+  }, [pubTunnelRunning, pubTunnelUrl]);
+
+  const armPubTunnel = () => { setPubTunnelNote(''); setPubTunnelArming(true); };
+  const disarmPubTunnel = () => { setPubTunnelArming(false); };
+
+  const startPubTunnel = async () => {
+    setPubTunnelArming(false);
+    setPubTunnelStarting(true);
+    setPubTunnelNote('');
+    try {
+      const r = await window.cth.tunnelStart();
+      if (!r.ok) {
+        setPubTunnelNote(
+          `The tunnel did not open: ${r.error ?? 'unknown reason'}. Your floor is still private `
+          + '— press expose to the internet to try again.'
+        );
+        setPubTunnelStarting(false);
+      }
+      // Success: onTunnelChanged pushes running:true + url; that handler also
+      // clears `starting`, so a real state push always wins the race with a
+      // client-side timeout rather than the reverse.
+    } catch (e) {
+      setPubTunnelNote(
+        `The tunnel did not open: ${e instanceof Error ? e.message : String(e)}. Your floor is `
+        + 'still private — press expose to the internet to try again.'
+      );
+      setPubTunnelStarting(false);
+    }
+  };
+
+  const stopPubTunnel = async () => {
+    pubTunnelStoppedByUserRef.current = true;
+    setPubTunnelNote('');
+    try { await window.cth.tunnelStop(); } catch { /* onTunnelChanged reconciles either way */ }
+  };
+
+  const copyPubTunnelUrl = () => { void window.cth.copyToClipboard(pubTunnelUrl); };
+  const copyPairingLink = () => { void window.cth.copyToClipboard(pairingLink); };
 
   /** Persist the current Slack inputs. Returns the resolved config patch. */
   const slackPatch = (enabled: boolean) => ({
@@ -1362,6 +1471,125 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           Leads the section; the hardcoded Slack/Webhook/Free Flow
                           blocks below stay as-is. */}
                       <IntegrationsRegistry />
+
+                      <div style={{ height: 2, background: 'var(--cth-ink-300)' }} />
+
+                      {/* Public tunnel (cloudflared) — DAEMON-05. The webhook
+                          server's own tunnel: a SEPARATE cloudflared child and
+                          hostname from Slack's own tunnel below (02-04-SUMMARY.md).
+                          Placed first so a titlebar-chip click lands with this
+                          panel already in view — no scroll-into-view code. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{
+                          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+                          color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 2
+                        }}>
+                          Public tunnel
+                        </div>
+
+                        {!pubTunnelRunning && !pubTunnelStarting && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
+                              Your floor is not reachable from the internet.
+                            </span>
+                            <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
+                              This puts an authenticated door to a floor of agents with bypassed
+                              permissions on the public internet. The address is public; the token
+                              is what keeps it shut.
+                            </span>
+                            {!pubTunnelArming ? (
+                              <div>
+                                {/* A button behind a confirmation, never a toggle — a toggle
+                                    invites a stray click, and DAEMON-05 says the tunnel is off
+                                    by default and never enabled as a side effect. */}
+                                <PixelButton variant="primary" size="sm" onClick={armPubTunnel}>
+                                  expose to the internet
+                                </PixelButton>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <PixelButton variant="secondary" size="sm" onClick={disarmPubTunnel}>
+                                  keep it private
+                                </PixelButton>
+                                <PixelButton variant="primary" size="sm" onClick={startPubTunnel}>
+                                  expose to the internet
+                                </PixelButton>
+                              </div>
+                            )}
+                            {pubTunnelNote && (
+                              <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: '#6E1423' }}>
+                                {pubTunnelNote}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {pubTunnelStarting && (
+                          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)' }}>
+                            Opening the tunnel…
+                          </span>
+                        )}
+
+                        {pubTunnelRunning && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={slackLabelStyle}>Public URL</span>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <input
+                                  readOnly
+                                  value={pubTunnelUrl}
+                                  onFocus={(e) => e.currentTarget.select()}
+                                  style={{
+                                    ...slackInputStyle, fontFamily: 'var(--cth-font-mono)',
+                                    fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)'
+                                  }}
+                                />
+                                <PixelButton variant="secondary" size="sm" onClick={copyPubTunnelUrl} disabled={!pubTunnelUrl}>
+                                  copy
+                                </PixelButton>
+                              </div>
+                            </div>
+
+                            <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
+                              This address is new every time the tunnel starts. Re-scan the QR after each restart.
+                            </span>
+
+                            {/* Permanent while the tunnel is up — never behind a toggle,
+                                never a modal, never collapsed. There is no dismissal to
+                                recover from. Keyed on the pairing link itself so React
+                                cannot keep a stale matrix mounted across a host change:
+                                a fresh QR always means a fresh, unburned token (D-19). */}
+                            {pairingLink && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                                <QrCode key={pairingLink} text={pairingLink} />
+                                <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
+                                  Scan with the phone&apos;s camera to pair it with this floor.
+                                </span>
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              {/* The pairing link is never rendered as selectable text —
+                                  it mints a bearer, and a live credential printed on
+                                  screen is one screenshot from being someone else's
+                                  floor. It flows to exactly two sinks: the QR above and
+                                  this button's clipboard write. */}
+                              <PixelButton variant="secondary" size="sm" onClick={copyPairingLink} disabled={!pairingLink}>
+                                copy pairing link
+                              </PixelButton>
+                              <PixelButton variant="secondary" size="sm" onClick={stopPubTunnel}>
+                                stop tunnel
+                              </PixelButton>
+                            </div>
+
+                            {pubTunnelNote && (
+                              <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: '#6E1423' }}>
+                                {pubTunnelNote}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
 
                       <div style={{ height: 2, background: 'var(--cth-ink-300)' }} />
 

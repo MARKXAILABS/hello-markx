@@ -256,4 +256,42 @@ test('QrCode.tsx: an oversized payload renders null rather than throwing (trust-
   assert.equal(markup, '', `expected null render (empty markup) for a 3000-char payload, got ${markup.length} chars`);
 });
 
+// ─── Task 3: the pairing link's only two sanctioned sinks ───────────────────
+//
+// The QR is the ONLY sanctioned rendering of the pairing link, so the
+// assertion that no second rendering exists lives beside the component that
+// provides the sanctioned one, over joined, comment-stripped SettingsModal.tsx.
+
+test('SettingsModal.tsx: the pairing link reaches only <QrCode text> and copyToClipboard, never text', () => {
+  const raw = fs.readFileSync(path.join(root, 'src/renderer/src/components/SettingsModal.tsx'), 'utf8');
+  const s = stripComments(raw).replace(/\s+/g, ' ');
+  const posQr = (s.match(/<QrCode\b[^>]*text=\{pairingLink\}/g) || []).length;
+  const posCopy = (s.match(/copyToClipboard\(pairingLink\)/g) || []).length;
+  assert.ok(posQr >= 1, 'pairingLink never reaches <QrCode text={pairingLink}>');
+  assert.ok(posCopy >= 1, 'pairingLink never reaches copyToClipboard(pairingLink)');
+  assert.equal((s.match(/value=\{pairingLink\}/g) || []).length, 0,
+    'pairingLink is bound to a value={…} — the credential must never be selectable input text');
+  assert.equal((s.match(/>\s*\{pairingLink\}\s*</g) || []).length, 0,
+    'pairingLink appears as a bare JSX text child');
+  assert.equal((s.match(/title=\{[^}]*pairingLink/g) || []).length, 0,
+    'pairingLink appears inside a title= attribute');
+  assert.equal((s.match(/<code>[^<]*\{pairingLink\}/g) || []).length, 0,
+    'pairingLink appears inside a <code> element');
+});
+
+// ─── Task 3: the QR is a permanent region, never behind a dismissal ─────────
+
+test('SettingsModal.tsx: the tunnel panel QR is permanent, keyed, and never behind a toggle', () => {
+  const raw = fs.readFileSync(path.join(root, 'src/renderer/src/components/SettingsModal.tsx'), 'utf8');
+  const s = stripComments(raw).replace(/\s+/g, ' ');
+  const el = s.match(/<QrCode\b[^>]*>/g) || [];
+  const keyed = el.filter((t) => /key=\{/.test(t) && /text=\{/.test(t));
+  assert.ok(el.length >= 1, 'no <QrCode> element found in the tunnel panel');
+  assert.equal(keyed.length, el.length,
+    'a <QrCode> is rendered without both key={…} and text={…} — React could keep a stale '
+    + 'matrix mounted across a host change');
+  assert.equal((s.match(/show ?qr|hideQr|qrOpen|showQr/gi) || []).length, 0,
+    'a show/hide-QR toggle idiom was found — the QR must be a permanent region with no dismissal');
+});
+
 module.exports = { stripComments, VENDOR_PATH, VENDOR_REL, root, PROBE_HOST, PROBE_TOKEN, PROBE_PAYLOAD };
