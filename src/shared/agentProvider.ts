@@ -396,6 +396,10 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     modelFlag: '--model',
     autoFlag: '--yolo',
     hiveAware: false,
+    // LIVE-UNVERIFIED: `qwen` is not installed on this machine and no account
+    // exists to run it against (same register as kimi's and crush's markers),
+    // so the proxy-bridge routing below has never round-tripped a live
+    // qwen-code session (D-33/D-35 — PARITY-03, this plan).
     // SPIKE/TODO-verify: confirm qwen-code reads OPENAI_BASE_URL for its upstream
     // ('serve' inboxDelivery is reserved for a later qwen-serve HTTP push path).
     bridge: { kind: 'proxy', api: 'openai', baseUrlEnv: 'OPENAI_BASE_URL', inboxDelivery: 'terminal' },

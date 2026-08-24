@@ -1274,7 +1274,7 @@ const MARKER_LEDGER = {
   'src/main/hiveTemplates.ts': 3,
   'src/main/index.ts': 1,
   'src/main/webhook.ts': 3,
-  'src/shared/agentProvider.ts': 2
+  'src/shared/agentProvider.ts': 3
 };
 
 /** Occurrence count of `needle` in the RAW file at `rel` — comments included,
