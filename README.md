@@ -75,8 +75,9 @@ spend rides the loopback proxy-bridge sidecar (`bridge.kind === 'proxy'`) instea
 routed a different way. That leaves **copilot** and **custom** commands with no cost path by
 construction: copilot's spend sits on the user's Copilot plan and nothing per-agent reaches this
 app, and a custom command is an unknown binary with nothing to read. No amount of engineering
-makes either one emit a number it does not have, so the honest state is six engines tracked, five
-not — never "all eleven."
+makes either one emit a number it does not have. The other five untracked engines (`grok`, `kimi`,
+`antigravity`, `opencode`, `pi`) have no telemetry and no proxy route either — the honest state is
+four engines tracked, seven not — never "all eleven."
 
 18 `LIVE-UNVERIFIED` markers are spread across `src/main/hive.ts`, `hiveProvisioning.ts`,
 `hiveTemplates.ts`, `index.ts`, `webhook.ts` and `agentProvider.ts` — of which 5 name an engine:

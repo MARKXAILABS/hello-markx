@@ -281,7 +281,8 @@ authenticated door in front of a floor whose internal identity must already be r
      per-agent reaching this app, and a custom command is an unknown binary with nothing to
      read. What shipped: nine of eleven engines can receive mail (only copilot/custom bounce);
      claude/codex report through native telemetry and qwen/crush through the proxy-bridge
-     sidecar, six engines tracked in total, never "all eleven." Same restatement, same words, as
+     sidecar, four engines tracked in total (the other seven, including copilot/custom, have
+     neither telemetry nor a proxy route), never "all eleven." Same restatement, same words, as
      `README.md` and `.planning/REQUIREMENTS.md`'s PARITY-02 entry**. The four `live-unverified`
      bridges (pi, opencode, crush, qwen) are unmarked only after a real session against a real
      account, and otherwise remain marked — never silently unmarked (also **corrected 2026-08-24

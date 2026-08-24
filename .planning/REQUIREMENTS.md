@@ -153,8 +153,10 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       reaches this app) and for a custom command (an unknown binary with nothing to read) — no
       amount of engineering makes either emit a number it does not have, and inventing one
       locally would be fabrication. What a skeptic can no longer do is confuse "we delivered
-      cost for the engines that can report it" with "all eleven report cost": six engines are
-      tracked, five are not, and the five are named. Same restatement, same words, as
+      cost for the engines that can report it" with "all eleven report cost": four engines are
+      tracked (`claude`, `codex`, `qwen`, `crush`), seven are not — the other five untracked
+      engines (`grok`, `kimi`, `antigravity`, `opencode`, `pi`) have neither telemetry nor a
+      proxy route either. Same restatement, same words, as
       `README.md`'s cost paragraph and `.planning/ROADMAP.md`'s Success Criterion 5. This
       requirement's checkbox and status row were already Complete before this restatement
       landed — set by an earlier plan, against the original unachievable wording; left exactly
