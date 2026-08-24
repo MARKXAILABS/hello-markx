@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-09-PLAN.md (phone PWA bundle + push.ts; DAEMON-02 left open, localhost-verified fallback recorded)
-last_updated: "2026-08-24T09:59:33.938Z"
+stopped_at: "Completed 02-10-PLAN.md (titlebar chip + QR pairing panel; DAEMON-05 left open -- DNS environmental blocker + tunnel:start/phone:pairing circular dependency)"
+last_updated: "2026-08-24T11:20:38.955Z"
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 40
-  percent: 93
+  completed_plans: 41
+  percent: 95
 ---
 
 # Project State
@@ -25,16 +25,20 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 ## Current Position
 
 Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plans complete: **10 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+Plans complete: **11 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
       The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
       ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-08,
-      02-09, 02-11**.
-      Outstanding: 02-10, 02-12.
-      Next wave: **02-10** (the pairing UI/QR, wave 8 — 02-09 closed wave 7: the five-file phone PWA
-      bundle, `src/main/push.ts`'s VAPID/aes128gcm implementation, and the `electron-builder.yml`
-      packaging entry, all real-verified on a live loopback socket and a real packaged
-      `dist/win-unpacked` tree. DAEMON-02 stays open — a localhost-verified auth path, never a device
-      verification; see `02-09-SUMMARY.md`).
+      02-09, 02-10, 02-11**.
+      Outstanding: 02-12 (the phase-close plan — docs, README/SECURITY honesty updates, and the final
+      PARITY-03 ledger pin).
+      Wave 8 closed: **02-10** (the pairing UI/QR) landed the vendored+digest-pinned QR encoder, the
+      titlebar PUBLIC chip (measured degradation at 833px/783px against the real 48-char probe host —
+      corrects the plan's own 800px estimate), and the tunnel panel in Settings → Connections. The
+      live loop was run end to end through the real app/IPC/cloudflared; DAEMON-05 stays OPEN — the
+      DNS-layer environmental blocker was re-confirmed live this session, and a second, independent
+      wiring gap was discovered (`tunnel:start` refuses with zero webhook triggers configured, because
+      `phone:pairing` itself requires the tunnel already open) and documented rather than patched
+      (outside 02-10's declared files). See `02-10-SUMMARY.md`.
 
 Execution facts as of this line:
 
@@ -52,9 +56,10 @@ Execution facts as of this line:
   after 02-05 -> 762/755/0/7 after 02-06 -> 777/770/0/7 after 02-08 (+13 cases: 5 in
   task 1, 4 in task 2, 4 in task 3), matching the orchestrator's own pre-dispatch baseline of
   757/0/7 plus this plan's additions exactly -> **789/782/0 fail/7 skipped** after 02-09 (+12 cases: 4
-  in `build-assets.test.cjs`, 8 in the new `push-vapid.test.cjs`). `npm run typecheck`, `npm run build`
-  and `npm run lint` (`--max-warnings 0`) all exit 0 at every checkpoint. 0 failures is the bar; there
-  is no pre-existing-failure allowance on this phase.
+  in `build-assets.test.cjs`, 8 in the new `push-vapid.test.cjs`) -> **800/793/0 fail/7 skipped** after
+  02-10 (+11 cases across all 5 tasks in `test/qr-vendor.test.cjs`, the only test file this plan
+  touched). `npm run typecheck`, `npm run build` and `npm run lint` (`--max-warnings 0`) all exit 0 at
+  every checkpoint. 0 failures is the bar; there is no pre-existing-failure allowance on this phase.
 
 - **02-05 landed the phone's whole server-side door.** `/phone/**` routed ahead of `readEndpointId`
   off a five-file exact-filename allowlist; a single-use enrollment token (burned before its
@@ -117,27 +122,55 @@ Execution facts as of this line:
   `phoneRootPath()`/the zero-endpoint guard were already plan 02-05's (commit `8577748`); this plan
   changed neither. **DAEMON-02 is NOT flipped `[x]`** — no physical Android device was used.
 
+- **02-10 landed the pairing UI/QR — DAEMON-05's UI half, live-loop-verified end to end except one
+  environmental step.** A vendored, digest-pinned QR encoder (Project Nayuki, MIT, pinned commit
+  `2d0d3c9276cda321a206d6b48dd3c060f18d8e16`) with a purity gate that goes red on a hostile edit or a
+  silent drift; `QrCode.tsx` renders + executes it under `node --test`; the tunnel panel in
+  Settings → Connections (armed-then-confirm expose, untruncated URL, permanent re-minting QR, pairing
+  link never rendered as text); the titlebar `PUBLIC` chip with two degradation widths measured live
+  and pinpointed exactly (833px / 783px — **corrects** the plan's own 800px estimate: the full host is
+  actually still shown at 800px, only auto-mode text hides there). The full live loop ran through the
+  real app/real IPC/real cloudflared: tunnel opened, chip + panel + QR all correct, pairing minted,
+  stop closed it, restart minted a genuinely new host + token — but the public-origin fetch step failed
+  at the DNS layer, the same environmental blocker 02-04 found, re-confirmed live twice more this
+  session. A second, independent, non-environmental gap was ALSO found live and left unpatched (outside
+  02-10's declared files): `tunnel:start` refuses on a zero-webhook-trigger install because
+  `phone:pairing` requires the tunnel already open — see the DAEMON-05 entry below. **DAEMON-05 is NOT
+  flipped `[x]`.**
+
 Requirements deliberately still OPEN, with the reason (none of these is an oversight):
 
 - **DAEMON-01** — unit half green (02-03). `02-VALIDATION.md` requires BOTH `node --test` AND a live
   Electron run with real PTYs; the live run has not happened. Tracked as a phase-close gate.
 
 - **DAEMON-02** — 02-05 landed the server's auth path, curl-verified on loopback; 02-09 landed the
-  client half (the phone bundle + push.ts), also localhost-verified, not device-verified. Only 02-10
-  (the pairing UI/QR) remains, and DAEMON-02's own text names a real Android device as the honest
-  completion bar, not yet attempted.
+  client half (the phone bundle + push.ts), also localhost-verified; 02-10 landed the pairing UI and
+  ran the live loop end to end except the public-origin fetch (DNS-layer environmental blocker). Still
+  not device-verified — DAEMON-02's own text names a real Android device as the honest completion bar,
+  not yet attempted. The `tunnel:start`/`phone:pairing` circular-dependency gap (02-10-SUMMARY.md) also
+  means a phone-only, zero-webhook-trigger install cannot open the tunnel via the button at all today.
 
 - **DAEMON-03** — the verifier + payload-adapter mechanism is real and localhost-verified (02-05); the
   live half (a real Telegram bot token, a real Discord application) is operator-supplied and was not
   available this session.
 
 - **DAEMON-05** — spans 02-04/02-05/02-10/02-12. 02-05 closed two of its five bullets (generated
-  token, rate limiting + lockout on the auth endpoint) — both proven engaging and clearing. Live close
-  attempted for real this session (02-04), twice, including outside the sandbox: exit 3, ANNOUNCED
-  skip. Root cause is ENVIRONMENTAL, not code — the LAN resolver (JioFiber router 192.168.31.1)
-  returns NXDOMAIN for freshly-minted `*.trycloudflare.com` subdomains while the apex resolves and
-  general egress is fine. A public resolver (8.8.8.8 / 1.1.1.1) would likely let this verification
-  actually pass.
+  token, rate limiting + lockout on the auth endpoint) — both re-proven live again in 02-10 (38/38 and
+  13/13 test runs, this session). Live close attempted for real across two sessions now: 02-04 twice,
+  02-10 once more via `scripts/tunnel-live-check.cjs` (re-run once, per authorization) AND via the full
+  UI-driven live loop (`scripts/p10-live-loop.cjs`, real app, real button, real cloudflared) — every
+  attempt: exit 3 / DNS-layer `fetch failed`, ANNOUNCED skip, never a claimed pass. Root cause remains
+  ENVIRONMENTAL, not code — the LAN resolver returns NXDOMAIN for freshly-minted
+  `*.trycloudflare.com` subdomains while the apex resolves and general egress is fine. A public
+  resolver (8.8.8.8 / 1.1.1.1) would likely let this verification actually pass.
+  **02-10 also found a SECOND, independent, non-environmental gap**: `tunnel:start`
+  (`src/main/index.ts:3982-3995`) refuses with `"no enabled webhook endpoints"` on a fresh install with
+  zero webhook triggers configured, because `phone:pairing` itself requires the tunnel's `publicUrl()`
+  to already be non-null — a circular dependency between 02-04's tunnel-open path and 02-05's
+  phone-pairing path that blocks the phone-only operator (DAEMON-02's own primary scenario) from ever
+  opening the tunnel via the button as currently wired. Documented in `02-10-SUMMARY.md`, not patched
+  (touches `src/main/index.ts`/`webhook.ts`, outside 02-10's declared files; the correct fix is a
+  trust-boundary design decision, not a one-line auto-fix). Left for a follow-up plan or 02-12.
 
 - **STRUCT-01** — 02-02 and 02-03 closed the boot and agent-lifecycle seams; `spawnAgentCore`
   (~480 lines, imports electron at module scope) and ~159 IPC handlers remain in `index.ts`.
@@ -210,6 +243,7 @@ is installed on this machine, so this is the expected outcome under the zero-rec
 | Phase 02 P06 | 58min | 5 tasks | 8 files |
 | Phase 02 P08 | 45min | 3 tasks | 5 files |
 | Phase 02 P09 | ~5h | 5 tasks | 10 files |
+| Phase 02 P10 | 75min | 5 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -506,6 +540,7 @@ Recent decisions affecting current work:
 - [Phase 02]: 02-09: DAEMON-02 lands as a localhost-verified auth path, deliberately not flipped [x] — no physical Android device was used this session, and the requirement's own text names a real device as the honest completion bar.
 - [Phase 02]: 02-09: R-push (a VAPID-key route + subscription-intake callback) is ABSENT from src/main/webhook.ts. push.ts ships fully unit-verified (VAPID + RFC 8291 aes128gcm, node:crypto only) but is wired to no route — named for plan 02-12's honesty ledger, not silently dropped.
 - [Phase 02]: 02-09: plan 02-05 already added the packaged/dev static-root resolver (as phoneRootPath(), not the phoneStaticDir() name this plan's own draft text used) and already widened the zero-endpoint guard for the phone in three places (traced to commit 8577748). This plan changes neither and does not rename the working symbol to match its own draft.
+- [Phase 02]: [02-10]: DAEMON-05 left OPEN -- environmental DNS blocker (LAN resolver cannot resolve freshly-minted *.trycloudflare.com hostnames) re-confirmed live this session, plus a newly-discovered tunnel:start/phone:pairing circular dependency for zero-webhook-trigger installs (tunnel:start refuses with 'no enabled webhook endpoints' because phone:pairing itself requires the tunnel already open) -- documented, not patched (outside this plan's declared files, a genuine trust-boundary design question).
 
 ### Pending Todos
 
@@ -627,8 +662,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-24T09:59:33.922Z
-Stopped at: Completed 02-09-PLAN.md (phone PWA bundle + push.ts; DAEMON-02 left open, localhost-verified fallback recorded)
+Last session: 2026-08-24T11:20:38.943Z
+Stopped at: Completed 02-10-PLAN.md (titlebar chip + QR pairing panel; DAEMON-05 left open -- DNS environmental blocker + tunnel:start/phone:pairing circular dependency)
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
