@@ -1,30 +1,32 @@
-# CodeFlow Snapshot — final
+# CodeFlow Snapshot — baseline
 
 - **Project:** `E:\munder-difflin`
-- **Captured:** 2026-08-23T22:31:18.240Z
+- **Captured:** 2026-08-24T11:21:54.181Z
 
 ## Health
 
-- **Score:** 60/100 (Grade D)
-- **Files analyzed:** 359 (305 code, 54 other)
-- **Functions:** 1562
-- **Unused functions:** 16
-- **Connections:** 2981
+- **Score:** 58/100 (Grade F)
+- **Files analyzed:** 365 (311 code, 54 other)
+- **Functions:** 1625
+- **Unused functions:** 17
+- **Connections:** 3371
 
 ## Architecture Issues
 
 - **Circular dependencies:** 0
-- **Layer violations:** 301
+- **Layer violations:** 392
 - **Duplicate / similar blocks:** 10
-- **Dead functions:** 16
+- **Dead functions:** 17
 
 ## Security
 
-- **HIGH:** 42
-- **MEDIUM:** 56
+- **HIGH:** 45
+- **MEDIUM:** 59
 - **LOW / other:** 17
 
 ### HIGH severity findings (top 10)
+- `electron-builder.yml` — finding
+- `resources/phone/index.html` — finding
 - `resources/skills/md-hive-sync/SKILL.md` — finding
 - `src/main/config.ts:552` — finding
 - `src/main/config.ts:553` — finding
@@ -33,8 +35,6 @@
 - `src/main/hive.ts` — finding
 - `src/main/hive.ts` — finding
 - `src/main/memory.ts` — finding
-- `src/main/pty.ts` — finding
-- `src/main/shellEnv.ts` — finding
 
 ## Patterns in use
 
