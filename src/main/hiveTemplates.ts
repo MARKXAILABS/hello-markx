@@ -125,7 +125,7 @@ if (cmd === 'patch' || cmd === 'claim' || cmd === 'done') {
     // contract in PROTOCOL.md (never replace the history — it IS the decision trail).
     if (patch.__q) {
       delete merged.__q;
-      merged.humanQA = (Array.isArray(tasks[i].humanQA) ? tasks[i].humanQA : []).concat([{ q: patch.__q, askedAt: new Date().toISOString() }]);
+      merged.humanQA = (Array.isArray(tasks[i].humanQA) ? tasks[i].humanQA : []).concat([{ q: patch.__q, askedAt: new Date().toISOString(), askedBy: process.env.AGENT_ID || 'god' }]);
       merged.status = 'blocked';
     }
     const next = tasks.slice();
@@ -214,7 +214,7 @@ task.cjs add "<title>" [--desc <text>] [--assignee <agent-id>] [--priority N]
 task.cjs claim <task-id> [--assignee <agent-id>]     # → assignee + status doing (defaults to you)
 task.cjs patch <task-id> [--status todo|doing|blocked|done] [--title …] [--description …]
                          [--assignee …] [--result …] [--priority N] [--budget-tokens N]
-                         [--q "<question for the human>"]   # appends humanQA + blocks the card
+                         [--q "<question for the human>"]   # appends humanQA (askedBy: you, from AGENT_ID) + blocks the card; the answer is delivered to your inbox
 task.cjs done  <task-id> [--result "<what you actually delivered>"]
 \`\`\`
 
