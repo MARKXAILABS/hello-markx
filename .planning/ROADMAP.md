@@ -38,7 +38,7 @@ Six phases, coarse granularity. Phases 1-3 keep the shape of GitHub issue #73.
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Finish the Floor** - Close all 20 open audit issues, each verified against source, with no partially-landed fix left described as done — plus the five pulled-forward prerequisites without which Phase 1's own criteria are satisfiable by code that does nothing
-- [ ] **Phase 2: The Daemon and the Protocol** - The floor runs with no window and is reachable from a phone; all eleven engines are first-class; the two god-files are split first, as this phase's internal gate
+- [ ] **Phase 2: The Daemon and the Protocol** - The floor runs with no window and is reachable from a phone; all eleven engines are first-class; the two god-files are split first, as this phase's internal gate (all 12 plans landed 2026-08-24; 5 requirements deliberately still open — see the status table below)
 - [ ] **Phase 3: Scale and Observability** - Many isolated floors, bulk hiring, a replayable timeline, and a digest that reaches the operator without the app
 - [ ] **Phase 4: Overnight on a Repo That Matters** - Blast radius bounded in main on every engine, a record that survives the crash, and a floor that reports absence as an event
 - [ ] **Phase 5: The Floor Gets Better at Its Own Job** - Reviews that look at the diff and the check, memory that is fast, server-scoped, dated and hand-editable, and decisions that survive a restart
@@ -620,7 +620,7 @@ after Phase 5 rather than closed in Phase 3.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Finish the Floor | 30/31 | **PARTIAL — all 8 gap-closure plans landed (01-24 … 01-31), phase NOT complete.** 10 of 23 requirements close, 13 do not; 0 of 20 floor-inspection issues closable while `origin/main` still pins `electron ^32.2.0` behind draft PR #77. 01-01 has no SUMMARY — its D-09 gate is unrun. Re-run `/gsd:verify-work 1`; the verdict is the verifier's |  |
-| 2. The Daemon and the Protocol | 11/12 | In Progress|  |
+| 2. The Daemon and the Protocol | 12/12 | **PARTIAL — all 12 plans landed, phase NOT complete.** 7 of 12 requirements close (STRUCT-02, PARITY-01a, PARITY-01b, PARITY-02, PARITY-03, GSD-06, DAEMON-04); 5 deliberately still open with reasons, none an oversight: DAEMON-01 (live headless run, real PTYs, not attempted), DAEMON-02 (no physical Android device; localhost-verified fallback), DAEMON-03 (live Telegram/Discord credentials are operator-supplied), DAEMON-05 (the cloudflared close is environmentally unverifiable on this LAN's DNS resolver; ~30s poll-verified, no multi-hour soak), STRUCT-01 (`spawnAgentCore` and ~160 IPC handlers remain in `index.ts`) |  |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |
 | 5. The Floor Gets Better at Its Own Job | 0/TBD | Not started | - |

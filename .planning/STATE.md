@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 4 context gathered (04-CONTEXT.md + 04-DISCUSSION-LOG.md, 37 decisions); auto-advance to plan-phase HELD -- plan 02-12 still in flight, see D-37
-last_updated: "2026-08-24T12:06:12.990Z"
+stopped_at: Phase 2 (the-daemon-and-the-protocol) COMPLETE -- plan 02-12 (the honesty ledger) landed, all 12 plans done. Phase 4 context gathering already ran concurrently (see 04-CONTEXT.md); the auto-advance hold on 02-12 is now clear.
+last_updated: "2026-08-24T18:15:00.000Z"
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 41
+  completed_plans: 42
   percent: 0
 ---
 
@@ -24,21 +24,34 @@ See: .planning/PROJECT.md (updated 2026-08-20)
 
 ## Current Position
 
-Phase: 02 (the-daemon-and-the-protocol) — EXECUTING
-Plans complete: **11 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
-      The number is a COUNT, not a cursor — phase 2 executes as a 9-wave dependency graph, so plan
-      ids do not advance in order. Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-08,
-      02-09, 02-10, 02-11**.
-      Outstanding: 02-12 (the phase-close plan — docs, README/SECURITY honesty updates, and the final
-      PARITY-03 ledger pin).
-      Wave 8 closed: **02-10** (the pairing UI/QR) landed the vendored+digest-pinned QR encoder, the
-      titlebar PUBLIC chip (measured degradation at 833px/783px against the real 48-char probe host —
-      corrects the plan's own 800px estimate), and the tunnel panel in Settings → Connections. The
-      live loop was run end to end through the real app/IPC/cloudflared; DAEMON-05 stays OPEN — the
-      DNS-layer environmental blocker was re-confirmed live this session, and a second, independent
-      wiring gap was discovered (`tunnel:start` refuses with zero webhook triggers configured, because
-      `phone:pairing` itself requires the tunnel already open) and documented rather than patched
-      (outside 02-10's declared files). See `02-10-SUMMARY.md`.
+Phase: 02 (the-daemon-and-the-protocol) — **COMPLETE, all 12 plans landed**
+Plans complete: **12 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+      Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-08, 02-09, 02-10, 02-11, 02-12**.
+      Wave 9 closed: **02-12** (the honesty ledger, the phase's last plan). Re-measured every claim
+      this phase touched against the tree at wave 9's end, not carried forward from any prior
+      SUMMARY: PARITY-03's marker ledger (18 raw `LIVE-UNVERIFIED` markers across 6 files, per-engine
+      attributed via structural comment-block bounding — found and fixed a genuine gap in the same
+      motion, `qwen` had ZERO markers despite being as unverified as pi/opencode/crush); all three
+      copies of ADR-0001's one-gate sentence made to agree (`docs/message-queue.md` was already fixed
+      by 01-23; `HIVE.md` was not); README's engine table re-derived from source (kimi off the NO MAIL
+      row, a new NO MCP row, PARITY-02 restated to what shipped); SECURITY.md's tunnel-close claim
+      corrected in the app's favour (the old "cannot be closed" limitation is false since 02-04) and
+      three real exposures named (global remotely-triggerable lockout, the self-identifying `/phone/`
+      shell, Discord's buffer-before-verify inversion); TESTING.md/CONCERNS.md re-measured (73 test
+      files, 863 cases, 803 TAP tests); `.planning/ROADMAP.md`'s own four disproved Success Criteria
+      and the god-file figures corrected in place, marked with date+D-id, no checkbox moved;
+      `.planning/REQUIREMENTS.md`'s PARITY-02 restated in the requirement itself, checkbox left as
+      found (already `[x]` from an earlier plan, against text that was false until this correction).
+      **Also fixed, handed over from 02-10 and root-caused precisely**: the fresh-install
+      `tunnel:start`/`phone:pairing` circular dependency (a zero-webhook-trigger install could never
+      open the public tunnel at all, because the only thing that arms the phone route was never
+      invoked before the tunnel refused) — `tunnel:start` now arms the phone as part of its own
+      explicit operator action when nothing else is configured, proven by two new tests against the
+      real `WebhookServer.start()` bind (index.ts's IPC handler itself is still untestable directly,
+      D-02). See `02-12-SUMMARY.md` for the full ledger, all RED-drive runs, and two findings recorded
+      rather than silently reconciled: the marker-count criterion undercounted to 8 where 10 was
+      structurally required, and the god-file figures use this session's own re-measurement (4,967 /
+      2,822 / 160) rather than the plan's own stale 2026-08-21 pointer (nine further waves moved it).
 
 Execution facts as of this line:
 
@@ -58,8 +71,14 @@ Execution facts as of this line:
   757/0/7 plus this plan's additions exactly -> **789/782/0 fail/7 skipped** after 02-09 (+12 cases: 4
   in `build-assets.test.cjs`, 8 in the new `push-vapid.test.cjs`) -> **800/793/0 fail/7 skipped** after
   02-10 (+11 cases across all 5 tasks in `test/qr-vendor.test.cjs`, the only test file this plan
-  touched). `npm run typecheck`, `npm run build` and `npm run lint` (`--max-warnings 0`) all exit 0 at
-  every checkpoint. 0 failures is the bar; there is no pre-existing-failure allowance on this phase.
+  touched) -> **805/798/0 fail/7 skipped** after 02-12 (+5 cases: 1 new PARITY-03 clause, 1 new
+  ADR-0001 clause, 1 new README clause, 1 new SECURITY.md clause in `test/repo-claims.test.cjs`, and 2
+  new tests in `test/webhook-endpoints.test.cjs` for the fresh-install tunnel fix — 5 declared but
+  actual delta was +5 tests exactly, confirmed by direct TAP diff, not arithmetic). `npm run
+  typecheck`, `npm run build` and `npm run lint` (`--max-warnings 0`) all exit 0 at every checkpoint.
+  0 failures is the bar; there is no pre-existing-failure allowance on this phase. **Phase 2 closes at
+  0 failures, every checkpoint, all 12 plans** — 638 -> 805 tests, +167, zero regressions the whole
+  way.
 
 - **02-05 landed the phone's whole server-side door.** `/phone/**` routed ahead of `readEndpointId`
   off a five-file exact-filename allowlist; a single-use enrollment token (burned before its
@@ -147,8 +166,12 @@ Requirements deliberately still OPEN, with the reason (none of these is an overs
   client half (the phone bundle + push.ts), also localhost-verified; 02-10 landed the pairing UI and
   ran the live loop end to end except the public-origin fetch (DNS-layer environmental blocker). Still
   not device-verified — DAEMON-02's own text names a real Android device as the honest completion bar,
-  not yet attempted. The `tunnel:start`/`phone:pairing` circular-dependency gap (02-10-SUMMARY.md) also
-  means a phone-only, zero-webhook-trigger install cannot open the tunnel via the button at all today.
+  not yet attempted. **The `tunnel:start`/`phone:pairing` circular-dependency gap 02-10 found is FIXED
+  by 02-12**: `tunnel:start` now arms the phone route itself when zero webhook triggers are
+  configured, the same mint-then-start order `phone:pairing` already used, so the one operator control
+  the shipped UI exposes is self-sufficient on a fresh install. Proven against the real
+  `WebhookServer.start()` bind in `test/webhook-endpoints.test.cjs` (index.ts's own IPC handler is
+  still untestable directly, D-02) — device-level pairing itself remains unattempted.
 
 - **DAEMON-03** — the verifier + payload-adapter mechanism is real and localhost-verified (02-05); the
   live half (a real Telegram bot token, a real Discord application) is operator-supplied and was not
@@ -163,25 +186,32 @@ Requirements deliberately still OPEN, with the reason (none of these is an overs
   ENVIRONMENTAL, not code — the LAN resolver returns NXDOMAIN for freshly-minted
   `*.trycloudflare.com` subdomains while the apex resolves and general egress is fine. A public
   resolver (8.8.8.8 / 1.1.1.1) would likely let this verification actually pass.
-  **02-10 also found a SECOND, independent, non-environmental gap**: `tunnel:start`
-  (`src/main/index.ts:3982-3995`) refuses with `"no enabled webhook endpoints"` on a fresh install with
-  zero webhook triggers configured, because `phone:pairing` itself requires the tunnel's `publicUrl()`
-  to already be non-null — a circular dependency between 02-04's tunnel-open path and 02-05's
-  phone-pairing path that blocks the phone-only operator (DAEMON-02's own primary scenario) from ever
-  opening the tunnel via the button as currently wired. Documented in `02-10-SUMMARY.md`, not patched
-  (touches `src/main/index.ts`/`webhook.ts`, outside 02-10's declared files; the correct fix is a
-  trust-boundary design decision, not a one-line auto-fix). Left for a follow-up plan or 02-12.
+  **02-10's SECOND, independent, non-environmental gap is FIXED by 02-12** (see the DAEMON-02 entry
+  above for the fix) — root-caused precisely: `tunnel:start`'s own comment premise ("a phone route
+  family becomes servable in plan 02-05") was true but never wired through to the one path an operator
+  can actually reach, since `phone:pairing` is only ever renderer-invoked AFTER a tunnel is already
+  reported running.
 
 - **STRUCT-01** — 02-02 and 02-03 closed the boot and agent-lifecycle seams; `spawnAgentCore`
-  (~480 lines, imports electron at module scope) and ~159 IPC handlers remain in `index.ts`.
+  (~480 lines, imports electron at module scope) and ~160 IPC handlers remain in `index.ts` (measured
+  by 02-12: `index.ts` 4,967 lines, `hive.ts` 2,822 lines — two further extractions past 02-02's own
+  split moved more out since).
 
-- **PARITY-03** — shared with 02-12, which owns the final honesty-ledger pin. 02-07 correctly
-  declined to flip it.
+- **PARITY-03** — pinned by 02-12 as a ledger, not closed by verification. 18 raw `LIVE-UNVERIFIED`
+  markers across 6 files, per-engine attributed and file-set pinned in `test/repo-claims.test.cjs`; 5
+  bridges (pi, opencode, crush, qwen, kimi) stay marked, none run against a real account. Correctly
+  never flipped — the honest outcome under the zero-recurring-cost rule, not a gap 02-12 failed to
+  close.
 
-Parity ledger after 02-07, reported in full per D-33/VALIDATION rather than as a bare win:
-engines that can receive mail **8 -> 9**; live-verified bridges **unchanged at zero**;
-LIVE-UNVERIFIED bridges **4 -> 5** (kimi joins pi, opencode, crush, qwen). None of those five CLIs
-is installed on this machine, so this is the expected outcome under the zero-recurring-cost rule.
+Parity ledger after 02-12 (re-measured, not carried forward from 02-07): engines that can receive mail
+**8 -> 9** (unchanged since 02-07); live-verified bridges **unchanged at zero**; LIVE-UNVERIFIED
+bridges **4 -> 5** (kimi joins pi, opencode, crush, qwen, per PARITY-01a — the sign is stated
+explicitly: PARITY-01a raised the can-receive-mail count while raising the unverified count too, not a
+pure win). None of those five CLIs is installed on this machine, so this is the expected outcome under
+the zero-recurring-cost rule. PARITY-02 restated (not "all eleven report cost"): claude/codex via
+native telemetry, qwen/crush via the proxy-bridge sidecar — four tracked, seven not (grok, kimi,
+antigravity, opencode, pi, plus copilot/custom which are structurally unfixable) — same words in
+README.md, ROADMAP.md and REQUIREMENTS.md.
 
 ## Performance Metrics
 

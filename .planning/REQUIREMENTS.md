@@ -162,7 +162,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       landed — set by an earlier plan, against the original unachievable wording; left exactly
       as found, per this plan's own scope: correcting the text this checkbox rests on is this
       plan's job, flipping the checkbox is the rollup's.)*
-- [ ] **PARITY-03**: The four `live-unverified` bridges (pi, opencode, crush, qwen) are
+- [x] **PARITY-03**: The four `live-unverified` bridges (pi, opencode, crush, qwen) are
       either verified against a real session and unmarked, or still marked — never silently
       unmarked
 
@@ -469,7 +469,7 @@ goals and success criteria each requirement rolls up into.
 | PARITY-01a | Phase 2 | Complete |
 | PARITY-01b | Phase 2 | Complete |
 | PARITY-02 | Phase 2 | Complete |
-| PARITY-03 | Phase 2 | Pending |
+| PARITY-03 | Phase 2 | Complete |
 | SCALE-01 | Phase 3 | Pending |
 | SCALE-02 | Phase 3 | Pending |
 | SCALE-03 | Phase 3 | Pending |
