@@ -1590,3 +1590,52 @@ test('README: the engine table documents a channel that renders, and "all eleven
     );
   }
 });
+
+// ─── 02-12 task 4: SECURITY.md's tunnel entry corrected in the direction ───
+// the phase actually moved it (D-13/D-16) ──────────────────────────────────
+//
+// Both directions, over joined+squeezed text. Negative: the doc no longer
+// claims the tunnel cannot be closed. Positive (>= 1 each): the doc names
+// the global-lockout caveat; src/main/tunnel.ts still contains the kill
+// path (hardKillTree) plan 02-04 delivered; and neither webhook.ts nor
+// slack.ts retains its own openTunnel body while both still reference the
+// shared helper — asserted over comment-stripped, joined source, with the
+// helper reference as the lower bound so deleting the tunnel outright
+// (rather than re-inlining it) also fails.
+
+test('SECURITY.md: the tunnel-close claim is corrected, and the three new exposures are named (D-13/D-16/D-23)', () => {
+  const joined = readRaw('SECURITY.md').replace(/\r/g, '').replace(/\n/g, ' ').replace(/ +/g, ' ');
+
+  assert.ok(
+    !/does not close its tunnel|no handle and no disposer/i.test(joined),
+    'SECURITY.md still claims the tunnel cannot be closed. Plan 02-04 made stop() kill the '
+    + 'cloudflared child process (hardKillTree) — this is now false in the app\'s favour, which is '
+    + 'the harder direction to notice.'
+  );
+
+  assert.ok(
+    /(lockout|locked out)[\s\S]{0,160}(global|globally|every client|remotely)|(global|globally|remotely)[\s\S]{0,160}(lockout|locked out)/i.test(joined),
+    'SECURITY.md does not name the global, remotely-triggerable lockout (D-23) — every caller '
+    + 'behind the tunnel presents the tunnel\'s own IP, so per-IP limiting is meaningless.'
+  );
+
+  assert.ok(
+    /hardKillTree/.test(readStripped('src/main/tunnel.ts')),
+    'src/main/tunnel.ts no longer contains hardKillTree — SECURITY.md\'s corrected tunnel-close '
+    + 'claim points at a kill path that no longer exists.'
+  );
+
+  for (const rel of ['src/main/webhook.ts', 'src/main/slack.ts']) {
+    const stripped = readStripped(rel).replace(/\s+/g, ' ');
+    assert.ok(
+      !/function openTunnel\(/.test(stripped) && !/\bopenTunnel\s*=\s*(async\s*)?\(/.test(stripped),
+      `${rel} retains its own openTunnel body — the shared helper in tunnel.ts exists precisely `
+      + 'so no server owns a second copy of tunnel-acquisition logic.'
+    );
+    assert.ok(
+      /TunnelHandle|TunnelOpener/.test(stripped),
+      `${rel} no longer references the shared tunnel helper's types (TunnelHandle/TunnelOpener) — `
+      + 'deleting the tunnel outright must fail this clause too, not just re-inlining it.'
+    );
+  }
+});
