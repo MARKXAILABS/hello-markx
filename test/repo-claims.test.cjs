@@ -1521,3 +1521,72 @@ test('ADR-0001: all three one-gate copies name the drain, none still hands the t
     + 'function that no longer exists.'
   );
 });
+
+// ─── 02-12 task 3: README's engine table describes a channel that renders, ─
+// and PARITY-02 is stated as what shipped (D-30, D-33, D-34) ──────────────
+//
+// Both directions, over README.md's joined+squeezed text (a claim wrapped
+// mid-sentence by the file's own line width cannot hide from a line grep).
+// The renderer-consumer half does NOT duplicate
+// test/capability-surface.test.cjs's 'providerCapabilities has >= 1
+// production consumer' clause (plan 02-06) — that clause is a pure
+// code-surface check with no README involvement. This one pins the
+// DOCUMENTATION-TO-RENDERER link: the table exists AND something under
+// src/renderer imports the channel, so deleting either half (the doc or the
+// consumer) fails, independent of whether the other test file's own clause
+// also still passes.
+
+test('README: the engine table documents a channel that renders, and "all eleven" never appears as a cost claim (D-30/D-34)', () => {
+  const readme = readRaw('README.md');
+  const joined = readme.replace(/\r/g, '').replace(/\n/g, ' ').replace(/ +/g, ' ');
+
+  // Positive half 1: the table exists, counted by its own |-delimited
+  // structure (a header separator row `|---|---|` plus >= 5 data rows —
+  // never a fixed line-count slice, which silently measures the wrong thing
+  // once the table grows or shrinks by a row).
+  const tableRows = readme
+    .split('\n')
+    .filter((line) => /^\|.*\|\s*$/.test(line) && !/^\|\s*---/.test(line) && line.includes('|'));
+  assert.ok(
+    tableRows.length >= 5,
+    `README.md's engine-limitation table has ${tableRows.length} data row(s) (counted by its own `
+    + '|-delimited structure), expected >= 5. The table documenting per-engine gaps is gone or '
+    + 'collapsed.'
+  );
+
+  // Positive half 2: at least one renderer file imports the capability
+  // channel — the D-30 headline (zero production consumers before this
+  // phase).
+  const rendererConsumers = sourceFiles(rendererRoot).filter((rel) =>
+    /providerCapabilities|capabilityLine/.test(readStripped(rel))
+  );
+  assert.ok(
+    rendererConsumers.length >= 1,
+    'no file under src/renderer imports providerCapabilities or capabilityLine — README documents '
+    + 'a channel with zero renderer consumers, exactly D-30\'s defect.'
+  );
+
+  // Negative half: no claim that all eleven engines report cost.
+  assert.ok(
+    !/all eleven[^.]*cost/i.test(joined) && !/eleven engines[^.]*(cost|ledger|breaker)/i.test(joined),
+    'README.md still claims "all eleven" engines report cost — PARITY-02 as originally written is '
+    + 'unachievable for copilot and custom by construction (D-34); the README must say what shipped, '
+    + 'never the unachievable original.'
+  );
+
+  // Negative half, pinned to source: copilot and custom still declare
+  // costTracking: 'none'. This is D-40's deliberately-fails-on-improvement
+  // pin — if a future change gives either one a real cost path, THIS
+  // assertion goes red and forces the README paragraph naming them to be
+  // rewritten in the same diff, rather than drifting silently true-again.
+  const providerSrc = readStripped('src/shared/agentProvider.ts').replace(/\s+/g, ' ');
+  for (const engine of ['copilot', 'custom']) {
+    const idBlock = providerSrc.slice(providerSrc.indexOf(`id: '${engine}'`), providerSrc.indexOf(`id: '${engine}'`) + 300);
+    assert.ok(
+      /costTracking: 'none'/.test(idBlock),
+      `${engine}'s preset no longer declares costTracking: 'none' — if this is a real new cost `
+      + 'path, README.md\'s copilot/custom cost paragraph (task 3, this plan) must be rewritten in '
+      + 'the same diff, not left claiming an impossibility that source just disproved.'
+    );
+  }
+});
