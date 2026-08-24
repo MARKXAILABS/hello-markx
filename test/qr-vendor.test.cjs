@@ -120,4 +120,140 @@ test('qrcodegen.ts: RETRIEVED-SHA256 matches the vendored slice (CRLF/BOM normal
     + 'hostile edit or an unnoticed drift');
 });
 
-module.exports = { stripComments, VENDOR_PATH, VENDOR_REL, root };
+// ─── Clause 4: the vendored code has a production consumer ──────────────────
+//
+// `02-PATTERNS.md` § Shared Pattern 5 names the disease by name: "a test file
+// is the only importer of a `src/shared` export" — capabilityLine's exact
+// shape before 02-08 gave it one. This clause is the standing guard against
+// the same thing happening to the encoder: at least one file under
+// `src/renderer/src`, other than this test and the vendored file itself,
+// must import it.
+
+test('qrcodegen.ts: has a production consumer, not only this test', () => {
+  const rendererRoot = path.join(root, 'src/renderer/src');
+  const consumers = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.tsx?$/.test(entry.name)) continue;
+      if (full === VENDOR_PATH) continue;
+      const src = fs.readFileSync(full, 'utf8');
+      if (/from ['"](\.\.\/)*vendor\/qrcodegen['"]/.test(src)) consumers.push(path.relative(root, full));
+    }
+  })(rendererRoot);
+  assert.ok(consumers.length >= 1,
+    'no file under src/renderer/src (other than the vendored file itself) imports vendor/qrcodegen '
+    + '— the encoder has no production consumer, only this test');
+});
+
+// ─── Task 2: execute the encoder, and render the component that consumes it ─
+
+const loadTs = require('./load-ts.cjs');
+const React = require('react');
+const { renderToStaticMarkup } = require('react-dom/server');
+
+// The binding probe value (02-UI-SPEC.md §S4a, D-14's live-measured label on
+// cloudflared's fixed suffix): 48 characters, never a shorter invented host.
+const PROBE_HOST = 'adams-medical-meeting-enormous.trycloudflare.com';
+assert.equal(Buffer.byteLength(PROBE_HOST), 48, 'PROBE_HOST drifted off its measured 48 characters');
+// A single-use enrollment token, base64url(32 random bytes) = 43 characters —
+// the same shape `phone:pairing`'s real token takes (D-19).
+const PROBE_TOKEN = crypto.randomBytes(32).toString('base64url');
+assert.equal(PROBE_TOKEN.length, 43, 'PROBE_TOKEN drifted off its measured 43 characters');
+const PROBE_PAYLOAD = `https://${PROBE_HOST}/phone/#${PROBE_TOKEN}`;
+
+/** True where a standard QR finder pattern is dark at (dx,dy) inside its own
+ *  7x7 box: a solid outer ring, a light ring one module in, a solid 3x3
+ *  centre. Structural, not "a dark ring" eyeballed. */
+function finderDarkAt(dx, dy) {
+  if (dx < 0 || dx > 6 || dy < 0 || dy > 6) return false;
+  if (dx === 0 || dx === 6 || dy === 0 || dy === 6) return true; // outer border
+  if (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4) return true; // inner 3x3
+  return false; // the light ring in between
+}
+
+/** Assert the three finder patterns of a decoded QrCode instance. */
+function assertFinderPatterns(qr, label) {
+  const n = qr.size;
+  const corners = [[0, 0], [n - 7, 0], [0, n - 7]];
+  for (const [ox, oy] of corners) {
+    for (let dy = 0; dy < 7; dy++) {
+      for (let dx = 0; dx < 7; dx++) {
+        assert.equal(qr.getModule(ox + dx, oy + dy), finderDarkAt(dx, dy),
+          `${label}: finder pattern at corner (${ox},${oy}) mismatches the standard shape `
+          + `at offset (${dx},${dy})`);
+      }
+    }
+  }
+}
+
+/** Count dark modules across the whole matrix. */
+function darkCount(qr) {
+  let count = 0;
+  for (let y = 0; y < qr.size; y++) {
+    for (let x = 0; x < qr.size; x++) {
+      if (qr.getModule(x, y)) count++;
+    }
+  }
+  return count;
+}
+
+test('qrcodegen.ts executed: the probe payload decodes to a real module matrix', () => {
+  const { qrcodegen } = loadTs(VENDOR_REL);
+  const qr = qrcodegen.QrCode.encodeText(PROBE_PAYLOAD, qrcodegen.QrCode.Ecc.MEDIUM);
+  const n = qr.size;
+  assert.ok(n >= 21 && n <= 177 && (n - 17) % 4 === 0,
+    `module count ${n} is not a valid QR version size (21..177, step 4)`);
+  assertFinderPatterns(qr, 'real encoder');
+  const dark = darkCount(qr);
+  // Anti-stub assertion (D-40): an encoder replaced by a constant-returning
+  // stub passes every structural check above except this one.
+  assert.notEqual(dark, 0, 'zero dark modules — encodeText/getModule is stubbed to always return false');
+  assert.notEqual(dark, n * n, 'every module dark — encodeText/getModule is stubbed to always return true');
+});
+
+test('qrcodegen.ts executed: two different payloads produce two different matrices', () => {
+  const { qrcodegen } = loadTs(VENDOR_REL);
+  const qrA = qrcodegen.QrCode.encodeText(PROBE_PAYLOAD, qrcodegen.QrCode.Ecc.MEDIUM);
+  const qrB = qrcodegen.QrCode.encodeText(PROBE_PAYLOAD + 'x', qrcodegen.QrCode.Ecc.MEDIUM);
+  const flatten = (qr) => {
+    const bits = [];
+    for (let y = 0; y < qr.size; y++) for (let x = 0; x < qr.size; x++) bits.push(qr.getModule(x, y) ? 1 : 0);
+    return bits.join('');
+  };
+  assert.notEqual(flatten(qrA), flatten(qrB), 'two different payloads produced byte-identical matrices');
+});
+
+test('QrCode.tsx: renders one accessible inline SVG, module count derived from the same matrix', () => {
+  const { qrcodegen } = loadTs(VENDOR_REL);
+  const qr = qrcodegen.QrCode.encodeText(PROBE_PAYLOAD, qrcodegen.QrCode.Ecc.MEDIUM);
+  const expectedDark = darkCount(qr);
+  const expectedDim = qr.size + 8;
+
+  const { QrCode } = loadTs('src/renderer/src/components/QrCode.tsx');
+  const markup = renderToStaticMarkup(React.createElement(QrCode, { text: PROBE_PAYLOAD }));
+
+  const svgOpenTags = markup.match(/<svg\b/g) || [];
+  assert.equal(svgOpenTags.length, 1, `expected exactly one <svg, found ${svgOpenTags.length}`);
+  assert.match(markup, /role="img"/, 'no role="img" on the rendered markup');
+  assert.match(markup, /aria-label="Pairing QR code for the phone"/, 'aria-label missing or wrong');
+  const viewBoxMatch = markup.match(/viewBox="0 0 (\d+) (\d+)"/);
+  assert.ok(viewBoxMatch, 'no viewBox attribute found');
+  assert.equal(Number(viewBoxMatch[1]), expectedDim, 'viewBox width does not equal module count + 8');
+  assert.equal(Number(viewBoxMatch[2]), expectedDim, 'viewBox height does not equal module count + 8');
+  assert.match(markup, /<rect[^>]*fill="#FFFFFF"/, 'no #FFFFFF background rect');
+  const rectTags = markup.match(/<rect\b/g) || [];
+  assert.equal(rectTags.length, expectedDark + 1,
+    `expected ${expectedDark + 1} <rect> elements (${expectedDark} dark modules + 1 background), `
+    + `found ${rectTags.length}`);
+});
+
+test('QrCode.tsx: an oversized payload renders null rather than throwing (trust-boundary guard)', () => {
+  const { QrCode } = loadTs('src/renderer/src/components/QrCode.tsx');
+  const oversized = 'x'.repeat(3000);
+  const markup = renderToStaticMarkup(React.createElement(QrCode, { text: oversized }));
+  assert.equal(markup, '', `expected null render (empty markup) for a 3000-char payload, got ${markup.length} chars`);
+});
+
+module.exports = { stripComments, VENDOR_PATH, VENDOR_REL, root, PROBE_HOST, PROBE_TOKEN, PROBE_PAYLOAD };
