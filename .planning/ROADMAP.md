@@ -310,7 +310,18 @@ SCALE-03 on RECORD-02 (Phase 4), SCALE-01 on RECALL-02 (Phase 5), per the table 
   4. **The operator learns what happened without opening the app.** A daily digest reaches
      the operator through an existing channel, and a single agent card shows cost, duration,
      context, account and block state together. — SCALE-04, SCALE-05
-**Plans**: TBD
+**Plans:** 9 plans across 6 waves
+
+Plans:
+- [ ] 03-01-PLAN.md — SCALE-01: PersistStore.repoint() + KnowledgeManager default path, both handles repointed at the one first-run transition
+- [ ] 03-02-PLAN.md — SCALE-05 main-process fixes: control:breakerSnapshot, spawnedAt, the getAgentUsage cost-ledger gate fix
+- [ ] 03-03-PLAN.md — SCALE-03 storage: events table (migration #3), the injected sink, hive:timeline/hive:timelineBucket
+- [ ] 03-04-PLAN.md — SCALE-02 main-side: team@1 format + validator, readHireManifestFile branch, team:export + its caller
+- [ ] 03-05-PLAN.md — SCALE-04: the digest scheduler, file/toast/Slack delivery, Settings toggle
+- [ ] 03-06-PLAN.md — SCALE-02 renderer: the shared bulk-spawn extraction, the uniqueId collision fix, the team review sheet
+- [ ] 03-07-PLAN.md — SCALE-03 UI: the day-band CCTab (band, scrubber, day picker, detail list)
+- [ ] 03-08-PLAN.md — SCALE-05 UI: agentView.ts, the three rewired renderings, the consolidated stat card
+- [ ] 03-09-PLAN.md — phase-close doc corrections (D-01, D-02, D-05, D-06, D-07, D-21, D-39)
 **UI hint**: yes
 
 ### Phase 4: Overnight on a Repo That Matters
