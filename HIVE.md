@@ -104,13 +104,16 @@ stream, retrieval, reflection, and planning.
    > needs a window to be open, so the drain keeps working headless — which is the
    > point of [#5](https://github.com/MARKXAILABS/hello-markx/issues/5).
    >
-   > The renderer nudge is still a path, no longer the ONLY one: `useHive.ts`
-   > effect #4 — the one gate allowed to type into a live PTY — delivers a queued
-   > message once the terminal is genuinely free (see
-   > [`docs/message-queue.md`](./docs/message-queue.md) and
-   > [ADR-0001](./docs/adr/0001-one-gate-for-pty-writes.md)). The Stop drain is
-   > preferred whenever a `Stop` actually fires, because it types NOTHING — the
-   > agent's own turn carries the work.
+   > The renderer nudge is a VIEW now, not a writer: the one gate allowed to
+   > type into a live PTY is main's own drain loop, `DeliveryService.drainQueue()`
+   > (`src/main/delivery.ts`), which delivers a queued message once the terminal
+   > is genuinely free (see [`docs/message-queue.md`](./docs/message-queue.md)
+   > and [ADR-0001](./docs/adr/0001-one-gate-for-pty-writes.md)). `useHive.ts`'s
+   > old effect #4 — about 150 lines of queue, dispatch and backstop — was
+   > deleted with the renderer drain it belonged to (#5 / FLOOR-02); what is
+   > left there is a read-only view main pushes on every mutation. The Stop
+   > drain is preferred whenever a `Stop` actually fires, because it types
+   > NOTHING — the agent's own turn carries the work.
    >
    > Dedup is durable and lives in main: `delivery.ts`'s `seenSet` (pruned against
    > the live inbox each tick) plus `cursor.json`, advanced by the drain

@@ -1458,3 +1458,66 @@ test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned per file, repo-wide, per e
     );
   }
 });
+
+// ─── 02-12 task 2: all three copies of ADR-0001's one-gate sentence agree ──
+// (D-02, D-12) ───────────────────────────────────────────────────────────
+//
+// `HIVE.md`, `docs/message-queue.md` and `docs/adr/0001-one-gate-for-pty-
+// writes.md` each carry their own copy of "the one gate allowed to type into
+// a live PTY". A single-site fix leaves the other two stale, which is worse
+// than leaving all three stale — the disagreement makes every copy
+// untrustworthy. This clause asserts over JOINED text (`tr`-style, in plain
+// JS) so a claim wrapped mid-sentence by the file's own formatter cannot
+// hide from a line-oriented grep, and pins the ADR's continued existence as
+// a positive lower bound so deleting it does not satisfy the negative half.
+// The ADR itself belongs to plan 02-03 — asserted here, never edited.
+
+/** repo-relative doc path -> its raw text, joined to one line and squeezed,
+ *  same discipline as `joinedSrcText()` above but over a single doc file
+ *  rather than the whole source tree (docs are not source; this is the
+ *  file-level joiner the `<interfaces>` style note describes). */
+function joinedDocText(rel) {
+  return readRaw(rel).replace(/\r/g, '').replace(/\n/g, ' ').replace(/ +/g, ' ');
+}
+
+const ONE_GATE_DOCS = ['HIVE.md', 'docs/message-queue.md', 'docs/adr/0001-one-gate-for-pty-writes.md'];
+
+test('ADR-0001: all three one-gate copies name the drain, none still hands the title to the deleted useHive.ts effect #4 (D-02/D-12)', () => {
+  assert.ok(
+    fs.existsSync(path.join(root, 'docs/adr/0001-one-gate-for-pty-writes.md'))
+    && readRaw('docs/adr/0001-one-gate-for-pty-writes.md').length > 0,
+    'docs/adr/0001-one-gate-for-pty-writes.md is missing or empty — deleting the ADR must FAIL '
+    + 'this clause, not satisfy the negative half by removing the stale claim along with it. It '
+    + 'belongs to plan 02-03; this clause asserts over it, never edits it.'
+  );
+
+  for (const rel of ONE_GATE_DOCS) {
+    const joined = joinedDocText(rel);
+    const stillClaimsEffect4 =
+      /(one place types|the one gate|the one writer).{0,200}useHive\.ts/i.test(joined)
+      || /useHive\.ts.{0,200}(the one gate|the one writer)/i.test(joined);
+    assert.ok(
+      !stillClaimsEffect4,
+      `${rel} still hands the one-gate title to useHive.ts's effect #4, which FLOOR-02/D-02 `
+      + 'deleted — main\'s DeliveryService.drainQueue() is the one gate now. Matching the bare '
+      + 'string "effect #4" is not this assertion: that phrase legitimately survives as history '
+      + '(e.g. "the drain used to be useHive.ts effect #4"); this one matches the CLAIM that it '
+      + 'still is the gate.'
+    );
+
+    const namesMainDrain =
+      /(one place types|the one gate|the one writer|single writer).{0,200}(delivery\.ts|drainQueue)/i.test(joined)
+      || /(delivery\.ts|drainQueue).{0,200}(the one gate|the one writer|one place types)/i.test(joined);
+    assert.ok(
+      namesMainDrain,
+      `${rel} does not name main's drain (delivery.ts / drainQueue) as the one gate. All three `
+      + 'copies of this sentence must describe the same mechanism.'
+    );
+  }
+
+  assert.ok(
+    /drainQueue\(/.test(readRaw('src/main/delivery.ts')),
+    'src/main/delivery.ts no longer contains drainQueue( — the three docs above all point at a '
+    + 'function that no longer exists.'
+  );
+});
