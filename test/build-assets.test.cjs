@@ -24,6 +24,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
+const yaml = require('js-yaml');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -86,4 +88,51 @@ test('every aliased asset the renderer imports exists at the path vite resolves 
 
   assert.deepEqual(missing, [],
     'these are generated brand assets that are not committed — run `npm run brand`, then commit them (#52)');
+});
+
+/**
+ * 02-09 D-40: three more parsed-not-grepped, both-directions clauses guarding
+ * the phone PWA bundle (`resources/phone/**`) — the same #52 failure mode
+ * (dev works, packaged app 404s) applied to a second `extraResources` entry.
+ */
+
+const PHONE_DIR = path.join(ROOT, 'resources', 'phone');
+const MANIFEST_PATH = path.join(PHONE_DIR, 'manifest.webmanifest');
+const ICON_512_PATH = path.join(PHONE_DIR, 'icon-512.png');
+const LOGO_PATH = path.join(ROOT, 'docs', 'logo.png');
+
+test('the phone bundle has a packaging entry, parsed from electron-builder.yml, pointing at the committed directory', () => {
+  const cfg = yaml.load(fs.readFileSync(path.join(ROOT, 'electron-builder.yml'), 'utf8'));
+  assert.ok(Array.isArray(cfg.extraResources) && cfg.extraResources.length > 0,
+    'extraResources parsed to nothing — this clause is checking air');
+  const entries = cfg.extraResources.filter((e) => e && e.from === 'resources/phone');
+  assert.equal(entries.length, 1, 'expected exactly one extraResources entry for resources/phone');
+  assert.equal(entries[0].to, 'phone');
+
+  const files = ['index.html', 'sw.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
+  for (const f of files) {
+    assert.ok(fs.existsSync(path.join(PHONE_DIR, f)), `resources/phone/${f} does not exist`);
+  }
+});
+
+test("the manifest's own icon list resolves, at the sizes it declares", () => {
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
+  assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 2,
+    'manifest.icons parsed to fewer than 2 entries — this clause is checking air');
+  for (const icon of manifest.icons) {
+    const abs = path.join(PHONE_DIR, icon.src);
+    assert.ok(fs.existsSync(abs), `manifest references missing icon ${icon.src}`);
+    const buf = fs.readFileSync(abs);
+    const width = buf.readUInt32BE(16);
+    const height = buf.readUInt32BE(20);
+    assert.equal(`${width}x${height}`, icon.sizes,
+      `${icon.src} is really ${width}x${height} but the manifest declares ${icon.sizes}`);
+  }
+});
+
+test('the 512 icon has not drifted from its source (docs/logo.png) — run `npm run brand` and re-copy if this fails', () => {
+  const iconDigest = crypto.createHash('sha256').update(fs.readFileSync(ICON_512_PATH)).digest('hex');
+  const logoDigest = crypto.createHash('sha256').update(fs.readFileSync(LOGO_PATH)).digest('hex');
+  assert.equal(iconDigest, logoDigest,
+    'resources/phone/icon-512.png no longer matches docs/logo.png — run `npm run brand`, then re-copy it as icon-512.png');
 });
