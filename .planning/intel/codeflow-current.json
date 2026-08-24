@@ -1,9 +1,9 @@
 {
-  "label": "pre-exec",
-  "projectRoot": "e:\\munder-difflin",
-  "capturedAt": "2026-08-23T19:22:55.534Z",
-  "fileCount": 358,
-  "codeFileCount": 304,
+  "label": "final",
+  "projectRoot": "E:\\munder-difflin",
+  "capturedAt": "2026-08-23T22:31:18.240Z",
+  "fileCount": 359,
+  "codeFileCount": 305,
   "skipped": [],
   "degraded": false,
   "data": {
@@ -4872,7 +4872,7 @@
           {
             "name": "sanitizeContextRule",
             "file": "src/main/index.ts",
-            "line": 3707,
+            "line": 3711,
             "code": "function sanitizeContextRule(patch: Partial<ContextRule> | undefined, current: ContextRule): ContextRule {\n  const p = (patch ?? {}) as Partial<ContextRule>;\n  const num = (v: unknown, fallback: number, min: number, max: number): number =>\n    typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;\n  return {\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n    everyMs: num(p.everyMs, current.everyMs, 60_000, 86_400_000),\n    minContextPct: num(p.minContextPct, current.minContextPct, 0, 100),\n    minContextPctLargeWindow: num(p.minContextPctLargeWindow, current.minContextPctLargeWindow, 0, 100),\n    message: typeof p.message === 'string' ? p.message : current.message\n  };\n}\n\n// ─── IPC: Triggers — webhooks (many endpoints, one server, one tunnel) ──────\nipcMain.handle('webhooks:list', () => readConfig().webhookTriggers ?? []);\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4880,7 +4880,7 @@
           {
             "name": "sanitizeWebhookTrigger",
             "file": "src/main/index.ts",
-            "line": 3760,
+            "line": 3764,
             "code": "function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): WebhookTrigger | null {\n  if (!raw || typeof raw !== 'object') return null;\n  const r = raw as Partial<WebhookTrigger>;\n  const id = typeof r.id === 'string' ? r.id.trim() : '';\n  // `phone` (case-insensitively) is the phone route's own reservation\n  // (D-23) — refused HERE, before the charset test, so the UI cannot save\n  // it even though it would also pass that test. The server independently\n  // refuses it too (`WebhookServer.setEndpoints`); this is the other half.\n  if (isReservedEndpointId(id)) return null;\n  // The id is spliced into a public URL path. Restrict it to a boring charset\n  // rather than escaping later: no slashes (which would forge a nested route),\n  // no encoded traversal, nothing that could make two endpoints alias.\n  if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) return null;\n  const prior = existing.find((t) => t.id === id);\n  const secret = typeof r.secret === 'string' && r.secret.trim() ? r.secret.trim() : prior?.secret ?? '';\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4888,7 +4888,7 @@
           {
             "name": "isWebhookVerifier",
             "file": "src/main/index.ts",
-            "line": 3790,
+            "line": 3794,
             "code": "function isWebhookVerifier(v: unknown): v is WebhookVerifier {\n  return v === 'shared-secret' || v === 'telegram' || v === 'discord';\n}\n\nfunction isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4896,7 +4896,7 @@
           {
             "name": "isTriggerMode",
             "file": "src/main/index.ts",
-            "line": 3794,
+            "line": 3798,
             "code": "function isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // start/stop, no network, no side effect of any kind.\n  const next: OrgTriggerConfig = {\n    apiKey: typeof p.apiKey === 'string' ? p.apiKey.trim() : current.apiKey,\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4904,7 +4904,7 @@
           {
             "name": "upsertLegacyWebhookTrigger",
             "file": "src/main/index.ts",
-            "line": 3906,
+            "line": 3910,
             "code": "function upsertLegacyWebhookTrigger(patch: { secret?: string; enabled?: boolean }): void {\n  const list = readConfig().webhookTriggers ?? [];\n  const prior = list.find((t) => t.id === 'legacy');\n  const secret = patch.secret !== undefined ? patch.secret : prior?.secret ?? '';\n  if (!secret) return;\n  const row: WebhookTrigger = {\n    id: 'legacy',\n    name: prior?.name ?? 'Default webhook',\n    secret,\n    enabled: patch.enabled !== undefined ? patch.enabled : prior?.enabled ?? false,\n    mode: prior?.mode ?? DEFAULT_TRIGGER_MODE,\n    schema: prior?.schema ?? DEFAULT_WEBHOOK_SCHEMA,\n    createdAt: prior?.createdAt ?? Date.now()\n  };\n  writeConfig({\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4912,7 +4912,7 @@
           {
             "name": "resolveCloudflaredBin",
             "file": "src/main/index.ts",
-            "line": 3947,
+            "line": 3951,
             "code": "async function resolveCloudflaredBin(): Promise<string | null> {\n  if (cloudflaredBin) return cloudflaredBin;\n  cloudflaredBin = await ensureCloudflared(join(app.getPath('userData'), 'bin'));\n  return cloudflaredBin;\n}\n\n/** Push `{ enabled, running, url }` to the renderer so the titlebar chip\n *  (plan 02-10) does not poll. Best-effort — a torn-down window must never\n *  throw here. */\nfunction emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -4920,7 +4920,7 @@
           {
             "name": "emitTunnelChanged",
             "file": "src/main/index.ts",
-            "line": 3956,
+            "line": 3960,
             "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4928,7 +4928,7 @@
           {
             "name": "spawnRequestsDir",
             "file": "src/main/index.ts",
-            "line": 4264,
+            "line": 4268,
             "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4936,7 +4936,7 @@
           {
             "name": "archiveRequest",
             "file": "src/main/index.ts",
-            "line": 4270,
+            "line": 4274,
             "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4944,7 +4944,7 @@
           {
             "name": "workerSignaledDone",
             "file": "src/main/index.ts",
-            "line": 4296,
+            "line": 4300,
             "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4952,7 +4952,7 @@
           {
             "name": "processSpawnRequest",
             "file": "src/main/index.ts",
-            "line": 4326,
+            "line": 4330,
             "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -4960,7 +4960,7 @@
           {
             "name": "workerTokensUsed",
             "file": "src/main/index.ts",
-            "line": 4428,
+            "line": 4432,
             "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4968,7 +4968,7 @@
           {
             "name": "gcPreservedWorktrees",
             "file": "src/main/index.ts",
-            "line": 4444,
+            "line": 4448,
             "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -4976,7 +4976,7 @@
           {
             "name": "ephemeralWorkerTick",
             "file": "src/main/index.ts",
-            "line": 4485,
+            "line": 4489,
             "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -4984,7 +4984,7 @@
           {
             "name": "startEphemeralWorkerWatcher",
             "file": "src/main/index.ts",
-            "line": 4565,
+            "line": 4569,
             "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -4992,7 +4992,7 @@
           {
             "name": "stopEphemeralWorkerWatcher",
             "file": "src/main/index.ts",
-            "line": 4572,
+            "line": 4576,
             "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5000,7 +5000,7 @@
           {
             "name": "healthCheckPtys",
             "file": "src/main/index.ts",
-            "line": 4659,
+            "line": 4663,
             "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5008,7 +5008,7 @@
           {
             "name": "onSystemResume",
             "file": "src/main/index.ts",
-            "line": 4690,
+            "line": 4694,
             "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5016,19 +5016,19 @@
           {
             "name": "electronDeps",
             "file": "src/main/index.ts",
-            "line": 4731,
+            "line": 4735,
             "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
             "isTopLevel": true,
             "type": "function"
           }
         ],
-        "lines": 4940,
+        "lines": 4950,
         "layer": "utils",
         "churn": 0,
         "isCode": true,
         "dependencies": [],
         "complexity": {
-          "score": 1586,
+          "score": 1590,
           "level": "critical"
         },
         "parserProvenance": "heuristic-regex"
@@ -15904,6 +15904,48 @@
         "parserProvenance": "heuristic-regex"
       },
       {
+        "path": "test/boot-order.test.cjs",
+        "name": "boot-order.test.cjs",
+        "folder": "test",
+        "content": null,
+        "functions": [
+          {
+            "name": "bootConstructed",
+            "file": "test/boot-order.test.cjs",
+            "line": 48,
+            "code": "function bootConstructed() {\n  const src = fs.readFileSync(BOOT, 'utf8');\n  const sf = ts.createSourceFile(BOOT, src, ts.ScriptTarget.Latest, true);\n  const names = new Set();\n  for (const st of sf.statements) {\n    if (!ts.isVariableStatement(st)) continue;\n    const isExported = (st.modifiers || []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);\n    const isLet = (st.declarationList.flags & ts.NodeFlags.Let) !== 0;\n    if (!isExported || !isLet) continue;\n    for (const d of st.declarationList.declarations) {\n      // Only bindings with NO initializer are the trap. An initialized\n      // `export let x = ...` is assigned at load and is safe.\n      if (!d.initializer && ts.isIdentifier(d.name)) names.add(d.name.text);\n    }\n  }\n  // ...",
+            "isTopLevel": true,
+            "type": "function"
+          },
+          {
+            "name": "isDeferred",
+            "file": "test/boot-order.test.cjs",
+            "line": 68,
+            "code": "function isDeferred(node) {\n  for (let p = node.parent; p; p = p.parent) {\n    if (\n      ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) ||\n      ts.isArrowFunction(p) || ts.isMethodDeclaration(p) ||\n      ts.isConstructorDeclaration(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p) ||\n      ts.isClassDeclaration(p) || ts.isClassExpression(p)\n    ) return true;\n  }\n  return false;\n}\n\ntest('boot.ts still declares unassigned `export let` singletons (this guard\\'s premise)', () => {\n  const names = bootConstructed();\n  assert.ok(\n  // ...",
+            "isTopLevel": true,
+            "type": "function"
+          },
+          {
+            "name": "walk",
+            "file": "test/boot-order.test.cjs",
+            "line": 97,
+            "code": "  (function walk(node) {\n    if (ts.isIdentifier(node) && names.has(node.text) && !isDeferred(node)) {\n      const p = node.parent;\n      // Only a DEREFERENCE is unsafe (`hive.x`, `hive[x]`). A bare mention in\n      // an import clause or a type position never reads the value.\n      const deref =\n        (ts.isPropertyAccessExpression(p) && p.expression === node) ||\n        (ts.isElementAccessExpression(p) && p.expression === node);\n      if (deref) {\n        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));\n        offenders.push(`  src/main/index.ts:${line + 1}  ${src.split('\\n')[line].trim().slice(0, 100)}`);\n      }\n    }\n    ts.forEachChild(node, walk);\n  })(sf);\n  // ...",
+            "isTopLevel": true,
+            "type": "function"
+          }
+        ],
+        "lines": 123,
+        "layer": "utils",
+        "churn": 0,
+        "isCode": true,
+        "dependencies": [],
+        "complexity": {
+          "score": 38,
+          "level": "critical"
+        },
+        "parserProvenance": "heuristic-regex"
+      },
+      {
         "path": "test/breaker.test.cjs",
         "name": "breaker.test.cjs",
         "folder": "test",
@@ -23066,7 +23108,7 @@
       {
         "name": "sanitizeContextRule",
         "file": "src/main/index.ts",
-        "line": 3707,
+        "line": 3711,
         "code": "function sanitizeContextRule(patch: Partial<ContextRule> | undefined, current: ContextRule): ContextRule {\n  const p = (patch ?? {}) as Partial<ContextRule>;\n  const num = (v: unknown, fallback: number, min: number, max: number): number =>\n    typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;\n  return {\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n    everyMs: num(p.everyMs, current.everyMs, 60_000, 86_400_000),\n    minContextPct: num(p.minContextPct, current.minContextPct, 0, 100),\n    minContextPctLargeWindow: num(p.minContextPctLargeWindow, current.minContextPctLargeWindow, 0, 100),\n    message: typeof p.message === 'string' ? p.message : current.message\n  };\n}\n\n// ─── IPC: Triggers — webhooks (many endpoints, one server, one tunnel) ──────\nipcMain.handle('webhooks:list', () => readConfig().webhookTriggers ?? []);\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23076,7 +23118,7 @@
       {
         "name": "sanitizeWebhookTrigger",
         "file": "src/main/index.ts",
-        "line": 3760,
+        "line": 3764,
         "code": "function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): WebhookTrigger | null {\n  if (!raw || typeof raw !== 'object') return null;\n  const r = raw as Partial<WebhookTrigger>;\n  const id = typeof r.id === 'string' ? r.id.trim() : '';\n  // `phone` (case-insensitively) is the phone route's own reservation\n  // (D-23) — refused HERE, before the charset test, so the UI cannot save\n  // it even though it would also pass that test. The server independently\n  // refuses it too (`WebhookServer.setEndpoints`); this is the other half.\n  if (isReservedEndpointId(id)) return null;\n  // The id is spliced into a public URL path. Restrict it to a boring charset\n  // rather than escaping later: no slashes (which would forge a nested route),\n  // no encoded traversal, nothing that could make two endpoints alias.\n  if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) return null;\n  const prior = existing.find((t) => t.id === id);\n  const secret = typeof r.secret === 'string' && r.secret.trim() ? r.secret.trim() : prior?.secret ?? '';\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23086,7 +23128,7 @@
       {
         "name": "isWebhookVerifier",
         "file": "src/main/index.ts",
-        "line": 3790,
+        "line": 3794,
         "code": "function isWebhookVerifier(v: unknown): v is WebhookVerifier {\n  return v === 'shared-secret' || v === 'telegram' || v === 'discord';\n}\n\nfunction isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23096,7 +23138,7 @@
       {
         "name": "isTriggerMode",
         "file": "src/main/index.ts",
-        "line": 3794,
+        "line": 3798,
         "code": "function isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // start/stop, no network, no side effect of any kind.\n  const next: OrgTriggerConfig = {\n    apiKey: typeof p.apiKey === 'string' ? p.apiKey.trim() : current.apiKey,\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23106,7 +23148,7 @@
       {
         "name": "upsertLegacyWebhookTrigger",
         "file": "src/main/index.ts",
-        "line": 3906,
+        "line": 3910,
         "code": "function upsertLegacyWebhookTrigger(patch: { secret?: string; enabled?: boolean }): void {\n  const list = readConfig().webhookTriggers ?? [];\n  const prior = list.find((t) => t.id === 'legacy');\n  const secret = patch.secret !== undefined ? patch.secret : prior?.secret ?? '';\n  if (!secret) return;\n  const row: WebhookTrigger = {\n    id: 'legacy',\n    name: prior?.name ?? 'Default webhook',\n    secret,\n    enabled: patch.enabled !== undefined ? patch.enabled : prior?.enabled ?? false,\n    mode: prior?.mode ?? DEFAULT_TRIGGER_MODE,\n    schema: prior?.schema ?? DEFAULT_WEBHOOK_SCHEMA,\n    createdAt: prior?.createdAt ?? Date.now()\n  };\n  writeConfig({\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23116,7 +23158,7 @@
       {
         "name": "resolveCloudflaredBin",
         "file": "src/main/index.ts",
-        "line": 3947,
+        "line": 3951,
         "code": "async function resolveCloudflaredBin(): Promise<string | null> {\n  if (cloudflaredBin) return cloudflaredBin;\n  cloudflaredBin = await ensureCloudflared(join(app.getPath('userData'), 'bin'));\n  return cloudflaredBin;\n}\n\n/** Push `{ enabled, running, url }` to the renderer so the titlebar chip\n *  (plan 02-10) does not poll. Best-effort — a torn-down window must never\n *  throw here. */\nfunction emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -23126,7 +23168,7 @@
       {
         "name": "emitTunnelChanged",
         "file": "src/main/index.ts",
-        "line": 3956,
+        "line": 3960,
         "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23136,7 +23178,7 @@
       {
         "name": "spawnRequestsDir",
         "file": "src/main/index.ts",
-        "line": 4264,
+        "line": 4268,
         "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23146,7 +23188,7 @@
       {
         "name": "archiveRequest",
         "file": "src/main/index.ts",
-        "line": 4270,
+        "line": 4274,
         "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23156,7 +23198,7 @@
       {
         "name": "workerSignaledDone",
         "file": "src/main/index.ts",
-        "line": 4296,
+        "line": 4300,
         "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23166,7 +23208,7 @@
       {
         "name": "processSpawnRequest",
         "file": "src/main/index.ts",
-        "line": 4326,
+        "line": 4330,
         "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -23176,7 +23218,7 @@
       {
         "name": "workerTokensUsed",
         "file": "src/main/index.ts",
-        "line": 4428,
+        "line": 4432,
         "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23186,7 +23228,7 @@
       {
         "name": "gcPreservedWorktrees",
         "file": "src/main/index.ts",
-        "line": 4444,
+        "line": 4448,
         "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -23196,7 +23238,7 @@
       {
         "name": "ephemeralWorkerTick",
         "file": "src/main/index.ts",
-        "line": 4485,
+        "line": 4489,
         "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -23206,7 +23248,7 @@
       {
         "name": "startEphemeralWorkerWatcher",
         "file": "src/main/index.ts",
-        "line": 4565,
+        "line": 4569,
         "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23216,7 +23258,7 @@
       {
         "name": "stopEphemeralWorkerWatcher",
         "file": "src/main/index.ts",
-        "line": 4572,
+        "line": 4576,
         "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23226,7 +23268,7 @@
       {
         "name": "healthCheckPtys",
         "file": "src/main/index.ts",
-        "line": 4659,
+        "line": 4663,
         "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23236,7 +23278,7 @@
       {
         "name": "onSystemResume",
         "file": "src/main/index.ts",
-        "line": 4690,
+        "line": 4694,
         "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -23246,7 +23288,7 @@
       {
         "name": "electronDeps",
         "file": "src/main/index.ts",
-        "line": 4731,
+        "line": 4735,
         "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32534,6 +32576,36 @@
         "layer": "utils"
       },
       {
+        "name": "bootConstructed",
+        "file": "test/boot-order.test.cjs",
+        "line": 48,
+        "code": "function bootConstructed() {\n  const src = fs.readFileSync(BOOT, 'utf8');\n  const sf = ts.createSourceFile(BOOT, src, ts.ScriptTarget.Latest, true);\n  const names = new Set();\n  for (const st of sf.statements) {\n    if (!ts.isVariableStatement(st)) continue;\n    const isExported = (st.modifiers || []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);\n    const isLet = (st.declarationList.flags & ts.NodeFlags.Let) !== 0;\n    if (!isExported || !isLet) continue;\n    for (const d of st.declarationList.declarations) {\n      // Only bindings with NO initializer are the trap. An initialized\n      // `export let x = ...` is assigned at load and is safe.\n      if (!d.initializer && ts.isIdentifier(d.name)) names.add(d.name.text);\n    }\n  }\n  // ...",
+        "isTopLevel": true,
+        "type": "function",
+        "folder": "test",
+        "layer": "utils"
+      },
+      {
+        "name": "isDeferred",
+        "file": "test/boot-order.test.cjs",
+        "line": 68,
+        "code": "function isDeferred(node) {\n  for (let p = node.parent; p; p = p.parent) {\n    if (\n      ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) ||\n      ts.isArrowFunction(p) || ts.isMethodDeclaration(p) ||\n      ts.isConstructorDeclaration(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p) ||\n      ts.isClassDeclaration(p) || ts.isClassExpression(p)\n    ) return true;\n  }\n  return false;\n}\n\ntest('boot.ts still declares unassigned `export let` singletons (this guard\\'s premise)', () => {\n  const names = bootConstructed();\n  assert.ok(\n  // ...",
+        "isTopLevel": true,
+        "type": "function",
+        "folder": "test",
+        "layer": "utils"
+      },
+      {
+        "name": "walk",
+        "file": "test/boot-order.test.cjs",
+        "line": 97,
+        "code": "  (function walk(node) {\n    if (ts.isIdentifier(node) && names.has(node.text) && !isDeferred(node)) {\n      const p = node.parent;\n      // Only a DEREFERENCE is unsafe (`hive.x`, `hive[x]`). A bare mention in\n      // an import clause or a type position never reads the value.\n      const deref =\n        (ts.isPropertyAccessExpression(p) && p.expression === node) ||\n        (ts.isElementAccessExpression(p) && p.expression === node);\n      if (deref) {\n        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));\n        offenders.push(`  src/main/index.ts:${line + 1}  ${src.split('\\n')[line].trim().slice(0, 100)}`);\n      }\n    }\n    ts.forEachChild(node, walk);\n  })(sf);\n  // ...",
+        "isTopLevel": true,
+        "type": "function",
+        "folder": "test",
+        "layer": "utils"
+      },
+      {
         "name": "test",
         "file": "test/breaker.test.cjs",
         "line": 35,
@@ -38327,7 +38399,7 @@
         "source": "src/main/floor/boot.ts",
         "target": "src/main/index.ts",
         "fn": "bootFloor",
-        "count": 7
+        "count": 9
       },
       {
         "source": "src/main/floor/boot.ts",
@@ -39902,7 +39974,7 @@
         "count": 1
       },
       {
-        "source": "test/hive-hook-node.test.cjs",
+        "source": "test/boot-order.test.cjs",
         "target": "src/main/skills.ts",
         "fn": "walk",
         "count": 2
@@ -47138,6 +47210,48 @@
         "count": 7
       },
       {
+        "source": "resources/kg.cjs",
+        "target": "test/boot-order.test.cjs",
+        "fn": "main",
+        "count": 1
+      },
+      {
+        "source": "src/main/floor/boot.ts",
+        "target": "test/boot-order.test.cjs",
+        "fn": "bootFloor",
+        "count": 4
+      },
+      {
+        "source": "test/agent-provider.test.cjs",
+        "target": "test/boot-order.test.cjs",
+        "fn": "test",
+        "count": 2
+      },
+      {
+        "source": "src/main/hooks.ts",
+        "target": "test/boot-order.test.cjs",
+        "fn": "handle",
+        "count": 1
+      },
+      {
+        "source": "resources/skills/temporal/when.mjs",
+        "target": "test/boot-order.test.cjs",
+        "fn": "resolve",
+        "count": 1
+      },
+      {
+        "source": "src/main/hiveTemplates.ts",
+        "target": "test/boot-order.test.cjs",
+        "fn": "ok",
+        "count": 2
+      },
+      {
+        "source": "src/main/index.ts",
+        "target": "test/boot-order.test.cjs",
+        "fn": "wirePtyExitHandler",
+        "count": 1
+      },
+      {
         "source": "test/agent-provider.test.cjs",
         "target": "test/breaker.test.cjs",
         "fn": "test",
@@ -48480,6 +48594,12 @@
         "target": "test/hive-hook-node.test.cjs",
         "fn": "home",
         "count": 28
+      },
+      {
+        "source": "test/boot-order.test.cjs",
+        "target": "test/hive-hook-node.test.cjs",
+        "fn": "walk",
+        "count": 2
       },
       {
         "source": "src/renderer/src/components/AskMeTab.tsx",
@@ -50876,7 +50996,7 @@
         "count": 1
       },
       {
-        "source": "test/hive-hook-node.test.cjs",
+        "source": "test/boot-order.test.cjs",
         "target": "test/repo-claims.test.cjs",
         "fn": "walk",
         "count": 2
@@ -52352,7 +52472,7 @@
         "count": 1
       },
       {
-        "source": "test/hive-hook-node.test.cjs",
+        "source": "test/boot-order.test.cjs",
         "target": "tools/patch-electron-builder-cycle.cjs",
         "fn": "walk",
         "count": 1
@@ -52755,7 +52875,7 @@
       },
       "main": {
         "internal": 1,
-        "external": 27,
+        "external": 28,
         "callers": [
           {
             "file": ".github/workflows/ci.yml",
@@ -52818,6 +52938,11 @@
             "count": 1
           },
           {
+            "file": "test/boot-order.test.cjs",
+            "name": "boot-order.test.cjs",
+            "count": 1
+          },
+          {
             "file": "test/engine-parity.test.cjs",
             "name": "engine-parity.test.cjs",
             "count": 1
@@ -52853,7 +52978,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 28
+        "count": 29
       },
       "build": {
         "internal": 1,
@@ -52884,7 +53009,7 @@
       },
       "resolve": {
         "internal": 1,
-        "external": 266,
+        "external": 267,
         "callers": [
           {
             "file": "e2e/smoke.spec.ts",
@@ -53037,6 +53162,11 @@
             "count": 9
           },
           {
+            "file": "test/boot-order.test.cjs",
+            "name": "boot-order.test.cjs",
+            "count": 1
+          },
+          {
             "file": "test/build-assets.test.cjs",
             "name": "build-assets.test.cjs",
             "count": 1
@@ -53177,7 +53307,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 267
+        "count": 268
       },
       "log": {
         "internal": 23,
@@ -57234,17 +57364,22 @@
       },
       "bootFloor": {
         "internal": 5,
-        "external": 28,
+        "external": 34,
         "callers": [
           {
             "file": "src/main/index.ts",
             "name": "index.ts",
-            "count": 7
+            "count": 9
           },
           {
             "file": "test/boot-floor.test.cjs",
             "name": "boot-floor.test.cjs",
             "count": 13
+          },
+          {
+            "file": "test/boot-order.test.cjs",
+            "name": "boot-order.test.cjs",
+            "count": 4
           },
           {
             "file": "test/engine-parity.test.cjs",
@@ -57282,7 +57417,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 33
+        "count": 39
       },
       "startHiveServices": {
         "internal": 1,
@@ -60543,7 +60678,7 @@
       },
       "ok": {
         "internal": 2,
-        "external": 540,
+        "external": 542,
         "callers": [
           {
             "file": "scripts/phone-curl-check.cjs",
@@ -60614,6 +60749,11 @@
             "file": "test/boot-floor.test.cjs",
             "name": "boot-floor.test.cjs",
             "count": 10
+          },
+          {
+            "file": "test/boot-order.test.cjs",
+            "name": "boot-order.test.cjs",
+            "count": 2
           },
           {
             "file": "test/build-assets.test.cjs",
@@ -60901,7 +61041,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 542
+        "count": 544
       },
       "read": {
         "internal": 3,
@@ -61876,7 +62016,7 @@
       },
       "handle": {
         "internal": 2,
-        "external": 186,
+        "external": 187,
         "callers": [
           {
             "file": "src/main/config.ts",
@@ -61929,6 +62069,11 @@
             "count": 2
           },
           {
+            "file": "test/boot-order.test.cjs",
+            "name": "boot-order.test.cjs",
+            "count": 1
+          },
+          {
             "file": "test/hive-roster-injection.test.cjs",
             "name": "hive-roster-injection.test.cjs",
             "count": 2
@@ -61959,7 +62104,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 188
+        "count": 189
       },
       "notify": {
         "internal": 4,
@@ -62148,9 +62293,15 @@
         "count": 1
       },
       "wirePtyExitHandler": {
-        "internal": 1,
-        "external": 0,
-        "callers": [],
+        "internal": 2,
+        "external": 1,
+        "callers": [
+          {
+            "file": "test/boot-order.test.cjs",
+            "name": "boot-order.test.cjs",
+            "count": 1
+          }
+        ],
         "file": "src/main/index.ts",
         "folder": "src/main",
         "line": 441,
@@ -62161,7 +62312,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 1
+        "count": 3
       },
       "syncKeepAwake": {
         "internal": 6,
@@ -63111,7 +63262,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 3707,
+        "line": 3711,
         "code": "function sanitizeContextRule(patch: Partial<ContextRule> | undefined, current: ContextRule): ContextRule {\n  const p = (patch ?? {}) as Partial<ContextRule>;\n  const num = (v: unknown, fallback: number, min: number, max: number): number =>\n    typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;\n  return {\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n    everyMs: num(p.everyMs, current.everyMs, 60_000, 86_400_000),\n    minContextPct: num(p.minContextPct, current.minContextPct, 0, 100),\n    minContextPctLargeWindow: num(p.minContextPctLargeWindow, current.minContextPctLargeWindow, 0, 100),\n    message: typeof p.message === 'string' ? p.message : current.message\n  };\n}\n\n// ─── IPC: Triggers — webhooks (many endpoints, one server, one tunnel) ──────\nipcMain.handle('webhooks:list', () => readConfig().webhookTriggers ?? []);\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63127,7 +63278,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 3760,
+        "line": 3764,
         "code": "function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): WebhookTrigger | null {\n  if (!raw || typeof raw !== 'object') return null;\n  const r = raw as Partial<WebhookTrigger>;\n  const id = typeof r.id === 'string' ? r.id.trim() : '';\n  // `phone` (case-insensitively) is the phone route's own reservation\n  // (D-23) — refused HERE, before the charset test, so the UI cannot save\n  // it even though it would also pass that test. The server independently\n  // refuses it too (`WebhookServer.setEndpoints`); this is the other half.\n  if (isReservedEndpointId(id)) return null;\n  // The id is spliced into a public URL path. Restrict it to a boring charset\n  // rather than escaping later: no slashes (which would forge a nested route),\n  // no encoded traversal, nothing that could make two endpoints alias.\n  if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) return null;\n  const prior = existing.find((t) => t.id === id);\n  const secret = typeof r.secret === 'string' && r.secret.trim() ? r.secret.trim() : prior?.secret ?? '';\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63143,7 +63294,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 3790,
+        "line": 3794,
         "code": "function isWebhookVerifier(v: unknown): v is WebhookVerifier {\n  return v === 'shared-secret' || v === 'telegram' || v === 'discord';\n}\n\nfunction isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63159,7 +63310,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 3794,
+        "line": 3798,
         "code": "function isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // start/stop, no network, no side effect of any kind.\n  const next: OrgTriggerConfig = {\n    apiKey: typeof p.apiKey === 'string' ? p.apiKey.trim() : current.apiKey,\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63175,7 +63326,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 3906,
+        "line": 3910,
         "code": "function upsertLegacyWebhookTrigger(patch: { secret?: string; enabled?: boolean }): void {\n  const list = readConfig().webhookTriggers ?? [];\n  const prior = list.find((t) => t.id === 'legacy');\n  const secret = patch.secret !== undefined ? patch.secret : prior?.secret ?? '';\n  if (!secret) return;\n  const row: WebhookTrigger = {\n    id: 'legacy',\n    name: prior?.name ?? 'Default webhook',\n    secret,\n    enabled: patch.enabled !== undefined ? patch.enabled : prior?.enabled ?? false,\n    mode: prior?.mode ?? DEFAULT_TRIGGER_MODE,\n    schema: prior?.schema ?? DEFAULT_WEBHOOK_SCHEMA,\n    createdAt: prior?.createdAt ?? Date.now()\n  };\n  writeConfig({\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63191,7 +63342,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 3947,
+        "line": 3951,
         "code": "async function resolveCloudflaredBin(): Promise<string | null> {\n  if (cloudflaredBin) return cloudflaredBin;\n  cloudflaredBin = await ensureCloudflared(join(app.getPath('userData'), 'bin'));\n  return cloudflaredBin;\n}\n\n/** Push `{ enabled, running, url }` to the renderer so the titlebar chip\n *  (plan 02-10) does not poll. Best-effort — a torn-down window must never\n *  throw here. */\nfunction emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  // ...",
         "isTopLevel": false,
         "isExported": false,
@@ -63207,7 +63358,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 3956,
+        "line": 3960,
         "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63223,7 +63374,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4264,
+        "line": 4268,
         "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63239,7 +63390,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4270,
+        "line": 4274,
         "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63255,7 +63406,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4296,
+        "line": 4300,
         "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63271,7 +63422,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4326,
+        "line": 4330,
         "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
         "isTopLevel": false,
         "isExported": false,
@@ -63287,7 +63438,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4428,
+        "line": 4432,
         "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63303,7 +63454,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4444,
+        "line": 4448,
         "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
         "isTopLevel": false,
         "isExported": false,
@@ -63319,7 +63470,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4485,
+        "line": 4489,
         "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
         "isTopLevel": false,
         "isExported": false,
@@ -63335,7 +63486,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4565,
+        "line": 4569,
         "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63351,7 +63502,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4572,
+        "line": 4576,
         "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63367,7 +63518,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4659,
+        "line": 4663,
         "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63389,7 +63540,7 @@
         ],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4690,
+        "line": 4694,
         "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -63411,7 +63562,7 @@
         ],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4731,
+        "line": 4735,
         "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -85531,7 +85682,7 @@
       },
       "test": {
         "internal": 7,
-        "external": 1110,
+        "external": 1112,
         "callers": [
           {
             "file": ".github/workflows/e2e.yml",
@@ -85777,6 +85928,11 @@
             "file": "test/boot-floor.test.cjs",
             "name": "boot-floor.test.cjs",
             "count": 20
+          },
+          {
+            "file": "test/boot-order.test.cjs",
+            "name": "boot-order.test.cjs",
+            "count": 2
           },
           {
             "file": "test/breaker.test.cjs",
@@ -86134,7 +86290,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 1117
+        "count": 1119
       },
       "isSupported": {
         "internal": 2,
@@ -86225,6 +86381,75 @@
         "decorators": null,
         "className": null,
         "count": 4
+      },
+      "bootConstructed": {
+        "internal": 2,
+        "external": 0,
+        "callers": [],
+        "file": "test/boot-order.test.cjs",
+        "folder": "test",
+        "line": 48,
+        "code": "function bootConstructed() {\n  const src = fs.readFileSync(BOOT, 'utf8');\n  const sf = ts.createSourceFile(BOOT, src, ts.ScriptTarget.Latest, true);\n  const names = new Set();\n  for (const st of sf.statements) {\n    if (!ts.isVariableStatement(st)) continue;\n    const isExported = (st.modifiers || []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);\n    const isLet = (st.declarationList.flags & ts.NodeFlags.Let) !== 0;\n    if (!isExported || !isLet) continue;\n    for (const d of st.declarationList.declarations) {\n      // Only bindings with NO initializer are the trap. An initialized\n      // `export let x = ...` is assigned at load and is safe.\n      if (!d.initializer && ts.isIdentifier(d.name)) names.add(d.name.text);\n    }\n  }\n  // ...",
+        "isTopLevel": true,
+        "isExported": false,
+        "isClassMethod": false,
+        "type": "function",
+        "decorators": null,
+        "className": null,
+        "count": 2
+      },
+      "isDeferred": {
+        "internal": 1,
+        "external": 0,
+        "callers": [],
+        "file": "test/boot-order.test.cjs",
+        "folder": "test",
+        "line": 68,
+        "code": "function isDeferred(node) {\n  for (let p = node.parent; p; p = p.parent) {\n    if (\n      ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) ||\n      ts.isArrowFunction(p) || ts.isMethodDeclaration(p) ||\n      ts.isConstructorDeclaration(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p) ||\n      ts.isClassDeclaration(p) || ts.isClassExpression(p)\n    ) return true;\n  }\n  return false;\n}\n\ntest('boot.ts still declares unassigned `export let` singletons (this guard\\'s premise)', () => {\n  const names = bootConstructed();\n  assert.ok(\n  // ...",
+        "isTopLevel": true,
+        "isExported": false,
+        "isClassMethod": false,
+        "type": "function",
+        "decorators": null,
+        "className": null,
+        "count": 1
+      },
+      "walk": {
+        "internal": 1,
+        "external": 7,
+        "callers": [
+          {
+            "file": "src/main/skills.ts",
+            "name": "skills.ts",
+            "count": 2
+          },
+          {
+            "file": "test/hive-hook-node.test.cjs",
+            "name": "hive-hook-node.test.cjs",
+            "count": 2
+          },
+          {
+            "file": "test/repo-claims.test.cjs",
+            "name": "repo-claims.test.cjs",
+            "count": 2
+          },
+          {
+            "file": "tools/patch-electron-builder-cycle.cjs",
+            "name": "patch-electron-builder-cycle.cjs",
+            "count": 1
+          }
+        ],
+        "file": "test/boot-order.test.cjs",
+        "folder": "test",
+        "line": 97,
+        "code": "  (function walk(node) {\n    if (ts.isIdentifier(node) && names.has(node.text) && !isDeferred(node)) {\n      const p = node.parent;\n      // Only a DEREFERENCE is unsafe (`hive.x`, `hive[x]`). A bare mention in\n      // an import clause or a type position never reads the value.\n      const deref =\n        (ts.isPropertyAccessExpression(p) && p.expression === node) ||\n        (ts.isElementAccessExpression(p) && p.expression === node);\n      if (deref) {\n        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));\n        offenders.push(`  src/main/index.ts:${line + 1}  ${src.split('\\n')[line].trim().slice(0, 100)}`);\n      }\n    }\n    ts.forEachChild(node, walk);\n  })(sf);\n  // ...",
+        "isTopLevel": true,
+        "isExported": false,
+        "isClassMethod": false,
+        "type": "function",
+        "decorators": null,
+        "className": null,
+        "count": 8
       },
       "makeBreaker": {
         "internal": 50,
@@ -87239,38 +87464,6 @@
         "decorators": null,
         "className": null,
         "count": 205
-      },
-      "walk": {
-        "internal": 2,
-        "external": 5,
-        "callers": [
-          {
-            "file": "src/main/skills.ts",
-            "name": "skills.ts",
-            "count": 2
-          },
-          {
-            "file": "test/repo-claims.test.cjs",
-            "name": "repo-claims.test.cjs",
-            "count": 2
-          },
-          {
-            "file": "tools/patch-electron-builder-cycle.cjs",
-            "name": "patch-electron-builder-cycle.cjs",
-            "count": 1
-          }
-        ],
-        "file": "test/hive-hook-node.test.cjs",
-        "folder": "test",
-        "line": 40,
-        "code": "function walk(dir, out = []) {\r\n  for (const e of fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : []) {\r\n    const p = path.join(dir, e.name);\r\n    if (e.isDirectory()) walk(p, out);\r\n    else out.push(p);\r\n  }\r\n  return out;\r\n}\r\n\r\n/** Sweep every config an installer wrote for commands that invoke one of our\r\n *  shims. Path-agnostic on purpose, so a new installer cannot be missed. */\r\nfunction hookCommandsUnder(home) {\r\n  const shim = /(cth-hook\\.cjs|agy-hook\\.cjs|grok-hook\\.cjs)/;\r\n  const found = [];\r\n  for (const file of walk(home)) {\r\n  // ...",
-        "isTopLevel": true,
-        "isExported": false,
-        "isClassMethod": false,
-        "type": "function",
-        "decorators": null,
-        "className": null,
-        "count": 7
       },
       "hookCommandsUnder": {
         "internal": 2,
@@ -95333,7 +95526,7 @@
                     {
                       "name": "sanitizeContextRule",
                       "file": "src/main/index.ts",
-                      "line": 3707,
+                      "line": 3711,
                       "code": "function sanitizeContextRule(patch: Partial<ContextRule> | undefined, current: ContextRule): ContextRule {\n  const p = (patch ?? {}) as Partial<ContextRule>;\n  const num = (v: unknown, fallback: number, min: number, max: number): number =>\n    typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;\n  return {\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n    everyMs: num(p.everyMs, current.everyMs, 60_000, 86_400_000),\n    minContextPct: num(p.minContextPct, current.minContextPct, 0, 100),\n    minContextPctLargeWindow: num(p.minContextPctLargeWindow, current.minContextPctLargeWindow, 0, 100),\n    message: typeof p.message === 'string' ? p.message : current.message\n  };\n}\n\n// ─── IPC: Triggers — webhooks (many endpoints, one server, one tunnel) ──────\nipcMain.handle('webhooks:list', () => readConfig().webhookTriggers ?? []);\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95341,7 +95534,7 @@
                     {
                       "name": "sanitizeWebhookTrigger",
                       "file": "src/main/index.ts",
-                      "line": 3760,
+                      "line": 3764,
                       "code": "function sanitizeWebhookTrigger(raw: unknown, existing: WebhookTrigger[]): WebhookTrigger | null {\n  if (!raw || typeof raw !== 'object') return null;\n  const r = raw as Partial<WebhookTrigger>;\n  const id = typeof r.id === 'string' ? r.id.trim() : '';\n  // `phone` (case-insensitively) is the phone route's own reservation\n  // (D-23) — refused HERE, before the charset test, so the UI cannot save\n  // it even though it would also pass that test. The server independently\n  // refuses it too (`WebhookServer.setEndpoints`); this is the other half.\n  if (isReservedEndpointId(id)) return null;\n  // The id is spliced into a public URL path. Restrict it to a boring charset\n  // rather than escaping later: no slashes (which would forge a nested route),\n  // no encoded traversal, nothing that could make two endpoints alias.\n  if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) return null;\n  const prior = existing.find((t) => t.id === id);\n  const secret = typeof r.secret === 'string' && r.secret.trim() ? r.secret.trim() : prior?.secret ?? '';\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95349,7 +95542,7 @@
                     {
                       "name": "isWebhookVerifier",
                       "file": "src/main/index.ts",
-                      "line": 3790,
+                      "line": 3794,
                       "code": "function isWebhookVerifier(v: unknown): v is WebhookVerifier {\n  return v === 'shared-secret' || v === 'telegram' || v === 'discord';\n}\n\nfunction isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95357,7 +95550,7 @@
                     {
                       "name": "isTriggerMode",
                       "file": "src/main/index.ts",
-                      "line": 3794,
+                      "line": 3798,
                       "code": "function isTriggerMode(v: unknown): v is TriggerMode {\n  return v === 'strict' || v === 'allow-all' || v === 'communication-only';\n}\n\n// ─── IPC: Triggers — organisation (persistence only; no transport yet) ──────\nipcMain.handle('org:getTrigger', () => readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER);\nipcMain.handle('org:setTrigger', (_evt, arg: unknown) => {\n  const current = readConfig().orgTrigger ?? DEFAULT_ORG_TRIGGER;\n  const p = (arg ?? {}) as Partial<OrgTriggerConfig>;\n  // PERSIST ONLY — the peer messaging service does not exist yet, so nothing\n  // reads `apiKey` beyond the settings surface that shows it. Deliberately no\n  // start/stop, no network, no side effect of any kind.\n  const next: OrgTriggerConfig = {\n    apiKey: typeof p.apiKey === 'string' ? p.apiKey.trim() : current.apiKey,\n    enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95365,7 +95558,7 @@
                     {
                       "name": "upsertLegacyWebhookTrigger",
                       "file": "src/main/index.ts",
-                      "line": 3906,
+                      "line": 3910,
                       "code": "function upsertLegacyWebhookTrigger(patch: { secret?: string; enabled?: boolean }): void {\n  const list = readConfig().webhookTriggers ?? [];\n  const prior = list.find((t) => t.id === 'legacy');\n  const secret = patch.secret !== undefined ? patch.secret : prior?.secret ?? '';\n  if (!secret) return;\n  const row: WebhookTrigger = {\n    id: 'legacy',\n    name: prior?.name ?? 'Default webhook',\n    secret,\n    enabled: patch.enabled !== undefined ? patch.enabled : prior?.enabled ?? false,\n    mode: prior?.mode ?? DEFAULT_TRIGGER_MODE,\n    schema: prior?.schema ?? DEFAULT_WEBHOOK_SCHEMA,\n    createdAt: prior?.createdAt ?? Date.now()\n  };\n  writeConfig({\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95373,7 +95566,7 @@
                     {
                       "name": "resolveCloudflaredBin",
                       "file": "src/main/index.ts",
-                      "line": 3947,
+                      "line": 3951,
                       "code": "async function resolveCloudflaredBin(): Promise<string | null> {\n  if (cloudflaredBin) return cloudflaredBin;\n  cloudflaredBin = await ensureCloudflared(join(app.getPath('userData'), 'bin'));\n  return cloudflaredBin;\n}\n\n/** Push `{ enabled, running, url }` to the renderer so the titlebar chip\n *  (plan 02-10) does not poll. Best-effort — a torn-down window must never\n *  throw here. */\nfunction emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -95381,7 +95574,7 @@
                     {
                       "name": "emitTunnelChanged",
                       "file": "src/main/index.ts",
-                      "line": 3956,
+                      "line": 3960,
                       "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95389,7 +95582,7 @@
                     {
                       "name": "spawnRequestsDir",
                       "file": "src/main/index.ts",
-                      "line": 4264,
+                      "line": 4268,
                       "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95397,7 +95590,7 @@
                     {
                       "name": "archiveRequest",
                       "file": "src/main/index.ts",
-                      "line": 4270,
+                      "line": 4274,
                       "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95405,7 +95598,7 @@
                     {
                       "name": "workerSignaledDone",
                       "file": "src/main/index.ts",
-                      "line": 4296,
+                      "line": 4300,
                       "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95413,7 +95606,7 @@
                     {
                       "name": "processSpawnRequest",
                       "file": "src/main/index.ts",
-                      "line": 4326,
+                      "line": 4330,
                       "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -95421,7 +95614,7 @@
                     {
                       "name": "workerTokensUsed",
                       "file": "src/main/index.ts",
-                      "line": 4428,
+                      "line": 4432,
                       "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95429,7 +95622,7 @@
                     {
                       "name": "gcPreservedWorktrees",
                       "file": "src/main/index.ts",
-                      "line": 4444,
+                      "line": 4448,
                       "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -95437,7 +95630,7 @@
                     {
                       "name": "ephemeralWorkerTick",
                       "file": "src/main/index.ts",
-                      "line": 4485,
+                      "line": 4489,
                       "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -95445,7 +95638,7 @@
                     {
                       "name": "startEphemeralWorkerWatcher",
                       "file": "src/main/index.ts",
-                      "line": 4565,
+                      "line": 4569,
                       "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95453,7 +95646,7 @@
                     {
                       "name": "stopEphemeralWorkerWatcher",
                       "file": "src/main/index.ts",
-                      "line": 4572,
+                      "line": 4576,
                       "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95461,7 +95654,7 @@
                     {
                       "name": "healthCheckPtys",
                       "file": "src/main/index.ts",
-                      "line": 4659,
+                      "line": 4663,
                       "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95469,7 +95662,7 @@
                     {
                       "name": "onSystemResume",
                       "file": "src/main/index.ts",
-                      "line": 4690,
+                      "line": 4694,
                       "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -95477,19 +95670,19 @@
                     {
                       "name": "electronDeps",
                       "file": "src/main/index.ts",
-                      "line": 4731,
+                      "line": 4735,
                       "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
                     }
                   ],
-                  "lines": 4940,
+                  "lines": 4950,
                   "layer": "utils",
                   "churn": 0,
                   "isCode": true,
                   "dependencies": [],
                   "complexity": {
-                    "score": 1586,
+                    "score": 1590,
                     "level": "critical"
                   },
                   "parserProvenance": "heuristic-regex"
@@ -106520,6 +106713,48 @@
               "parserProvenance": "heuristic-regex"
             },
             {
+              "path": "test/boot-order.test.cjs",
+              "name": "boot-order.test.cjs",
+              "folder": "test",
+              "content": null,
+              "functions": [
+                {
+                  "name": "bootConstructed",
+                  "file": "test/boot-order.test.cjs",
+                  "line": 48,
+                  "code": "function bootConstructed() {\n  const src = fs.readFileSync(BOOT, 'utf8');\n  const sf = ts.createSourceFile(BOOT, src, ts.ScriptTarget.Latest, true);\n  const names = new Set();\n  for (const st of sf.statements) {\n    if (!ts.isVariableStatement(st)) continue;\n    const isExported = (st.modifiers || []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);\n    const isLet = (st.declarationList.flags & ts.NodeFlags.Let) !== 0;\n    if (!isExported || !isLet) continue;\n    for (const d of st.declarationList.declarations) {\n      // Only bindings with NO initializer are the trap. An initialized\n      // `export let x = ...` is assigned at load and is safe.\n      if (!d.initializer && ts.isIdentifier(d.name)) names.add(d.name.text);\n    }\n  }\n  // ...",
+                  "isTopLevel": true,
+                  "type": "function"
+                },
+                {
+                  "name": "isDeferred",
+                  "file": "test/boot-order.test.cjs",
+                  "line": 68,
+                  "code": "function isDeferred(node) {\n  for (let p = node.parent; p; p = p.parent) {\n    if (\n      ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) ||\n      ts.isArrowFunction(p) || ts.isMethodDeclaration(p) ||\n      ts.isConstructorDeclaration(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p) ||\n      ts.isClassDeclaration(p) || ts.isClassExpression(p)\n    ) return true;\n  }\n  return false;\n}\n\ntest('boot.ts still declares unassigned `export let` singletons (this guard\\'s premise)', () => {\n  const names = bootConstructed();\n  assert.ok(\n  // ...",
+                  "isTopLevel": true,
+                  "type": "function"
+                },
+                {
+                  "name": "walk",
+                  "file": "test/boot-order.test.cjs",
+                  "line": 97,
+                  "code": "  (function walk(node) {\n    if (ts.isIdentifier(node) && names.has(node.text) && !isDeferred(node)) {\n      const p = node.parent;\n      // Only a DEREFERENCE is unsafe (`hive.x`, `hive[x]`). A bare mention in\n      // an import clause or a type position never reads the value.\n      const deref =\n        (ts.isPropertyAccessExpression(p) && p.expression === node) ||\n        (ts.isElementAccessExpression(p) && p.expression === node);\n      if (deref) {\n        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));\n        offenders.push(`  src/main/index.ts:${line + 1}  ${src.split('\\n')[line].trim().slice(0, 100)}`);\n      }\n    }\n    ts.forEachChild(node, walk);\n  })(sf);\n  // ...",
+                  "isTopLevel": true,
+                  "type": "function"
+                }
+              ],
+              "lines": 123,
+              "layer": "utils",
+              "churn": 0,
+              "isCode": true,
+              "dependencies": [],
+              "complexity": {
+                "score": 38,
+                "level": "critical"
+              },
+              "parserProvenance": "heuristic-regex"
+            },
+            {
               "path": "test/breaker.test.cjs",
               "name": "breaker.test.cjs",
               "folder": "test",
@@ -110506,7 +110741,7 @@
             "name": "index.ts (80 fns)",
             "file": "src/main/index.ts",
             "fns": 80,
-            "lines": 4940
+            "lines": 4950
           },
           {
             "name": "kg-core.cjs (25 fns)",
@@ -110778,6 +111013,11 @@
             "imports": 18
           },
           {
+            "name": "hive-hook-node.test.cjs (18 imports)",
+            "file": "test/hive-hook-node.test.cjs",
+            "imports": 18
+          },
+          {
             "name": "renderer-components.test.cjs (18 imports)",
             "file": "test/renderer-components.test.cjs",
             "imports": 18
@@ -110800,11 +111040,6 @@
           {
             "name": "agentProvider.ts (17 imports)",
             "file": "src/shared/agentProvider.ts",
-            "imports": 17
-          },
-          {
-            "name": "hive-hook-node.test.cjs (17 imports)",
-            "file": "test/hive-hook-node.test.cjs",
             "imports": 17
           },
           {
@@ -114292,14 +114527,14 @@
       },
       {
         "type": "warning",
-        "title": "154 High Complexity Files",
+        "title": "155 High Complexity Files",
         "desc": "Files with complexity score >30",
         "items": [
           {
-            "name": "index.ts (1586)",
+            "name": "index.ts (1590)",
             "file": "src/main/index.ts",
-            "score": 1586,
-            "lines": 4940
+            "score": 1590,
+            "lines": 4950
           },
           {
             "name": "hive.ts (767)",
@@ -115070,6 +115305,12 @@
             "lines": 158
           },
           {
+            "name": "boot-order.test.cjs (38)",
+            "file": "test/boot-order.test.cjs",
+            "score": 38,
+            "lines": 123
+          },
+          {
             "name": "triggerHistory.ts (37)",
             "file": "src/main/triggerHistory.ts",
             "score": 37,
@@ -115374,6 +115615,10 @@
             "path": "test/boot-floor.test.cjs"
           },
           {
+            "name": "boot-order.test.cjs",
+            "path": "test/boot-order.test.cjs"
+          },
+          {
             "name": "breaker.test.cjs",
             "path": "test/breaker.test.cjs"
           },
@@ -115447,7 +115692,7 @@
           }
         ],
         "metrics": {
-          "factories": 54
+          "factories": 55
         }
       },
       {
@@ -116235,7 +116480,7 @@
           {
             "name": "index.ts",
             "path": "src/main/index.ts",
-            "lines": 4940
+            "lines": 4950
           },
           {
             "name": "kg-core.cjs",
@@ -116479,7 +116724,7 @@
             "name": "index.ts",
             "path": "src/main/index.ts",
             "fns": 80,
-            "lines": 4940
+            "lines": 4950
           },
           {
             "name": "kg-core.cjs",
@@ -117109,6 +117354,14 @@
         "file": "agent-lifecycle.test.cjs",
         "path": "test/agent-lifecycle.test.cjs",
         "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Function Constructor",
+        "file": "boot-order.test.cjs",
+        "path": "test/boot-order.test.cjs",
+        "desc": "Function constructor is similar to eval(). Consider alternatives.",
         "code": ""
       },
       {
@@ -120312,19 +120565,19 @@
     ],
     "excludePatterns": [],
     "stats": {
-      "files": 358,
-      "functions": 1559,
-      "connections": 2973,
+      "files": 359,
+      "functions": 1562,
+      "connections": 2981,
       "dead": 16,
       "patterns": 7,
       "security": 42,
       "duplicates": 10,
       "violations": 301,
-      "loc": 101054,
+      "loc": 101187,
       "languages": [
         {
           "ext": "ts",
-          "lines": 47496,
+          "lines": 47506,
           "pct": 47
         },
         {
@@ -120334,7 +120587,7 @@
         },
         {
           "ext": "cjs",
-          "lines": 23012,
+          "lines": 23135,
           "pct": 23
         },
         {
@@ -120401,7 +120654,7 @@
       "parserModes": [
         {
           "mode": "heuristic-regex",
-          "files": 305
+          "files": 306
         },
         {
           "mode": "markdown-link-parser",

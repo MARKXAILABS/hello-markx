@@ -1,28 +1,28 @@
 # CodeFlow Snapshot — final
 
 - **Project:** `E:\munder-difflin`
-- **Captured:** 2026-08-23T14:50:18.266Z
+- **Captured:** 2026-08-23T22:31:18.240Z
 
 ## Health
 
-- **Score:** 61/100 (Grade D)
-- **Files analyzed:** 355 (301 code, 54 other)
-- **Functions:** 1507
+- **Score:** 60/100 (Grade D)
+- **Files analyzed:** 359 (305 code, 54 other)
+- **Functions:** 1562
 - **Unused functions:** 16
-- **Connections:** 2903
+- **Connections:** 2981
 
 ## Architecture Issues
 
 - **Circular dependencies:** 0
-- **Layer violations:** 282
+- **Layer violations:** 301
 - **Duplicate / similar blocks:** 10
 - **Dead functions:** 16
 
 ## Security
 
-- **HIGH:** 38
-- **MEDIUM:** 53
-- **LOW / other:** 16
+- **HIGH:** 42
+- **MEDIUM:** 56
+- **LOW / other:** 17
 
 ### HIGH severity findings (top 10)
 - `resources/skills/md-hive-sync/SKILL.md` — finding
