@@ -1246,28 +1246,47 @@ test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => 
   );
 });
 
-// ─── 02-07 (wave 4): PARITY-03's LIVE-UNVERIFIED marker pin (D-35, D-40) ────
+// ─── 02-12 (wave 9): PARITY-03's LIVE-UNVERIFIED marker pin, re-measured ────
+// after the whole phase (D-33, D-35, D-40) ────────────────────────────────
 //
 // THIS CLAUSE IS THE FILE'S ONE DELIBERATE EXCEPTION TO COMMENT-STRIPPING.
 // `LIVE-UNVERIFIED` lives INSIDE comments — every marker below is a comment
 // line, by construction (it is how a bridge is marked as unverified) — so a
 // `readStripped` read would delete every single one and this clause would
-// count zero forever, passing green against any ledger whatsoever (D-40). It
-// reads RAW source with `fs.readFileSync` directly and counts with a global
-// regex over the WHOLE file text, never per line (`grep -c` counts matching
-// LINES, so two markers sharing one line would silently score as one).
+// count zero forever, passing green against any ledger whatsoever (D-40).
+// `readRaw`, defined beside `readStripped` below, is the required read path
+// for anything in this clause; the file's mandatory comment-stripping and
+// this clause's mandatory raw read are both deliberate, not in tension.
+//
+// Plan 02-07 (wave 4) wrote the first version of this pin. Read at execution
+// time: it already called `fs.readFileSync` directly rather than routing
+// through `readStripped` — so it was never the vacuous "collapses to zero"
+// case D-40 warns about, and RED run 4 below re-proves that rather than
+// finding a bug. What wave 4's version did NOT have is a named `readRaw`
+// counterpart to `readStripped`, a per-engine lower bound, or a committed
+// file-set assertion — all three land here, and this task's fix commit
+// (02779b9) also closed a genuine gap wave 4's pin did not catch: `qwen` had
+// ZERO raw markers despite being exactly as unverified as pi/opencode/crush
+// (02-VALIDATION.md's own operator-account table lists all four together).
+// A per-file-and-total pin cannot see a missing per-engine attribution; only
+// asserting the attribution itself can, which is the whole reason this task
+// adds it rather than trusting wave 4's shape to still be sufficient.
 //
 // Pinned in BOTH directions — tighter than D-35's one-directional marker
 // rule, per D-40 (#39): unmarking a bridge (the count drops) and silently
-// shipping a new unverified one (the count rises) both go red. There is no
-// `live-unverified` field anywhere in the provider table (D-35) — this
-// comment-and-regex pin is the only thing that can catch either drift.
+// shipping a new unverified one (the count rises) both go red, AND unmarking
+// one engine while leaving the total untouched (renaming it inside its own
+// block) goes red too — RED run 3 below is the proof a count-only pin cannot
+// see that case. There is no `live-unverified` field anywhere in the
+// provider table (D-35) — this comment-and-regex pin is the only thing that
+// can catch any of the three.
 
 /** Every file under `src/` that carries at least one `LIVE-UNVERIFIED`
  *  marker, mapped to its EXACT occurrence count. Re-measure with:
  *  `grep -ro 'LIVE-UNVERIFIED' src/ | cut -d: -f1 | sort | uniq -c`
- *  Measured in THIS session at `a13f952` (post plans 02-01 through 02-07
- *  task 3) — never copied from a plan file or a prior SUMMARY. */
+ *  Measured in THIS session at `02779b9` (2026-08-24, after this plan's own
+ *  fix commit added qwen's missing marker) — never copied from a plan file
+ *  or a prior SUMMARY. */
 const MARKER_LEDGER = {
   'src/main/hive.ts': 3,
   'src/main/hiveProvisioning.ts': 5,
@@ -1277,19 +1296,80 @@ const MARKER_LEDGER = {
   'src/shared/agentProvider.ts': 3
 };
 
-/** Occurrence count of `needle` in the RAW file at `rel` — comments included,
- *  counted per OCCURRENCE (global regex), never per LINE. */
+/** The repo-wide EXACT total of raw `LIVE-UNVERIFIED` occurrences under
+ *  `src/` — the sum of MARKER_LEDGER's values, re-measured in THIS session
+ *  at `02779b9` (2026-08-24) with
+ *  `grep -rc 'LIVE-UNVERIFIED' src --include=*.ts | grep -v ':0' | awk -F: '{s+=$2} END {print s}'`.
+ *  The ONLY reason this number is allowed to change is a real marker being
+ *  added or removed in source — never a refactor, a rename, or a change to
+ *  how this file strips comments. */
+const LIVE_UNVERIFIED_TOTAL = 18;
+
+/** The five engines this phase built bridges for and never live-verified
+ *  (D-33, D-35): none of these four CLIs is installed on this machine
+ *  (`pi`, `opencode`, `crush`, `qwen`), and `kimi`'s bridge is new and
+ *  unverified by construction. Committed here rather than derived from
+ *  `agentProvider.ts`'s preset table, because the whole point of the
+ *  per-engine assertion below is to catch a bridge that shipped with NO
+ *  marker at all — deriving the expected set from the same table the
+ *  markers are supposed to describe would let a missing marker hide behind
+ *  a missing list entry too. */
+const LIVE_UNVERIFIED_ENGINES = ['pi', 'opencode', 'crush', 'qwen', 'kimi'];
+
+/** Raw (un-stripped) contents of a repo-relative file. The required read
+ *  path for anything counting `LIVE-UNVERIFIED`: the marker IS a comment,
+ *  and `readStripped` (above) would erase the very thing being counted. */
+const readRaw = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+
+/** Occurrence count of `needle` in the RAW file at `rel` — comments
+ *  included, counted per OCCURRENCE (global regex), never per LINE
+ *  (`grep -c` counts matching lines, so two markers sharing one line would
+ *  silently score as one). */
 function rawOccurrences(rel, needle) {
-  const text = fs.readFileSync(path.join(root, rel), 'utf8');
-  return (text.match(new RegExp(needle, 'g')) || []).length;
+  return (readRaw(rel).match(new RegExp(needle, 'g')) || []).length;
 }
 
-test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo-wide (D-35/D-40)', () => {
+/** For every `LIVE-UNVERIFIED` occurrence in the RAW text of `rel`, the
+ *  comment block it sits in — bounded by the block's own structure, never
+ *  by a character count: the smallest enclosing `/* ... *\/` (or `/**` doc)
+ *  block, or, when the marker sits in `//` comments instead, the maximal
+ *  contiguous run of `//` lines touching it. Two markers in the same block
+ *  yield the same block text twice — attribution must not silently drop
+ *  the second occurrence because its neighbour already answered. */
+function markerBlocks(rel) {
+  const text = readRaw(rel);
+  const blockRanges = [];
+  const blockRe = /\/\*[\s\S]*?\*\//g;
+  let bm;
+  while ((bm = blockRe.exec(text))) blockRanges.push([bm.index, bm.index + bm[0].length]);
+
+  const lines = text.split('\n');
+  const lineStart = [0];
+  for (const l of lines) lineStart.push(lineStart[lineStart.length - 1] + l.length + 1);
+  const lineOf = (idx) => lineStart.findIndex((s, i) => idx >= s && idx < lineStart[i + 1]);
+
+  const blocks = [];
+  const markerRe = /LIVE-UNVERIFIED/g;
+  let mm;
+  while ((mm = markerRe.exec(text))) {
+    const enclosing = blockRanges.find(([s, e]) => mm.index >= s && mm.index < e);
+    if (enclosing) { blocks.push(text.slice(enclosing[0], enclosing[1])); continue; }
+    const lineNo = lineOf(mm.index);
+    let start = lineNo;
+    while (start > 0 && /^\s*\/\//.test(lines[start - 1])) start--;
+    let end = lineNo;
+    while (end < lines.length - 1 && /^\s*\/\//.test(lines[end + 1])) end++;
+    blocks.push(lines.slice(start, end + 1).join('\n'));
+  }
+  return blocks;
+}
+
+test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned per file, repo-wide, per engine and by file set (D-33/D-35/D-40)', () => {
   let ledgerSum = 0;
   for (const [rel, expected] of Object.entries(MARKER_LEDGER)) {
     const full = path.join(root, rel);
     assert.ok(
-      fs.existsSync(full) && fs.statSync(full).isFile() && fs.statSync(full).size > 0,
+      fs.existsSync(full) && fs.statSync(full).isFile() && readRaw(rel).length > 0,
       `${rel} is listed in MARKER_LEDGER but is missing or empty — deleting the bridges (or `
       + 'deleting the file) must FAIL this clause, not satisfy it by removing every match'
     );
@@ -1302,14 +1382,24 @@ test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo
     );
     ledgerSum += expected;
   }
+  assert.equal(
+    ledgerSum, LIVE_UNVERIFIED_TOTAL,
+    `MARKER_LEDGER sums to ${ledgerSum}, but the committed LIVE_UNVERIFIED_TOTAL is `
+    + `${LIVE_UNVERIFIED_TOTAL}. Both are supposed to be the same number measured two ways.`
+  );
 
-  // Repo-wide total, over EVERY .ts/.tsx under src/ — not just the files
-  // MARKER_LEDGER lists. This is the check that catches a marker moved INTO
-  // (or newly created in) a file the ledger does not mention: every per-file
-  // entry above can still balance exactly while this total drifts.
+  // Repo-wide total, over EVERY .ts/.tsx under src/ via the file's own
+  // sourceFiles() walker — not a hardcoded file list. This is the check that
+  // catches a marker moved INTO (or newly created in) a file MARKER_LEDGER
+  // does not mention: every per-file entry above can still balance exactly
+  // while this total drifts.
+  const allSrcFiles = sourceFiles(path.join(root, 'src'));
   let repoTotal = 0;
-  for (const rel of sourceFiles(path.join(root, 'src'))) {
-    repoTotal += rawOccurrences(rel, 'LIVE-UNVERIFIED');
+  const filesWithMarkers = [];
+  for (const rel of allSrcFiles) {
+    const n = rawOccurrences(rel, 'LIVE-UNVERIFIED');
+    repoTotal += n;
+    if (n > 0) filesWithMarkers.push(rel);
   }
 
   assert.ok(
@@ -1318,13 +1408,53 @@ test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo
     + 'now genuinely live-verified (in which case replace this whole clause with the real '
     + 'evidence) or the markers were silently deleted. An empty ledger must not read as "clean".'
   );
-  assert.equal(
-    repoTotal, ledgerSum,
-    `src/ carries ${repoTotal} LIVE-UNVERIFIED marker(s) total (every .ts/.tsx file), but `
-    + `MARKER_LEDGER's per-file entries sum to ${ledgerSum}. A marker moved into, or a new one `
-    + 'was added in, a file this ledger does not list. Unmarking a bridge is a claim that a real '
-    + 'session ran against a real account — which account? Reconcile MARKER_LEDGER against a '
-    + '`grep -ro \'LIVE-UNVERIFIED\' src/ | cut -d: -f1 | sort | uniq -c` re-measurement before '
-    + 'trusting either number.'
+
+  // The committed FILE SET carrying markers, so a future split that moves
+  // them again (as plan 02-01 already did once) shows up in a diff rather
+  // than in nobody's head. Checked BEFORE the total-equality assertion below
+  // on purpose: a marker added to (or moved into) a file MARKER_LEDGER does
+  // not list changes this set without necessarily changing repoTotal (a move
+  // nets to zero), so file-set drift needs its own assertion, reachable on
+  // its own rather than only as a side effect of the total going stale.
+  assert.deepEqual(
+    filesWithMarkers.slice().sort(),
+    Object.keys(MARKER_LEDGER).slice().sort(),
+    `the files actually carrying a LIVE-UNVERIFIED marker (${filesWithMarkers.sort().join(', ')}) `
+    + `do not match MARKER_LEDGER's keys (${Object.keys(MARKER_LEDGER).sort().join(', ')}). A `
+    + 'marker moved to a file this ledger does not name.'
   );
+
+  assert.equal(
+    repoTotal, LIVE_UNVERIFIED_TOTAL,
+    `src/ carries ${repoTotal} LIVE-UNVERIFIED marker(s) total (every .ts/.tsx file, enumerated `
+    + `via sourceFiles()), but the committed LIVE_UNVERIFIED_TOTAL is ${LIVE_UNVERIFIED_TOTAL}. A `
+    + 'marker moved into, or a new one was added in, a file this ledger does not list. Unmarking '
+    + 'a bridge is a claim that a real session ran against a real account — which account? '
+    + 'Reconcile MARKER_LEDGER and LIVE_UNVERIFIED_TOTAL against a '
+    + '`grep -ro \'LIVE-UNVERIFIED\' src/ | cut -d: -f1 | sort | uniq -c` re-measurement before '
+    + 'trusting any of the three.'
+  );
+
+  // Per-engine: which of the five is named inside each marker's own comment
+  // block, attributed structurally (never by character count). A total
+  // alone is satisfied by unmarking crush and adding a marker elsewhere —
+  // this is the positive half that catches exactly that.
+  const engineCounts = Object.fromEntries(LIVE_UNVERIFIED_ENGINES.map((e) => [e, 0]));
+  for (const rel of allSrcFiles) {
+    for (const block of markerBlocks(rel)) {
+      for (const engine of LIVE_UNVERIFIED_ENGINES) {
+        if (new RegExp(`\\b${engine}\\b`, 'i').test(block)) engineCounts[engine]++;
+      }
+    }
+  }
+  for (const engine of LIVE_UNVERIFIED_ENGINES) {
+    assert.ok(
+      engineCounts[engine] >= 1,
+      `${engine} has ${engineCounts[engine]} attributed LIVE-UNVERIFIED marker(s), expected >= 1. `
+      + `Under the zero-recurring-cost rule the honest answer is normally "none, and it stays `
+      + `marked" — which account was ${engine}'s bridge verified against, by whom, on what date? `
+      + 'If the answer is a real one, replace the marker with the evidence; if not, put the '
+      + 'marker back.'
+    );
+  }
 });
