@@ -3054,7 +3054,14 @@ function mcpGrantHasSecret(agentId: string, mcpId: string): boolean {
 
 ipcMain.handle('mcp:agentState', (_evt, agentId: unknown) => {
   if (typeof agentId !== 'string' || !agentId) return { ok: false, error: 'invalid agentId' };
-  const provider = hive.registry().agents[agentId]?.provider ?? 'claude';
+  // MAIN-02: the id comes from the renderer — the less-trusted side of this
+  // boundary by design — and is about to select both a secret-store namespace
+  // and (via hive.mcpArmed) a filesystem path. The shape check above is not a
+  // membership check, so fail CLOSED on an agent the live roster does not know
+  // rather than answering with a fabricated state for it.
+  const agent = hive.registry().agents[agentId];
+  if (!agent) return { ok: false, error: 'unknown agent' };
+  const provider = agent.provider ?? 'claude';
   const wired = mcpWiredFor(provider);
   const cfg = readConfig();
   const safe = MCP_CATALOG

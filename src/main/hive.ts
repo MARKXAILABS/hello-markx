@@ -2211,6 +2211,15 @@ export class HiveManager {
    *  difference — main never asserts a live connection. `[]` when the file is
    *  absent or unparseable; never throws. */
   mcpArmed(agentId: string): string[] {
+    // MAIN-02: `agentId` arrives here straight from the RENDERER (mcp:agentState),
+    // and a `typeof agentId === 'string'` shape check is not a membership check —
+    // `../agents/<someone-else>` is a perfectly good string. Validate against the
+    // live registry BEFORE constructing any path, so an id the roster never issued
+    // cannot be used to read a `mcpServers` key list off an arbitrary JSON file.
+    // Fails closed on a hive with no home too: `registry()` answers `{ agents:{} }`
+    // there, which also keeps `agentDir`'s `root()!` non-null assertion — a
+    // compile-time fiction — from throwing a TypeError across a sync IPC handler.
+    if (!this.registry().agents[agentId]) return [];
     const p = join(this.agentDir(agentId), 'mcp.json');
     if (!existsSync(p)) return [];
     try {

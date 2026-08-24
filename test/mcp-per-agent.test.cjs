@@ -414,3 +414,63 @@ test('scripts/mcp-live-probe.cjs never invokes `claude mcp list`, and does drive
   const mcpConfigMatches = raw.match(/--mcp-config/g) || [];
   assert.ok(mcpConfigMatches.length >= 1, 'the probe must actually drive --mcp-config');
 });
+
+// ── MAIN-02: the agentId reaching a filesystem path is RENDERER-supplied ─────
+//
+// `mcp:agentState` takes the agent id straight from the renderer — the
+// less-trusted side of that boundary by design — and it reached
+// `hive.mcpArmed(agentId)` → `join(root, 'agents', agentId, 'mcp.json')` with
+// a shape check (`typeof agentId === 'string'`) and NO membership check. A
+// shape check is not a membership check: `../agents/<other>` is a perfectly
+// good string. The primitive is bounded (it discloses the `mcpServers` KEY
+// NAMES of whatever JSON it lands on, not file contents) but it is a
+// traversal read all the same, so the guard belongs at the path-construction
+// site where every caller routes through it.
+
+test('mcpArmed refuses an agentId the live registry never issued, including traversal ids that normalize onto a real agent dir', async (t) => {
+  const home = tmpHome('md-mcp-g-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const hive = new HiveManager(() => home);
+
+  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });
+  assert.ok(hive.mcpArmed('a1').length > 0, 'sanity: a REGISTERED agent still reads back its own armed bundle');
+
+  // Each of these join()s down to exactly <hiveRoot>/agents/a1/mcp.json — the
+  // same file, reached through an id the registry never issued.
+  for (const id of ['../agents/a1', 'a1/../a1', './a1', '../../hive/agents/a1']) {
+    assert.deepEqual(hive.mcpArmed(id), [],
+      `a traversal id (${JSON.stringify(id)}) read a real agent dir — validate against the registry BEFORE building the path`);
+  }
+
+  // A directory that exists on disk but is not in the registry is refused too:
+  // registry membership, not dir existence, is the authority.
+  fs.mkdirSync(path.join(home, 'hive', 'agents', 'ghost'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'hive', 'agents', 'ghost', 'mcp.json'),
+    JSON.stringify({ mcpServers: { 'hellomarkx-leak': {} } }), 'utf8');
+  assert.deepEqual(hive.mcpArmed('ghost'), [], 'an unregistered agent dir must not be readable through this channel');
+});
+
+test('mcpArmed answers [] rather than THROWING when there is no harness home', () => {
+  // `agentDir` is `join(this.root()!, ...)` and the non-null assertion is a
+  // compile-time fiction: with harnessHome null (the shipped default until the
+  // operator picks a hive) `join(null, …)` throws a TypeError, and mcp:agentState
+  // is a SYNC ipcMain handler — so the throw crossed IPC as a rejected invoke.
+  const hive = new HiveManager(() => null);
+  assert.deepEqual(hive.mcpArmed('a1'), []);
+});
+
+test("index.ts's mcp:agentState fails closed on an agentId the registry does not know, before any path is built", () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
+  const start = src.indexOf("ipcMain.handle('mcp:agentState'");
+  assert.ok(start > 0, 'sanity: the mcp:agentState handler must exist');
+  const body = src.slice(start, src.indexOf("ipcMain.handle('mcp:grant'", start));
+  const beforePath = body.slice(0, body.indexOf('hive.mcpArmed('));
+  assert.ok(beforePath.length > 0, 'sanity: the handler must still read armed state off disk');
+
+  const failClosed = beforePath.match(/return \{ ok: false/g) || [];
+  assert.ok(failClosed.length >= 2,
+    'mcp:agentState must refuse an agentId the live registry does not know (MAIN-02) — the '
+    + '`typeof agentId === "string"` shape check alone is not a membership check');
+  assert.ok(/registry\(\)\.agents\[agentId\]/.test(beforePath),
+    'the membership check must be made against the live registry, ahead of path construction');
+});
