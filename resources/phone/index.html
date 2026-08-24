@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; img-src 'self' data:; manifest-src 'self'; script-src 'sha256-814xuPrQRdE3Ai4P9zUi/93JhdTjScCbk0JCaGEGkDU='; style-src 'sha256-NLGNADNkRikjoVfjWqk8uOuc4YI/OiS94hXK806cBwg='; base-uri 'none'; form-action 'none'">
+<link rel="manifest" href="./manifest.webmanifest">
+<title>Hello MarkX</title>
+<style>
+:root {
+  color-scheme: dark;
+  --p-ground: #17171B; /* --cth-cream-50 (dark) */
+  --p-card: #1A1A1F; /* --cth-paper-100 (dark) */
+  --p-raise: #26262C; /* --cth-cream-200 (dark) */
+  --p-line: #787684; /* --cth-ink-300 (dark) */
+  --p-divider: #3E3D46; /* --cth-ink-100 (dark) */
+  --p-text: #DEDBD6; /* --cth-ink-900 (dark) */
+  --p-text-2: #B3B0AC; /* --cth-ink-700 (dark) */
+  --p-text-3: #96919F; /* --cth-ink-500 (dark) */
+  --p-accent: #A896E3; /* --cth-lilac (dark) */
+  --p-accent-fill: #2B2740; /* --cth-lilac-light (dark) */
+  --p-warn: #DF8078; /* --cth-status-blocked (dark) */
+  --p-ok: #6FB88B; /* --cth-status-success (dark) */
+  --p-on-accent: #1A1320; /* --cth-on-accent (theme-invariant, tokens.css:94) */
+  --p-1: 4px;
+  --p-2: 8px;
+  --p-3: 12px;
+  --p-4: 16px;
+  --p-5: 24px;
+  --p-text-lg: 20px;
+  --p-text-md: 16px;
+  --p-text-sm: 14px;
+  --p-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --p-font-mono: ui-monospace, "Roboto Mono", monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; background: var(--p-ground); }
+body {
+  min-height: 100dvh;
+  color: var(--p-text);
+  font-family: var(--p-font);
+  font-size: var(--p-text-md);
+  line-height: 24px;
+}
+#app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior-y: contain;
+}
+button { font-family: var(--p-font); }
+:focus-visible { outline: 2px solid var(--p-text); outline-offset: 2px; }
+.p-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- screen 1: the ask list ---- */
+.p-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--p-3);
+  padding: var(--p-4);
+}
+.p-h1 { font-size: var(--p-text-lg); line-height: 28px; font-weight: 600; margin: 0; }
+.p-count { color: var(--p-text-3); font-weight: 400; margin-left: var(--p-2); }
+.p-refresh {
+  min-height: 48px;
+  padding: 0 var(--p-3);
+  background: transparent;
+  border: 1px solid var(--p-line);
+  border-radius: 8px;
+  color: var(--p-text-2);
+  font-size: var(--p-text-sm);
+  line-height: 20px;
+  cursor: pointer;
+}
+.p-offline-bar {
+  margin: 0 var(--p-4) var(--p-3);
+  padding: var(--p-3);
+  background: var(--p-card);
+  color: var(--p-warn);
+  font-size: var(--p-text-sm);
+  line-height: 20px;
+  border-radius: 8px;
+}
+.p-empty { padding: 0 var(--p-4); }
+.p-empty-body { color: var(--p-text-3); font-size: var(--p-text-md); line-height: 24px; margin: var(--p-2) 0 0; }
+.p-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--p-4) var(--p-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--p-3);
+}
+.p-list.p-list-stale .p-ask { opacity: 0.6; }
+.p-ask {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  text-align: left;
+  background: var(--p-card);
+  border: none;
+  border-left: 2px solid var(--p-accent);
+  border-radius: 4px;
+  padding: var(--p-3);
+  cursor: pointer;
+}
+.p-ask-row { display: block; }
+.p-ask-agent { display: block; font-size: var(--p-text-sm); line-height: 20px; color: var(--p-text-3); }
+.p-ask-title {
+  display: block;
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--p-text-2);
+  margin: var(--p-1) 0;
+}
+.p-ask-q {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0;
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  color: var(--p-text);
+}
+
+/* ---- states shared by both screens ---- */
+.p-loading, .p-not-paired {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--p-4);
+  text-align: center;
+  color: var(--p-text-3);
+  font-size: var(--p-text-md);
+  line-height: 24px;
+}
+
+/* ---- screen 2: the answer ---- */
+.p-detail { display: flex; flex-direction: column; flex: 1; min-height: 100dvh; }
+.p-back {
+  align-self: flex-start;
+  min-height: 48px;
+  padding: 0 var(--p-4);
+  background: transparent;
+  border: none;
+  color: var(--p-text-2);
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  cursor: pointer;
+}
+.p-meta { padding: 0 var(--p-4); font-size: var(--p-text-sm); line-height: 20px; color: var(--p-text-3); }
+.p-meta-id { font-family: var(--p-font-mono); }
+.p-title { font-size: var(--p-text-lg); line-height: 28px; font-weight: 600; margin: var(--p-2) 0; padding: 0 var(--p-4); }
+.p-question {
+  white-space: pre-wrap;
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  padding: 0 var(--p-4);
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 0 var(--p-4);
+}
+.p-actionbar {
+  position: sticky;
+  bottom: 0;
+  padding: var(--p-4);
+  padding-top: var(--p-5);
+  background: var(--p-ground);
+  border-top: 1px solid var(--p-divider);
+  display: flex;
+  flex-direction: column;
+  gap: var(--p-2);
+}
+.p-textarea {
+  width: 100%;
+  background: var(--p-card);
+  color: var(--p-text);
+  border: 1px solid var(--p-line);
+  border-radius: 8px;
+  padding: var(--p-3);
+  font-family: var(--p-font);
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  max-height: 40vh;
+  resize: vertical;
+}
+.p-send-error { margin: 0; color: var(--p-warn); font-size: var(--p-text-sm); line-height: 20px; }
+.p-send {
+  min-height: 56px;
+  width: 100%;
+  background: var(--p-accent);
+  color: var(--p-on-accent);
+  border: none;
+  border-radius: 8px;
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.p-send:disabled { opacity: 0.6; cursor: default; }
+.p-send.p-send-sent { background: var(--p-ok); color: var(--p-on-accent); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(function () {
+  'use strict';
+
+  /* ============================================================
+   * PAIRING BLOCK — must stay first in this file (T-P02-09-01).
+   * readPairingToken()'s definition, its history.replaceState call
+   * and its invocation all sit above the renderer: nothing capable
+   * of painting (render(, innerHTML =, document.body) is written
+   * anywhere earlier than the replaceState line below, so nothing
+   * capable of painting can run before the fragment is cleared.
+   * ============================================================ */
+  function readPairingToken() {
+    var hash = location.hash;
+    if (!hash || hash.length < 2) return null;
+    var token = hash.slice(1);
+    history.replaceState(null, '', location.pathname);
+    return token;
+  }
+  var PAIRING_TOKEN = readPairingToken();
+
+  /* ============================================================
+   * Everything below this line may paint.
+   * ============================================================ */
+
+  var DB_NAME = 'markx-phone';
+  var DB_VERSION = 1;
+  var STORE = 'auth';
+  var BEARER_KEY = 'bearer';
+  var POLL_MS = 10000;
+
+  function openDb() {
+    return new Promise(function (resolve, reject) {
+      var req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = function () { req.result.createObjectStore(STORE); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+  function getBearer() {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve) {
+        var r = db.transaction(STORE, 'readonly').objectStore(STORE).get(BEARER_KEY);
+        r.onsuccess = function () { resolve(r.result || null); };
+        r.onerror = function () { resolve(null); };
+      });
+    }).catch(function () { return null; });
+  }
+  function storeBearer(token) {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve) {
+        var tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).put(token, BEARER_KEY);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { resolve(); };
+      });
+    }).catch(function () {});
+  }
+  function forgetBearer() {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve) {
+        var tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).delete(BEARER_KEY);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { resolve(); };
+      });
+    }).catch(function () {});
+  }
+
+  function draftKey(taskId) { return 'draft:' + taskId; }
+  function getDraft(taskId) { try { return localStorage.getItem(draftKey(taskId)) || ''; } catch (e) { return ''; } }
+  function saveDraft(taskId, text) { try { localStorage.setItem(draftKey(taskId), text); } catch (e) { /* quota/private mode */ } }
+  function dropDraft(taskId) { try { localStorage.removeItem(draftKey(taskId)); } catch (e) { /* noop */ } }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var COPY = {
+    emptyHeading: 'Nothing needs you right now.',
+    emptyBody: 'The floor will notify you when it blocks on your answer.',
+    notPaired: 'This phone is not paired with a floor. Scan the QR in Settings → Connections on the desktop.',
+    unauthorized: 'This phone is no longer paired. Scan the QR on the desktop.',
+    tokenUsed: 'That pairing code was already used. Generate a new QR on the desktop.',
+    offline: "Can't reach your floor. The tunnel address changes every restart — scan the QR on the desktop again.",
+    rateLimited: 'Too many requests — from your floor or from the tunnel. Wait a minute and try again.',
+    sendFailed: 'Not sent. Your answer is still here — try again.'
+  };
+
+  var state = {
+    screen: 'loading', // 'loading' | 'not-paired' | 'list' | 'detail'
+    bearer: null,
+    asks: [],
+    offline: false,
+    banner: '',
+    selected: null,
+    draft: '',
+    sending: false,
+    sent: false,
+    sendError: ''
+  };
+
+  var root = document.getElementById('app');
+
+  function timeAgo(iso) {
+    if (!iso) return '';
+    var ms = Date.now() - new Date(iso).getTime();
+    if (!(ms >= 0)) return '';
+    var m = Math.floor(ms / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ago';
+    return Math.floor(h / 24) + 'd ago';
+  }
+
+  function askItemHtml(ask) {
+    var accessibleName = (ask.agent ? ask.agent + ' ' : '') + 'asks: ' + ask.title;
+    return '<li>'
+      + '<button type="button" class="p-ask" data-task-id="' + escapeHtml(ask.taskId) + '">'
+      + '<span class="p-visually-hidden">' + escapeHtml(accessibleName) + '</span>'
+      + '<span class="p-ask-row" aria-hidden="true">'
+      + '<span class="p-ask-agent">' + escapeHtml((ask.agent || 'an agent') + (ask.askedAt ? ' · ' + timeAgo(ask.askedAt) : '')) + '</span>'
+      + '<span class="p-ask-title">' + escapeHtml(ask.title) + '</span>'
+      + '<p class="p-ask-q">' + escapeHtml(ask.question) + '</p>'
+      + '</span>'
+      + '</button>'
+      + '</li>';
+  }
+
+  function screenListHtml() {
+    var count = state.asks.length;
+    var headingText = count > 0 ? 'NEEDS YOU' : COPY.emptyHeading;
+    var countBadge = count > 0 ? '<span class="p-count">' + count + '</span>' : '';
+    var bannerHtml = state.banner
+      ? '<p class="p-offline-bar">' + escapeHtml(state.banner) + '</p>'
+      : '';
+    var bodyHtml = count > 0
+      ? '<ol class="p-list' + (state.offline ? ' p-list-stale' : '') + '">' + state.asks.map(askItemHtml).join('') + '</ol>'
+      : '<p class="p-empty-body">' + escapeHtml(COPY.emptyBody) + '</p>';
+    return ''
+      + '<header class="p-header">'
+      + '<h1 class="p-h1">' + escapeHtml(headingText) + countBadge + '</h1>'
+      + '<button type="button" class="p-refresh" data-action="refresh">refresh</button>'
+      + '</header>'
+      + bannerHtml
+      + '<div class="p-empty">' + bodyHtml + '</div>';
+  }
+
+  function screenDetailHtml() {
+    var ask = state.asks.filter(function (a) { return a.taskId === state.selected; })[0];
+    if (!ask) return screenListHtml();
+    var sendLabel = state.sent ? 'sent' : (state.sending ? 'sending…' : 'send answer');
+    var sendClass = 'p-send' + (state.sent ? ' p-send-sent' : '');
+    var errorHtml = state.sendError ? '<p class="p-send-error">' + escapeHtml(state.sendError) + '</p>' : '';
+    return ''
+      + '<div class="p-detail">'
+      + '<button type="button" class="p-back" data-action="back">back</button>'
+      + '<p class="p-meta">' + escapeHtml(ask.agent || 'an agent')
+      + ' · task <span class="p-meta-id">' + escapeHtml(ask.taskId) + '</span>'
+      + (ask.askedAt ? ' · ' + escapeHtml(timeAgo(ask.askedAt)) : '') + '</p>'
+      + '<h1 class="p-title">' + escapeHtml(ask.title) + '</h1>'
+      + '<p class="p-question">' + escapeHtml(ask.question) + '</p>'
+      + '<div class="p-actionbar">'
+      + errorHtml
+      + '<label class="p-visually-hidden" for="p-answer">Your answer</label>'
+      + '<textarea id="p-answer" class="p-textarea" rows="5" placeholder="Your answer…">' + escapeHtml(state.draft) + '</textarea>'
+      + '<button type="button" class="' + sendClass + '" data-action="send"'
+      + ((state.sending || state.sent || !state.draft.trim()) ? ' disabled' : '') + '>' + escapeHtml(sendLabel) + '</button>'
+      + '</div>'
+      + '</div>';
+  }
+
+  function render() {
+    var html;
+    if (state.screen === 'loading') {
+      html = '<p class="p-loading">Loading…</p>';
+    } else if (state.screen === 'not-paired') {
+      html = '<p class="p-not-paired">' + escapeHtml(state.banner || COPY.notPaired) + '</p>';
+    } else if (state.screen === 'detail') {
+      html = screenDetailHtml();
+    } else {
+      html = screenListHtml();
+    }
+    root.innerHTML = html;
+    wireEvents();
+  }
+
+  function wireEvents() {
+    var refreshBtn = root.querySelector('[data-action="refresh"]');
+    if (refreshBtn) refreshBtn.addEventListener('click', function () { loadAsks(); });
+    var backBtn = root.querySelector('[data-action="back"]');
+    if (backBtn) backBtn.addEventListener('click', function () {
+      state.selected = null;
+      state.sendError = '';
+      state.screen = 'list';
+      render();
+    });
+    var textarea = root.querySelector('.p-textarea');
+    if (textarea) textarea.addEventListener('input', function () {
+      state.draft = textarea.value;
+      if (state.selected) saveDraft(state.selected, state.draft);
+      var sendBtn = root.querySelector('[data-action="send"]');
+      if (sendBtn) sendBtn.disabled = state.sending || state.sent || !state.draft.trim();
+    });
+    var sendBtn = root.querySelector('[data-action="send"]');
+    if (sendBtn) sendBtn.addEventListener('click', function () { sendAnswer(); });
+    root.querySelectorAll('.p-ask').forEach(function (btn) {
+      btn.addEventListener('click', function () { openAsk(btn.getAttribute('data-task-id')); });
+    });
+  }
+
+  function openAsk(taskId) {
+    state.selected = taskId;
+    state.draft = getDraft(taskId);
+    state.sendError = '';
+    state.sent = false;
+    state.screen = 'detail';
+    render();
+  }
+
+  function apiFetch(path, opts) {
+    opts = opts || {};
+    var headers = opts.headers || {};
+    if (state.bearer) headers['authorization'] = 'Bearer ' + state.bearer;
+    return fetch(path, { method: opts.method || 'GET', headers: headers, body: opts.body })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          return { status: res.status, ok: res.ok, data: data };
+        });
+      });
+  }
+
+  function handleUnauthorized() {
+    state.bearer = null;
+    state.screen = 'not-paired';
+    state.banner = COPY.unauthorized;
+    render();
+    return forgetBearer();
+  }
+
+  function loadAsks() {
+    if (!state.bearer) return;
+    apiFetch('/phone/api/asks').then(function (r) {
+      if (r.status === 401) { handleUnauthorized(); return; }
+      if (r.status === 429) { state.banner = COPY.rateLimited; render(); return; }
+      if (!r.ok) { state.offline = true; state.banner = COPY.offline; render(); return; }
+      state.offline = false;
+      state.banner = '';
+      state.asks = Array.isArray(r.data.asks) ? r.data.asks : [];
+      render();
+    }).catch(function () {
+      state.offline = true;
+      state.banner = COPY.offline;
+      render();
+    });
+  }
+
+  function sendAnswer() {
+    var taskId = state.selected;
+    var text = state.draft.trim();
+    if (!taskId || !text || state.sending || state.sent) return;
+    state.sending = true;
+    state.sendError = '';
+    render();
+    apiFetch('/phone/api/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ taskId: taskId, answer: text })
+    }).then(function (r) {
+      state.sending = false;
+      if (r.status === 401) { handleUnauthorized(); return; }
+      if (r.status === 429) { state.sendError = COPY.rateLimited; render(); return; }
+      if (!r.ok || !r.data || r.data.ok !== true) { state.sendError = COPY.sendFailed; render(); return; }
+      dropDraft(taskId);
+      state.sent = true;
+      render();
+      setTimeout(function () {
+        state.sent = false;
+        state.draft = '';
+        state.asks = state.asks.filter(function (a) { return a.taskId !== taskId; });
+        state.selected = null;
+        state.screen = 'list';
+        render();
+      }, 1500);
+    }).catch(function () {
+      state.sending = false;
+      state.sendError = COPY.sendFailed;
+      render();
+    });
+  }
+
+  function poll() {
+    if (document.visibilityState !== 'visible') return;
+    if (state.screen === 'list' || state.screen === 'detail') loadAsks();
+  }
+  setInterval(poll, 10000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') poll();
+  });
+
+  function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    // Registered unconditionally so notificationclick routing is ready the
+    // moment R-push lands. R-push itself is ABSENT from src/main/webhook.ts
+    // as merged (no VAPID public key route, no subscription-intake callback)
+    // — no pushManager.subscribe() call exists in this file because there is
+    // no endpoint to hand a subscription to. See 02-09-SUMMARY.md.
+    navigator.serviceWorker.register('./sw.js').catch(function () { /* best effort */ });
+  }
+
+  function enroll(token) {
+    fetch('/phone/api/enroll', { method: 'POST', headers: { 'x-md-phone-enroll': token } })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          return { status: res.status, data: data };
+        });
+      })
+      .then(function (r) {
+        if (r.status === 200 && r.data && typeof r.data.bearer === 'string') {
+          state.bearer = r.data.bearer;
+          return storeBearer(r.data.bearer).then(function () {
+            state.screen = 'list';
+            render();
+            loadAsks();
+          });
+        }
+        state.screen = 'not-paired';
+        state.banner = COPY.tokenUsed;
+        render();
+      })
+      .catch(function () {
+        state.screen = 'not-paired';
+        state.banner = COPY.offline;
+        render();
+      });
+  }
+
+  function boot() {
+    render();
+    registerServiceWorker();
+    if (PAIRING_TOKEN) {
+      enroll(PAIRING_TOKEN);
+      return;
+    }
+    getBearer().then(function (bearer) {
+      if (bearer) {
+        state.bearer = bearer;
+        state.screen = 'list';
+        render();
+        loadAsks();
+      } else {
+        state.screen = 'not-paired';
+        render();
+      }
+    });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
