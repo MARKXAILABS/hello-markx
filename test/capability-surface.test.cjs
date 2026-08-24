@@ -412,3 +412,35 @@ test('CR-01 wiring: submitGrant republishes the grants mirror on the partial-fai
   assert.ok(keysIdx >= 0 && body.slice(keysIdx, body.indexOf('load()')).includes('granted'),
     'the secrets cleared after a batch must be the ids that actually succeeded (granted); clearing nothing leaves plaintext keys in React state, which this file documents as forbidden');
 });
+
+test('CR-02 wiring: the floor-wide defaults toggle publishes its write into the grants snapshot', () => {
+  const text = readStripped('src/renderer/src/components/McpDefaultsSettings.tsx');
+  const body = arrowBody(text, 'toggle');
+  assert.ok(body, 'toggle not found in McpDefaultsSettings.tsx');
+  const write = body.indexOf('updateConfig(');
+  assert.ok(write >= 0, 'the toggle must still persist the defaults map to config');
+  const publish = body.indexOf('setMcpGrants(');
+  assert.ok(publish > write,
+    'the safe-readonly defaults toggle writes config and republishes nothing: ensureMcpGrants() latches once per session, so every card’s "MCP N safe" count renders the pre-change number until the app restarts (CR-02)');
+});
+
+test('CR-02 payoff: a republished mcpDefaults map moves the card safe count and notifies subscribers', () => {
+  const cfg = loadTs('src/renderer/src/store/config.ts');
+  const { MCP_CATALOG } = loadTs('src/shared/mcpCatalog.ts');
+  const safeOn = MCP_CATALOG.filter((e) => e.tier === 'safe-readonly' && e.defaultEnabled);
+  assert.ok(safeOn.length >= 1, 'the catalog must carry at least one on-by-default safe-readonly entry');
+
+  const original = cfg.getMcpGrantsSnapshot();
+  let fired = 0;
+  const off = cfg.subscribeMcpGrants(() => { fired++; });
+  try {
+    const before = cfg.mcpCardSummary(cfg.getMcpGrantsSnapshot(), 'a1', { supportsMcp: true }).safeCount;
+    cfg.setMcpGrants({ ...cfg.getMcpGrantsSnapshot(), mcpDefaults: { [safeOn[0].id]: { enabled: false } } });
+    const after = cfg.mcpCardSummary(cfg.getMcpGrantsSnapshot(), 'a1', { supportsMcp: true }).safeCount;
+    assert.equal(after, before - 1, 'turning one safe-readonly default off must drop the card count by exactly one');
+    assert.equal(fired, 1, 'the publish must notify subscribers — AgentCard reads this through useSyncExternalStore');
+  } finally {
+    off();
+    cfg.setMcpGrants(original);
+  }
+});

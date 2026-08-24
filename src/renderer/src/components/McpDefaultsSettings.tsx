@@ -1,5 +1,10 @@
-import { useState } from 'react';
-import type { HarnessConfig } from '@/store/config';
+import { useState, useSyncExternalStore } from 'react';
+import {
+  getMcpGrantsSnapshot,
+  setMcpGrants,
+  subscribeMcpGrants,
+  type HarnessConfig
+} from '@/store/config';
 import { MCP_CATALOG, type McpTier } from '@shared/mcpCatalog';
 
 export interface McpDefaultsSettingsProps {
@@ -29,15 +34,29 @@ const labelStyle: React.CSSProperties = {
 export function McpDefaultsSettings({ config }: McpDefaultsSettingsProps) {
   const [note, setNote] = useState('');
 
+  // This toggle is the ONLY renderer writer of the floor-wide `mcpDefaults` map,
+  // and two readers go stale without it (CR-02): every AgentCard's "MCP N safe"
+  // count reads the grants snapshot, whose one seeding fetch (`ensureMcpGrants`)
+  // latches for the whole session; and the on/off labels below read the `config`
+  // prop, which `SettingsModal` documents as loaded once and never refreshed after
+  // a save. Reading through the snapshot — and republishing MAIN'S saved map after
+  // every write — is what keeps all three in agreement without an app restart.
+  const snapshot = useSyncExternalStore(subscribeMcpGrants, getMcpGrantsSnapshot, getMcpGrantsSnapshot);
+  const defaults = { ...(config.mcpDefaults ?? {}), ...snapshot.mcpDefaults };
+
   const enabledFor = (id: string): boolean =>
-    config.mcpDefaults?.[id]?.enabled ?? MCP_CATALOG.find((e) => e.id === id)?.defaultEnabled ?? false;
+    defaults[id]?.enabled ?? MCP_CATALOG.find((e) => e.id === id)?.defaultEnabled ?? false;
 
   const toggle = async (id: string) => {
     const next = !enabledFor(id);
     try {
-      await window.cth.updateConfig({
-        mcpDefaults: { ...(config.mcpDefaults ?? {}), [id]: { enabled: next } }
+      // Publish what main SAVED, not what we sent: writeConfig() is free to
+      // normalise the map (config.ts's D-27 prune drops non-safe-readonly floor
+      // entries), and a snapshot that disagrees with main is the whole bug class.
+      const saved = await window.cth.updateConfig({
+        mcpDefaults: { ...defaults, [id]: { enabled: next } }
       });
+      setMcpGrants({ ...getMcpGrantsSnapshot(), mcpDefaults: saved.mcpDefaults ?? {} });
       setNote(`${id}: ${next ? 'enabled' : 'disabled'}`);
       setTimeout(() => setNote(''), 1800);
     } catch {
