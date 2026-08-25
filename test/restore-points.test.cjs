@@ -218,9 +218,24 @@ test('the same repo through two path spellings uses ONE store', async () => {
   // defect it guards only exists on a case-insensitive volume.
   const other = process.platform === 'win32' ? repo[0].toLowerCase() + repo.slice(1) : repo;
 
+  // The SECOND spelling, and the one that is not hypothetical on this machine:
+  // `os.tmpdir()` returns the 8.3 short form (`C:\Users\ALIENW~1\…`) while
+  // `git rev-parse --show-toplevel` returns the long one (`C:/Users/Alienware/…`).
+  // repoRootOf hands the long form to snapshot() and the caller may hold the
+  // short one, so if the key did not reconcile them the store would split on
+  // every single Windows floor rather than only on a mis-typed drive letter.
+  // Measured: plain realpathSync leaves ALIENW~1 alone; .native expands it.
+  const longForm = fs.realpathSync.native(repo);
+  assert.equal(fs.realpathSync.native(longForm), fs.realpathSync.native(repo),
+    'positive control: the two spellings must canonicalize to one directory, or the store-count '
+    + 'assertion below is about two genuinely different repos');
+
   write(repo, 'b.txt', 'b1-agentB\n');
   const sha2 = await rp.snapshot(other);
   assert.match(String(sha2), /^[0-9a-f]{40}$/, 'the second spelling could not snapshot at all');
+  write(repo, 'c.txt', 'c1-agentC\n');
+  const sha3 = await rp.snapshot(longForm);
+  assert.match(String(sha3), /^[0-9a-f]{40}$/, 'the long-form spelling could not snapshot at all');
 
   assert.equal(fs.readdirSync(storeRoot).length, 1,
     `the two spellings of the same repo made ${fs.readdirSync(storeRoot).length} stores. Each then `
@@ -230,6 +245,10 @@ test('the same repo through two path spellings uses ONE store', async () => {
   assert.ok(points.includes(sha),
     'the second spelling cannot see the first spelling\'s restore point — the history is split');
   assert.ok(points.includes(sha2));
+  assert.ok(points.includes(sha3),
+    'the long-form spelling\'s restore point is not in the store the short form reads — this is '
+    + 'the split that would happen on EVERY Windows floor, because repoRootOf returns git\'s long '
+    + 'form and the registry may hold the 8.3 short one');
 });
 
 // ── an unchanged tree is not a restore point ────────────────────────────────
@@ -242,6 +261,34 @@ test('a snapshot with nothing changed since the last one returns null', async ()
   assert.equal(await rp.snapshot(repo), null,
     'an identical tree produced a second restore point — an idle floor would then fill the store '
     + 'with empty commits and push the real ones out of the retention window');
+});
+
+// ── an agent's cwd is usually a SUBDIRECTORY, and that changes the answer ───
+
+test('repoRootOf resolves an agent\'s subdirectory cwd to the repo top level', async () => {
+  const { repo, rp } = operatorFloor();
+  const sub = path.join(repo, 'src', 'deep');
+  fs.mkdirSync(sub, { recursive: true });
+
+  // Compared as DIRECTORIES, not as strings. Measured on this machine:
+  // `os.tmpdir()` hands back the 8.3 short form `C:\Users\ALIENW~1\...` while
+  // `git rev-parse --show-toplevel` prints the long form `C:/Users/Alienware/...`.
+  // Two spellings, one directory — which is precisely what realpathSync.native
+  // is in storePathFor to reconcile, and comparing raw strings here would assert
+  // a spelling rather than the answer.
+  const sameDir = (a, b) => fs.realpathSync.native(a) === fs.realpathSync.native(b);
+
+  const fromSub = await rp.repoRootOf(sub);
+  assert.ok(fromSub && sameDir(fromSub, repo),
+    `an agent cwd one directory down resolved to ${fromSub}, not the repo root ${repo}. `
+    + 'Snapshotting the subdirectory instead would make git treat it as the top level and never '
+    + 'read the ROOT .gitignore, so the "a gitignored build/ contributes 0 entries" property '
+    + 'silently stops holding (T-04-SNAP-05)');
+  const fromRoot = await rp.repoRootOf(repo);
+  assert.ok(fromRoot && sameDir(fromRoot, repo), 'the repo root does not resolve to itself');
+  // The negative, with the positives above as its control.
+  assert.equal(await rp.repoRootOf(path.join(os.tmpdir(), 'md-rp-definitely-not-here')), null,
+    'a cwd that does not exist came back as a repo root');
 });
 
 // ── ASVS V12: an operator-supplied restore path may not escape the repo ─────

@@ -159,6 +159,28 @@ export class RestorePoints {
   // ── the store ─────────────────────────────────────────────────────────────
 
   /**
+   * The top level of the repo `cwd` sits in, or null when it is not in one.
+   *
+   * Callers hold an AGENT's cwd, which is very often a subdirectory. Snapshotting
+   * that subdirectory directly would be quietly wrong in the expensive direction:
+   * with `--work-tree=<subdir>` git treats the subdirectory as the top level and
+   * never reads the repo root's `.gitignore`, so the "a gitignored `build/`
+   * contributes 0 entries" property (T-04-SNAP-05) silently stops holding and
+   * the store fills with node_modules. Resolving to the top level first is what
+   * keeps that mitigation true.
+   *
+   * `rev-parse` is read-only — it does not touch the operator's index — and it
+   * resolves to the WORKTREE root for an agent working in a git worktree, which
+   * is the right answer: that is the tree whose files need restoring.
+   */
+  async repoRootOf(cwd: string): Promise<string | null> {
+    if (!cwd || !existsSync(cwd)) return null;
+    const r = await this.git('', ['-C', cwd, 'rev-parse', '--show-toplevel']);
+    const out = r.out.trim();
+    return r.ok && out ? out : null;
+  }
+
+  /**
    * Where this repo's shadow store lives.
    *
    * One store PER REPO, keyed by a hash of the repo's real path: `RegistryAgent.cwd`
