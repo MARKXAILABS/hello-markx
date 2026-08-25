@@ -853,8 +853,8 @@ export class HookServer {
    * field's type. Without this branch `typeof ti.command === 'string'` is false on
    * codex, both arms exit, and GATE-03 refuses nothing on the one non-Claude
    * engine installed on this machine while every unit test stays green. The real
-   * payload shape is measured by the live codex run in plan 04-13; ceiling item
-   * (s) names what is still unjudged (an engine that uses a different KEY).
+   * payload shape is measured by the live codex run in plan 04-13; ceiling item (s)
+   * names what is still unjudged — an engine that uses a different KEY.
    */
   private commandOf(ti: Record<string, unknown>): string | null {
     if (typeof ti.command === 'string') return ti.command.trim() || null;
