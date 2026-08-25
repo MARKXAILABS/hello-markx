@@ -563,7 +563,11 @@ function joinedStripped(rel) {
   return raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/\s+/g, ' ');
 }
 
-const B_IPC_JOINED = 159;
+// 159 -> 160: plan 04-18 (wave 6) adds `control:answerApproval`, GATE-05's one
+// renderer->main invoke channel. The main->renderer EVENT channel
+// (`control:approvalRequest`) is REUSED and is not an `ipcMain.handle`, so it
+// does not appear here — the two are different directions.
+const B_IPC_JOINED = 160;
 
 test('D-40: ipcMain.handle( count over joined, comment-stripped index.ts is exactly B-ipc-joined', () => {
   const joined = joinedStripped('src/main/index.ts');
@@ -585,7 +589,8 @@ const B_IPC_NAMES = [
   'claudeAccount:clear', 'claudeAccount:has', 'claudeAccount:markActive',
   'claudeAccount:poolState', 'claudeAccount:remove', 'claudeAccount:rotate',
   'claudeAccount:set', 'clipboard:saveImage', 'config:changeHome', 'config:ensureHome',
-  'config:get', 'config:update', 'control:autoDelivery', 'control:gateTool', 'control:halt',
+  'config:get', 'config:update', 'control:answerApproval',
+  'control:autoDelivery', 'control:gateTool', 'control:halt',
   'control:pause', 'control:resume', 'control:setBreakerState', 'control:snapshot',
   'control:steer', 'dialog:attachFiles', 'dialog:chooseFolder', 'freeflow:setConfig',
   'freeflow:transcribe', 'fs:listDir', 'fs:readBinary', 'fs:readFile', 'fs:statAbs',
