@@ -438,6 +438,81 @@ test('SCALE-04: a floor armed BEFORE its fire hour sends nothing yet', async (t)
     + 'catch-up branch fires unconditionally, which makes it fire-on-every-boot, not catch-up');
 });
 
+test('SCALE-04: the digest on disk reports REAL ledger data, not an empty shell', async (t) => {
+  // Everything above proves the arms are wired. This proves what travels
+  // through them: fireDigest could hand buildDigestContent an empty array, an
+  // empty task list and two zeroes, and every other case in this file would
+  // still be green — a fully-wired feature reporting nothing, which is exactly
+  // the class of defect four Phase-4 features on this codebase shipped as.
+  const env = floorEnv(t, { dailyDigest: true });
+  const { deps } = fakeDeps(env);
+  const { bootFloor, fireDigest } = loadTs('src/main/floor/boot.ts');
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+  const hiveRoot = floor.hive.root();
+
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  const yStart = new Date(midnight); yStart.setDate(yStart.getDate() - 1);
+  const inYesterday = yStart.getTime() + 6 * 3600_000;
+
+  // The cost ledger is CUMULATIVE per (agent, session). dailyCostRows returns
+  // DELTAS, so summing what it hands back gives 0.25 + 0.75 = $1.00 / 700
+  // tokens. A digest that summed the ledger's RAW usd/token fields instead —
+  // D-22's exact failure — would report $1.25 / 900. Two rows in one series is
+  // the smallest fixture that can tell those apart; one row cannot.
+  fs.writeFileSync(path.join(hiveRoot, 'cost-ledger.jsonl'), [
+    JSON.stringify({ agent_id: 'cx', session_id: 's1', task_id: 'CARD-1', ts: inYesterday, input: 100, output: 100, usd: 0.25 }),
+    JSON.stringify({ agent_id: 'cx', session_id: 's1', task_id: 'CARD-1', ts: inYesterday + 60_000, input: 400, output: 300, usd: 1.0 }),
+    // ...and a row from LAST week, which must not reach yesterday's total.
+    JSON.stringify({ agent_id: 'cx', session_id: 's9', task_id: 'CARD-OLD', ts: yStart.getTime() - 7 * 86_400_000, input: 9000, output: 9000, usd: 99 })
+  ].join('\n'), 'utf8');
+
+  fs.writeFileSync(path.join(hiveRoot, 'tasks.json'), JSON.stringify({
+    rev: 1,
+    updatedAt: '',
+    tasks: [
+      { id: 'CARD-1', title: 'Ship the digest', status: 'doing', dependsOn: [], priority: 1, createdAt: '',
+        humanQA: [{ q: 'WHICH-CHANNEL-SHOULD-THIS-POST-TO', askedAt: new Date(inYesterday).toISOString() }] },
+      { id: 'CARD-2', title: 'Old work', status: 'done', dependsOn: [], priority: 1, createdAt: '' }
+    ]
+  }, null, 2), 'utf8');
+
+  // ONE codex agent: costTracking 'transcript', the D-35 tier-2 case, and the
+  // ONLY preset in it. `grok` is tier 1. Both counts come off THIS registry.
+  fs.writeFileSync(path.join(hiveRoot, 'registry.json'), JSON.stringify({
+    godId: null,
+    agents: {
+      cx: { id: 'cx', name: 'Codex', cwd: env.harnessHome, provider: 'codex', status: 'idle', lastSeen: Date.now() },
+      gk: { id: 'gk', name: 'Grok', cwd: env.harnessHome, provider: 'grok', status: 'idle', lastSeen: Date.now() },
+      old: { id: 'old', name: 'Archived', cwd: env.harnessHome, provider: 'grok', status: 'gone', lastSeen: 0, archived: true }
+    }
+  }, null, 2), 'utf8');
+
+  await fireDigest();
+  const body = fs.readFileSync(path.join(hiveRoot, `digest-${yesterdayKey()}.md`), 'utf8');
+
+  assert.ok(body.includes('$1.0000') && body.includes('700 tokens'),
+    `the digest's spend total is not the sum of yesterday's DELTAS:\n${body}`);
+  assert.ok(!body.includes('$1.2500') && !body.includes('900 tokens'),
+    'the digest summed the ledger\'s RAW cumulative fields instead of the diffed deltas (D-22) — '
+    + 'every later row in a session re-bills everything the session had already spent');
+  assert.ok(!body.includes('$100') && !body.includes('$99'),
+    'last week\'s row reached yesterday\'s total — dailyCostRows must diff the whole file and '
+    + 'FILTER to the range, never open a series at the range boundary');
+  assert.ok(body.includes('CARD-1'), 'the card that carried yesterday\'s spend is not named');
+  assert.ok(!body.includes('CARD-OLD'), 'a card from another day is listed as having spent yesterday');
+  assert.ok(body.includes('doing 1') && body.includes('done 1'),
+    `the board counts did not come from tasks.json:\n${body}`);
+  assert.ok(body.includes('WHICH-CHANNEL-SHOULD-THIS-POST-TO'),
+    'the unanswered question asked yesterday never reached the digest');
+  // Both D-35 tiers, counted off the REAL registry: one codex (transcript),
+  // one live grok (none), and the archived grok excluded.
+  assert.ok(body.includes('1 agent(s) report no cost meter'),
+    `tier-1 count wrong (an archived agent may be being counted):\n${body}`);
+  assert.ok(body.includes('1 agent(s) report spend only from their own transcripts'),
+    `tier-2 count wrong — this is the codex-floor case the whole two-count split exists for:\n${body}`);
+});
+
 test('SCALE-04 / T-03-05f: the Slack arm is dispatched from the REAL fire path, and only on all four', async (t) => {
   const env = floorEnv(t, { dailyDigest: true });
   const { deps } = fakeDeps(env);
