@@ -822,7 +822,31 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                 >AUTO</span>
               )}
               <PixelBadge status={rosterBadgeStatus(a.status, armed)} />
-              {armed && <span aria-hidden="true" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}
+              {/* T-04-BLK-10 — the breaker's third channel, and on ONE row it is now the
+                  only one an AT operator has. `rosterBadgeStatus` (plan 04-14) makes the
+                  badge read `needs you` rather than `looping` under `armed && blocked`,
+                  which is right — at 3am the operator can act on `needs you` — but it
+                  leaves the breaker with no audible signal on that row at all, because a
+                  `title` on an `aria-hidden` span is announced to nobody.
+
+                  So the glyph splits on exactly that case. Everywhere else it stays
+                  byte-identical decoration: the badge already says `looping`, and
+                  announcing "circuit breaker" beside it is a second reading of one fact.
+
+                  The `role="img"` + `aria-label` pair is A2's shipped pattern
+                  (TasksKanban.tsx:410), applied where it has become load-bearing.
+
+                  THE BLOCKED BRANCH CARRIES NO INLINE fontSize, and that is a
+                  constraint rather than an oversight. FLOOR-12 clause 3
+                  (repo-claims.test.cjs) walks back from every sub-14px site to its
+                  owning open tag and requires a LITERAL aria-hidden — which this branch
+                  by definition does not have — so a numeric override here would be
+                  unallowlistable AND unfixable at once. The nearest token,
+                  --cth-text-body-sm, is 14px (tokens.css:71), not 12. The glyph
+                  therefore inherits the row's ~14px on this one branch. Do not "fix"
+                  it with a numeric override; that reopens the contradiction. */}
+              {armed && a.status !== 'blocked' && <span aria-hidden="true" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}
+              {armed && a.status === 'blocked' && <span role="img" aria-label={`circuit breaker: ${breaker?.reason ?? 'armed'}`} style={{ color: 'var(--cth-coral)' }}>⚠</span>}
               <span style={{ marginLeft: 'auto', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                 {(toolCounts[a.id] ?? 0)} tool calls
               </span>

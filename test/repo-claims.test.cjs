@@ -714,7 +714,14 @@ const FLOOR12_ALLOWLIST = [
   { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
   { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
   { file: 'src/renderer/src/components/AskMeTab.tsx', text: '<span aria-hidden="true" style={{ fontSize: 13 }}>✕</span>', count: 1 },
-  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: "{armed && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}", count: 1 },
+  // Plan 04-18 (wave 6) split this glyph on `armed && blocked` so the breaker is
+  // announced to an AT operator once plan 04-14's badge stopped saying `looping`
+  // (T-04-BLK-10). The entry moves in the SAME commit as the line it pins — which
+  // is the whole reason that rider waited two waves for the wave that owns this
+  // file. The list is NOT widened: the blocked branch carries no inline numeric
+  // fontSize, so it produces no M1 hit, needs no entry, and clause 3 never sees
+  // it. The repo-wide M1 total and this list's length are both unchanged.
+  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: "{armed && a.status !== 'blocked' && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}", count: 1 },
   { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✓</span>', count: 1 },
   { file: 'src/renderer/src/components/FullscreenFileEditor.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
   { file: 'src/renderer/src/components/FullscreenTerminal.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },

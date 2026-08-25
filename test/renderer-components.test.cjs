@@ -1160,17 +1160,52 @@ test("VIGIL-03: the armed row keeps its other two channels, so `blocked` winning
     'the `paused` count moved. PixelBadge has no `paused` StatusKind (PixelBadge.tsx:3-12) and none was to be invented; the one legitimate occurrence is the floor-delivery label at :213');
 });
 
-test("VIGIL-03: the breaker's ⚠ span is byte-identical — its a11y swap is plan 04-18's, in wave 6", () => {
-  // `test/repo-claims.test.cjs:717` pins this line VERBATIM with `count: 1`, clause 2
-  // (`:782`) is an exact-text multiset in BOTH directions, and clause 3 (`:815-838`)
-  // walks back to the owning open tag and requires a LITERAL `aria-hidden=("true"|{true})`
-  // — a conditional expression does not match it. Changing this line therefore requires
-  // editing repo-claims.test.cjs in the same commit, and that file belongs to plan 04-13
-  // in this wave. Plan 04-18 owns CommandCenterPanel.tsx in wave 6, where the pin file is
-  // free, and lands the `role="img"` + `aria-label` swap there.
-  const PINNED = '{armed && <span aria-hidden="true" title={breaker?.reason} style={{ color: \'var(--cth-coral)\', fontSize: 12 }}>⚠</span>}';
-  assert.equal(ccpSource().split(PINNED).length - 1, 1,
-    'the ⚠ span is no longer byte-identical to the line repo-claims.test.cjs:717 pins. Two FLOOR-12 clauses redden on this, and the fix is NOT to widen that allowlist (repo-claims.test.cjs:800-802 says so explicitly) — it is to leave the line to plan 04-18');
+test("T-04-BLK-10: the breaker's ⚠ is ANNOUNCED on the one row where the badge stopped saying it", () => {
+  // WHY THIS IS ASSERTED ON SOURCE AND NOT ON MARKUP, stated rather than left as a
+  // silence. `armed` is derived from `breakers`, which is `useState({})` inside
+  // `useFleetTelemetry` and is filled only by an effect — and this harness runs no
+  // effect phase at all (:23-38). A rendered CommandCenterPanel therefore has
+  // `armed === false` for every row and BOTH branches below are unreachable through
+  // it. That is the same measured fact that made plan 04-14 export
+  // `rosterBadgeStatus`; here the glyph cannot be extracted the same way, because its
+  // `fontSize: 12` is pinned verbatim by FLOOR-12's allowlist and moving it out of
+  // that line would redden two clauses in repo-claims.test.cjs. So: the shape is
+  // asserted where it lives.
+  const src = ccpSource();
+
+  const DECOR = "{armed && a.status !== 'blocked' && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}";
+  const SPOKEN = "{armed && a.status === 'blocked' && <span role=\"img\" aria-label={`circuit breaker: ${breaker?.reason ?? 'armed'}`} style={{ color: 'var(--cth-coral)' }}>⚠</span>}";
+
+  // The decorative branch is BYTE-IDENTICAL to what shipped, plus its new guard —
+  // `repo-claims.test.cjs`'s FLOOR-12 entry pins this exact text with `count: 1`, and
+  // that entry moved in the same commit as this line.
+  assert.equal(src.split(DECOR).length - 1, 1,
+    'the decorative ⚠ branch no longer matches the text FLOOR-12 pins verbatim. Two clauses redden on this, and the fix is NOT to widen that allowlist (repo-claims.test.cjs says so in its own failure message) — it is to restore the line');
+
+  assert.equal(src.split(SPOKEN).length - 1, 1,
+    'the armed+blocked ⚠ is not announced. A `title` on an `aria-hidden` span reaches nobody, and since plan 04-14 made the badge read `needs you` on this row the glyph is the ONLY armed signal an AT operator has left (T-04-BLK-10)');
+
+  // The two guards are exhaustive and mutually exclusive over `armed`: the glyph can
+  // neither vanish under a tripped breaker nor render twice on one row. Asserted from
+  // the guards themselves, because a rendered panel cannot reach either branch.
+  assert.equal((src.match(/\{armed && a\.status [!=]== 'blocked' &&/g) ?? []).length, 2,
+    'the ⚠ no longer splits on exactly `armed && a.status (!==|===) blocked` — a third guard, or a dropped one, means a row that shows two glyphs or none');
+
+  // The spoken branch is not merely present, it is CORRECTLY shaped: no aria-hidden
+  // (which would silence it again), and the label carries main's own breaker reason
+  // rather than a renderer-authored sentence.
+  assert.doesNotMatch(SPOKEN, /aria-hidden/,
+    'the announced branch kept aria-hidden, so the swap changed nothing an AT operator can hear');
+  assert.match(SPOKEN, /aria-label=\{`circuit breaker: \$\{breaker\?\.reason/,
+    'the announced branch does not name WHY the breaker tripped — "circuit breaker" alone is the same non-information the badge already carries');
+
+  // FLOOR-12's cost, asserted so it cannot silently become a numeric override later:
+  // the announced branch has no inline fontSize at all. Clause 3 walks back from every
+  // sub-14px site to its owning open tag and demands a LITERAL aria-hidden, which this
+  // branch by definition cannot have — so a 12px override here would be both
+  // unallowlistable and unfixable. The glyph inherits ~14px on this one row.
+  assert.doesNotMatch(SPOKEN, /fontSize/,
+    'the announced ⚠ took an inline fontSize. If it is sub-14px, FLOOR-12 clause 3 fails on it and no allowlist entry can rescue it; --cth-text-body-sm is 14px (tokens.css:71), not 12');
 });
 
 test('GATE-03 rule D-2: the terminal feed line survives — it is the audit trail, not a duplicate', () => {
