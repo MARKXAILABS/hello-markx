@@ -712,18 +712,41 @@ let firedDb: PersistStore | null | undefined;
 
 function firedStore(): PersistStore | null {
   if (firedDb !== undefined) return firedDb;
+  // LOAD-BEARING, do not move below the try: `getHome` calls readConfig(), which
+  // re-enters this function. `firedDb = null` here is what makes that re-entry
+  // return immediately (null, so the inner read simply skips the stamp overlay
+  // it does not need to resolve harnessHome) instead of recursing forever.
   firedDb = null;
   try {
     // A second connection to the same harness.db index.ts already opens. SQLite in
     // WAL mode is fine with that, and it keeps config.ts free of an import from
     // index.ts — which imports config.
-    const s = new PersistStore();
+    //
+    // SCALE-01: harnessHome-aware, like boot.ts's handle. `readConfig` is a local
+    // function in this very file, so this is not the reverse import db.ts must
+    // never have. Both handles are repointed together at the one non-relaunching
+    // null -> set transition, or a mission fires off the previous project's stamps.
+    const s = new PersistStore(undefined, () => readConfig().harnessHome);
     s.open();
     firedDb = s;
   } catch (e) {
     console.warn('[config] mission stamps stay in config.json:', e instanceof Error ? e.message : String(e));
   }
   return firedDb;
+}
+
+/**
+ * Drop the memoized mission-stamps handle so the NEXT `firedStore()` reopens at
+ * the freshly-resolved default path — this file's own equivalent of
+ * `PersistStore.repoint()`, one memoization layer up.
+ *
+ * Called only from `config:update`'s `harnessHome: null -> set` transition, the
+ * one path that changes the home WITHOUT relaunching. Everywhere else
+ * (`changeHome`, `resetAll`) the process restarts and rebuilds this for free.
+ */
+export function repointFiredStore(): void {
+  firedDb?.close();
+  firedDb = undefined;
 }
 
 function withMissionStamps(cfg: HarnessConfig): HarnessConfig {

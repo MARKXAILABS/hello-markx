@@ -1356,7 +1356,11 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     reflectSettings,
     (event) => { try { hive.appendLog(event); } catch { /* best-effort */ } }
   );
-  persist = new PersistStore();
+  // SCALE-01: harness.db lives under the active project's own home, not in one
+  // userData file shared by every project on the machine. Same injected-getter
+  // shape as memory/reflector/roster above; null before onboarding keeps the
+  // historical userData path.
+  persist = new PersistStore(undefined, () => readConfig().harnessHome);
   restorePoints = new RestorePoints({
     // `<harnessHome>/hive/restore` — beside `backups/` and deliberately NOT in
     // it (D-21): reflect.ts owns `hive/backups/` and prunes it on its own

@@ -16,7 +16,8 @@ import { initAutoUpdater } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
 import {
   readConfig, writeConfig, resetConfig, redactedConfig, ensureHarnessHome, ensureClaudePermissionsAccepted,
-  modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
+  modelForRole, repointFiredStore,
+  OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
 } from './config';
 import {
   listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde,
@@ -2839,6 +2840,20 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);
   if (!hiveWasEnabled && hive.enabled()) {
     console.log('[hive] harnessHome configured — bootstrapping hive services');
+    // SCALE-01: both live PersistStore handles were opened BEFORE harnessHome
+    // existed, so they are bound to the pre-onboarding userData file. Repoint
+    // them HERE — strictly before the hive bootstrap below, which reads
+    // `missionLastFiredAt` off whichever handle is open at that moment and would
+    // otherwise arm the scheduler off the previous project's stamps.
+    //
+    // Its OWN try/catch, deliberately NOT the one below: PersistStore.open()
+    // rethrows every non-corruption failure (locked file, read-only or full
+    // disk), so a bare call here would propagate out of the handler and skip
+    // the bootstrap entirely — resurrecting the dead-services bug that guard
+    // exists to prevent. A repoint that cannot open is a wrong-DB problem; it
+    // must never also become a no-hive problem.
+    try { persist.repoint(); repointFiredStore(); }
+    catch (e) { console.error('[hive] repoint at first-run transition:', e); }
     try { startHiveServices(); } catch (e) { console.error('[hive] bootstrap after onboarding:', e); }
   }
   return next;
@@ -2891,11 +2906,26 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
 
   if (mode === 'move' && oldHome) {
     try {
+      // The teardown above never closes `persist`, and since SCALE-01 that handle
+      // holds `<oldHome>/harness.db` OPEN in WAL mode — cpSync would copy the
+      // main file while unflushed pages still sat in `-wal`. Close first so the
+      // WAL is checkpointed into the file being copied. 'move' only: 'fresh'
+      // copies nothing and needs neither the close nor the reopen.
+      try { persist.close(); } catch (e) { console.error('[changeHome] persist.close:', e); }
       // roster.json + its backups ride along with hive/palace: the roster is the
       // renderer's half of the same state, and leaving it behind would move the
       // agents' sessions and memory to the new home while their names, notes and
       // worktree paths stayed at the old one.
-      for (const sub of ['hive', 'palace', 'roster.json', 'roster-backups']) {
+      //
+      // harness.db (+ its WAL/SHM siblings, absent unless the close above left
+      // them) and knowledge/ join them since SCALE-01 made both project-local:
+      // without them 'move' silently strands command_history, the whole kv store
+      // (missionLastFiredAt included), the FTS recall index and the knowledge
+      // graph at the old home. existsSync below already no-ops the absent ones.
+      for (const sub of [
+        'hive', 'palace', 'roster.json', 'roster-backups',
+        'harness.db', 'harness.db-wal', 'harness.db-shm', 'knowledge'
+      ]) {
         const src = join(oldHome, sub);
         if (!existsSync(src)) continue;
         // cpSync copies the whole tree incl. .git and is cross-device safe (unlike
@@ -2906,6 +2936,15 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
     } catch (e) {
       // Copy failed: recover IN PLACE against the unchanged old home (config never
       // repointed) so the user loses nothing, and surface the error — no relaunch.
+      //
+      // This is the ONE path out of this handler that does not end in a
+      // relaunch, so it is also the only one where the close above is not undone
+      // by a process restart. Nothing in the recovery below reopens `persist`,
+      // so without this the module-level handle stays CLOSED for the rest of the
+      // session and every kv/history write silently no-ops. The copy failed
+      // BEFORE writeConfig ran, so harnessHome is still oldHome and repoint()
+      // correctly reopens against the unchanged path.
+      try { persist.repoint(); } catch (err) { console.error('[changeHome] persist.repoint after copy failure:', err); }
       startHiveServices();
       const cfg = readConfig();
       if (cfg.slackEnabled && cfg.slackSigningSecret) void startSlackServer();
