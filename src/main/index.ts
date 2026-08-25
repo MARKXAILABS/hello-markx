@@ -48,7 +48,8 @@ import { listIssues, listCIRuns } from './github';
 import { SlackWebhookServer, SlackReplyServer, postSlackReply, type SlackEventFile } from './slack';
 import {
   WebhookServer,
-  type PhoneAsk, type WebhookDispatch, type WebhookEndpointRef, type WebhookInbound, type WebhookTaskStatus
+  type PhoneAsk, type PhoneAnswerOutcome, type PhoneFloorQuiet,
+  type WebhookDispatch, type WebhookEndpointRef, type WebhookInbound, type WebhookTaskStatus
 } from './webhook';
 import { openTunnel, type TunnelOpener } from './tunnel';
 import { ensureCloudflared } from './cloudflared';
@@ -1217,8 +1218,35 @@ function openAskOf(task: HiveTask): PhoneHumanQA | undefined {
   return undefined;
 }
 
+/**
+ * GATE-05 — the deadline of every tool ask this process has ever SERVED to the
+ * phone, id → `expiresAt`.
+ *
+ * It exists for one reason: `HookServer.answerApproval` returns a bare boolean,
+ * and rule G-2 needs "expired" told apart from "already answered on the
+ * desktop" — opposite outcomes at 3am. Once an entry leaves `openApprovals()`
+ * there is nothing left to ask, so the deadline has to have been kept when it
+ * was still there. The phone can only learn an ask id from a GET, so an id it
+ * posts back is always in here.
+ *
+ * Bounded by pruning on every read: nothing survives more than one
+ * {@link TOOL_ASK_MEMO_MS} past its own deadline.
+ */
+const toolAskExpiry = new Map<string, number>();
+/** How long a settled/expired ask's deadline is remembered — long enough that a
+ *  phone answering the ask it is looking at gets the honest verdict, short
+ *  enough that an overnight run does not accumulate ids. */
+const TOOL_ASK_MEMO_MS = 10 * 60_000;
+
 /** `GET /phone/api/asks`' data source (UI-SPEC S5 screen 1) — every card
- *  blocked on an open human question, newest first. */
+ *  blocked on an open human question, newest first, PLUS every open tool
+ *  approval behind `kind:'tool'` (D-10).
+ *
+ *  The approvals are NOT cards and are never written to `tasks.json`: a tool
+ *  approval has no card, is ephemeral, and expires to deny in seconds. Writing
+ *  one into the ledger would block a real card, survive its own timeout as a
+ *  dead question on the phone, and put a high-frequency transient into the
+ *  durable ledger ADR-0004 gives a single committer. */
 function openPhoneAsks(): PhoneAsk[] {
   const ledger = hive.tasks() as { tasks?: HiveTask[] };
   const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
@@ -1227,13 +1255,79 @@ function openPhoneAsks(): PhoneAsk[] {
     if (t.status !== 'blocked') continue;
     const open = openAskOf(t);
     if (!open) continue;
+    // No `kind` on the card path: absent === 'card', so this producer is
+    // back-compatible by construction and an old phone sees no change at all.
     const ask: PhoneAsk = { taskId: t.id, title: t.title, question: open.q };
     if (t.assignee) ask.agent = t.assignee;
     if (open.askedAt) ask.askedAt = open.askedAt;
     asks.push(ask);
   }
   asks.sort((a, b) => (b.askedAt ?? '').localeCompare(a.askedAt ?? ''));
+
+  // Tool approvals ride the same response. Guarded because this thunk is
+  // reachable from the webhook server the instant it is constructed, and
+  // `hookServer` is assigned inside `bootFloor` — a pre-boot GET must answer
+  // with the cards it has, never a 500.
+  try {
+    const now = Date.now();
+    for (const [id, expiresAt] of toolAskExpiry) {
+      if (now - expiresAt > TOOL_ASK_MEMO_MS) toolAskExpiry.delete(id);
+    }
+    for (const a of hookServer.openApprovals()) {
+      toolAskExpiry.set(a.id, a.expiresAt);
+      asks.push({
+        taskId: a.id,               // rule G-1: the ASK id in the UNCHANGED field
+        title: 'wants to run a command',
+        question: a.command,        // agent-authored; escaped at render, never eval'd
+        agent: a.agentId,
+        kind: 'tool',
+        // Rule G-3 — computed HERE, at response time, so what crosses the wire
+        // is a duration. The raw `expiresAt` never leaves this process.
+        expiresInMs: Math.max(0, a.expiresAt - now)
+      });
+    }
+  } catch (e) {
+    console.error('[phone] could not read open approvals:', e instanceof Error ? e.message : e);
+  }
   return asks;
+}
+
+/** VIGIL-01 — the floor-quiet snapshot on the wire the phone reads it from.
+ *  The watchdog's `current()` below is plan 04-11's named accessor on a
+ *  declared `Floor` member, exactly as approvals are reached through
+ *  `floor.hookServer` — one call site, no second copy of the state;
+ *  neither needs a line in `boot.ts`. Null (the floor is moving, or boot has
+ *  not settled) omits the field entirely. */
+function phoneFloorQuiet(): PhoneFloorQuiet | null {
+  if (!floor) return null;
+  const snap = floor.watchdog.current();
+  if (!snap) return null;
+  const out: PhoneFloorQuiet = { sinceMs: snap.sinceMs, inFlight: snap.inFlight.length };
+  if (snap.godDead) {
+    const reg = hive.registry();
+    const name = reg.godId ? reg.agents[reg.godId]?.name : undefined;
+    if (name) out.agent = name;
+  }
+  if (snap.inFlight.length === 1) out.card = snap.inFlight[0].title;
+  return out;
+}
+
+/** Settle one GATE-05 tool approval from the phone.
+ *
+ * The two-literal allowlist is asserted TWICE on purpose. `webhook.ts` refuses
+ * anything else with a 400 before this is ever called, which is the operator's
+ * honest error; this second check is the security guarantee (T-04-ASK-34) — if
+ * the transport's classification ever misses, the worst outcome must still be
+ * "nothing happened", never an accidental YES on the channel whose whole point
+ * is an explicit yes for an unrecoverable command. */
+function answerToolAsk(id: string, answer: string): PhoneAnswerOutcome {
+  const approved = answer === 'approve' ? true : answer === 'deny' ? false : null;
+  if (approved === null || !floor) return { ok: false };
+  if (floor.hookServer.answerApproval(id, approved)) return { ok: true };
+  // It did not settle, so it is gone. Rule G-2: WHICH way it went matters —
+  // expired means the command was denied, settled means it may already have run.
+  const expiresAt = toolAskExpiry.get(id);
+  return { ok: false, state: expiresAt !== undefined && Date.now() >= expiresAt ? 'expired' : 'settled' };
 }
 
 /**
@@ -1246,7 +1340,12 @@ function openPhoneAsks(): PhoneAsk[] {
  * D-39 binds: the god is ALSO informed, even when the recipient is someone
  * else — one send is exactly the failure mode this decision closes.
  */
-function answerPhoneAsk(taskId: string, answer: string): boolean {
+function answerPhoneAsk(taskId: string, answer: string): PhoneAnswerOutcome {
+  // A tool ask is one this process has SERVED as `kind:'tool'`, and the memo is
+  // the only place that fact survives the entry leaving `openApprovals()` —
+  // which is exactly the expired/settled case rule G-2 exists to tell apart.
+  // Card ids and `ask-<hex>` ids never collide.
+  if (toolAskExpiry.has(taskId)) return answerToolAsk(taskId, answer);
   try {
     const ledger = hive.tasks() as { tasks?: HiveTask[] };
     const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
@@ -1320,7 +1419,8 @@ function ensureWebhookServerInstance(): WebhookServer {
     lookupStatus: lookupWebhookStatus,
     staticRoot: () => phoneRootPath(),
     openAsks: () => openPhoneAsks(),
-    answerAsk: (taskId, answer) => answerPhoneAsk(taskId, answer)
+    answerAsk: (taskId, answer) => answerPhoneAsk(taskId, answer),
+    floorQuiet: () => phoneFloorQuiet()
   });
   webhookServer = server;
   return server;
