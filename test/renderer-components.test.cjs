@@ -1380,10 +1380,19 @@ test('DayBandTab draws the day as ONE accessible SVG of rects — no canvas, no 
     'the band rendered a <canvas> — D-28 refuses a second WebGL context on this surface on a measured bug (glRecovery.ts:9-18), and the office floor is always first out of Chromium\'s ~16-context cap');
   assert.ok(!/<text[\s>]/.test(markup),
     'the band put a <text> element inside the SVG — S1b puts the axis and legend in DOM precisely so they stay selectable, translatable and scalable');
-  assert.ok((markup.match(/<rect/g) ?? []).length > 96,
-    `the band drew only ${(markup.match(/<rect/g) ?? []).length} rects — 96 columns plus a plate is the floor, so the columns are not rendering`);
   assert.match(ariaLabelOf(markup), /^Activity for 2026-08-20: 12 events, 5 envelopes, \$0\.42 across 96 fifteen-minute buckets\./,
     'the band\'s accessible name is not S1b\'s summary string — a screen-reader user gets an unlabelled graphic instead of the day');
+
+  // Counted against a day where every column HAS something, because S1b's encoding is
+  // "zero draws nothing" — counting rects on the sparse fixture above would assert the
+  // opposite of the spec and force a 288-rect band whose empty columns are all noise.
+  const busy = bandBuckets(QUIET, Object.fromEntries(Array.from({ length: 96 }, (_, i) => [i, { events: i + 1 }])));
+  const dense = band({
+    day: QUIET,
+    summary: { ok: true, firstTs: localDayStart(QUIET) - 86_400_000, eventsAgedOut: false, buckets: busy }
+  });
+  assert.ok((dense.match(/<rect/g) ?? []).length >= 97,
+    `a day with all 96 columns populated drew only ${(dense.match(/<rect/g) ?? []).length} rects — 96 bars plus the plate is the floor, so columns are being dropped`);
 });
 
 test('round-3 #8: an ok:false timeline renders UI-SPEC :247\'s binding error copy, reason and all, and never a claim about the record', (t) => {
