@@ -373,3 +373,75 @@ export async function sendPush(
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/**
+ * The floor-quiet alarm's push tag (VIGIL-01, 04-UI-SPEC §S6a rule Q-4).
+ *
+ * `sw.js` sets `tag: 'ask:' + taskId`, so a notification REPLACES rather than
+ * stacks on another with the same tag. This one is distinct and stable: the
+ * alarm can only ever replace its own previous notification, and it can never
+ * collide with — or swallow — a real ask. It satisfies `PHONE_TASK_ID_RE`
+ * (`webhook.ts`), which is the only shape constraint on the field.
+ */
+export const FLOOR_QUIET_TAG = 'floor-quiet';
+
+/**
+ * The floor-quiet alarm's wire body — the JSON `resources/phone/sw.js` parses
+ * out of the push event, and the only place that mapping is written down.
+ *
+ * **`agent` is the TITLE.** `sw.js` calls `showNotification(data.agent, {body:
+ * 'is waiting on you'})` with the body HARD-CODED, and that worker is already
+ * installed on the operator's phone. So an old worker renders the title alone,
+ * and the title has to be a complete, true statement on its own — `The floor
+ * has stopped`, `The orchestrator is gone`. A title of `Floor` would render as
+ * "Floor is waiting on you", which is false. `body` is carried for the worker
+ * that reads it; an old one ignores it, which is why both directions are
+ * compatible and why `sw.js` needs no change from this plan (rule Q-5: a
+ * service-worker edit is a live-device risk with no local reproduction).
+ *
+ * Composition only. The floor has no `PushSubscription` to send this to yet —
+ * `webhook.ts` has no subscription-intake route, so nothing in this process has
+ * ever captured one, and adding that route is `index.ts`'s, not this plan's.
+ * When the intake lands, this is the payload it hands to {@link sendPush}.
+ */
+export function floorQuietPushPayload(
+  a: { title: string; body: string }
+): { agent: string; body: string; taskId: string } {
+  return { agent: a.title, body: a.body, taskId: FLOOR_QUIET_TAG };
+}
+
+/**
+ * GATE-05's tool-approval push (04-UI-SPEC §S6a rule Q-4, §S1).
+ *
+ * **The title is the AGENT NAME, and that is the whole compatibility argument.**
+ * `sw.js` renders `data.agent` as the title and, on a worker installed before
+ * this change, hard-codes `body: 'is waiting on you'`. So an old worker shows
+ * `Ada is waiting on you` — which for an approval is true. (Contrast the floor
+ * alarm, where the title has to be a full sentence fragment because "Floor is
+ * waiting on you" would be false.)
+ *
+ * **What the body may and may not carry, and this is a boundary rather than a
+ * style rule.** The ask LIST is behind the phone's bearer; a notification
+ * renders on a LOCKED SCREEN with no authentication at all. So the body carries
+ * the agent's intent and how long is left, and **never the command string**,
+ * never a path, never the question — even though the list itself shows the
+ * command (T-04-ASK-18). `sw.js:33-35` is where that rule is written down.
+ *
+ * `tag: 'ask:' + taskId` (`sw.js:38`) means an ask replaces its own previous
+ * notification and never stacks, so the id goes on the wire under the UNCHANGED
+ * field name (rule G-1).
+ *
+ * COMPOSITION ONLY, exactly like {@link floorQuietPushPayload}: this process
+ * has never held a `PushSubscription` — `webhook.ts` has no subscription-intake
+ * route, so nothing here has ever captured one. Nothing calls this yet, and
+ * the push leg of GATE-05 is **not** delivered by this plan. When the intake
+ * lands, this is the payload it hands to {@link sendPush}.
+ */
+export function askPushPayload(
+  a: { agent: string; taskId: string; expiresInMs?: number }
+): { agent: string; body: string; taskId: string } {
+  const left = typeof a.expiresInMs === 'number' && a.expiresInMs > 0
+    ? ` — ${Math.max(1, Math.round(a.expiresInMs / 1000))}s to answer`
+    : '';
+  return { agent: a.agent, body: `wants to run a command${left}`, taskId: a.taskId };
+}

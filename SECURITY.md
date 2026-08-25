@@ -194,6 +194,262 @@ make trust decisions from this file.
   `display:standalone`, no Web Push while the phone is asleep. Treat those three as
   unverified, never as shipped, until run on a real device.
 
+## Phase 4 — the three new gates, their ceilings, and the four fail-opens
+
+Phase 4 moved an agent's blast radius out of one engine's settings file and into the
+main process. Three gates landed: **GATE-02** (an env allowlist at the `pty.spawn` choke
+point, `src/main/shellEnv.ts`), **GATE-03** (a command-shape judge in main,
+`src/main/commandShape.ts` called from `hooks.ts`'s `protectedPathDenial` path), and
+**GATE-05** (a third answer between allow and deny, `hooks.ts`'s `openApproval` +
+`src/main/approvals.ts`). **GATE-04** (a per-engine codex sandbox opt-in) is built and
+**LIVE-UNVERIFIED**; its outcome is stated below rather than implied.
+
+Each gate's ceiling is itemised in its own source file, and restated here because people
+make trust decisions from this file and not from a doc comment. The lists below are the
+same lists, at the same counts — 10 items for GATE-02, 13 for GATE-03, 8 for GATE-05 —
+counted against the source at the closing wave rather than summarised from memory.
+
+### The four fail-opens
+
+Three inherited, one new. Every one carries a disposition and, where the fix has an
+owner, that owner. A ceiling list that omits one reads as a guarantee that does not hold.
+
+1. **The user-global engine seeds sit outside the hive root.** `~/.codex/config.toml`
+   (copied into every codex agent's config at spawn), `~/.gemini/…/hooks.json` and
+   `~/.grok/hooks/` are all outside the tree `protectedPathDenial` protects, so an agent
+   that appends one `[[hooks.PreToolUse]]` block to a seed has it executed inside another
+   agent's hook process, with that agent's environment. Stated at `hooks.ts:54-59`.
+   **Disposition:** INHERITED, DEFERRED. **Owner:** the hive maintainer. Closing it needs
+   the seeds moved inside a protected location, which is its own change.
+2. **The shim's connect-error `process.exit(0)`, which for a Claude `PreToolUse` hook is
+   *allow*.** Deleting the socket file therefore disables the gate for everyone. Making
+   the shim fail **closed** would break every agent whenever the app is legitimately not
+   running — an agent PTY outlives a quit, which is a normal state — so the shim keeps
+   exiting 0 and `armSocketWatchdog` re-listens on a missing or replaced socket instead.
+   **Disposition:** INHERITED, DELIBERATE, BOUNDED rather than removed. What is guaranteed
+   is detection plus a loud log, not exclusion; re-taking a rebound path is a race this app
+   can lose.
+3. **`protectedPathDenial`'s `if (!root) return null`** — GATE-01/GATE-03 ceiling item (i).
+   With no hive root there is nothing to protect, so failing open is a true statement about
+   the world. **Disposition:** INHERITED, ACCEPTED. **Owner:** the hive maintainer.
+   **The deliberate contrast, and it is the point of listing both together:** GATE-03's
+   host arm fails **closed** on an *empty* allowlist (`commandShape.ts` returns
+   `kind:'deny'`, naming the key), for exactly the opposite reason — an empty allowlist is
+   a configuration this app cannot distinguish from a tampered one, so there *is* something
+   to protect and the safe direction is refusal. Two fail directions, both chosen.
+4. **NEW this phase, and the only one: on four engines GATE-05's "ask" degrades to
+   "deny".** pi, OpenCode, grok and agy all take the first reply's deny and never poll
+   back, so for them the third answer collapses into the second. That is the safe side, and
+   it is still a behaviour that belongs in a ceiling list: on those four, every force-push,
+   every `curl … | sh`, every `rm` with a recursive flag and every fetch to a host outside
+   the allowlist becomes a refusal with no path through. **Disposition:** DELIBERATE
+   fail-**CLOSED**, named at `hooks.ts` GATE-05 ceiling item (a). **Owner:** the hive
+   maintainer. There is a rider `(a-rider)` beside it: the ask is still *opened* for those
+   four, so the operator is still paged and their answer is inert.
+
+*(The phase's own closing plan described fail-open 4 as naming pi and OpenCode only. The
+source names **four** engines, and grok's and agy's degradation is ceiling item (e)'s
+explicit consequence. The wider, measured set is what is written above.)*
+
+### GATE-02's ceiling — what an env allowlist does not reach (`src/main/shellEnv.ts`, 10 items)
+
+The filter bounds the **initial** environment of every process this app spawns, applied at
+the three `...process.env` spreads it owns — `pty.ts`, `hiddenClaude.ts` and `memory.ts`.
+
+- (a) An agent that obtains a secret by any route other than inheritance — `aws configure`,
+  or simply reading `~/.aws/credentials`, `~/.codex/auth.json` or `~/.netrc`.
+- (b) Anything reachable on `PATH`. `PATH` survives by necessity, so every credential
+  helper, keychain client and cloud CLI on this machine is one command away.
+- (c) The operator's additive pass-through list (`envPassThrough`) — a hole they opened
+  knowingly. **Disposition:** ACCEPTED. **Owner:** the operator.
+- (d) Grandchildren. A filtered agent may `export` anything into what it spawns; this
+  bounds the first hop only.
+- (e) win32 env names are case-insensitive to the OS while `Set.has` is not. Mitigated by
+  upper-casing both sides and emitting the original spelling; listed because it is the
+  failure a future edit would silently reintroduce.
+- (f) BYOK engines reading a key the operator exported in their own shell stop
+  authenticating unless that name is passed through. Keys configured *in the app* are
+  unaffected — they layer after the filter.
+- (g) The pass-through list itself lives in `userData/config.json`, outside the hive root
+  and outside everything `protectedPathDenial` protects, while the allowlist keeps
+  `APPDATA` / `LOCALAPPDATA` / `USERPROFILE` because agents need them. So an agent can
+  locate and rewrite its own env allowlist. **Owner:** the hive maintainer.
+- (h) `memory.ts` and `hiddenClaude.ts` both filter with an **empty** pass-through list, so
+  two of the three sites cannot reach the operator's list. Consequence, stated rather than
+  discovered: an operator whose `ANTHROPIC_API_KEY` comes from their own shell loses memory
+  condensation with no way to re-admit it. **Owner:** the hive maintainer.
+- (i) `HTTP_PROXY` / `HTTPS_PROXY` may embed credentials and are on the allowlist, so that
+  string reaches every agent child. The alternative is a corporate floor that cannot fetch.
+  **Owner:** the operator.
+- (j) **Two further `...process.env` spawns in `src/main/` are NOT filtered by this
+  control** — `hive.ts`'s `startProxyBridge` (the first-party proxy sidecar) and
+  `index.ts`'s `enableCodexRemoteForSpawn` (the `codex app-server` daemon). Neither was in
+  GATE-02's owned line ranges. **Owner:** the hive maintainer.
+
+### GATE-03's ceiling — what a command-shape judge does not reach (`src/main/hooks.ts`, 13 items, (j)-(v))
+
+- (j) A runtime-assembled command string — `C=rm; $C -rf /`, or any spelling the model
+  composes after the hook has already seen the literal text.
+- (k) A `cd` into a directory followed by a relative invocation.
+- (l) A harness home containing a **space** — the Bash arm splits on whitespace.
+- (m) A base64 blob, an `eval` body or a here-doc body.
+- (n) A tool that carries no command string. A `WebFetch` to a denied host is not judged by
+  the command arm.
+- (o) The **engines**. This reaches every engine that sends a hook payload carrying a
+  command: claude (measured) and codex (envelope measured), plus the four reusing the same
+  shim — agy, grok, pi, opencode — **whose payload keys are UNMEASURED**. It does not exist
+  at all for an engine with no `PreToolUse` hook.
+- (p) **A host outside a downloader's own argument is not judged, and neither is a
+  single-label host.** The whole host arm is scoped to a downloader's first non-flag
+  argument, and that scope is measured rather than cautious: judging every scheme-ful token
+  anywhere in the command refused writing a README here-doc, because this repo's own README
+  links to ten hosts in ordinary prose. **So `git clone` / `npm` / `pip` against an unlisted
+  host, a downloader this list does not name, and any exfiltration by a non-downloader
+  binary (`nc`, `ssh`, a `node -e` fetch) are not reached.** Any wording elsewhere implying
+  the host arm covers `git clone` is wrong, and is corrected by this item.
+- (q) The host allowlist and the env pass-through list both live in `userData/config.json`,
+  outside the hive root, and GATE-02 deliberately keeps the variables that locate it. An
+  agent can append its own host to its own allowlist without a restart. **Disposition:**
+  ACCEPTED. **Owner:** the hive maintainer.
+- (r) `harness.db`, the tool-call audit trail, also lives in `userData` and is reachable by
+  the agents it audits, for the same structural reason. **Owner:** the hive maintainer.
+- (s) Both arms read `tool_input.command` and **nothing else**. An engine naming its shell
+  argument differently is judged by neither arm and is not path-protected either. Measured
+  for claude; **UNMEASURED for grok, pi, opencode, kimi and agy.**
+- (t) The deletion spellings this gate does **not** judge, enumerated so the list is not
+  read as complete: `find . -delete`, `find … -exec rm {} \;`, `git clean -xfd`, `shred`,
+  `truncate -s0`, `> file`, `dd of=`, `Remove-Item -Recurse`. The delete arm covers a
+  recursive `rm` and nothing else. **Owner:** the hive maintainer.
+- (u) `DEFAULT_HOST_ALLOWLIST` is `[ASSUMED]` and known incomplete; the operator extends it.
+  **Owner:** the operator. *(The source's own wording ties "the approval transport is wired"
+  to `openAsk` being supplied. At the closing wave that reading is stale: production passes
+  `openAsk` as `undefined` on purpose, `HookServer` owns an `ApprovalRegistry` and opens a
+  real ask anyway, and `floor/boot.ts` supplies `readConfig().hostAllowlist ?? []`. So an
+  **unlisted** host is an **ask** today; only an **emptied** allowlist is a hard deny.)*
+- (v) The delete arm's **segmentation is a heuristic, not a shell**, and it errs in both
+  directions: it splits on `;`, `&&`, `||`, `|` and newline, requires `rm` to head its
+  segment, and unwraps one level of `sh -c` / `bash -lc`. **Owner:** the hive maintainer.
+
+### GATE-05's ceiling — what a third answer does not reach (`src/main/hooks.ts`, 8 items, (a)-(h))
+
+- (a) **The deny-on-timeout only binds engines whose shim polls**, and four do not — pi,
+  OpenCode, grok and agy. See fail-open 4 above, and its `(a-rider)`: the ask is still
+  opened for those four, so the operator is paged and their answer is inert.
+- (b) An app restart mid-ask loses the in-memory registry and the next poll denies.
+  Deliberate — "asked and nobody answered" and "the floor is down" must not share a default.
+- (c) An agent that never runs a hook-bridged tool is not asked about anything.
+- (d) `--permission-mode bypassPermissions` (auto mode's default) suppresses Claude's own
+  prompt, so this gate is the only thing between the model and the command.
+- (e) **grok's and agy's `PreToolUse` timeouts are unchanged and their shims deliberately do
+  not poll.** agy is `timeout: 0`; grok writes no key at all and applies its own ~5 s
+  event-aware default **whose unit is unverified** — if it reads milliseconds, writing `150`
+  would kill every grok hook before the shim could answer. Neither CLI is installed here, so
+  neither resolver can be probed. **Owner:** whoever installs them.
+- (f) The registry's `answer` is reachable from three places — the hook socket (where the
+  owning agent is checked), the phone and the desktop IPC (where **the ask id is the whole
+  capability**). Unguessable and single-use, but named so the capability model is legible.
+- (g) Claude's `PreToolUse` budget: the unit was read out of the installed binary
+  (`claude --version` → 2.1.236, `e.timeout ? e.timeout * 1000 : <default>`, i.e. seconds).
+  **Owner:** the hive maintainer.
+- (h) `PRETOOLUSE_HOOK_TIMEOUT_SEC = 150` is five times codex's previous 30 s — a real
+  latency change on the non-ask path, bounded by the shim's own unconditional 5 s exit timer
+  on that path. `150` remains `[ASSUMED]`.
+
+### The honest cross-engine claim
+
+Kept verbatim beside the assertions that support it in `test/engine-parity.test.cjs`, and
+repeated here because a reader who trusts this file should not have to find that one. It is
+deliberately narrower than the phase's own opening wording, which bound the work to
+*"refused for Codex and Grok"* with a live agent observed in each case. grok is not
+installed on this machine and an xAI key is a recurring cost this project forbids, so that
+wording is not achievable here. The substitution is stated, never performed silently.
+
+> GATE-03 is refused **through the real `HookServer`** for Claude-shaped and Codex-shaped
+> `PreToolUse` payloads, driven by the real shim as a child process
+> (`test/gate03-roundtrip.test.cjs` and `test/engine-parity.test.cjs`), in **both command
+> shapes** — a `command` string and an argv array — with a tool name that is not Claude's
+> `Bash`. **NO LIVE AGENT HAS EVER BEEN OBSERVED REFUSED**, and that is a closed measurement
+> rather than a pending one: the phase's only live non-Claude agent could not be spawned at
+> all, because this machine's stored ChatGPT refresh token is revoked and every codex model
+> turn dies at `401 refresh_token_reused` before a tool call is ever emitted. Codex is the
+> only one of the four engines named in the phase's own success criterion that is installed
+> here (codex-cli 0.128.0).
+>
+> **Read the sense of that carefully.** It records that no live refusal was observed. It does
+> **not** record that a live agent attempted a denied shape and sailed through — that
+> experiment never ran. This is an *absence of evidence* about live enforcement, not evidence
+> of absence, and nothing may be upgraded on the strength of it. What would settle it is
+> unchanged and cheap: `codex login`, then one interactive hive agent asked to run one of
+> `commandShapeDenial`'s shapes inside its own worktree.
+>
+> It is **built for grok, kimi and agy**, and all three are **LIVE-UNVERIFIED** for want of
+> an installed CLI and an account. **grok's and agy's reply translators are each exercised
+> through a real child process**; kimi reuses `HOOK_SHIM` verbatim, which
+> `test/gate03-roundtrip.test.cjs` drives. kimi's open question is unchanged: Moonshot
+> documents a hook BLOCK as exit code 2, where this shim expresses a deny as stdout JSON at
+> exit 0.
+>
+> For **pi and OpenCode** it is **built**, and their bridge logic is executed against a real
+> `HookServer`: pi's `require()`d extension returns `{approve:false}` carrying main's own
+> reason even with `HIVE_AUTO_APPROVE=1`, and OpenCode's dynamically imported ESM plugin
+> throws its documented veto. It stays **LIVE-UNVERIFIED for pi**, and equally for OpenCode,
+> on the **runtime** question, which no test here can settle — whether pi awaits an async
+> return, and whether OpenCode auto-loads the plugin and honours a thrown veto under Bun.
+> OpenCode was additionally **inert as shipped**: it posted no `tool_input`, so main answered
+> allow on every call. That was a defect, fixed, and it is not laundered into the marker as
+> if it were an unverifiable.
+>
+> The **qwen and crush** proxy tiers have no tool-call boundary to gate at and are out of
+> scope. **copilot** has no bridge at all.
+
+One further limit of GATE-03's reach, measured and not implied: OpenCode's `read` tool names
+its target `output.args.filePath` while `protectedPathDenial` collects `file_path` / `path` /
+`notebook_path`, so **OpenCode's path arm cannot see a file read**. Its command arm does work.
+
+### GATE-04 — built, opt-in, default off, and LIVE-UNVERIFIED
+
+The codex preset gained a sandbox variant: with the per-engine opt-in on, the bypass flag is
+replaced by `-s workspace-write --add-dir <agentDir>`, spliced through one shared author
+(`sandboxFlagsForProvider`) called from both independent command assemblers.
+
+What was measured, and what was not:
+
+- **Measured, twice, in two independent sessions:** codex-cli 0.128.0 on win32 *admits* the
+  sibling agent directory into its writable-root set — its own banner prints it. That is the
+  configuration layer.
+- **Not measured: enforcement.** No model turn, no shell tool call, no write attempted. Both
+  the phase's opening spike and its live run died at `401 refresh_token_reused` before any
+  model turn. The spike's verdict was **INCONCLUSIVE**; the live interactive run **did not
+  run at all**.
+- **Not wired, and this is the part an operator needs.** Both spawn-command assemblers accept
+  an `agentDir` and splice it correctly, but **no production caller passes one today** — every
+  `buildSpawnCommand(config, model, provider)` call site is three-argument. So turning the
+  opt-in on today yields `-s workspace-write` **without** the agent's own folder added, which
+  is the failure openai/codex#23552 describes. Wiring it must go through
+  `sandboxFlagsForProvider`. **Owner:** the hive maintainer.
+
+GATE-04 therefore ships **built + `LIVE-UNVERIFIED`**, citing
+[openai/codex#23552](https://github.com/openai/codex/issues/23552) (OPEN), **neither
+reproduced nor ruled out**. Leave the opt-in off until a live run says otherwise.
+
+### The phone's push leg is composed but not delivered
+
+GATE-05's ask and VIGIL-01's absence alarm both compose a push payload
+(`askPushPayload`, `floorQuietPushPayload` in `src/main/push.ts`) and neither sends one.
+`push.ts` persists a VAPID keypair and nothing else; `webhook.ts` has **no
+subscription-intake route**, so **no `PushSubscription` has ever been captured in this
+process**. The absence alarm reaches the desktop only, and says so in its own log line. An
+alarm raised while the operator's phone is asleep does not arrive. **Owner:** whoever adds
+the intake route. This is one root cause with two visible stubs, not two independent gaps.
+
+Related, and recorded rather than fixed: `resources/phone/sw.js`'s comment above the
+notification body still says the body is the fixed phrase **"unconditionally"**. Since the
+one-line fallback landed, the body renders `data.body` when the sender supplies one — the
+security property still holds because the two composers above are the only senders and
+neither carries a command, a path or a question, but **the guarantee moved from the worker
+to the sender and the comment has not caught up**. A future author who trusts it could put a
+command string in `data.body`. **Owner:** the next plan permitted to touch `sw.js`.
+
 ## Supported versions
 
 Security fixes target the `main` branch only.

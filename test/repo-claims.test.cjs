@@ -714,7 +714,14 @@ const FLOOR12_ALLOWLIST = [
   { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
   { file: 'src/renderer/src/components/AgentStrip.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
   { file: 'src/renderer/src/components/AskMeTab.tsx', text: '<span aria-hidden="true" style={{ fontSize: 13 }}>✕</span>', count: 1 },
-  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: "{armed && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}", count: 1 },
+  // Plan 04-18 (wave 6) split this glyph on `armed && blocked` so the breaker is
+  // announced to an AT operator once plan 04-14's badge stopped saying `looping`
+  // (T-04-BLK-10). The entry moves in the SAME commit as the line it pins — which
+  // is the whole reason that rider waited two waves for the wave that owns this
+  // file. The list is NOT widened: the blocked branch carries no inline numeric
+  // fontSize, so it produces no M1 hit, needs no entry, and clause 3 never sees
+  // it. The repo-wide M1 total and this list's length are both unchanged.
+  { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: "{armed && a.status !== 'blocked' && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}", count: 1 },
   { file: 'src/renderer/src/components/CommandCenterPanel.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✓</span>', count: 1 },
   { file: 'src/renderer/src/components/FullscreenFileEditor.tsx', text: '<span aria-hidden="true" style={{ fontSize: 12 }}>✕</span>', count: 1 },
   { file: 'src/renderer/src/components/FullscreenTerminal.tsx', text: '<span aria-hidden="true" style={{ fontSize: 11 }}>✕</span>', count: 1 },
@@ -1284,37 +1291,135 @@ test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => 
 /** Every file under `src/` that carries at least one `LIVE-UNVERIFIED`
  *  marker, mapped to its EXACT occurrence count. Re-measure with:
  *  `grep -ro 'LIVE-UNVERIFIED' src/ | cut -d: -f1 | sort | uniq -c`
- *  Measured in THIS session at `02779b9` (2026-08-24, after this plan's own
- *  fix commit added qwen's missing marker) — never copied from a plan file
- *  or a prior SUMMARY. */
+ *  Re-measured in THIS session by plan 04-10 (2026-08-25), in the same commit
+ *  as the two markers it added — never computed by adding a plan's expected
+ *  marker count to the previous ledger, and never copied from a plan file or
+ *  a prior SUMMARY. Plan 02-12 found a real gap the arithmetic way round.
+ *  `src/main/hiveTemplates.ts` went 3 → 5: GATE-03 gave pi a request/response
+ *  PreToolUse path and OpenCode a veto, and each carries its own marker.
+ *  RE-MEASURED AGAIN by plan 04-13 (2026-08-25, wave 4) with the command above,
+ *  in the same commit as the marker it adds. `src/shared/agentProvider.ts`
+ *  went 3 → 4: GATE-04's codex sandbox path. The FILE SET is unchanged — no
+ *  file gained or lost its first marker — which is why the file-set assertion
+ *  below stays green while the two counts move.
+ *  RE-MEASURED AGAIN by plan 04-16 (2026-08-25, wave 5) with the command above
+ *  in that session, in the same commit as the two markers it adds — not by
+ *  adding 2 to plan 04-13's figures. `src/main/hiveTemplates.ts` went 5 → 7:
+ *  GATE-05's bounded wait puts a poll loop in `HOOK_SHIM`, and the two markers
+ *  say DIFFERENT things. One is kimi's — the loop is real new code and kimi is
+ *  one of the three engines that runs this shim, exercised here on Claude's and
+ *  codex's contract rather than kimi's, with `hiveTemplates.ts`'s own note that
+ *  Moonshot documents a BLOCK as exit code 2 still open. The other is grok's
+ *  and agy's — their shims are UNCHANGED and an ask degrades to a deny through
+ *  decoders they already ship, a translation `test/gate05-bounded-wait.test.cjs`
+ *  case 7 drives as a real child process on this machine, so what is unverified
+ *  there is the ENGINE honouring the deny, not the shim writing it. The FILE
+ *  SET is unchanged again. */
 const MARKER_LEDGER = {
   'src/main/hive.ts': 3,
   'src/main/hiveProvisioning.ts': 5,
-  'src/main/hiveTemplates.ts': 3,
+  'src/main/hiveTemplates.ts': 7,
   'src/main/index.ts': 1,
   'src/main/webhook.ts': 3,
-  'src/shared/agentProvider.ts': 3
+  'src/shared/agentProvider.ts': 4
 };
 
 /** The repo-wide EXACT total of raw `LIVE-UNVERIFIED` occurrences under
  *  `src/` — the sum of MARKER_LEDGER's values, re-measured in THIS session
- *  at `02779b9` (2026-08-24) with
+ *  by plan 04-10 (2026-08-25) with
  *  `grep -rc 'LIVE-UNVERIFIED' src --include=*.ts | grep -v ':0' | awk -F: '{s+=$2} END {print s}'`.
  *  The ONLY reason this number is allowed to change is a real marker being
  *  added or removed in source — never a refactor, a rename, or a change to
- *  how this file strips comments. */
-const LIVE_UNVERIFIED_TOTAL = 18;
+ *  how this file strips comments. 18 → 20: GATE-03's two new engine paths.
+ *  20 → 21, re-measured by plan 04-13 (2026-08-25, wave 4) with the command
+ *  above and NOT by adding one to 20: GATE-04's codex sandbox path ships
+ *  built-but-unverified, because this machine's codex auth is dead
+ *  (401 `refresh_token_reused`, re-tested live in that session) so the plan's
+ *  own live interactive run could not execute. openai/codex#23552 is OPEN and
+ *  neither reproduced nor ruled out.
+ *  21 → 23, re-measured by plan 04-16 (2026-08-25, wave 5) with the command
+ *  above in that session and NOT by adding two to 21: GATE-05's poll loop ships
+ *  with one marker for kimi's path through it and one for grok's and agy's
+ *  deliberate absence from it. This is also the answer to plan 04-19's
+ *  zero-marker sweep for GATE-05 — a decision, recorded, rather than a hole.
+ *  RE-MEASURED AT THE CLOSING WAVE by plan 04-19 (2026-08-26, wave 7) with the
+ *  command above, run in that session. It reads 23 and the per-file split is
+ *  unchanged, so nothing here moved — recorded because "re-measured and found
+ *  identical" and "not re-measured" are the same number and different facts,
+ *  and this file's whole premise is that the difference matters. */
+const LIVE_UNVERIFIED_TOTAL = 23;
 
-/** The five engines this phase built bridges for and never live-verified
- *  (D-33, D-35): none of these four CLIs is installed on this machine
- *  (`pi`, `opencode`, `crush`, `qwen`), and `kimi`'s bridge is new and
- *  unverified by construction. Committed here rather than derived from
+/** The five engines this project built bridges for and never live-verified
+ *  (D-33, D-35), mapped to the MINIMUM number of marker blocks that must
+ *  name each: none of these four CLIs is installed on this machine
+ *  (`pi`, `opencode`, `crush`, `qwen`), and `kimi`'s bridge is unverified by
+ *  construction. Committed here rather than derived from
  *  `agentProvider.ts`'s preset table, because the whole point of the
  *  per-engine assertion below is to catch a bridge that shipped with NO
  *  marker at all — deriving the expected set from the same table the
  *  markers are supposed to describe would let a missing marker hide behind
- *  a missing list entry too. */
-const LIVE_UNVERIFIED_ENGINES = ['pi', 'opencode', 'crush', 'qwen', 'kimi'];
+ *  a missing list entry too.
+ *
+ *  A per-engine COUNT rather than mere presence, since plan 04-10 (2026-08-25).
+ *  `>= 1` cannot see an engine being unmarked in one place while a second,
+ *  unrelated marker still names it — the exact shape of the drift the total
+ *  pin above also cannot see. The numbers are a live measurement from that
+ *  session, not arithmetic: pi 3 → 4 and opencode 4 → 5 because GATE-03 gave
+ *  each a second marker (pi's request/response PreToolUse path, OpenCode's
+ *  veto), on top of their pre-existing bridge markers. Lowering any of these
+ *  is a claim that a real session ran against a real account — say which.
+ *
+ *  DELIBERATELY UNCHANGED by plan 04-13, which is a decision rather than an
+ *  oversight. That plan added a marker on codex's SANDBOX path, and codex is
+ *  not in this map: this map is about BRIDGES that were never live-verified,
+ *  and codex's bridge is not one of them — codex is installed here (0.128.0)
+ *  and its hook bridge does run. Adding `codex` would conflate an unverified
+ *  sandbox with an unverified bridge, and the floor would be met by any of the
+ *  five pre-existing marker blocks that merely CROSS-REFERENCE codex (kimi's
+ *  says "the CODEX case, not the grok case"), so it would pin almost nothing.
+ *  Measured, not assumed: 6 blocks name codex with the new marker, 5 without.
+ *  The repo-wide total above is what holds the new marker in place.
+ *
+ *  RAISED FOR kimi ONLY by plan 04-16 (2026-08-25, wave 5), 5 → 6, from a live
+ *  run of this file's own `markerBlocks` over `src/` in that session — before
+ *  21 blocks {pi 4, opencode 5, crush 1, qwen 1, kimi 5, grok 3, agy 1,
+ *  codex 6}, after 23 blocks {pi 4, opencode 5, crush 1, qwen 1, kimi 6,
+ *  grok 4, agy 2, codex 7}. GATE-05's poll loop carries a kimi marker, and
+ *  raising the floor to the measured value is what stops that marker being
+ *  quietly dropped later while the total still balances — the exact drift this
+ *  per-engine half exists to catch.
+ *
+ *  `grok` and `agy` are DELIBERATELY still absent, which is a decision rather
+ *  than an oversight and is written down so plan 04-19's sweep finds one. Both
+ *  gained a marker block in the same commit (3 → 4 and 1 → 2), and neither CLI
+ *  is installed here. But this map is the set plans 04-10 and 04-13 scoped to
+ *  bridges that were never live-verified, and adding two engines to it is a
+ *  claim about THEIR bridges that this plan neither made nor measured: what
+ *  04-16 observed is that their UNCHANGED decoders translate an ask reply into
+ *  their own deny, driven as real child processes here
+ *  (`test/gate05-bounded-wait.test.cjs` case 7 for grok,
+ *  `test/engine-parity.test.cjs` for agy). Widening the map on the back of that
+ *  would conflate an unverified engine with an unverified bridge, the same
+ *  conflation 04-13 refused for codex. The repo-wide total above is what holds
+ *  the grok/agy marker in place.
+ *
+ *  THE ZERO-MARKER SWEEP, plan 04-19, wave 7 — the job plan 02-12 invented after
+ *  finding `qwen` with ZERO markers while it was exactly as unverified as
+ *  pi/opencode/crush. Run over all 23 blocks in this session, by canonical
+ *  `AgentProvider` id rather than by the short names the prose uses, because an
+ *  audit keyed on the union type is how the next reader will check: claude 11,
+ *  codex 7, kimi 6, opencode 5, pi 4, grok 4, agy 2, crush 1, qwen 1,
+ *  antigravity 0, copilot 0. Verdict: NO bridged engine carries zero markers.
+ *  The two zeroes are both explained and neither is a hole — `copilot` has no
+ *  bridge at all (nothing to mark), and `antigravity` is the CANONICAL id of the
+ *  engine every marker block spells `agy`, which carries 2. That alias is the
+ *  one thing worth writing down: it is a naming inconsistency, not a missing
+ *  marker, and it is recorded rather than inflated into a finding it is not.
+ *  codex's SANDBOX path was checked by name for the same reason (04-13's spike
+ *  came back INCONCLUSIVE, not clean) and carries its own marker. */
+const LIVE_UNVERIFIED_ENGINES = {
+  pi: 4, opencode: 5, crush: 1, qwen: 1, kimi: 6
+};
 
 /** Raw (un-stripped) contents of a repo-relative file. The required read
  *  path for anything counting `LIVE-UNVERIFIED`: the marker IS a comment,
@@ -1439,22 +1544,24 @@ test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned per file, repo-wide, per e
   // block, attributed structurally (never by character count). A total
   // alone is satisfied by unmarking crush and adding a marker elsewhere —
   // this is the positive half that catches exactly that.
-  const engineCounts = Object.fromEntries(LIVE_UNVERIFIED_ENGINES.map((e) => [e, 0]));
+  const engines = Object.keys(LIVE_UNVERIFIED_ENGINES);
+  const engineCounts = Object.fromEntries(engines.map((e) => [e, 0]));
   for (const rel of allSrcFiles) {
     for (const block of markerBlocks(rel)) {
-      for (const engine of LIVE_UNVERIFIED_ENGINES) {
+      for (const engine of engines) {
         if (new RegExp(`\\b${engine}\\b`, 'i').test(block)) engineCounts[engine]++;
       }
     }
   }
-  for (const engine of LIVE_UNVERIFIED_ENGINES) {
+  for (const [engine, floor] of Object.entries(LIVE_UNVERIFIED_ENGINES)) {
     assert.ok(
-      engineCounts[engine] >= 1,
-      `${engine} has ${engineCounts[engine]} attributed LIVE-UNVERIFIED marker(s), expected >= 1. `
-      + `Under the zero-recurring-cost rule the honest answer is normally "none, and it stays `
-      + `marked" — which account was ${engine}'s bridge verified against, by whom, on what date? `
-      + 'If the answer is a real one, replace the marker with the evidence; if not, put the '
-      + 'marker back.'
+      engineCounts[engine] >= floor,
+      `${engine} has ${engineCounts[engine]} attributed LIVE-UNVERIFIED marker(s), expected >= `
+      + `${floor}. Under the zero-recurring-cost rule the honest answer is normally "none, and `
+      + `it stays marked" — which account was ${engine}'s bridge verified against, by whom, on `
+      + 'what date? If the answer is a real one, replace the marker with the evidence; if not, '
+      + 'put the marker back. Re-measure, never subtract: the per-engine floor is a live '
+      + 'measurement, and arithmetic over a prior figure is how plan 02-12\'s gap survived.'
     );
   }
 });
@@ -1638,4 +1745,558 @@ test('SECURITY.md: the tunnel-close claim is corrected, and the three new exposu
       + 'deleting the tunnel outright must fail this clause too, not just re-inlining it.'
     );
   }
+});
+
+/* ── FLOOR-04: one padded file must not disable the scanner for the rest ──
+ *
+ * gitCommitter's own header documented this as ACTIVE BYPASS 2:
+ *
+ *   "seq 20001 > pad.txt in the same debounce window pushes --numstat past
+ *    SECRET_SCAN_MAX_LINES and sends the WHOLE commit, secret included, down
+ *    the `committing UNSCANNED` path."
+ *
+ * i.e. a single agent-controllable command walked a credential into history by
+ * making the commit merely LARGE. Not theoretical — it fired twice on an
+ * operator's machine (105,089 and 106,609 lines) before anyone looked at the log.
+ *
+ * The cap now applies PER FILE. A genuinely enormous single file is still
+ * skipped, and named; it can no longer take its neighbours with it. */
+test('FLOOR-04: the line cap is applied per file, not to the whole staged diff', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'gitCommitter.ts'), 'utf8');
+  const fn = src.slice(src.indexOf('private async scrubStagedSecrets'));
+
+  // The whole-diff early return is what made one pad file fatal. It must be gone.
+  assert.ok(!/reason: 'diff-too-large'/.test(fn),
+    "the whole-commit 'diff-too-large' skip must not exist: it let one padded file send every "
+    + 'other file in the commit, secret included, into history unscanned');
+
+  // Over-cap commits must now take a per-file path that still scans what it can.
+  assert.ok(/secret-scan-chunked/.test(fn),
+    'an over-cap commit must fall back to per-file scanning, not to skipping everything');
+  assert.ok(/scanned \$\{parts\.length\}\/\$\{rows\.length\} files individually/.test(fn),
+    'the operator must be told how many files were actually scanned');
+
+  // And the files it could NOT scan must be named — "which file went unscanned"
+  // is the question an operator actually has, and the old message could not answer it.
+  assert.ok(/UNSCANNED: \$\{skipped\.join/.test(fn),
+    'skipped files must be named individually, not summarised as a line count');
+
+  // The per-file cap comparison must be against that file's own line count.
+  assert.ok(/lines > SECRET_SCAN_MAX_LINES/.test(fn),
+    'the cap must be compared against each FILE\'s line count, not the commit total');
+});
+
+// ─── GATE-04 (04-13): the Settings sandbox group says what it does ───────────
+//
+// The copy is fixed by 04-UI-SPEC rule S-4 and pinned VERBATIM, because the
+// sub-label is the operator's escape hatch: this feature's own failure mode is a
+// floor that silently stops working at 3am, and "turn it off if this engine stops
+// writing" is the sentence that gets them back out. A paraphrase loses that.
+test('GATE-04: the Settings sandbox group carries rule S-4\'s copy verbatim, with a DERIVED count', () => {
+  const settings = readRaw('src/renderer/src/components/SettingsModal.tsx');
+
+  for (const copy of [
+    "Codex — sandbox off (today's behaviour)",
+    'Codex — sandbox on, agent folder writable',
+    'Applies to newly spawned agents. Turn it off if this engine stops writing.'
+  ]) {
+    assert.ok(settings.includes(copy), `rule S-4 copy missing or paraphrased: ${copy}`);
+  }
+
+  // Rule S-3: ONE row per sandbox-capable engine, and the rest named in one quiet
+  // sentence whose number is DERIVED. A hard-coded "ten" is the failure this pins —
+  // when a second engine gains support the row appears and the number must drop by
+  // itself, with no edit here and no stale sentence left behind.
+  assert.equal(
+    (settings.match(/other ten engines/g) || []).length, 0,
+    'the "other N engines" count is hard-coded. It must be derived from the preset '
+    + 'table, so a second sandbox-capable engine moves the row list and the number together.'
+  );
+  assert.ok(
+    /AGENT_PROVIDER_PRESETS\.length - sandboxEngines\.length/.test(settings),
+    'the count must be the preset table minus the sandbox-capable engines'
+  );
+  assert.ok(
+    /sandboxEngines\.map\(/.test(settings),
+    'rows must be mapped from the derived sandbox-capable list, never written out one by one'
+  );
+
+  // D-33/D-40: the positive lower bound beside the negatives. The derivation must
+  // actually produce ONE row and TEN others today — a derivation that yields zero
+  // rows would satisfy every assertion above while showing the operator nothing.
+  const shared = readRaw('src/shared/agentProvider.ts');
+  const capable = (shared.match(/^\s{4}sandboxFlags:/gm) || []).length;
+  const presets = (shared.match(/^\s{4}id: '/gm) || []).length;
+  assert.equal(capable, 1, 'D-15: exactly one engine ships the opt-in');
+  assert.equal(presets - capable, 10, 'and the sentence therefore says ten');
+});
+
+// AddAgentModal is a READ-ONLY reflection of that setting, never a second control:
+// a per-engine setting with two controls in two places is how the two splice sites
+// drift in the UI as well as in the code (L-08 / T-04-SBX-04).
+test('GATE-04: AddAgentModal previews the sandbox without offering a second control', () => {
+  const modal = readRaw('src/renderer/src/components/AddAgentModal.tsx');
+  assert.ok(
+    modal.includes('Command (auto mode on · sandbox on)'),
+    'the command preview must report the sandbox when it is on'
+  );
+  // Narrowly: it must never WRITE providerSandbox. It legitimately writes other
+  // config (registeredRepos, agentTokenCaps), so a blanket "no updateConfig" ban
+  // would be a false claim about this file — the invariant is about THIS key.
+  assert.ok(
+    !/providerSandbox\s*:/.test(modal),
+    'AddAgentModal must never WRITE providerSandbox — Settings owns that control, and a '
+    + 'per-engine setting with two controls in two places drifts exactly like the two splices do'
+  );
+  // …but it must still READ it, or the preview label is decorative (D-33/D-40's
+  // positive bound: this is what proves the negative above is not vacuous).
+  assert.ok(
+    /config\.providerSandbox\?\.\[provider\]/.test(modal),
+    'the preview must READ providerSandbox, or the sandbox label can never appear'
+  );
+});
+
+test('FLOOR-04: the bypass register does not claim a bypass that is now closed', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'gitCommitter.ts'), 'utf8');
+  const header = src.slice(0, src.indexOf('private async scrubStagedSecrets'));
+  const two = header.slice(header.indexOf('2. THE LINE CAP'), header.indexOf('3. THE BYTE CAP'));
+  assert.ok(/CLOSED/.test(two),
+    'bypass 2 is closed in code, so the register must say so. A source comment that documents '
+    + 'a bypass which no longer exists is the same defect class as one that documents a '
+    + 'mitigation it does not enforce — the next reader trusts it either way.');
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// GATE-05 (plan 04-18, wave 6) — the desktop approval route, asserted at every
+// hop it has to cross.
+//
+// D-45's reason for these living here rather than in a SUMMARY: a grep that
+// lives in a report rots, and every one of these is a security property. The
+// counts are MEASURED, per file and per direction — a bare `grep -c` over two
+// files prints `file:count` per file and compares against nothing, which is how
+// the round-3 draft of this criterion managed to assert nothing at all.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Occurrences (not lines) of a literal in a comment-stripped source file. */
+const strippedHits = (rel, needle) => readStripped(rel).split(needle).length - 1;
+
+test('GATE-05: the approval EVENT channel is reused — no second main→renderer name', () => {
+  // `control:approvalRequest` already existed and is already named for this.
+  // One send in main, one on + one removeListener in the preload. Unchanged by
+  // plan 04-18: the answer needs a name of its own, the event does not.
+  assert.equal(strippedHits('src/main/hooks.ts', "'control:approvalRequest'"), 1,
+    'the ask event has more than one publisher in main, or none');
+  assert.equal(strippedHits('src/preload/index.ts', "'control:approvalRequest'"), 2,
+    'the preload subscription no longer pairs `on` with `removeListener` — a 1 means the unsubscribe leaks, a 3 means a second channel was added for an event that already had one');
+});
+
+test('GATE-05: the ANSWER is exactly one new renderer→main invoke channel', () => {
+  // The other direction, which DOES need a name: an ipcMain.handle must have
+  // one. Exactly one, and the same spelling on both sides of the bridge.
+  assert.equal(strippedHits('src/main/index.ts', "'control:answerApproval'"), 1,
+    'the answer handler is missing, or registered twice');
+  assert.equal(strippedHits('src/preload/index.ts', "'control:answerApproval'"), 1,
+    'the preload no longer invokes the answer channel, or invokes it from two places');
+
+  const main = readStripped('src/main/index.ts');
+  assert.equal(main.split("ipcMain.handle('control:").length - 1, 9,
+    'the `control:` handler count moved off 9 (measured 8 before plan 04-18 added the answer) — exactly one handler was added and no other was dropped');
+
+  // The settle routes through HookServer's NAMED accessor, never a second
+  // registry: two registries means an ask answered on the desktop stays open on
+  // the phone, and the shim polls whichever one it was opened in.
+  assert.match(main, /hookServer\.answerApproval\(/,
+    'the desktop settle does not reach ApprovalRegistry through HookServer.answerApproval — a second registry would let the same ask be answered twice, with opposite verdicts');
+});
+
+test('GATE-05: the renderer names NEITHER channel literal — contextIsolation makes the preload the only place they can live', () => {
+  // `contextIsolation: true` and the `cth` bridge mean every channel literal
+  // stays in the preload. Comment-stripped, so the JSDoc at useHive.ts:345 that
+  // legitimately MENTIONS `control:approvalRequest` cannot redden a security
+  // gate and push an executor into deleting a comment to make it pass.
+  assert.equal(strippedHits('src/renderer/src/hooks/useHive.ts', 'control:'), 0,
+    'a channel literal crossed the bridge into the renderer');
+
+  // D-33/D-40's positive lower bound over the SAME stripped text, so an emptied
+  // or unparsed file cannot satisfy the negative above.
+  assert.ok(strippedHits('src/renderer/src/hooks/useHive.ts', 'window.cth') >= 30,
+    'useHive subscribes through fewer than the 30 measured `window.cth` hops — the negative above is now passing on a file that lost its subscriptions');
+});
+
+test('ADR-0001: the approval answer is not a second PTY typer', () => {
+  // The whole of T-04-ASK-21. `writePty` must be exactly where it already was:
+  // the PTY-parser-derived reasons BlockedBanner's callers were written for.
+  // Plan 04-18 branches AROUND that path on `askId` and adds no new call site.
+  assert.equal(strippedHits('src/renderer/src/hooks/useHive.ts', 'writePty'), 2,
+    'the writePty count in useHive moved — an ask must reach ApprovalRegistry.answer through the IPC and the hook return, never a live PTY (ADR-0001)');
+  for (const rel of [
+    'src/renderer/src/components/AgentDetailPanel.tsx',
+    'src/renderer/src/components/CommandCenterPanel.tsx'
+  ]) {
+    assert.equal(strippedHits(rel, 'writePty'), 1,
+      `${rel} gained or lost a writePty call. The existing path survives unchanged for non-ask reasons; the ask path must not acquire one`);
+  }
+});
+
+test('GATE-05 rule G-3: the desktop countdown is re-derived from an anchor, never decremented', () => {
+  const rel = 'src/renderer/src/components/BlockedBanner.tsx';
+  const src = readStripped(rel);
+
+  // A backgrounded window throttles intervals, so a decremented counter drifts
+  // arbitrarily far in the OPTIMISTIC direction — it tells the operator they have
+  // time to answer a question that has already auto-denied.
+  assert.equal(/remaining\s*(--|-=)|--\s*remaining|setRemaining\(/.test(src), false,
+    'the countdown decrements a counter instead of re-deriving from its anchor');
+
+  // D-33/D-40's positive bound over the same text, so the negative above cannot be
+  // satisfied by a banner that never counts at all.
+  assert.ok(strippedHits(rel, 'receivedAt') >= 2,
+    'the countdown anchor is not both written and read');
+  assert.ok(strippedHits(rel, 'expiresInMs') >= 1,
+    "main's measured duration is not consumed");
+  assert.equal(strippedHits(rel, 'expiresAt'), 0,
+    'a deadline TIMESTAMP reached the banner. The renderer clock is not main\'s, and the whole reason main sends a duration is that the two never have to agree');
+});
+
+test("VIGIL-01: the QUIET chip's route is real at ALL THREE hops — T-04-ABS-10 is a chip with nowhere to get its snapshot", () => {
+  // A chip that renders geometry and never fills is the whole of T-04-ABS-10, and
+  // `contextIsolation: true` means the three hops are not optional plumbing: without
+  // the middle one the seam does not cross at all. Each is asserted with the number a
+  // CORRECT implementation actually produces, which is not the same as "at least one".
+
+  // 1. PUBLISHER, main. Plan 04-11 owns this and this plan only listens; one publish
+  //    site, one spelling. Scoped to the `deps.send(` call rather than the bare
+  //    literal, because plan 04-11 also requires a comment quoting the channel.
+  assert.equal(strippedHits('src/main/floor/boot.ts', "deps.send('floor:quiet'"), 1,
+    "the watchdog's publish site is missing or duplicated — report against plan 04-11 rather than adding one here; this plan owns no src/main file beyond index.ts's IPC handler");
+
+  // 2. BRIDGE, preload — where the literal LIVES, and exactly twice: the
+  //    `ipcRenderer.on` and its `removeListener`, which is `onApprovalRequest`'s
+  //    shape verbatim. A 1 means the unsubscribe leaks a listener per remount.
+  assert.equal(strippedHits('src/preload/index.ts', "'floor:quiet'"), 2,
+    'the preload hop is missing, or its subscription no longer pairs `on` with `removeListener`');
+
+  // 3. CONSUMER, renderer — the method by name and the literal NOT at all. Both
+  //    directions, so a listener wired to nothing and a literal planted to satisfy a
+  //    grep each fail.
+  const useHive = 'src/renderer/src/hooks/useHive.ts';
+  assert.equal(strippedHits(useHive, 'onFloorQuiet'), 1,
+    'the renderer does not subscribe to the quiet latch, so the store field is never filled and the chip can never appear');
+  assert.equal(strippedHits(useHive, "'floor:quiet'"), 0,
+    'the channel literal crossed the bridge into the renderer, where contextIsolation means it can do nothing but drift');
+
+  // ⚠ A TYPED call, not a cast. `useHive.ts`'s context-trigger effect deliberately
+  // escapes CthApi — `(window.cth as unknown as {...}).onContextTrigger?.(…)` — so it
+  // could land before its preload method existed. Copying that shape here would make
+  // `npm run typecheck` prove nothing about whether `onFloorQuiet` is really on the
+  // bridge, and every criterion above would pass on a listener bound to undefined.
+  assert.equal(strippedHits(useHive, 'window.cth.onFloorQuiet('), 1,
+    'the quiet listener is not a direct typed call on the bridge');
+  assert.equal(strippedHits(useHive, 'as unknown as'), 2,
+    'the `as unknown as` count in useHive.ts moved off its measured 2. A third cast is how a listener binds to a bridge method that does not exist while every other check stays green');
+
+  // The `.d.ts` is 9 lines and derives the whole surface from
+  // `export type CthApi = typeof api`, so it names NO bridge method — measured, it
+  // matches zero of onApprovalRequest/onBreakerState/onHiveQueue while index.ts
+  // matches several. A token added here to satisfy a grep would be dead.
+  assert.equal(strippedHits('src/preload/index.d.ts', 'onFloorQuiet'), 0,
+    'the .d.ts named a bridge method. It derives the surface from typeof api and names none of them; the typecheck coverage this reaches for is already carried by tsconfig.web.json');
+});
+
+// ─── 04-19 (wave 7): the phase's closing clauses ───────────────────────────
+//
+// Four clauses, each asserting BOTH directions (D-33/D-40): softening or
+// deleting the claim fails, and inflating it fails. They land here, in the
+// closing wave, because this is the first commit in which SECURITY.md carries
+// the claims AND this file is free to pin them — plan 04-10 (wave 3) wrote the
+// honest claim and deliberately left it unpinned rather than pin a comment it
+// had just written in the same commit, which would have been self-certifying.
+//
+// GREP-GATE HYGIENE, binding here: every count-based gate below runs over text
+// with Markdown HEADINGS stripped, because a heading naming a token is the
+// documentation-level equivalent of the comment case `readStripped` exists for,
+// and every negative is paired with a positive LOWER BOUND in the same clause,
+// so an empty extraction (a renamed heading, a deleted section, a moved file)
+// fails LOUDLY instead of satisfying the negative by parsing nothing.
+
+/** Repo-relative Markdown, with heading lines removed and all whitespace
+ *  squeezed to single spaces. The required read path for anything asserting a
+ *  PHRASE over a doc: SECURITY.md wraps at ~88 columns, so every claim in it
+ *  straddles a newline and a line-oriented grep would miss the ones that
+ *  matter most (D-33/D-40). */
+const readDocJoined = (rel) => fs.readFileSync(path.join(root, rel), 'utf8')
+  .replace(/\r/g, '')
+  .split('\n')
+  .filter((l) => !/^#/.test(l))
+  .join(' ')
+  .replace(/^>\s?|\s>\s?/g, ' ')
+  .replace(/\s+/g, ' ');
+
+/** The lines of `rel` between the heading matching `fromRe` and the next
+ *  heading of the same-or-higher level. Section-scoped on purpose: GATE-02's
+ *  ceiling is lettered (a)-(j) and GATE-05's (a)-(h), so a whole-file letter
+ *  count cannot tell them apart and would score either gate as complete on the
+ *  other's items. */
+function docSection(rel, fromRe) {
+  const lines = fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r/g, '').split('\n');
+  const start = lines.findIndex((l) => /^#{2,4}\s/.test(l) && fromRe.test(l));
+  if (start < 0) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => /^#{2,4}\s/.test(l));
+  return (end < 0 ? rest : rest.slice(0, end)).join('\n');
+}
+
+/** Item markers `- (a)` … `- (v)` in a doc section, deduplicated by letter, so
+ *  a section that repeats one item does not score as two. Filtered so a heading
+ *  can never satisfy the gate — `docSection` already excludes them. */
+function docItemLetters(sectionText) {
+  const seen = new Set();
+  for (const m of sectionText.matchAll(/^\s*[-*(]\s*\(([a-v])\)/gm)) seen.add(m[1]);
+  return seen;
+}
+
+/** Occurrences of `needle` in `text` whose ±`radius`-character window also
+ *  contains `nearRe`. The shape every negative below uses: "the doc must not
+ *  describe grok as live-verified" is a PROXIMITY claim, and a bare
+ *  `indexOf(...) === -1` on either token alone would forbid honest prose that
+ *  names the token in order to deny it. */
+function nearMatches(text, needle, nearRe, radius = 200) {
+  const out = [];
+  for (const m of text.matchAll(new RegExp(needle, 'gi'))) {
+    const win = text.slice(Math.max(0, m.index - radius), m.index + m[0].length + radius);
+    if (nearRe.test(win)) out.push(win);
+  }
+  return out;
+}
+
+test('04-19 clause 1: SECURITY.md carries each gate ceiling at NO FEWER items than its source (D-34)', () => {
+  // ── The SOURCE counts, measured here rather than quoted. The doc is asserted
+  //    AGAINST the source, so a ceiling item added to hooks.ts and never written
+  //    into SECURITY.md fails this clause — which is the whole point: a stale
+  //    `(j)-(o)` range in the doc would silently drop ten items that are exactly
+  //    the remedies two red-team rounds produced.
+  const hooks = readRaw('src/main/hooks.ts');
+  const g3Src = hooks.slice(hooks.indexOf('(j) a RUNTIME-ASSEMBLED'), hooks.indexOf('INHERITED AND RESTATED'));
+  const g5Src = hooks.slice(hooks.indexOf("GATE-05's CEILING"), hooks.indexOf('private openApproval'));
+  const srcLetters = (text, re) => {
+    const seen = new Set();
+    for (const m of text.matchAll(re)) seen.add(m[1]);
+    return seen;
+  };
+  // `(j)` heads its own slice, so it is counted explicitly; every later item is
+  // matched by the 3-space doc-comment indent the file uses for list items —
+  // which is also what excludes the `(a)'s degradation` CROSS-REFERENCE inside
+  // GATE-05's item (e), indented seven spaces. Measured: without that exclusion
+  // the GATE-05 block scores 9 for 8 items.
+  const g3SrcLetters = srcLetters(g3Src, /^\s*\*\s{3}\(([k-v])\)/gm);
+  g3SrcLetters.add('j');
+  const g5SrcLetters = srcLetters(g5Src, /^\s*\*\s{3}\(([a-h])\)/gm);
+
+  assert.ok(g3SrcLetters.size >= 13,
+    `hooks.ts's GATE-03 ceiling has ${g3SrcLetters.size} distinct items, expected >= 13 ((j)-(v)). `
+    + 'The ceiling shrank in SOURCE — report that, do not shrink the doc to match.');
+  assert.ok(g5SrcLetters.size >= 8,
+    `hooks.ts's GATE-05 ceiling has ${g5SrcLetters.size} distinct items, expected >= 8 ((a)-(h)).`);
+
+  // ── The DOC counts, section-scoped and heading-filtered.
+  const g3Doc = docSection('SECURITY.md', /GATE-03's ceiling/);
+  const g5Doc = docSection('SECURITY.md', /GATE-05's ceiling/);
+  const g2Doc = docSection('SECURITY.md', /GATE-02's ceiling/);
+  assert.ok(g3Doc && g5Doc && g2Doc,
+    'SECURITY.md no longer has the three per-gate ceiling sections — their headings were renamed or '
+    + 'the sections deleted, and every count below would then measure nothing at all');
+
+  const g3DocLetters = docItemLetters(g3Doc);
+  const g5DocLetters = docItemLetters(g5Doc);
+  const g2DocLetters = docItemLetters(g2Doc);
+
+  // Positive lower bounds FIRST, so an empty extraction can never pass the
+  // comparison below by scoring 0 on both sides.
+  assert.ok(g2DocLetters.size >= 10,
+    `SECURITY.md's GATE-02 ceiling lists ${g2DocLetters.size} items, expected >= 10 ((a)-(j) in shellEnv.ts)`);
+  assert.ok(g3DocLetters.size >= 13,
+    `SECURITY.md's GATE-03 ceiling lists ${g3DocLetters.size} items, expected >= 13`);
+  assert.ok(g5DocLetters.size >= 8,
+    `SECURITY.md's GATE-05 ceiling lists ${g5DocLetters.size} items, expected >= 8`);
+
+  assert.ok(g3DocLetters.size >= g3SrcLetters.size,
+    `SECURITY.md carries ${g3DocLetters.size} GATE-03 ceiling items against hooks.ts's `
+    + `${g3SrcLetters.size}. A doc count lower than its source count is a boundary described as `
+    + 'tighter than it is.');
+  assert.ok(g5DocLetters.size >= g5SrcLetters.size,
+    `SECURITY.md carries ${g5DocLetters.size} GATE-05 ceiling items against hooks.ts's `
+    + `${g5SrcLetters.size}.`);
+
+  // The two items a stale range would have dropped FIRST, named individually so
+  // the failure message says which remedy went missing rather than "a count moved".
+  for (const letter of ['s', 't', 'u', 'v']) {
+    assert.ok(g3DocLetters.has(letter),
+      `SECURITY.md's GATE-03 ceiling has no item (${letter}). Items (s)-(v) are round 2's and `
+      + "round 3's own remedies — the argv residual, the unjudged deletion spellings, the "
+      + 'incomplete host allowlist and the `rm` segmentation heuristic.');
+  }
+  for (const letter of ['e', 'g', 'h']) {
+    assert.ok(g5DocLetters.has(letter),
+      `SECURITY.md's GATE-05 ceiling has no item (${letter}). (e), (g) and (h) are grok/agy's `
+      + "unchanged timeouts, Claude's PreToolUse budget and the 150 s latency hazard.");
+  }
+});
+
+test('04-19 clause 2: SECURITY.md names four fail-opens with dispositions, and states the fail-open/fail-closed contrast (T-04-DOC-01)', () => {
+  const joined = readDocJoined('SECURITY.md');
+
+  // Positive, with a lower bound: four fail-opens means at least four
+  // disposition lines. Counted on heading-stripped text so a section title
+  // cannot satisfy it.
+  const dispositions = (joined.match(/\*\*Disposition:\*\*/g) || []).length;
+  assert.ok(dispositions >= 4,
+    `SECURITY.md carries ${dispositions} **Disposition:** line(s), expected >= 4 — one per `
+    + 'fail-open. Three are inherited (the user-global engine seeds, the shim\'s connect-error '
+    + 'exit 0, protectedPathDenial\'s `if (!root) return null`) and one is new this phase '
+    + "(GATE-05's ask degrading to deny on the engines whose shim cannot poll).");
+
+  const owners = (joined.match(/\*\*Owner:\*\*/g) || []).length;
+  assert.ok(owners >= 4,
+    `SECURITY.md carries ${owners} **Owner:** line(s), expected >= 4. A disposition with no owner `
+    + 'is a note, not a decision.');
+
+  // Each of the four, by the phrase that identifies it. Deleting any one drops
+  // the count above too, but this half says WHICH went.
+  const each = [
+    [/user-global engine seeds/i, 'fail-open 1 — the user-global engine seeds outside the hive root'],
+    [/connect-error `process\.exit\(0\)`|connect-error .process\.exit\(0\)./i, "fail-open 2 — the shim's connect-error exit 0, which for a Claude PreToolUse hook is allow"],
+    [/if \(!root\) return null/i, "fail-open 3 — protectedPathDenial's no-hive-root early return"],
+    [/degrades to\s*\*?\*?"?deny"?|"ask" degrades to/i, "fail-open 4 — GATE-05's ask degrading to deny"]
+  ];
+  for (const [re, what] of each) {
+    assert.match(joined, re, `SECURITY.md no longer names ${what}`);
+  }
+
+  // THE CONTRAST, which is the point of listing item 3 beside GATE-03's empty
+  // allowlist: one fails OPEN because with no hive root there is nothing to
+  // protect, the other fails CLOSED because an empty allowlist is not the same
+  // kind of absence. Asserted as a proximity claim over joined text, because the
+  // two halves are deliberately in one paragraph and a line grep cannot see it.
+  assert.ok(
+    nearMatches(joined, 'fails\\s+\\*?\\*?closed', /empt(y|ied)\s+(host\s+)?allowlist/i, 300).length >= 1,
+    'SECURITY.md no longer states that GATE-03\'s host arm fails CLOSED on an empty allowlist '
+    + 'beside the fail-open it contrasts with. Both directions in one place IS the claim; either '
+    + 'one alone reads as a policy rather than a choice.'
+  );
+});
+
+test('04-19 clause 3: SECURITY.md carries the honest GATE-03 claim and cannot inflate it (T-04-DOC-02, T-04-DOC-09)', () => {
+  const joined = readDocJoined('SECURITY.md');
+
+  // ── POSITIVE, three unconditional. Softening or deleting any one fails.
+  //    These are the clauses plan 04-10 measured UP and DOWN during wave 3; a
+  //    later editor "tidying" them is the drift this clause exists for.
+  const unconditional = [
+    'through the real `HookServer`',
+    'LIVE-UNVERIFIED for pi',
+    'exercised through a real child process'
+  ];
+  for (const phrase of unconditional) {
+    assert.ok(joined.includes(phrase),
+      `SECURITY.md no longer contains the literal ${JSON.stringify(phrase)}. This is one of the `
+      + "claim's own POSITIVE clauses — the negatives below cannot see it go.");
+  }
+
+  // ── POSITIVE, one CONDITIONAL, cross-checked against plan 04-13's own
+  //    machine-readable line. An unmeasured live run cannot be rounded in
+  //    either direction (round 1's BL-11), so the clause FAILS if that line is
+  //    absent, and fails if two copies of it disagree.
+  const summary = readRaw('.planning/phases/04-overnight-on-a-repo-that-matters/04-13-SUMMARY.md');
+  const verdicts = [...summary.matchAll(/LIVE GATE-03 REFUSAL:\s*(yes|no)\b/gi)].map((m) => m[1].toLowerCase());
+  assert.ok(verdicts.length >= 1,
+    "04-13-SUMMARY.md carries no `LIVE GATE-03 REFUSAL: yes|no` line. Plan 04-13 task 4 is "
+    + 'required to write exactly one of them, and without it SECURITY.md\'s live-refusal wording '
+    + 'cannot be checked in either direction — which is the whole of BL-11.');
+  assert.equal(new Set(verdicts).size, 1,
+    `04-13-SUMMARY.md's LIVE GATE-03 REFUSAL line is AMBIGUOUS — it reads ${verdicts.join(' and ')}. `
+    + 'An unmeasured run cannot be rounded either way; fix the SUMMARY, do not pick one here.');
+
+  const liveRefusalSentence = /(had a command refused on this machine|a live agent (was|has been) refused|live[- ]verified refusal)/i;
+  if (verdicts[0] === 'yes') {
+    assert.match(joined, liveRefusalSentence,
+      'plan 04-13 recorded LIVE GATE-03 REFUSAL: yes, but SECURITY.md does not carry the '
+      + 'live-refusal sentence. A measurement that was obtained must be stated.');
+  } else {
+    assert.doesNotMatch(joined, liveRefusalSentence,
+      'plan 04-13 recorded LIVE GATE-03 REFUSAL: no — no live agent ever ran, because this '
+      + "machine's codex auth is revoked — yet SECURITY.md claims a live refusal. That is the "
+      + 'exact over-claim round 1 flagged as BL-11.');
+    assert.ok(joined.includes('NO LIVE AGENT HAS EVER BEEN OBSERVED REFUSED'),
+      'plan 04-13 recorded LIVE GATE-03 REFUSAL: no, so SECURITY.md must carry the '
+      + 'corrected-downward wording explicitly. Silence is not the same as saying so: a reader '
+      + 'who finds neither sentence assumes the gate was watched working.');
+  }
+
+  // ── NEGATIVE. Proximity, not presence: the doc is allowed to use the words in
+  //    order to DENY them (it does, naming what the phase's opening wording asked
+  //    for and could not achieve), and forbidden to attach them to these engines.
+  for (const engine of ['grok', '\\bpi\\b', 'OpenCode']) {
+    const hits = nearMatches(joined, 'live-verified', new RegExp(engine, 'i'));
+    assert.equal(hits.length, 0,
+      `SECURITY.md describes ${engine.replace(/\\\\b/g, '')} as live-verified. None of grok, pi or `
+      + 'OpenCode is installed on this machine and no live session has ever run against any of '
+      + `them.\nOffending text: ${JSON.stringify((hits[0] || '').slice(0, 240))}`);
+  }
+  const agyHits = nearMatches(joined, 'unit-verified', /\bagy\b|antigravity/i);
+  assert.equal(agyHits.length, 0,
+    'SECURITY.md calls agy unit-verified. What is true and measured is narrower and is already '
+    + "written: agy's reply TRANSLATOR is exercised through a real child process. The engine "
+    + `honouring the deny is unverified.\nOffending text: ${JSON.stringify((agyHits[0] || '').slice(0, 240))}`);
+
+  // ── The marker vocabulary itself, with a lower bound, so the negatives above
+  //    cannot be satisfied by a SECURITY.md that stopped talking about engines.
+  const markers = (joined.match(/LIVE-UNVERIFIED/g) || []).length;
+  assert.ok(markers >= 3,
+    `SECURITY.md mentions LIVE-UNVERIFIED ${markers} time(s), expected >= 3 (GATE-04, the `
+    + 'grok/kimi/agy bridges, and pi/OpenCode). A doc with none of them has stopped making the '
+    + 'claim rather than making it honestly.');
+});
+
+test('04-19 clause 4: TELEMETRY.md states the durability level it has, and the writer is in hooks.ts (RECORD-01)', () => {
+  const joined = readDocJoined('TELEMETRY.md');
+
+  // Positive, with lower bounds.
+  assert.ok(joined.includes('synchronous = NORMAL'),
+    'TELEMETRY.md no longer states the `synchronous = NORMAL` durability level. Without it the '
+    + 'reader infers `FULL`, which this app deliberately does not pay for.');
+  assert.match(joined, /survives?\s+a\s+process\s+crash/i,
+    'TELEMETRY.md no longer says what NORMAL under WAL actually buys — a row committed before the '
+    + 'insert returns, surviving a PROCESS crash.');
+  assert.match(joined, /not\s+guaranteed\s+against\s+an?\s+OS\s+crash|not\s+\*?\*?guaranteed\*?\*?\s+against\s+an\s+OS/i,
+    'TELEMETRY.md no longer states the CEILING of `synchronous = NORMAL`: a row is not guaranteed '
+    + 'against an OS crash or a power loss until the next checkpoint.');
+  assert.match(joined, /in-memory ring/i,
+    'TELEMETRY.md no longer says the span ring is unchanged. The waterfall UI reads exactly that '
+    + 'ring, and a reader who thinks it was replaced will "fix" the duplication by deleting it.');
+  for (const reason of [/ToolSpan/, /ATTR_ALLOWLIST/, /Claude-only/i]) {
+    assert.match(joined, reason,
+      'TELEMETRY.md no longer states all three measured reasons the durable writer is NOT on the '
+      + 'telemetry path (`ToolSpan` has no target, `ATTR_ALLOWLIST` admits no path or command key, '
+      + 'the OTel block is Claude-only). Drop one and somebody moves the writer back.');
+  }
+
+  // Negative: it must not upgrade the guarantee it has.
+  assert.doesNotMatch(joined, /synchronous\s*=\s*FULL\b(?![^.]*would)/i,
+    'TELEMETRY.md describes `synchronous = FULL` as what ships. It does not: FULL would fsync on '
+    + 'every tool call, and the doc may only name it as the trade NOT taken.');
+
+  // Both directions on the writer's location — a positive alone would pass while
+  // a duplicate crept back into telemetry.ts, and a negative alone would pass on
+  // a repo where the writer was deleted outright.
+  assert.ok(strippedHits('src/main/hooks.ts', 'recordToolCall') >= 1,
+    'src/main/hooks.ts no longer references recordToolCall — the hook socket is the only place '
+    + 'agent, tool and TARGET all exist for every engine, which is the whole reason RECORD-01\'s '
+    + 'writer lives there and not on the telemetry path');
+  assert.equal(strippedHits('src/main/telemetry.ts', 'recordToolCall'), 0,
+    'src/main/telemetry.ts references recordToolCall. The durable writer was moved (or copied) '
+    + 'onto the telemetry path, where `ToolSpan` has no `target` and `ATTR_ALLOWLIST` admits no '
+    + 'path or command key — so the record it writes cannot answer "who wrote this file"');
+  assert.equal(strippedHits('src/main/telemetry.ts', 'never persisted'), 0,
+    'the ToolSpan comment in telemetry.ts was rewritten. It is comment-stripped here on purpose: '
+    + 'this clause pins the CODE, and TELEMETRY.md is where that sentence is explained');
 });

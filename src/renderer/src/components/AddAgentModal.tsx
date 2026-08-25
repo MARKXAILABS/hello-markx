@@ -968,7 +968,16 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                       </div>
                     )}
 
-                    <Row label={config.autoMode && preset.autoFlag ? 'Command (auto mode on)' : 'Command'}>
+                    {/* GATE-04: a READ-ONLY reflection of the Settings opt-in, never a
+                        second control. A per-engine setting with two controls in two
+                        places is how the two splice sites drift in the UI as well as in
+                        the code — the operator turns the sandbox on in Settings, and this
+                        label only reports what that did. */}
+                    <Row label={config.autoMode && preset.autoFlag
+                      ? (config.providerSandbox?.[provider] && preset.sandboxFlags
+                        ? 'Command (auto mode on · sandbox on)'
+                        : 'Command (auto mode on)')
+                      : 'Command'}>
                       <input
                         value={command}
                         onChange={(e) => setCommand(e.target.value)}

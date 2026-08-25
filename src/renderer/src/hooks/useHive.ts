@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useStore, type Agent, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
+import { useStore, type Agent, type BlockReason, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
 import {
   buildSpawnCommand,
   ASSISTANT_MODEL,
@@ -342,6 +342,156 @@ function passesContextPressure(a: Agent, rule: ContextRule): boolean {
 }
 
 /**
+ * Assemble the banner text for a GATE-03 refusal (`control:approvalRequest`).
+ *
+ * WHOSE SENTENCE THE "WHY" IS. Main authors the deny reason beside the gate that
+ * decided it (`hooks.ts:251-292`) and passes it here. The renderer renders it and does
+ * not write a second copy: a renderer-authored explanation drifts from main's the first
+ * time a rule changes, and then confidently describes a rule that no longer exists.
+ * `hooks.ts:849` already states the house rule one layer down — a ceiling list that
+ * omits an item reads as a guarantee that does not hold. So when main sends no reason
+ * the fallback is BARE. It says that the floor refused the call and stops talking,
+ * rather than naming a mechanism ("ungate it from the Command Center") the operator may
+ * not have, for a refusal main never explained.
+ *
+ * Exported for the same reason `stopArmDecision` above is: this runs inside a
+ * `useEffect`, and the renderer test harness is a server render with no effect phase at
+ * all (`test/renderer-components.test.cjs:23-38`), so exporting it is the only way the
+ * assembly that SHIPS gets asserted instead of a copy of it.
+ */
+export function blockReasonFromApproval(
+  e: { tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number },
+  agentName: string | undefined,
+  now: number = Date.now()
+): BlockReason {
+  const tool = e.tool ?? 'tool';
+  const who = agentName ?? 'An agent';
+  if (e.askId !== undefined) {
+    // GATE-05 — an OPEN question, not a refusal. `askId` present is the whole
+    // discriminator (store.ts's BlockReason says so beside the field).
+    return {
+      // Rule D-1 governs the DETAIL — main's sentence, byte for byte, below.
+      // The headline is the renderer's, and it must not read `was refused`: this
+      // call has not been refused, it is waiting on the operator and auto-denies
+      // in about two minutes if they read "refused" and move on.
+      summary: `${who} wants to run a ${tool} command`,
+      detail: e.reason ?? 'The floor is waiting on your answer.',
+      command: e.command,
+      // TWO answerable actions and NO keystrokes. `send` is what BlockedBanner's
+      // callers forward to `writePty`; leaving it undefined makes the PTY path
+      // structurally unreachable for an ask rather than merely unused (ADR-0001:
+      // exactly one place types into a live PTY, and this is not it).
+      //
+      // The labels are the SAME two literals `answerToolAsk` allowlists in main
+      // (index.ts) — one vocabulary across the phone and the desktop, so an
+      // unrecognised label can never become an accidental yes on the channel
+      // whose whole point is an explicit yes for an unrecoverable command.
+      actions: [
+        { label: 'approve', kind: 'approve' },
+        { label: 'deny', kind: 'deny' }
+      ],
+      askId: e.askId,
+      expiresInMs: e.expiresInMs,
+      // The countdown's anchor, stamped at the moment the event landed HERE. Main
+      // sent a duration, not a deadline (rule G-3), so the renderer supplies its
+      // own zero and the two clocks never have to agree.
+      receivedAt: now
+    };
+  }
+  return {
+    summary: agentName ? `${agentName}'s ${tool} call was refused` : `A ${tool} call was refused`,
+    detail: e.reason ?? 'Refused by the floor.',
+    command: e.command,
+    // Nothing to answer: the call was already denied and the agent kept running, so
+    // this is a notice rather than a prompt. BlockedBanner renders `dismiss` for
+    // exactly this shape.
+    actions: []
+  };
+}
+
+/**
+ * 04-UI-SPEC rule G-2's outcome line: what the banner says once the ask is settled.
+ *
+ * WHICH WAY IT WENT IS THE WHOLE POINT, and the two failures are opposites at 3am.
+ * `expired` means the floor already denied the command and the agent moved on — nothing
+ * ran. `settled` means somebody else answered, and it may have run. A single "could not
+ * answer" line for both is the one message that leaves the operator unable to act.
+ *
+ * Pure, and exported, for the same measured reason `blockReasonFromApproval` above is:
+ * the IPC round trip needs a `window.cth` this harness does not have, but the RULE is a
+ * function of three booleans and gets asserted for real.
+ *
+ * `locallyExpired` is the renderer's OWN reading, derived from `receivedAt + expiresInMs`
+ * — its own anchor, its own clock, skew-immune by construction (rule G-3). Main's
+ * `expired` flag is read too, but it is `false` for an ask no phone GET ever memoised, so
+ * it can only ever CONFIRM. Either source saying "expired" is enough; requiring both
+ * would report an expiry as an unexplained settle on a desktop-only floor.
+ */
+export function askOutcomeText(
+  approved: boolean,
+  res: { settled: boolean; expired?: boolean } | null,
+  locallyExpired: boolean
+): string {
+  if (res === null) return 'could not reach the floor — the ask was left exactly as it was';
+  if (res.settled) {
+    return approved
+      ? 'approved — the command was allowed to run'
+      : 'denied — the command did not run';
+  }
+  if (res.expired === true || locallyExpired) {
+    return 'expired before you answered — the floor denied it for you, so the command did not run';
+  }
+  return 'already answered elsewhere — this ask was settled on another surface, and the command may have run';
+}
+
+/**
+ * GATE-05's arm of `BlockedBanner`'s `onAction`, shared by both of its callers.
+ *
+ * Returns TRUE when it took the click, so a caller's remaining lines are the
+ * PTY-parser-derived path they were already written for, byte-unchanged.
+ *
+ * ONLY the ask arm is shared, deliberately. The obvious refactor is to absorb both
+ * callers' `onAction` whole — but that would move `window.cth.writePty` out of
+ * `AgentDetailPanel` and `CommandCenterPanel`, and T-04-ASK-21's mitigation is a
+ * `grep -c 'writePty'` gate on exactly those two files. A one-gate invariant whose
+ * measurement surface moves in the commit that adds a second answer route is a worse
+ * trade than three lines appearing twice.
+ *
+ * The branch is on `askId` AND on the label being one of the two literals main allowlists
+ * (`answerToolAsk`, index.ts) — never "the reason has an id, so route everything". The
+ * `dismiss` control on a RESOLVED ask still carries `askId`, and routing it back to the
+ * IPC would re-answer a question that is already settled.
+ *
+ * ADR-0001: this function contains no `writePty` and cannot reach one —
+ * `blockReasonFromApproval` gives an ask's actions no `send` at all, so the callers' PTY
+ * path is unreachable for an ask rather than merely unused.
+ */
+export function answerAskFromBanner(
+  agent: { id: string; blockReason?: BlockReason },
+  label: string,
+  now: number = Date.now()
+): boolean {
+  const reason = agent.blockReason;
+  const askId = reason?.askId;
+  if (!reason || askId === undefined || (label !== 'approve' && label !== 'deny')) return false;
+
+  const { updateAgent } = useStore.getState();
+  const approved = label === 'approve';
+  const locallyExpired = reason.receivedAt !== undefined && reason.expiresInMs !== undefined
+    && reason.receivedAt + reason.expiresInMs - now <= 0;
+  // Rule 4 — the banner does NOT vanish. `actions: []` swaps the action row for the
+  // outcome plus the `dismiss` control BlockedBanner already renders on exactly that
+  // condition, so the swap needs no new JSX and no second state machine.
+  const settle = (res: { settled: boolean; expired?: boolean } | null): void => {
+    updateAgent(agent.id, {
+      blockReason: { ...reason, actions: [], outcome: askOutcomeText(approved, res, locallyExpired) }
+    });
+  };
+  void window.cth.answerApproval(askId, approved).then(settle).catch(() => settle(null));
+  return true;
+}
+
+/**
  * The renderer-side glue for the hive:
  *   1. spawns the god agent into Michael's room when none is running,
  *   2. drives avatar state from real Claude Code hook events, and
@@ -611,18 +761,37 @@ export function useHive(config: HarnessConfig | null): void {
   //      instant and the agent keeps running, and the PreToolUse hook event that
   //      follows this on the same boundary would overwrite it anyway.
   useEffect(() => {
-    return window.cth.onApprovalRequest(({ agentId, tool, reason }) => {
+    return window.cth.onApprovalRequest(({ agentId, tool, reason, command, askId, expiresInMs }) => {
       const { updateAgent, agents, pushFeed } = useStore.getState();
-      if (!agents.some((a) => a.id === agentId)) return;
+      const self = agents.find((a) => a.id === agentId);
+      if (!self) return;
+      // `askId`/`expiresInMs` are present only on a GATE-05 ask (hooks.ts's
+      // `openApproval` is their one publisher); a GATE-03 refusal carries
+      // neither and keeps today's notice shape exactly.
       updateAgent(agentId, {
-        blockReason: {
-          summary: `${tool ?? 'A tool'} was blocked`,
-          detail: reason ?? 'Denied by operator policy — ungate it from the Command Center to let this agent continue.',
-          actions: []
-        }
+        blockReason: blockReasonFromApproval({ tool, reason, command, askId, expiresInMs }, self.name)
       });
+      // D-2: the feed line stays. The requirement is that the operator does not HAVE to
+      // read a terminal to see a refusal, not that the audit trail is deleted.
       pushFeed(agentId, `\x1b[31m⛔ ${tool ?? 'tool'} blocked\x1b[0m ${reason ?? ''}`);
     });
+  }, []);
+
+  // 2b3) VIGIL-01 — main's absence latch, mirrored into the store for the
+  //      titlebar chip. `AbsenceWatchdog` (plan 04-11) publishes ONCE on the
+  //      setting edge and once with `null` on the clearing edge, so there is no
+  //      poll and no second state machine here: the store field is a mirror, and
+  //      the chip renders iff it is non-null. `setFloorQuiet` stamps the
+  //      renderer's own `receivedAt`, which is what lets a duration published
+  //      once keep counting without either clock trusting the other.
+  //
+  //      A TYPED call through the bridge, deliberately NOT the
+  //      `(window.cth as unknown as {...})` shape effect #13 uses: that cast
+  //      exists so a listener can land before its preload method does, and it
+  //      makes `npm run typecheck` prove nothing about whether the method is
+  //      really there. `onFloorQuiet` ships in the same commit as this line.
+  useEffect(() => {
+    return window.cth.onFloorQuiet((s) => { useStore.getState().setFloorQuiet(s); });
   }, []);
 
   // 2c) Context gauge backfill: poll each live agent's current context size

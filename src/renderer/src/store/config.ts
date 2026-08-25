@@ -5,6 +5,7 @@ import {
   providerPreset,
   inferAgentProvider,
   isClaudeProvider,
+  sandboxFlagsForProvider,
   type AgentProvider
 } from '@shared/agentProvider';
 import type {
@@ -32,6 +33,7 @@ export {
   providerPreset,
   inferAgentProvider,
   isClaudeProvider,
+  sandboxFlagsForProvider,
   type AgentProvider
 };
 export {
@@ -154,6 +156,11 @@ export interface HarnessConfig {
   providerBaseUrls?: Partial<Record<AgentProvider, string>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** GATE-04 / D-15. Per-CLI-provider sandbox opt-in. ABSENT === OFF, which is the
+   *  behaviour that shipped and therefore the verified fallback — no migration, no
+   *  explicit write. Only engines whose preset declares `sandboxFlags` can act on it
+   *  (codex alone today); it is inert for the rest. Mirrors src/main/config.ts. */
+  providerSandbox?: Partial<Record<AgentProvider, boolean>>;
   /** Claude account pool — NON-secret metadata only (mirrors src/main/config.ts).
    *  Tokens are write-only in the secret broker via the claudeAccount* bridge. */
   claudeAccounts?: ClaudeAccount[];
@@ -403,9 +410,10 @@ export function decodeProviderModel(value: string): {
  *  configured `defaultCommand`; other providers use their preset binary so the
  *  app works without Claude installed. */
 export function buildSpawnCommand(
-  config: Pick<HarnessConfig, 'defaultCommand' | 'autoMode'>,
+  config: Pick<HarnessConfig, 'defaultCommand' | 'autoMode' | 'providerSandbox'>,
   model?: string,
-  provider: AgentProvider = inferAgentProvider(config.defaultCommand)
+  provider: AgentProvider = inferAgentProvider(config.defaultCommand),
+  agentDir?: string
 ): string {
   const preset = providerPreset(provider);
   // Claude keeps the user's configured defaultCommand; custom falls back to it
@@ -427,7 +435,24 @@ export function buildSpawnCommand(
   // Auto (skip-permissions) mode appends each provider's own flag — Claude's
   // bypassPermissions, Codex's dangerous bypass, Grok's always-approve, Kimi's
   // auto, or agy's skip flag.
-  if (config.autoMode && preset.autoFlag) cmd = `${cmd} ${preset.autoFlag}`;
+  //
+  // …UNLESS the operator turned this engine's sandbox opt-in on (GATE-04/D-14), in
+  // which case the bypass is REPLACED by `-s workspace-write --add-dir <agentDir>`.
+  // Absent === off, so no config on disk changes behaviour; `sandboxFlagsForProvider`
+  // is '' for every engine with no sandbox the floor can turn on, so an opt-in set
+  // for such an engine falls through to that engine's own flag.
+  //
+  // L-08 — THIS IS ONE OF TWO INDEPENDENT ASSEMBLERS. `commandForAutoMode`
+  // (src/main/config.ts) does the same job for main, and the two live in DIFFERENT
+  // tsconfig projects, so `npm run typecheck` cannot see a drift between them. Any
+  // edit here must be mirrored there in the same commit;
+  // test/spawn-command-parity.test.cjs calls BOTH and asserts they agree, and it is
+  // the only thing that will catch you.
+  if (config.autoMode) {
+    const sandbox = config.providerSandbox?.[provider] ? sandboxFlagsForProvider(provider, agentDir) : '';
+    const flag = sandbox || preset.autoFlag;
+    if (flag) cmd = `${cmd} ${flag}`;
+  }
   return cmd;
 }
 

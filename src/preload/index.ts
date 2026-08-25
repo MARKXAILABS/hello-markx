@@ -1145,11 +1145,41 @@ const api = {
   /** Read an agent's current control snapshot. */
   controlSnapshot: (agentId: string): Promise<AgentControlSnapshot | null> =>
     ipcRenderer.invoke('control:snapshot', agentId),
-  /** Subscribe to gate/deny events (a tool was blocked); returns unsubscribe fn. */
-  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string }) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string }) => cb(payload);
+  /** Subscribe to gate/deny events (a tool was blocked); returns unsubscribe fn.
+   *
+   *  `askId`/`expiresInMs` are present only on a GATE-05 ask — an OPEN question
+   *  the floor is still blocking on, answerable through `answerApproval` below.
+   *  A GATE-03 refusal carries neither: it was already denied. `expiresInMs` is
+   *  a DURATION measured by main at emit time, never a deadline (rule G-3). */
+  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number }) => cb(payload);
     ipcRenderer.on('control:approvalRequest', listener);
     return () => ipcRenderer.removeListener('control:approvalRequest', listener);
+  },
+  /** GATE-05 — settle one tool approval from the desktop. The ONE renderer→main
+   *  route for an answer; the event above is the other direction and is reused
+   *  unchanged. The answer reaches `ApprovalRegistry.answer` and rides the hook
+   *  return — it is never typed into a live PTY (ADR-0001).
+   *
+   *  `{ settled: false }` means the ask is gone. `expired` tells the two apart
+   *  the way rule G-2 requires: expired means the command was DENIED, settled
+   *  means it may already have run — opposite outcomes at 3am. */
+  answerApproval: (askId: string, approved: boolean): Promise<{ settled: boolean; expired?: boolean } | null> =>
+    ipcRenderer.invoke('control:answerApproval', askId, approved),
+  /** VIGIL-01 — main's absence latch, pushed. Plan 04-11 declared the channel and
+   *  `boot.ts` is its one publisher: a `QuietSnapshot` on the setting edge, `null`
+   *  on the clearing edge. Never polled.
+   *
+   *  THE LITERAL LIVES HERE AND NOWHERE ELSE ON THE RENDERER SIDE.
+   *  `contextIsolation: true` plus the `cth` bridge means the renderer cannot reach
+   *  `ipcRenderer` at all — `useHive.ts` holds zero channel literals and subscribes
+   *  through `window.cth.*` alone. Shape copied verbatim from `onApprovalRequest`
+   *  above, unsubscribe included: an `on` without its `removeListener` leaks a
+   *  listener per remount. */
+  onFloorQuiet: (cb: (s: { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean } | null) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean } | null) => cb(payload);
+    ipcRenderer.on('floor:quiet', listener);
+    return () => ipcRenderer.removeListener('floor:quiet', listener);
   },
 
   // ─── Task kanban (hive/tasks.json) ───────────────────────────────────────

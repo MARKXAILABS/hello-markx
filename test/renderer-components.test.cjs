@@ -106,12 +106,37 @@ Module._load = function (request, ...rest) {
 };
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
+let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
+let PixelButton, blockReasonFromApproval, rosterBadgeStatus, formatRemaining, askOutcomeText;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
-  ({ BlockedBanner } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
+  ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
+  // `formatRemaining` is exported for the same measured reason `blockReasonFromApproval`
+  // and `rosterBadgeStatus` are: the countdown's rule table is a pure function of a
+  // number, and pulling it out is what turns "five rendered states" from a checkpoint
+  // item into five assertions in a harness that runs no effects.
+  ({ BlockedBanner, formatRemaining } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
   ({ AgentCard } = loadTs('src/renderer/src/components/AgentCard.tsx'));
   ({ useStore } = loadTs('src/renderer/src/store/store.ts'));
   ({ autoModeFlagForProvider, AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts'));
+  ({ relAge } = loadTs('src/shared/relAge.ts'));
+  ({ TaskCard, TaskAge, TaskDetail, parseTasks } = loadTs('src/renderer/src/components/TasksKanban.tsx'));
+  ({ AskMeTab } = loadTs('src/renderer/src/components/AskMeTab.tsx'));
+  // The SAME module instance AskMeTab resolved through `@/hooks/useHiveTasks` — loadTs
+  // caches by absolute path, and the alias above lands on this one. Reaching the shared
+  // poll's module cache is the only way to render a board that has any cards on it.
+  ({ refreshHiveTasks } = loadTs('src/renderer/src/hooks/useHiveTasks.ts'));
+  // The GATE-03 refusal decision, exported from the hook for the same reason
+  // `stopArmDecision` is (`useHive.ts:156`): it lives inside a `useEffect`, and this
+  // harness has no effect phase at all (see the ceiling at :23-38), so the only way to
+  // assert the SHIPPED assembly rather than a copy of it is to call it directly.
+  ({ blockReasonFromApproval, askOutcomeText } = loadTs('src/renderer/src/hooks/useHive.ts'));
+  // The roster badge's precedence rule. Exported for a MEASURED reason, not a stylistic
+  // one: `armed` is derived from `breakers`, which is `useState({})` inside
+  // `useFleetTelemetry` (`useTelemetry.ts:96`) and is filled only by an effect. This
+  // harness never runs effects, so a rendered CommandCenterPanel has `armed === false`
+  // for every row and the two armed cases below are unreachable through the panel.
+  ({ rosterBadgeStatus } = loadTs('src/renderer/src/components/CommandCenterPanel.tsx'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -125,7 +150,7 @@ try {
 // default exports "per convention (implied by React/Vite tooling)"; measured 2026-08-21,
 // `grep -rl "export default" src/renderer/src --include=*.tsx` matches 0 of 63 files, so
 // a harness reaching for `.default` would get `undefined` from every one of them.
-for (const [name, value] of Object.entries({ PixelBadge, BlockedBanner, AgentCard, useStore })) {
+for (const [name, value] of Object.entries({ PixelBadge, PixelButton, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks })) {
   assert.equal(typeof value, 'function',
     `${name} did not come back from loadTs as a function — the component tests below would all render undefined`);
 }
@@ -343,4 +368,935 @@ test('FLOOR-13: the model chip is bounded, so it cannot drop the card\'s project
   // `renderToStaticMarkup` is a server render with NO LAYOUT. This proves the
   // guards are PRESENT. Whether the row actually composes without clipping at
   // 322px is an operator observation and is not claimed here.
+});
+
+// ─── relAge — VIGIL-04's one shared formatter (04-UI-SPEC § S5 rule A-1) ──────────────
+
+/**
+ * `WorkersTab.tsx:20`'s shipped `relAge`, lifted OUT OF ITS SOURCE and evaluated.
+ *
+ * Rule A-1 keeps the four existing relative-time implementations exactly where they are, so
+ * `src/shared/relAge.ts` is a COPY of one of them — and a copy is only worth anything if
+ * something notices when the two drift. Transcribing the body into this file would assert
+ * that the transcription matches itself. Reading the real source means the parity test below
+ * fails the day somebody edits `WorkersTab.tsx`, which is precisely when it should.
+ *
+ * The function is module-private in `WorkersTab.tsx` (not exported, and the component around
+ * it cannot be server-rendered), so there is no import that reaches it.
+ */
+function shippedRelAge() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/WorkersTab.tsx'), 'utf8');
+  const m = /function relAge\(ms: number\): string \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(m, 'WorkersTab.tsx no longer declares `function relAge(ms: number): string` — re-derive this anchor by content, not by line');
+  // ONLY the two type annotations in the signature are stripped; the BODY is untouched.
+  return new Function(`${m[0].replace('(ms: number): string', '(ms)')}; return relAge;`)();
+}
+
+test('relAge renders the five terse shapes, and names the unit alongside each', () => {
+  assert.deepEqual(relAge(0), { text: '0s', unit: 's' });
+  assert.deepEqual(relAge(47_000), { text: '47s', unit: 's' });
+  assert.deepEqual(relAge(4 * 60_000), { text: '4m', unit: 'm' });
+  assert.deepEqual(relAge(9 * 3_600_000), { text: '9h', unit: 'h' });
+  assert.deepEqual(relAge(3 * 86_400_000), { text: '3d', unit: 'd' });
+
+  // The unit is the whole reason this returns an object. 04-UI-SPEC rule A-2 defines stale as
+  // "the age stopped being minutes" — the caller reads the unit letter instead of comparing
+  // against a threshold constant nobody will remember, so the emphasis and the letter can
+  // never disagree on screen.
+  assert.equal(relAge(89 * 60_000).unit, 'm', 'the m/h boundary moved — rule A-2 ties the stale treatment to it');
+  assert.equal(relAge(91 * 60_000).unit, 'h', 'the m/h boundary moved — rule A-2 ties the stale treatment to it');
+});
+
+test('relAge is byte-compatible with the shipped WorkersTab formatter on every finite input', () => {
+  const shipped = shippedRelAge();
+  // The four cuts first (<1000ms, <90s, <90m, <48h), then ordinary values around them.
+  const inputs = [
+    -10_000, -1, 0, 999, 1000, 1499, 1500, 47_000, 89_000, 89_499, 89_500, 90_000,
+    4 * 60_000, 89 * 60_000, 90 * 60_000, 9 * 3_600_000, 47 * 3_600_000, 48 * 3_600_000,
+    3 * 86_400_000, 400 * 86_400_000
+  ];
+  for (const ms of inputs) {
+    assert.equal(relAge(ms).text, shipped(ms),
+      `relAge(${ms}) diverged from the shipped WorkersTab formatter — rule A-1 extracts that shape verbatim, so a boundary that differs is a regression nobody asked for`);
+  }
+});
+
+test('relAge corrects exactly ONE thing: the shipped formatter renders `NaNd` for a non-finite input', () => {
+  const shipped = shippedRelAge();
+
+  // The positive control (D-33/D-40): the defect being corrected is MEASURED here rather than
+  // asserted from memory. `NaN < 1000` is false, so the shipped guard falls through to
+  // Math.round(NaN / 1000) and the NaN reaches the last branch intact.
+  assert.equal(shipped(NaN), 'NaNd',
+    'WorkersTab no longer renders `NaNd` for NaN — the one divergence src/shared/relAge.ts deliberately carries has been fixed upstream, so re-read rule A-1 before keeping it');
+  assert.equal(shipped(Infinity), 'Infinityd',
+    'WorkersTab no longer renders `Infinityd` for Infinity — same as above');
+
+  // T-04-AGE-06: a malformed `updatedAt` reaches this as NaN through Date.parse, and a card
+  // reading `NaNd` is worse than one reading `0s` — it looks like a crash on the board.
+  assert.deepEqual(relAge(NaN), { text: '0s', unit: 's' },
+    'relAge renders NaN as something other than 0s — a card whose updatedAt does not parse now shows a broken age');
+  assert.deepEqual(relAge(Infinity), { text: '0s', unit: 's' });
+  assert.deepEqual(relAge(-Infinity), { text: '0s', unit: 's' });
+  assert.deepEqual(relAge(-1), { text: '0s', unit: 's' });
+  assert.doesNotThrow(() => relAge(undefined), 'relAge threw on a missing input instead of degrading to 0s');
+});
+
+// ─── VIGIL-04 / VIGIL-02 — the age and the released card on the kanban meta row ───────
+
+/** The clock icon's path data, read from `Icon.tsx` rather than transcribed — channel 4
+ *  of rule A-2 is "an `<Icon name="clock" />` is present", and matching `<svg` alone would
+ *  stay green if the wrong icon were rendered. */
+const CLOCK_PATH = (() => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/Icon.tsx'), 'utf8');
+  const m = /\bclock:\s*\{[\s\S]*?ink:\s*'([^']+)'/.exec(src);
+  assert.ok(m, "Icon.tsx no longer defines a `clock` entry with an `ink` path — re-derive this anchor");
+  return m[1];
+})();
+const hasClock = (markup) => markup.includes(CLOCK_PATH);
+
+/**
+ * The whole `<span>` whose `title` attribute STARTS WITH `prefix` — the age element.
+ *
+ * Located by its tooltip, never by position: rule A-3 makes the tooltip the age's own
+ * identity (`updated …` / `created … — never updated` / `asked …`), so an assertion keyed
+ * on it cannot drift onto a sibling. The age span nests at most an `<svg>`, which contains
+ * no `</span>`, so the first one after the open tag closes it.
+ */
+function ageElement(markup, prefix) {
+  const at = markup.indexOf(`title="${prefix}`);
+  assert.ok(at >= 0, `no element carries a title starting with "${prefix}" — VIGIL-04's age is missing from this render:\n${markup}`);
+  const start = markup.lastIndexOf('<', at);
+  const end = markup.indexOf('</span>', at);
+  assert.ok(end > start, `the element titled "${prefix}…" never closes`);
+  return markup.slice(start, end + '</span>'.length);
+}
+
+/** An ISO timestamp `ms` in the past. Ages are DERIVED AT RENDER (D-32), so every fixture
+ *  here is a stored instant and never an elapsed number. */
+const ago = (ms) => new Date(Date.now() - ms).toISOString();
+const NINE_HOURS = 9 * 3_600_000;
+const FOUR_MINUTES = 4 * 60_000;
+
+const kanbanTask = (extra = {}) => ({
+  id: 't-1', title: 'ship the release drop', status: 'doing', dependsOn: [], priority: 3,
+  createdAt: ago(NINE_HOURS), ...extra
+});
+const kanbanCard = (task = {}, extra = {}) => ({
+  task: kanbanTask(task), accent: 'var(--cth-sky)', onOpen: () => {}, onDismiss: () => {}, ...extra
+});
+
+test('VIGIL-04: a nine-hour card and a four-minute card differ on ALL FOUR channels, not on colour alone', () => {
+  // 04-UI-SPEC § S5 rule A-2 asks for this as ONE test, deliberately. A test that checked a
+  // single channel would pass against an implementation that satisfies DESIGN.md:707's
+  // "never colour alone" rule on paper and not on screen.
+  const stale = html(React.createElement(TaskCard, kanbanCard({ updatedAt: ago(NINE_HOURS) })));
+  const fresh = html(React.createElement(TaskCard, kanbanCard({ updatedAt: ago(FOUR_MINUTES) })));
+  const staleAge = ageElement(stale, 'updated ');
+  const freshAge = ageElement(fresh, 'updated ');
+
+  // 1 — unit letter
+  assert.equal(visibleText(staleAge), '9h', 'the stale card does not render its age as 9h');
+  assert.equal(visibleText(freshAge), '4m', 'the fresh card does not render its age as 4m');
+  // 2 — colour
+  assert.match(staleAge, /color:var\(--cth-ink-900\)/, 'the stale age is not on the ink-900 end of the ramp');
+  assert.match(freshAge, /color:var\(--cth-ink-500\)/, 'the fresh age lost its ink-500 whisper treatment');
+  assert.doesNotMatch(freshAge, /color:var\(--cth-ink-900\)/, 'a four-minute card is drawn as emphatically as a nine-hour one — the distinction VIGIL-04 exists for is gone');
+  // 3 — weight
+  assert.match(staleAge, /font-weight:600/, 'the stale age is not bolder than the fresh one');
+  assert.doesNotMatch(freshAge, /font-weight:600/, 'the fresh age is already at weight 600, so the stale one cannot escalate past it');
+  // 4 — icon
+  assert.ok(hasClock(staleAge), 'the stale age carries no clock icon — the one channel a colour-blind operator reads first');
+  assert.ok(!hasClock(freshAge), 'a four-minute card shows the clock icon, so the icon says nothing');
+});
+
+test('VIGIL-04: a done card takes no stale emphasis, however old it is', () => {
+  const done = html(React.createElement(TaskCard, kanbanCard({ status: 'done', updatedAt: ago(NINE_HOURS) })));
+  const age = ageElement(done, 'updated ');
+
+  // Positive lower bound first (D-33/D-40): the age IS rendered on a done card. The
+  // assertion below is about the emphasis, not about the age going missing.
+  assert.equal(visibleText(age), '9h', 'a done card renders no age at all — the negative assertions below would pass against an empty element');
+  assert.ok(!hasClock(age), 'a card finished nine hours ago is lit up as a problem; rule A-2 exempts done deliberately, because that is noise');
+  assert.doesNotMatch(age, /font-weight:600/, 'a done card takes the stale weight');
+  assert.match(age, /color:var\(--cth-ink-500\)/, 'a done card takes the stale colour');
+
+  // …and the same age in todo DOES escalate — todo is included deliberately, because a card
+  // nobody picked up for nine hours is the same failure as one nobody finished.
+  const todo = html(React.createElement(TaskCard, kanbanCard({ status: 'todo', updatedAt: ago(NINE_HOURS) })));
+  assert.ok(hasClock(ageElement(todo, 'updated ')), 'a nine-hour TODO card takes no emphasis — a card nobody picked up is the same failure as one nobody finished');
+});
+
+test('VIGIL-04: the meta row renders on a card with no assignee, carrying the age alone', () => {
+  const markup = html(React.createElement(TaskCard, kanbanCard({ updatedAt: ago(FOUR_MINUTES) })));
+
+  assert.equal(visibleText(ageElement(markup, 'updated ')), '4m',
+    'an unassigned card renders no age — rule A-4 makes that row unconditional precisely so the age survives when the assignee does not');
+  assert.match(visibleText(markup), /ship the release drop/,
+    'the card lost its title, so the age assertion above is measuring a card that renders nothing else');
+
+  // …and an assignee still renders, in the same slot, unchanged.
+  const assigned = html(React.createElement(TaskCard, kanbanCard({ updatedAt: ago(FOUR_MINUTES) }, { assigneeName: 'Ada' })));
+  assert.match(visibleText(assigned), /ADA/, 'the assignee vanished from the meta row when the row became unconditional');
+  assert.equal(visibleText(ageElement(assigned, 'updated ')), '4m', 'the age vanished once an assignee shared the row with it');
+});
+
+test('VIGIL-04: a card that has never been updated SAYS so, rather than passing createdAt off as a change time', () => {
+  // T-04-AGE-07. Every card on disk before this phase has createdAt and no updatedAt, so
+  // this is the common case, not the edge one.
+  const markup = html(React.createElement(TaskCard, kanbanCard({ createdAt: ago(NINE_HOURS) })));
+
+  const age = ageElement(markup, 'created ');
+  assert.equal(visibleText(age), '9h', 'the age is not derived from createdAt when updatedAt is absent');
+  assert.match(markup, /never updated/,
+    'the tooltip does not say which clock it read — "nothing has changed in nine hours" and "nothing has ever touched this" now read identically');
+  assert.doesNotMatch(markup, /title="updated /,
+    'a card with no updatedAt claims to have been updated');
+  // The fallback is still a real age, and it still escalates.
+  assert.ok(hasClock(age), 'an age derived from createdAt does not take the stale treatment, so an untouched card looks fresh forever');
+});
+
+test('VIGIL-02: a released card reads DROPPED BY in coral, and renders NO placeholder for a branch it does not have yet', () => {
+  const markup = html(React.createElement(TaskCard, kanbanCard(
+    { status: 'todo', assignee: undefined, updatedAt: ago(FOUR_MINUTES), released: { by: 'a1', at: ago(FOUR_MINUTES) } },
+    { releasedByName: 'Ada' }
+  )));
+
+  assert.match(visibleText(markup), /DROPPED BY ADA/,
+    'a card whose owner\'s terminal died says nothing about who dropped it — VIGIL-02 is "who, and how long ago" on one row');
+  // The label slot, located by its own text, so this cannot pass by finding coral elsewhere.
+  const label = /<span style="([^"]*)"[^>]*>DROPPED BY ADA<\/span>/.exec(markup);
+  assert.ok(label, 'DROPPED BY ADA is not the whole text of one span — the meta row label slot has changed shape');
+  assert.match(label[1], /color:var\(--cth-coral\)/,
+    'DROPPED BY renders in the assignee\'s ink-500 whisper — rule R-2 changes the colour and nothing else, and the colour is the change');
+  assert.match(label[1], /text-overflow:ellipsis/, 'the label slot lost its ellipsis, so a long name will break the 170px column');
+
+  // …and how long ago, on the same row. One row, both facts.
+  assert.equal(visibleText(ageElement(markup, 'updated ')), '4m', 'the released card renders no age beside DROPPED BY');
+
+  // Rule R-1, asserted as an explicit negative: absence IS the rendering of "not known yet".
+  // A placeholder is the only way the gap between write 1 and write 2 can look broken.
+  for (const placeholder of ['…', '&hellip;', 'loading', 'Loading', 'unknown', 'Unknown', 'pending', 'skeleton']) {
+    assert.ok(!markup.includes(placeholder),
+      `the released card renders "${placeholder}" where the branch will go. Rule R-1 forbids every placeholder: if write 2 never lands (git failed; ADR-0003 keeps the work anyway) that placeholder is permanent and false`);
+  }
+  assert.match(markup, /title="Ada&#x27;s terminal exited at [^"]*\."/,
+    "the card's title attribute does not name who dropped it and when");
+  assert.doesNotMatch(markup, /title="[^"]*branch[^"]*"/,
+    'the title claims a branch on a card whose second write has not landed');
+});
+
+test('VIGIL-02: the branch lives in the title attribute and the overlay, never in the card body', (t) => {
+  const BRANCH = 'worker/ada/ship-the-release-drop-20260825';
+  const released = { by: 'a1', at: ago(FOUR_MINUTES), branch: BRANCH, detail: 'uncommitted work preserved' };
+  const card = html(React.createElement(TaskCard, kanbanCard(
+    { status: 'todo', updatedAt: ago(FOUR_MINUTES), released }, { releasedByName: 'Ada' }
+  )));
+
+  assert.match(card, new RegExp(`title="[^"]*Their work is on branch ${BRANCH}\\.`),
+    "the card's title attribute dropped the branch — rule R-3 puts it there and in the overlay, and nowhere else");
+  assert.ok(!visibleText(card).includes(BRANCH),
+    `the branch is rendered in the CARD BODY. TasksKanban.tsx states the board's own law verbatim — "a kanban card can carry a title at most" — and a worktree branch truncated into a 170px column is the looks-verifiable-but-is-not failure the UI-SPEC forbids`);
+
+  // The overlay is where the full text lives. TaskDetail resolves released.by through the
+  // store rather than through a prop, so its host (TaskDetailOverlay.tsx) needs no change.
+  seedServerSnapshot(t, { agents: [agentRow()] });
+  const task = kanbanTask({ status: 'todo', updatedAt: ago(FOUR_MINUTES), released });
+  const overlay = html(React.createElement(TaskDetail, {
+    task, all: [task], onMove: () => {}, onAssign: () => {}, onClose: () => {}
+  }));
+
+  assert.match(visibleText(overlay), new RegExp(`Their work is on branch ${BRANCH}\\.`),
+    'the overlay does not carry the branch, so the full text exists nowhere a human can read it');
+  assert.match(/<span style="([^"]*)"[^>]*>Their work is on branch/.exec(overlay)?.[1] ?? '', /word-break:break-all/,
+    "the branch is not set to break-all — WorkersTab.tsx:161's shipped treatment of a worktree path exists because these strings have no spaces to wrap at");
+  assert.match(visibleText(overlay), /Ada&#x27;s terminal exited at |Ada's terminal exited at /,
+    'the overlay does not say whose terminal exited');
+  assert.match(visibleText(overlay), /uncommitted work preserved/, "the overlay drops released.detail");
+
+  // And with no branch, the overlay renders no placeholder either.
+  const noBranch = kanbanTask({ status: 'todo', released: { by: 'a1', at: ago(FOUR_MINUTES) } });
+  const bare = html(React.createElement(TaskDetail, {
+    task: noBranch, all: [noBranch], onMove: () => {}, onAssign: () => {}, onClose: () => {}
+  }));
+  assert.match(visibleText(bare), /terminal exited at /, 'the overlay stopped reporting the release at all — the negative below would pass vacuously');
+  assert.ok(!visibleText(bare).includes('branch'),
+    'the overlay names a branch on a card whose second write has not landed (rule R-1)');
+});
+
+test('VIGIL-04: parseTasks carries updatedAt and released through its whitelist, and drops a half-written released', () => {
+  const at = ago(FOUR_MINUTES);
+  const [full, partial, garbage] = parseTasks({
+    tasks: [
+      { id: 'a', title: 'a', createdAt: at, updatedAt: at, released: { by: 'a1', at, branch: 'b', detail: 'd' } },
+      { id: 'b', title: 'b', createdAt: at, released: { by: 'a1', at } },
+      { id: 'c', title: 'c', createdAt: at, released: { at, branch: 42 } }
+    ]
+  });
+
+  // parseTasks is a WHITELIST — a field it does not name is dropped, so the two new ones
+  // would arrive at the card as undefined however correctly the writers stamp them.
+  assert.equal(full.updatedAt, at, 'parseTasks drops updatedAt, so every card on the board would fall back to createdAt forever');
+  assert.deepEqual(full.released, { by: 'a1', at, branch: 'b', detail: 'd' });
+  assert.equal(partial.updatedAt, undefined, 'parseTasks invented an updatedAt — "never updated" is a fact the tooltip renders and must not be erased here');
+  assert.deepEqual(partial.released, { by: 'a1', at, branch: undefined, detail: undefined },
+    'the write-1 shape (no branch yet) does not survive parsing, so the card could never render between the two writes');
+  assert.equal(garbage.released, undefined,
+    'a released block with no `by` survives parsing — the ledger is a hand-written file, and that reaches the card as undefined.toUpperCase()');
+});
+
+// ─── VIGIL-04 — the ASK ME age, on the real board ────────────────────────────────────
+
+/**
+ * Render the REAL ASK ME board with real cards on it.
+ *
+ * `AskMeTab` fills its card list from `useHiveTasks()`, whose payload lives in one
+ * module-level cache shared by the whole renderer (`useHiveTasks.ts:20`). A server render
+ * runs NO effect phase, so the only way that cache is populated at first paint is to
+ * populate it before rendering — which is what `refreshHiveTasks()` does, through
+ * `window.cth.hiveTasks`.
+ *
+ * `window.cth` is the preload bridge (`src/preload/index.ts`), i.e. something the real
+ * build already provides — the same category as the harness's `globalThis.self` shim, and
+ * the same shape as TESTING.md's documented `require.cache` injection. It is NOT standing
+ * in for a component, a prop or a derivation: the real `parse()`, the real `waitsOnHuman()`
+ * and the real `recipientOf()` all run on the payload it delivers.
+ *
+ * `window` is installed and removed per test, never at module scope, because several
+ * libraries in this process branch on `typeof window`.
+ */
+async function renderAskBoard(t, tasks) {
+  const hadWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  globalThis.window = { cth: { hiveTasks: async () => ({ tasks }) } };
+  t.after(() => {
+    if (hadWindow) Object.defineProperty(globalThis, 'window', hadWindow);
+    else delete globalThis.window;
+  });
+  refreshHiveTasks();
+  // read() is async; one macrotask is enough for the awaited stub above to settle.
+  await new Promise((resolve) => setImmediate(resolve));
+  return html(React.createElement(AskMeTab));
+}
+
+const openAsk = (askedAt, extra = {}) => ({
+  id: 'ask-1', title: 'approve the production key rotation', status: 'blocked',
+  dependsOn: [], priority: 3, createdAt: ago(NINE_HOURS),
+  humanQA: [{ q: 'which key should I rotate first?', ...(askedAt ? { askedAt } : {}) }], ...extra
+});
+
+test('VIGIL-04: every unanswered ASK ME question renders its age, between the title and the recipient badge', async (t) => {
+  const markup = await renderAskBoard(t, [openAsk(ago(FOUR_MINUTES))]);
+
+  // Positive lower bound FIRST (D-33/D-40): the board actually rendered the ask. Without
+  // this, every assertion below would pass just as happily against an empty board.
+  assert.match(visibleText(markup), /which key should I rotate first\?/,
+    'the ASK ME board rendered no question at all, so nothing below is measuring the real surface');
+
+  const age = ageElement(markup, 'asked ');
+  assert.equal(visibleText(age), '4m', 'an unanswered ask renders no age — VIGIL-04 names asks explicitly, not just cards');
+
+  // Rule A-4's placement, on the MARKUP rather than on the source: after the title button,
+  // before the wrapper span that carries the recipient badge. The badge is located by its
+  // own tooltip, the same one sendAnswer's recipient is derived from.
+  const titleAt = markup.indexOf('which key should I rotate first?');
+  const askTitleAt = markup.indexOf('approve the production key rotation');
+  const ageAt = markup.indexOf('title="asked ');
+  const badgeAt = markup.indexOf('your answer will be sent to');
+  assert.ok(askTitleAt >= 0 && badgeAt >= 0, 'the header lost either its title button or its recipient badge — re-derive this anchor');
+  assert.ok(askTitleAt < ageAt, 'the age renders BEFORE the task title — rule A-4 puts it after the title button, which is the element that gives up the width for it');
+  assert.ok(ageAt < badgeAt, "the age renders after the recipient badge — rule A-4 inserts it immediately before the badge's wrapper span");
+  assert.ok(badgeAt < titleAt, 'the question body now precedes the header, so the ordering assertions above are measuring the wrong region');
+
+  assert.match(age, /flex-shrink:0/, 'the age can shrink, so a long task title will squeeze it to nothing instead of ellipsing itself');
+});
+
+test('VIGIL-04: a four-minute ask and a nine-hour ask differ on ALL FOUR channels, exactly as the cards do', async (t) => {
+  const fresh = ageElement(await renderAskBoard(t, [openAsk(ago(FOUR_MINUTES))]), 'asked ');
+  const stale = ageElement(await renderAskBoard(t, [openAsk(ago(NINE_HOURS))]), 'asked ');
+
+  // 1 — unit letter
+  assert.equal(visibleText(fresh), '4m');
+  assert.equal(visibleText(stale), '9h');
+  // 2 — colour
+  assert.match(fresh, /color:var\(--cth-ink-500\)/, 'the fresh ask lost its ink-500 whisper treatment');
+  assert.match(stale, /color:var\(--cth-ink-900\)/, 'a nine-hour ask is drawn no darker than a four-minute one');
+  assert.doesNotMatch(fresh, /color:var\(--cth-ink-900\)/, 'a four-minute ask is already at ink-900, so the stale one cannot escalate past it');
+  // 3 — weight
+  assert.match(stale, /font-weight:600/, 'the stale ask is not bolder than the fresh one');
+  assert.doesNotMatch(fresh, /font-weight:600/, 'a four-minute ask already renders at weight 600');
+  // 4 — icon
+  assert.ok(hasClock(stale), 'a nine-hour ask carries no clock icon — DESIGN.md:707 forbids colour alone, and this is the channel that survives a colour-blind operator');
+  assert.ok(!hasClock(fresh), 'a four-minute ask shows the clock icon, so the icon says nothing');
+});
+
+test('VIGIL-04: an ask with no askedAt falls back to the card clock and SAYS which one it read', async (t) => {
+  // `askedAt` is optional on the shared HumanQA shape and `openPhoneAsks` already guards
+  // for its absence (`index.ts:1232`) — a hand-written god edit produces exactly this card.
+  // Rendering `0s` for it would disguise a nine-hour-old ask as one that just arrived,
+  // which is precisely the failure VIGIL-04 exists to make impossible (T-04-AGE-07).
+  const markup = await renderAskBoard(t, [openAsk(undefined)]);
+
+  assert.match(visibleText(markup), /which key should I rotate first\?/, 'the board rendered no ask, so the assertions below are vacuous');
+  const age = ageElement(markup, 'asked ');
+  assert.notEqual(visibleText(age), '0s',
+    'an ask carrying no askedAt renders as brand new — a stale ask permanently disguised as a fresh one is the exact failure VIGIL-04 exists to prevent');
+  assert.equal(visibleText(age), '9h', 'the fallback did not read the card clock');
+  assert.match(markup, /the ask carries no timestamp/,
+    'the tooltip does not name which clock it read, so "asked nine hours ago" cannot be told from "the card is nine hours old and the ask has no timestamp at all"');
+});
+
+// ─── PixelButton — the deny button's contrast (GATE-05 prerequisite) ─────────────────
+
+/**
+ * The `case '<variant>':` arm of PixelButton's palette switch, sliced by SYMBOL rather
+ * than by line window. Every line number in that file moves the moment a variant is
+ * added or a comment grows; the `case` label and the arm's closing `};` do not. Plan
+ * 04-18 depends on this same boundary three waves later.
+ */
+function paletteCase(variant) {
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/PixelButton.tsx'), 'utf8');
+  const start = src.indexOf(`case '${variant}':`);
+  assert.notEqual(start, -1, `PixelButton no longer has a \`case '${variant}':\` arm — this assertion is reading nothing`);
+  const end = src.indexOf('\n        };', start);
+  assert.notEqual(end, -1, `the \`case '${variant}':\` arm has no closing \`};\` at the expected indent — the slice below would run to end-of-file`);
+  return src.slice(start, end);
+}
+
+test('GATE-05: the destructive button paints its label with --cth-on-accent, the token that does NOT invert with the theme', () => {
+  const markup = html(React.createElement(PixelButton, { variant: 'destructive' }, 'deny'));
+
+  // The positive bound comes FIRST (D-33/D-40). Asserting only that `ink-900` is gone
+  // would pass just as happily against a button that renders no colour at all, or no
+  // button at all — which is the failure mode this whole file exists to catch.
+  assert.equal(visibleText(markup), 'deny',
+    'the destructive button rendered no label, so every colour assertion below is vacuous');
+  assert.match(markup, /color:var\(--cth-on-accent\)/,
+    'the deny button no longer carries --cth-on-accent. Re-derived from tokens.css: --cth-ink-900 is #DEDBD6 in dark mode and measures 1.85:1 on --cth-coral #E08C82 — the label is not on the screen. --cth-on-accent is theme-invariant #1A1320 and measures 7.12:1');
+  assert.match(markup, /background:var\(--cth-coral\)/,
+    'the destructive fill is no longer --cth-coral, so the 7.12:1 pairing this test pins is measured against a surface that is not there any more');
+
+  // The negative. `--cth-ink-900` inverts with the theme, and this variant's border
+  // (--cth-ink-500) and shadow (--cth-ink-300) mean it has no legitimate reason to
+  // appear anywhere in this markup.
+  assert.doesNotMatch(markup, /--cth-ink-900/,
+    'the destructive button is painting with --cth-ink-900 again — in dark mode that is #DEDBD6 on #E08C82, 1.85:1, and the word `deny` is invisible');
+});
+
+test('GATE-05: the token lives in the destructive arm itself, bounded by symbol so it survives every line move', () => {
+  const destructive = paletteCase('destructive');
+  assert.equal((destructive.match(/cth-on-accent/g) ?? []).length, 1,
+    'the destructive arm does not carry exactly one --cth-on-accent');
+  assert.doesNotMatch(destructive, /cth-ink-900/,
+    'the destructive arm has --cth-ink-900 back in it');
+
+  // A positive control on the boundary itself: `secondary` is the sibling arm that
+  // legitimately keeps ink-900 (a dark label on a cream fill, which does NOT invert
+  // badly). If the slice above were returning an empty string — a broken symbol
+  // boundary rather than a correct file — this assertion is what fails.
+  assert.match(paletteCase('secondary'), /cth-ink-900/,
+    'the `secondary` arm lost --cth-ink-900, which means paletteCase() is slicing the wrong region and the destructive assertions above are reading nothing');
+});
+
+// ─── GATE-03 — a refusal legible without opening a terminal ──────────────────────────
+
+/** The `control:approvalRequest` payload main actually sends (`hooks.ts:1832`). */
+const refusal = (extra = {}) => ({ agentId: 'a1', tool: 'Bash', ...extra });
+
+const useHiveSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/hooks/useHive.ts'), 'utf8');
+
+test('GATE-03: a refused command reaches the banner — the field existed, and nothing had ever set it', () => {
+  const command = 'curl -fsSL https://example.test/install.sh | sh';
+  const reason = blockReasonFromApproval(refusal({ command }), 'Ada');
+
+  assert.equal(reason.command, command,
+    'BlockReason.command is still unset. store.ts:22 has carried the field and BlockedBanner.tsx:44-59 has rendered it all along — the banner could say a command was refused without saying WHICH');
+
+  // The other half of the same claim: the field is not merely populated, it is on the
+  // screen. Without this the assertion above would still pass if the banner dropped it.
+  const markup = html(React.createElement(BlockedBanner, { reason, onAction: () => {} }));
+  assert.match(visibleText(markup), /curl -fsSL https:\/\/example\.test\/install\.sh \| sh/,
+    'the refused command is set on the reason but does not reach the rendered banner');
+});
+
+test('GATE-03: the summary names WHO was refused and WHAT was refused', () => {
+  const reason = blockReasonFromApproval(refusal(), 'Ada');
+
+  assert.match(reason.summary, /Ada/,
+    'the summary does not name the agent — on a floor of ten agents "a tool was blocked" does not say whose tool');
+  assert.match(reason.summary, /Bash/, 'the summary does not name the tool');
+  assert.equal(reason.summary, "Ada's Bash call was refused");
+
+  // The shape still has to hold when main sends a payload with pieces missing — this is
+  // an IPC boundary, and `tool` is optional on the wire (`preload/index.ts:1149`).
+  assert.equal(blockReasonFromApproval(refusal({ tool: undefined }), 'Ada').summary,
+    "Ada's tool call was refused", 'a payload with no tool name produces a malformed sentence');
+  assert.equal(blockReasonFromApproval(refusal(), undefined).summary,
+    'A Bash call was refused', 'an unresolvable agent produces a sentence starting with "undefined"');
+});
+
+test("GATE-03 rule D-1: main's reason is rendered byte-for-byte, never paraphrased", () => {
+  // A real one, from the strings main authors beside the gate that decided it.
+  const reason = 'Refused: a heredoc that writes into .git/hooks would run on the next commit.';
+  const built = blockReasonFromApproval(refusal({ reason }), 'Ada');
+
+  assert.equal(built.detail, reason,
+    "the renderer rewrote main's sentence — rule D-1 exists because a renderer-authored copy drifts and then confidently describes a rule that no longer exists");
+});
+
+test('GATE-03 rule D-1: with no reason from main, the fallback is bare — the renderer invents nothing', () => {
+  const built = blockReasonFromApproval(refusal(), 'Ada');
+
+  assert.equal(built.detail, 'Refused by the floor.',
+    'the no-reason fallback is not the bare sentence');
+  // The negative that matters, and its positive bound is the equality above: the old
+  // fallback named a mechanism ("ungate it from the Command Center") that the operator
+  // may not have, on a refusal main never explained.
+  assert.doesNotMatch(built.detail, /ungate|operator policy|Command Center/,
+    'the renderer is inventing an explanation for a refusal main did not explain');
+});
+
+test('GATE-03 rule D-1: the invented sentence is gone from the source, not merely unreachable', () => {
+  assert.doesNotMatch(useHiveSource(), /Denied by operator policy/,
+    'the old renderer-authored denial reason is still in useHive.ts');
+});
+
+// ─── GATE-05 — an ASK is not a notice, and the difference is one field ────────────────
+//
+// `blockReasonFromApproval` is the SHIPPED assembly (it runs inside a useEffect, and this
+// harness has no effect phase — see the ceiling at :23-38), so these call it directly for
+// the same reason the GATE-03 cases above do.
+
+/** A GATE-05 ask payload as `control:approvalRequest` now delivers it. */
+const askPayload = (extra = {}) => ({
+  agentId: 'a1', tool: 'Bash', command: 'git push origin +main --force',
+  reason: 'Refused: this command FORCE-pushes to a git remote.',
+  askId: 'ask-0123456789abcdef0123456789abcdef', expiresInMs: 120_000, ...extra
+});
+
+test('GATE-05: an ask carries its id, its DURATION and the anchor the countdown is derived from', () => {
+  const built = blockReasonFromApproval(askPayload(), 'Ada', 1_700_000_000_000);
+
+  assert.equal(built.askId, 'ask-0123456789abcdef0123456789abcdef',
+    '`askId` did not survive the assembly — it is the discriminator AND the capability, and without it the answer has nothing to name');
+  assert.equal(built.expiresInMs, 120_000, 'the server-measured duration was dropped');
+  assert.equal(built.receivedAt, 1_700_000_000_000,
+    'the renderer did not stamp WHEN it received the ask. The countdown is `receivedAt + expiresInMs - now`; without the anchor it has nothing to re-derive from and the only alternative is a decremented counter, which drifts optimistically in a backgrounded window');
+});
+
+test('GATE-05: an ask renders TWO answerable actions and NO keystrokes — ADR-0001 is structural here', () => {
+  const built = blockReasonFromApproval(askPayload(), 'Ada');
+
+  assert.deepEqual(built.actions.map((a) => [a.label, a.kind]), [['approve', 'approve'], ['deny', 'deny']],
+    'an ask rendered the notice shape (`actions: []` plus `dismiss`) — the operator is shown a question they cannot answer while the shim sits on its poll loop until the TTL denies it');
+
+  // ADR-0001: exactly one place types into a live PTY, and this is not it. `send` is what
+  // BlockedBanner's two callers forward to `writePty`; leaving it undefined makes the PTY
+  // path UNREACHABLE for an ask rather than merely unused, so a future edit to either
+  // caller cannot resurrect a second typer by accident.
+  for (const a of built.actions) {
+    assert.equal(a.send, undefined,
+      `the ${a.label} action carries keystrokes. The answer rides the approval IPC to ApprovalRegistry.answer and the hook return — never a second PTY typer (ADR-0001)`);
+  }
+
+  // The two labels are the SAME two literals `answerToolAsk` allowlists in main
+  // (index.ts:1323) — `approve` → true, `deny` → false, anything else → no answer at all.
+  // One vocabulary across the phone and the desktop, so an unrecognised label can never
+  // become an accidental yes on the channel whose whole point is an explicit yes.
+  assert.deepEqual(built.actions.map((a) => a.label), ['approve', 'deny']);
+});
+
+test('GATE-05: a notice is untouched — no id, no duration, no actions, and it still dismisses', () => {
+  // The paired negative. Two of the three assertions above would pass just as well
+  // against an assembly that made EVERY refusal answerable, which is the worse failure:
+  // approve/deny buttons on a call the floor already denied settle nothing at all.
+  const built = blockReasonFromApproval(refusal({ command: 'rm -rf build' }), 'Ada');
+
+  assert.equal(built.askId, undefined, 'a GATE-03 notice was given an ask id');
+  assert.equal(built.expiresInMs, undefined, 'a GATE-03 notice was given a countdown');
+  assert.deepEqual(built.actions, [], 'a GATE-03 notice grew answer buttons that can settle nothing');
+
+  const markup = html(React.createElement(BlockedBanner, { reason: built, onAction: () => {} }));
+  assert.match(visibleText(markup), /dismiss/, 'the notice lost the only control that closes it');
+});
+
+test('GATE-05: the summary says the ask is WAITING, not that it was refused', () => {
+  const built = blockReasonFromApproval(askPayload(), 'Ada');
+
+  assert.match(built.summary, /Ada/, 'the summary does not name the agent');
+  assert.doesNotMatch(built.summary, /refused/i,
+    'an OPEN question is headlined as a refusal. It has not been refused — it is waiting on the operator, and it auto-denies in two minutes if they read that headline and move on');
+
+  // Rule D-1 still binds on the DETAIL: main's sentence, byte for byte. Only the
+  // renderer-authored sentence SHAPE differs between the two kinds.
+  assert.equal(built.detail, 'Refused: this command FORCE-pushes to a git remote.',
+    "main's own sentence was rewritten — rule D-1 does not stop applying because the reason arrived on an ask");
+});
+
+// ─── GATE-05 — the countdown's rule table, as a pure function ─────────────────────────
+//
+// The one part of this surface that is a pure function of a number, so the one part that
+// gets real coverage instead of a checkpoint. Everything else about the countdown — that
+// it TICKS — needs an effect phase this harness does not have (:23-38), and is a task-4
+// acceptance criterion rather than a silence here.
+
+test('GATE-05 rule G-3: formatRemaining renders all five bands, and escalates on the last three', () => {
+  assert.deepEqual(formatRemaining(124_000), { text: '2m 04s left', escalate: false },
+    '>= 60s must render minutes with a ZERO-PADDED seconds field — `2m 4s left` is a different string from the one the phone renders and the cross-check in build-assets.test.cjs reddens on it');
+  assert.deepEqual(formatRemaining(45_000), { text: '45s left', escalate: false },
+    '10-59s is a bare seconds count, and two thirds of the ask is not an emergency');
+  assert.deepEqual(formatRemaining(30_000), { text: '30s left', escalate: true },
+    'at 30s the countdown must ESCALATE. This is the threshold the whole ink ramp exists for: below it the operator has to decide now, and the banner has to say so on more than one channel');
+  assert.deepEqual(formatRemaining(9_000), { text: 'expiring — will deny', escalate: true },
+    'below 10s NO NUMBER is shown — the last ten seconds are the window where clock skew and transit latency could lie, and a number that lies there tells the operator they have time to answer a question that has already auto-denied. `— will deny` is the half that says what the timeout DOES');
+  assert.deepEqual(formatRemaining(0), { text: 'expired', escalate: true });
+  assert.deepEqual(formatRemaining(-1), { text: 'expired', escalate: true },
+    'a negative remainder must read `expired`, never a negative countdown');
+
+  // The boundary belongs to the number, exactly as it does on the phone: 10_000
+  // renders `10s left`, not `expiring`.
+  assert.equal(formatRemaining(10_000).text, '10s left',
+    'the 10s boundary fell into the no-number band — the phone puts it on the number side and the two must not disagree');
+  // 31s is the OTHER side of the escalation threshold, and without it `escalate`
+  // could be a constant true above 10s.
+  assert.equal(formatRemaining(31_000).escalate, false,
+    'the escalation has no upper edge — everything above 30s is escalating, so nothing is');
+});
+
+// ─── GATE-05 — the banner, on the markup the operator actually sees ───────────────────
+
+/** A resolved-or-live ask reason for BlockedBanner. */
+const askReason = (extra = {}) => ({
+  ...blockReasonFromApproval(askPayload(), 'Ada', 1_000_000),
+  ...extra
+});
+
+/**
+ * The countdown span's inline style.
+ *
+ * This file's house rule is "assert semantics, never markup strings" (:41-47), and this
+ * is the one deliberate exception in it. The rule the criterion enforces is a MEASURED
+ * contrast ratio — `--cth-coral` on the banner's `--cth-coral-light` fill is 2.43:1 in
+ * light mode, a fail, while `--cth-ink-900` is 12.96:1 — and a colour token has no
+ * accessible name, no role and no visible text to be asserted through. T-04-ASK-23 is
+ * "a countdown unreadable exactly when it matters", so the token IS the property.
+ * Located by `margin-left:auto`, which the countdown is the only element in the banner
+ * to carry (it is the row's right-aligned member), never by ordinal position.
+ */
+const countdownStyle = (markup) => {
+  const m = markup.match(/<span style="([^"]*margin-left:auto[^"]*)"/);
+  assert.ok(m, 'no right-aligned countdown span in the banner markup at all');
+  return m[1];
+};
+
+test('GATE-05 rule 1: the countdown escalates on the INK ramp, and never to coral', () => {
+  const live = html(React.createElement(BlockedBanner, {
+    reason: askReason({ receivedAt: Date.now(), expiresInMs: 31_000 }), onAction: () => {}
+  }));
+  const urgent = html(React.createElement(BlockedBanner, {
+    reason: askReason({ receivedAt: Date.now(), expiresInMs: 30_000 }), onAction: () => {}
+  }));
+
+  assert.match(countdownStyle(live), /--cth-ink-700/,
+    'the un-escalated countdown is not on ink-700 (8.89:1 light / 6.47:1 dark on the banner fill)');
+  assert.doesNotMatch(countdownStyle(live), /font-weight:600/,
+    'the countdown is already at weight 600 at 31s, so the escalation at 30s carries no weight channel at all');
+
+  assert.match(countdownStyle(urgent), /--cth-ink-900/,
+    'at 30s the countdown did not move to ink-900 (12.96:1 / 10.13:1) — this is the moment it most has to be readable');
+  assert.match(countdownStyle(urgent), /font-weight:600/,
+    'the escalation is colour-only. DESIGN.md:707: colour + icon + position, never colour alone');
+
+  // The negative that T-04-ASK-23 is actually about, in BOTH states, with its
+  // positive control in the same case: the banner's own fill IS --cth-coral-light
+  // and must still be there, so an empty render cannot satisfy this.
+  for (const [name, markup] of [['31s', live], ['30s', urgent]]) {
+    assert.doesNotMatch(countdownStyle(markup), /cth-coral/,
+      `the ${name} countdown paints itself coral. --cth-coral on --cth-coral-light measures 2.43:1 in LIGHT mode — a fail — so the countdown would become unreadable at exactly the moment it matters`);
+    assert.match(markup, /--cth-coral-light/,
+      'the banner lost its own coral fill — the positive control for the negative above');
+  }
+});
+
+test('GATE-05: the clock icon rides the ask and nothing else', () => {
+  const ask = html(React.createElement(BlockedBanner, { reason: askReason(), onAction: () => {} }));
+  const notice = html(React.createElement(BlockedBanner, {
+    reason: blockReasonFromApproval(refusal({ command: 'rm -rf build' }), 'Ada'), onAction: () => {}
+  }));
+
+  // Counted, not merely matched: the bell is already an <svg> in this banner, so
+  // "an svg is present" would pass on a render with no clock at all.
+  const svgs = (m) => (m.match(/<svg/g) ?? []).length;
+  assert.equal(svgs(ask), 2, 'the ask render is missing the countdown clock beside the bell');
+  assert.equal(svgs(notice), 1, 'a GATE-03 notice grew a clock — there is nothing counting down on a call that was already denied');
+});
+
+test('GATE-05 rule 3: a command under approval is NEVER ellipsised; a notice keeps its ellipsis AND gains a tooltip', () => {
+  const command = 'git push origin +main --force';
+  const ask = html(React.createElement(BlockedBanner, { reason: askReason(), onAction: () => {} }));
+  const notice = html(React.createElement(BlockedBanner, {
+    reason: blockReasonFromApproval(refusal({ command }), 'Ada'), onAction: () => {}
+  }));
+
+  // `git push origin +ma…` hides the dangerous half, and the dangerous half is
+  // frequently at the end. Under approval the block wraps and scrolls instead.
+  assert.doesNotMatch(ask, /text-overflow:ellipsis/,
+    'the command awaiting approval is still ellipsised — the operator is being asked to authorise a string they cannot fully read');
+  assert.match(ask, /white-space:pre-wrap/, 'the command block does not wrap');
+  assert.match(ask, /word-break:break-all/, 'a single unbroken token (a long URL, a base64 blob) would still overflow');
+  assert.match(ask, /max-height:96px/, 'the block is unbounded, so a heredoc pushes the answer buttons off screen');
+  assert.match(ask, /overflow-y:auto/, 'the block is capped but not scrollable, so anything past 96px is unreachable');
+
+  // The GATE-03 half is UNCHANGED behaviour plus plan 04-14's deferred rider:
+  // that command already did not run, so the ellipsis is fine — but the full
+  // string must be one hover away rather than only in the terminal feed.
+  assert.match(notice, /text-overflow:ellipsis/, "the notice's ellipsis was removed — this direction was not asked for and costs vertical space on a banner that is not a prompt");
+  assert.match(notice, new RegExp(`title="${command.replace(/[+]/g, '\\+')}"`),
+    'the notice command has no `title` — plan 04-14 deferred this rider here because D-35 forbade it that file, and without it the truncated half is readable nowhere in the UI');
+});
+
+test('GATE-05 rule 4: a resolved ask keeps its banner, shows an outcome, and offers dismiss', () => {
+  // The post-resolution SHAPE, which is prop-driven and therefore visible to a
+  // server render. What is NOT asserted here, and is named so nobody mistakes
+  // the silence for coverage: that a CLICK produced this shape, and that focus
+  // moved to `dismiss`. There is no `document` in this harness and no events
+  // fire (:23-38) — both are task-4 acceptance criteria.
+  const resolved = html(React.createElement(BlockedBanner, {
+    reason: askReason({ actions: [], outcome: 'approved — the command was allowed to run' }),
+    onAction: () => {}
+  }));
+
+  assert.match(resolved, /--cth-coral-light/,
+    'the banner vanished on resolution. A banner that silently disappears leaves the operator unable to tell whether they approved something (T-04-ASK-24)');
+  assert.match(visibleText(resolved), /approved — the command was allowed to run/,
+    'the outcome line is missing, so the banner is still mounted and says nothing about what happened');
+  assert.match(visibleText(resolved), /dismiss/,
+    'the resolved banner has no control that closes it');
+  assert.doesNotMatch(visibleText(resolved), /approve\b(?!d)/,
+    'the action row survived resolution — the operator can click approve on an ask that is already settled');
+
+  // A resolved ask stops counting: `expiring — will deny` beside `approved` is a
+  // sentence the operator has to reconcile at 3am.
+  assert.doesNotMatch(resolved, /margin-left:auto/,
+    'the countdown is still rendered on a settled ask');
+});
+
+test('GATE-05 rule G-2: the outcome line says WHICH way a failed answer went', () => {
+  // The two failures are opposites at 3am. `expired` means the floor already denied
+  // and nothing ran; `settled` means somebody else answered and it may have run. One
+  // "could not answer" line for both is the message that leaves the operator unable
+  // to act, which is the whole reason main returns the distinction.
+  assert.match(askOutcomeText(true, { settled: true }, false), /approved/);
+  assert.match(askOutcomeText(false, { settled: true }, false), /denied/);
+  assert.doesNotMatch(askOutcomeText(false, { settled: true }, false), /did run|was allowed/,
+    'a DENY reported that the command ran');
+
+  assert.match(askOutcomeText(true, { settled: false, expired: true }, false), /expired/,
+    "main said the ask expired and the banner did not pass that on — the operator cannot tell a denied command from one that may have run");
+  assert.match(askOutcomeText(true, { settled: false, expired: false }, false), /elsewhere/,
+    'an ask settled on another surface is reported as an expiry, which claims the command did not run when it may well have');
+
+  // The renderer's OWN reading wins on a desktop-only floor: `toolAskExpiry` in main is
+  // filled by phone GETs, so `expired` is false there for a genuinely expired ask. Either
+  // source saying expired is enough; requiring both would report the safe outcome as the
+  // unsafe one exactly where the phone is not in play.
+  assert.match(askOutcomeText(true, { settled: false, expired: false }, true), /expired/,
+    "the renderer ignored its own anchor. Main's expired flag reads false for any ask no phone GET memoised, so on a desktop-only floor this is the ONLY honest source");
+
+  // A dead IPC is neither: the ask was not touched, and saying so is the only
+  // statement that is true.
+  assert.match(askOutcomeText(true, null, false), /could not reach the floor/,
+    'a failed IPC was reported as an outcome — the ask is still open and the operator has been told it is not');
+});
+
+test('GATE-05: BOTH banner call sites route through the shipped ask decision, so the cases above are not asserting a copy', () => {
+  for (const rel of [
+    'src/renderer/src/components/AgentDetailPanel.tsx',
+    'src/renderer/src/components/CommandCenterPanel.tsx'
+  ]) {
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    assert.match(src, /if \(answerAskFromBanner\(agent, label\)\) return;/,
+      `${rel} no longer routes an ask through answerAskFromBanner — a second copy of a security branch is how two surfaces come to disagree about it`);
+    // ...and the PTY path it guards is STILL THERE for the non-ask reasons it was
+    // written for. T-04-ASK-21 is a grep gate on these two files precisely so that
+    // "the ask does not type" cannot be satisfied by deleting the typer.
+    assert.match(src, /window\.cth\.writePty\(agent\.ptyId, send\)/,
+      `${rel} lost its writePty path entirely — the GATE-03/pty-parser reasons this banner was built for now do nothing`);
+  }
+});
+
+// ─── VIGIL-03 — a blocked agent is visibly blocked, even under a tripped breaker ──────
+
+const ccpSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/CommandCenterPanel.tsx'), 'utf8');
+
+/** One roster row's badge, rendered exactly as the Command Center renders it. */
+const rosterBadge = (status, armed) =>
+  visibleText(html(React.createElement(PixelBadge, { status: rosterBadgeStatus(status, armed) })));
+
+test('VIGIL-03: a blocked agent reads `needs you` on the roster even while the circuit breaker is armed', () => {
+  // All FOUR cases, because two of them would pass just as well against an expression
+  // that ignores `armed` entirely — and the armed pair is the whole point.
+  assert.equal(rosterBadge('blocked', true), 'needs you',
+    'a blocked agent reads `looping` under a tripped breaker. That badge is the row\'s only blocked signal, and VIGIL-03\'s criterion is that an agent blocked on a prompt is VISIBLY blocked — at 3am the operator can act on `needs you` and cannot act on `looping`');
+  assert.equal(rosterBadge('working', true), 'looping',
+    'the armed state was weakened in general — a working agent under a tripped breaker must still read `looping`');
+  assert.equal(rosterBadge('blocked', false), 'needs you',
+    'the unarmed blocked row regressed');
+  assert.equal(rosterBadge('working', false), 'working',
+    'the unarmed working row regressed');
+});
+
+test('VIGIL-03: the roster badge site calls the shipped rule, so the four cases above are not asserting a copy', () => {
+  assert.match(ccpSource(), /<PixelBadge status=\{rosterBadgeStatus\(a\.status, armed\)\} \/>/,
+    'the Command Center roster no longer routes its badge through rosterBadgeStatus, so the four cases above are testing a function nothing renders');
+});
+
+test("VIGIL-03: the armed row keeps its other two channels, so `blocked` winning is a strict improvement and not a trade", () => {
+  const src = ccpSource();
+  // Channel 2 — the row fill. Channel 3 — the ⚠ glyph (asserted verbatim below).
+  // DESIGN.md:707: "colour + icon + position … never colour alone".
+  assert.match(src, /background: armed \? 'var\(--cth-coral-light\)' : 'var\(--cth-paper-100\)'/,
+    'the armed row lost its --cth-coral-light fill — with the badge now able to say `needs you`, that fill is one of the two channels left saying the breaker is armed');
+  assert.equal((src.match(/'paused'/g) ?? []).length, 1,
+    'the `paused` count moved. PixelBadge has no `paused` StatusKind (PixelBadge.tsx:3-12) and none was to be invented; the one legitimate occurrence is the floor-delivery label at :213');
+});
+
+test("T-04-BLK-10: the breaker's ⚠ is ANNOUNCED on the one row where the badge stopped saying it", () => {
+  // WHY THIS IS ASSERTED ON SOURCE AND NOT ON MARKUP, stated rather than left as a
+  // silence. `armed` is derived from `breakers`, which is `useState({})` inside
+  // `useFleetTelemetry` and is filled only by an effect — and this harness runs no
+  // effect phase at all (:23-38). A rendered CommandCenterPanel therefore has
+  // `armed === false` for every row and BOTH branches below are unreachable through
+  // it. That is the same measured fact that made plan 04-14 export
+  // `rosterBadgeStatus`; here the glyph cannot be extracted the same way, because its
+  // `fontSize: 12` is pinned verbatim by FLOOR-12's allowlist and moving it out of
+  // that line would redden two clauses in repo-claims.test.cjs. So: the shape is
+  // asserted where it lives.
+  const src = ccpSource();
+
+  const DECOR = "{armed && a.status !== 'blocked' && <span aria-hidden=\"true\" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}";
+  const SPOKEN = "{armed && a.status === 'blocked' && <span role=\"img\" aria-label={`circuit breaker: ${breaker?.reason ?? 'armed'}`} style={{ color: 'var(--cth-coral)' }}>⚠</span>}";
+
+  // The decorative branch is BYTE-IDENTICAL to what shipped, plus its new guard —
+  // `repo-claims.test.cjs`'s FLOOR-12 entry pins this exact text with `count: 1`, and
+  // that entry moved in the same commit as this line.
+  assert.equal(src.split(DECOR).length - 1, 1,
+    'the decorative ⚠ branch no longer matches the text FLOOR-12 pins verbatim. Two clauses redden on this, and the fix is NOT to widen that allowlist (repo-claims.test.cjs says so in its own failure message) — it is to restore the line');
+
+  assert.equal(src.split(SPOKEN).length - 1, 1,
+    'the armed+blocked ⚠ is not announced. A `title` on an `aria-hidden` span reaches nobody, and since plan 04-14 made the badge read `needs you` on this row the glyph is the ONLY armed signal an AT operator has left (T-04-BLK-10)');
+
+  // The two guards are exhaustive and mutually exclusive over `armed`: the glyph can
+  // neither vanish under a tripped breaker nor render twice on one row. Asserted from
+  // the guards themselves, because a rendered panel cannot reach either branch.
+  assert.equal((src.match(/\{armed && a\.status [!=]== 'blocked' &&/g) ?? []).length, 2,
+    'the ⚠ no longer splits on exactly `armed && a.status (!==|===) blocked` — a third guard, or a dropped one, means a row that shows two glyphs or none');
+
+  // The spoken branch is not merely present, it is CORRECTLY shaped: no aria-hidden
+  // (which would silence it again), and the label carries main's own breaker reason
+  // rather than a renderer-authored sentence.
+  assert.doesNotMatch(SPOKEN, /aria-hidden/,
+    'the announced branch kept aria-hidden, so the swap changed nothing an AT operator can hear');
+  assert.match(SPOKEN, /aria-label=\{`circuit breaker: \$\{breaker\?\.reason/,
+    'the announced branch does not name WHY the breaker tripped — "circuit breaker" alone is the same non-information the badge already carries');
+
+  // FLOOR-12's cost, asserted so it cannot silently become a numeric override later:
+  // the announced branch has no inline fontSize at all. Clause 3 walks back from every
+  // sub-14px site to its owning open tag and demands a LITERAL aria-hidden, which this
+  // branch by definition cannot have — so a 12px override here would be both
+  // unallowlistable and unfixable. The glyph inherits ~14px on this one row.
+  assert.doesNotMatch(SPOKEN, /fontSize/,
+    'the announced ⚠ took an inline fontSize. If it is sub-14px, FLOOR-12 clause 3 fails on it and no allowlist entry can rescue it; --cth-text-body-sm is 14px (tokens.css:71), not 12');
+});
+
+// ─── VIGIL-01 — the QUIET chip, and the latch it mirrors ──────────────────────────────
+//
+// THE CHIP ITSELF IS NOT RENDERED HERE, and the reason is measured rather than assumed:
+// `App.tsx:292` reads `import.meta.env.DEV`, and this harness transpiles to CommonJS —
+// `loadTs('src/renderer/src/App.tsx')` throws `Cannot use 'import.meta' outside a module`
+// before any component is reached. That is a property of the file, not of the chip, and
+// no amount of seeding gets past it. So the chip's DRIVER is asserted behaviourally (the
+// store mirror, both directions, which is exactly what its `{floorQuiet && …}` guard
+// reads) and its SHAPE is asserted on source. Its click is task 4's, for the same reason
+// every other click in this file is.
+
+const appSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/App.tsx'), 'utf8');
+
+test('VIGIL-01: the store field is a MIRROR of main\'s latch — both edges, including the clearing one', (t) => {
+  const before = useStore.getState().floorQuiet;
+  t.after(() => useStore.setState({ floorQuiet: before }));
+
+  assert.equal(useStore.getState().floorQuiet, null,
+    'the quiet latch does not start null. A stale "the floor stopped" chip on a floor that is moving is the one failure this mirror must not be capable of');
+
+  const snap = { sinceMs: 1_920_000, inFlight: [{ id: 't1', title: 'ship the thing', assignee: 'ada' }], godDead: false };
+  useStore.getState().setFloorQuiet(snap);
+  const set = useStore.getState().floorQuiet;
+  assert.ok(set, 'the setting edge did not reach the store, so the chip has no route to the snapshot at all (T-04-ABS-10)');
+  assert.equal(set.sinceMs, 1_920_000, "main's duration was dropped");
+  assert.deepEqual(set.inFlight, snap.inFlight,
+    'the in-flight set was dropped — "with what was in flight when it stopped" is the requirement, and re-reading the board later reports a different, possibly empty, set');
+  assert.ok(typeof set.receivedAt === 'number' && set.receivedAt > 0,
+    "the renderer did not stamp its own anchor. `sinceMs` is a duration at the moment of ONE push; without a local zero the label freezes at the value main happened to send");
+
+  // The clearing edge. Plan 04-11 publishes `null` rather than leaving the last
+  // snapshot in place precisely so this is expressible, and a mirror that can only
+  // be set is a chip that never goes away.
+  useStore.getState().setFloorQuiet(null);
+  assert.equal(useStore.getState().floorQuiet, null,
+    'the clearing edge left the last snapshot in place — the chip would still be claiming the floor is stopped after it started moving again');
+});
+
+test('VIGIL-01 rules Q-2/Q-3: the chip is a button, it opens the task board, and it renders only while the latch is set', () => {
+  const src = appSource();
+
+  // Q-3 — a STATE, not a repeat notification: guarded on the mirror, so it exists
+  // while the latch is set and disappears when it clears. Both directions come from
+  // this one guard plus the store test above.
+  assert.match(src, /\{floorQuiet && \(/,
+    'the QUIET chip is not guarded on the store mirror — a chip that always renders and a chip that never renders both pass every other assertion here');
+
+  // Q-2 — a <button>, and the action it fires was READ FROM SOURCE, not assumed:
+  // `OfficeFloor.tsx:1106` is the shipped task-board click and this copies it,
+  // including the ORDER (select() sets ccTabRequest: null, so requesting first and
+  // selecting second would clear the request it just made).
+  assert.match(src, /st\.requestCommandCenterTab\('tasks'\);/,
+    "the chip does not open the task board through the store action the office board already uses — VIGIL-01 composes with VIGIL-04 rather than growing a surface of its own");
+  assert.ok(
+    src.indexOf('if (god) st.select(god.id);') < src.indexOf("st.requestCommandCenterTab('tasks');"),
+    'the chip requests the Command Center tab BEFORE selecting the god. `select()` sets ccTabRequest to null, so that order clears the request it just made and the click does nothing');
+
+  // A1 — the visible `QUIET 32m` names neither what is quiet nor what clicking does.
+  assert.match(src, /aria-label=\{`Floor quiet for \$\{quietFor\} — \$\{floorQuiet\.inFlight\.length\}/,
+    "the chip's accessible name does not carry the duration and the in-flight count");
+});
+
+test('VIGIL-01: the QUIET chip copies the PUBLIC chip field for field, changing only the background', () => {
+  // Geometry, not taste: two chips in one 36px strip that disagree about padding or
+  // flexShrink degrade differently, and the containment measurement is only valid for
+  // the geometry it was taken against.
+  const src = appSource();
+  const chip = (bg) => {
+    const at = src.indexOf(`background: 'var(${bg})', color: 'var(--cth-on-accent)'`);
+    assert.ok(at >= 0, `no titlebar chip with a ${bg} fill`);
+    return src.slice(at, src.indexOf('}}', at));
+  };
+  const publicChip = chip('--cth-lemon');
+  const quietChip = chip('--cth-coral');
+
+  assert.equal(
+    quietChip.replace('--cth-coral', '--cth-lemon'), publicChip,
+    'the QUIET chip has drifted from the PUBLIC chip on something other than its background. The two share one 36px strip and one measurement; a padding or flexShrink that differs makes the containment probe describe a layout that is not on screen'
+  );
+  // --cth-on-accent on --cth-coral is 5.34:1 light / 7.12:1 dark, both PASS — an
+  // already-measured pairing, which is why this chip needed no new colour work.
+  assert.match(quietChip, /color: 'var\(--cth-on-accent\)'/,
+    'the chip lost the token that does NOT invert with the theme, so its label goes unreadable in one of the two modes');
+});
+
+test('GATE-03 rule D-2: the terminal feed line survives — it is the audit trail, not a duplicate', () => {
+  // The requirement is that the operator does not HAVE to read a terminal, not that the
+  // trail is deleted. Counted rather than merely matched: a second ⛔ push would mean the
+  // feed is being written twice per refusal.
+  assert.equal((useHiveSource().match(/⛔/g) ?? []).length, 1,
+    'the ⛔ feed push was dropped or duplicated — D-2 keeps exactly the one that was already there');
 });
