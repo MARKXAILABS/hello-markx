@@ -24,6 +24,7 @@ import {
   AUTO_ACCOUNT_LABEL,
   decodeAccountChoice,
   buildSpawnCommand,
+  hireCommandFor,
   tokenizeCommand,
   modelsForProvider,
   inferAgentProvider,
@@ -31,6 +32,7 @@ import {
   isClaudeProvider,
   capabilityGaps
 } from '@/store/config';
+import { batchAgentIds } from '@/hooks/bulkSpawn';
 
 const ACCENTS: AccentColorName[] = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'];
 
@@ -128,8 +130,17 @@ function basename(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path;
 }
 
+/** One agent id for the single-hire form.
+ *
+ *  A DELEGATE, deliberately: the slug/timestamp rule itself lives in
+ *  `batchAgentIds` (hooks/bulkSpawn.ts) and is shared with the team-import bulk
+ *  hire. While it lived here it was module-private, so UI-SPEC S3a's flagged
+ *  collision hazard — two same-named members hired in the same millisecond getting
+ *  the SAME id — could not be reached by any test at all. Routing this path through
+ *  the exported generator is what makes test/bulk-spawn.test.cjs a test of the code
+ *  the app runs rather than of a copy of the rule. */
 function uniqueId(name: string): string {
-  return `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`;
+  return batchAgentIds([name], Date.now())[0];
 }
 
 /** What `team:export` can come back with. */
@@ -190,12 +201,10 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     (ACCENTS.includes(a as AccentColorName) ? (a as AccentColorName) : 'sky');
   /** The locally-built spawn command for a manifest: provider preset + model
    *  from the LOCAL config builder, with the manifest's validated flags
-   *  appended. A manifest can never name the binary itself. */
-  const hireCommand = (m: HireManifest): string => {
-    const prov: AgentProvider = m.provider ?? inferAgentProvider(config.defaultCommand);
-    const base = buildSpawnCommand(config, m.model, prov);
-    return m.commandFlags?.length ? `${base} ${m.commandFlags.join(' ')}` : base;
-  };
+   *  appended. A manifest can never name the binary itself. The rule itself is
+   *  `hireCommandFor` in store/config.ts, shared with the team-import bulk hire so
+   *  the two paths cannot drift into building different commands. */
+  const hireCommand = (m: HireManifest): string => hireCommandFor(m, config);
 
   // Default provider follows whatever the global default command is (claude
   // unless the user reconfigured it); the model only carries over for Claude.

@@ -27,6 +27,7 @@ import {
 import { fmtCountdown, describeHealth, type PoolSnapshot, type AccountHealth } from '@shared/claudeAccountPool';
 import { providerCapabilities, remoteControlAvailability } from '@shared/providerAutomation';
 import { MCP_CATALOG, mcpWiredFor, type McpTier } from '@shared/mcpCatalog';
+import type { HireManifest } from '@shared/hire';
 
 export {
   AGENT_PROVIDER_PRESETS,
@@ -454,6 +455,35 @@ export function buildSpawnCommand(
     if (flag) cmd = `${cmd} ${flag}`;
   }
   return cmd;
+}
+
+/**
+ * The locally-built spawn command for an imported hire manifest: the provider
+ * preset + model from the LOCAL builder above, with the manifest's already-
+ * validated flags appended.
+ *
+ * THE SECURITY PROPERTY, which is the whole reason this is a function and not an
+ * interpolation at the call site: a manifest can never name the binary itself. The
+ * spawn command is rebuilt here from the operator's own config every time, so an
+ * imported file contributes a model string and a validated flag list — nothing that
+ * decides what actually executes.
+ *
+ * Lives beside `buildSpawnCommand` and `inferAgentProvider` because it is composed
+ * of exactly those two (RESEARCH.md suggested `src/shared/hire.ts`, which cannot
+ * import either without inventing a renderer→shared dependency). Shared by the
+ * single-hire form and the team-import bulk hire, so the two can never drift into
+ * building different commands from the same manifest.
+ *
+ * `commandFlags` is always absent on a TEAM member — `validateTeamManifest` deletes
+ * it (along with `skills` and `mcpServers`) because the team path has no per-member
+ * review surface for them. The branch below is therefore live only for the
+ * single-hire path; it is kept rather than asserted away so this stays a faithful
+ * shared implementation of both.
+ */
+export function hireCommandFor(m: HireManifest, config: HarnessConfig): string {
+  const prov: AgentProvider = m.provider ?? inferAgentProvider(config.defaultCommand);
+  const base = buildSpawnCommand(config, m.model, prov);
+  return m.commandFlags?.length ? `${base} ${m.commandFlags.join(' ')}` : base;
 }
 
 // ── PARITY-01b / DAEMON-04 (plan 02-06) ───────────────────────────────────────

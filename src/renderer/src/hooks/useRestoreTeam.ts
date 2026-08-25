@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { useStore, type Agent } from '@/store/store';
 import { buildSpawnCommand, inferAgentProvider, tokenizeCommand, type HarnessConfig } from '@/store/config';
+import { spawnBatch } from './bulkSpawn';
 
 /** "Restore team" — respawn every worker from the previous session.
  *
@@ -82,18 +83,18 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
     let alreadyLive = 0;
     const failures: string[] = [];
     try {
-      // Restore every agent CONCURRENTLY. Each spawn is keyed by its own ptyId and
-      // touches no cross-agent state in the renderer, and in the main process the
-      // whole `pty:spawn` handler (hive registry read-modify-write included) runs
-      // synchronously between awaits, so concurrent handlers can't interleave
-      // mid-update. Serially this cost the sum of every agent's git probe + spawn;
-      // a 6-agent team took ~6× one agent for no reason.
-      // Spawns run concurrently but agents are ADDED in roster order afterwards.
-      // Calling addAgent from inside each spawn made completion timing decide
-      // the roster order — and that order is persisted, so a slow provider or a
-      // slow git probe silently overwrote the sequence the user had dragged the
-      // cards into.
-      const restoredInOrder = await Promise.all([...restorableAgents].map(async (a): Promise<Agent | null> => {
+      // Restore every agent CONCURRENTLY, adding them in roster order afterwards,
+      // with one agent's failure never aborting the rest. All three of those
+      // properties — and the three defects behind them — now live in `spawnBatch`,
+      // which is shared with the team-import bulk hire (D-18) rather than
+      // re-implemented there. This call is the same shape this loop always ran;
+      // see bulkSpawn.ts for the full record of what each part is paying for.
+      //
+      // Each spawn is keyed by its own ptyId and touches no cross-agent state in
+      // the renderer, and in the main process the whole `pty:spawn` handler (hive
+      // registry read-modify-write included) runs synchronously between awaits, so
+      // concurrent handlers can't interleave mid-update.
+      const batch = await spawnBatch([...restorableAgents], async (a): Promise<Agent | null> => {
         // Per-agent guard: one agent's failure (or a rejected IPC call) must NEVER
         // abort the others — an unhandled rejection here used to make the
         // entire restore a silent no-op after the first bad agent.
@@ -194,10 +195,15 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
           console.error('[restore] error for', a.id, e);
         }
         return null;
-      }));
+      });
+      // The closure above catches its own errors so it can name the agent in the
+      // message; spawnBatch's per-item catch is the net under it, and anything it
+      // caught is a throw that escaped the closure entirely. Merge rather than
+      // ignore — a swallowed one here is the silent-abort defect coming back.
+      failures.push(...batch.failures);
       // Add in the ORIGINAL roster order, not completion order.
-      for (const restoredAgent of restoredInOrder) {
-        if (restoredAgent) useStore.getState().addAgent(restoredAgent);
+      for (const restoredAgent of batch.ok) {
+        useStore.getState().addAgent(restoredAgent);
       }
     } finally {
       // addAgent auto-selects each spawn; put the user back where they were.

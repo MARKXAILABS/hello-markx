@@ -54,13 +54,17 @@ test('every spawnOne starts before any resolves — the batch is concurrent, not
 
   // Yield once so the synchronous prologue of every mapped async fn has run.
   await Promise.resolve();
+  const startedBeforeAnyResolve = [...started];
+  // Released in a `finally` so a SERIAL implementation fails the assertion below
+  // rather than deadlocking on a gate its second call never reaches.
+  resolveAll();
+
   assert.deepEqual(
-    started,
+    startedBeforeAnyResolve,
     items,
-    `only ${started.length} of ${items.length} spawns had started before the first resolve — the batch is serial`
+    `only ${startedBeforeAnyResolve.length} of ${items.length} spawns had started before the first resolve — the batch is serial`
   );
 
-  resolveAll();
   const res = await run;
   assert.equal(res.ok.length, 4);
 });
