@@ -7,6 +7,7 @@ import {
   defaultCommandForProvider,
   inferAgentProvider,
   providerPreset,
+  sandboxFlagsForProvider,
   type AgentProvider
 } from '../shared/agentProvider';
 import { defaultMcpDefaults, MCP_CATALOG, MCP_GRANT_PREFIX } from '../shared/mcpCatalog';
@@ -356,6 +357,11 @@ export interface HarnessConfig {
   providerBaseUrls?: Partial<Record<AgentProvider, string>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** GATE-04 / D-15. Per-CLI-provider sandbox opt-in. ABSENT === OFF, which is the
+   *  behaviour that shipped and therefore the verified fallback — no migration, no
+   *  explicit write. Only engines whose preset declares `sandboxFlags` can act on it
+   *  (codex alone today); it is inert for the rest. Mirrors the renderer store. */
+  providerSandbox?: Partial<Record<AgentProvider, boolean>>;
   /** Master toggle for the Slack → Michael's-queue integration. */
   slackEnabled?: boolean;
   /** Slack app signing secret (Basic Information → Signing Secret). Never logged. */
@@ -1084,17 +1090,35 @@ export function modelForRole(
  *  flag here removes the interactive tool-approval prompt entirely (#4). Nothing
  *  in this function can put a human back in the loop — the enforcement that
  *  survives a bypass is the `permissions.deny` list in the per-agent settings the
- *  hive writes, plus `control.toolDecision` at PreToolUse. */
+ *  hive writes, plus `control.toolDecision` at PreToolUse.
+ *
+ *  …UNLESS the operator turned this engine's sandbox opt-in on (GATE-04/D-14), in
+ *  which case the bypass is REPLACED by `-s workspace-write --add-dir <agentDir>`:
+ *  the sandbox stays up and the agent's own folder is added as a writable root, so
+ *  hive housekeeping still works. Default is off and is byte-identical to what
+ *  shipped (D-15's verified fallback).
+ *
+ *  L-08 — THIS IS ONE OF TWO INDEPENDENT ASSEMBLERS. `buildSpawnCommand`
+ *  (src/renderer/src/store/config.ts) does the same job for the renderer, and the two
+ *  live in DIFFERENT tsconfig projects, so `npm run typecheck` cannot see a drift
+ *  between them. Any edit here must be mirrored there in the same commit;
+ *  test/spawn-command-parity.test.cjs calls BOTH and asserts they agree, and it is
+ *  the only thing that will catch you. */
 export function commandForAutoMode(
   config: HarnessConfig,
-  provider?: AgentProvider
+  provider?: AgentProvider,
+  agentDir?: string
 ): string {
   const p = provider ?? inferAgentProvider(config.defaultCommand);
   const base = p === 'claude' || p === 'custom'
     ? config.defaultCommand
     : defaultCommandForProvider(p, config.defaultCommand);
   if (!config.autoMode) return base;
-  const flag = autoModeFlagForProvider(p);
+  // Absent === off, so no existing config on disk changes behaviour and no migration
+  // is needed. `sandboxFlagsForProvider` is '' for every engine with no sandbox the
+  // floor can turn on, so an opt-in set for such an engine falls through to the flag.
+  const sandbox = config.providerSandbox?.[p] ? sandboxFlagsForProvider(p, agentDir) : '';
+  const flag = sandbox || autoModeFlagForProvider(p);
   return flag ? `${base} ${flag}` : base;
 }
 
