@@ -107,11 +107,15 @@ Module._load = function (request, ...rest) {
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
-let PixelButton, blockReasonFromApproval, rosterBadgeStatus;
+let PixelButton, blockReasonFromApproval, rosterBadgeStatus, formatRemaining;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
-  ({ BlockedBanner } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
+  // `formatRemaining` is exported for the same measured reason `blockReasonFromApproval`
+  // and `rosterBadgeStatus` are: the countdown's rule table is a pure function of a
+  // number, and pulling it out is what turns "five rendered states" from a checkpoint
+  // item into five assertions in a harness that runs no effects.
+  ({ BlockedBanner, formatRemaining } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
   ({ AgentCard } = loadTs('src/renderer/src/components/AgentCard.tsx'));
   ({ useStore } = loadTs('src/renderer/src/store/store.ts'));
   ({ autoModeFlagForProvider, AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts'));
@@ -926,6 +930,154 @@ test('GATE-05: the summary says the ask is WAITING, not that it was refused', ()
   // renderer-authored sentence SHAPE differs between the two kinds.
   assert.equal(built.detail, 'Refused: this command FORCE-pushes to a git remote.',
     "main's own sentence was rewritten — rule D-1 does not stop applying because the reason arrived on an ask");
+});
+
+// ─── GATE-05 — the countdown's rule table, as a pure function ─────────────────────────
+//
+// The one part of this surface that is a pure function of a number, so the one part that
+// gets real coverage instead of a checkpoint. Everything else about the countdown — that
+// it TICKS — needs an effect phase this harness does not have (:23-38), and is a task-4
+// acceptance criterion rather than a silence here.
+
+test('GATE-05 rule G-3: formatRemaining renders all five bands, and escalates on the last three', () => {
+  assert.deepEqual(formatRemaining(124_000), { text: '2m 04s left', escalate: false },
+    '>= 60s must render minutes with a ZERO-PADDED seconds field — `2m 4s left` is a different string from the one the phone renders and the cross-check in build-assets.test.cjs reddens on it');
+  assert.deepEqual(formatRemaining(45_000), { text: '45s left', escalate: false },
+    '10-59s is a bare seconds count, and two thirds of the ask is not an emergency');
+  assert.deepEqual(formatRemaining(30_000), { text: '30s left', escalate: true },
+    'at 30s the countdown must ESCALATE. This is the threshold the whole ink ramp exists for: below it the operator has to decide now, and the banner has to say so on more than one channel');
+  assert.deepEqual(formatRemaining(9_000), { text: 'expiring — will deny', escalate: true },
+    'below 10s NO NUMBER is shown — the last ten seconds are the window where clock skew and transit latency could lie, and a number that lies there tells the operator they have time to answer a question that has already auto-denied. `— will deny` is the half that says what the timeout DOES');
+  assert.deepEqual(formatRemaining(0), { text: 'expired', escalate: true });
+  assert.deepEqual(formatRemaining(-1), { text: 'expired', escalate: true },
+    'a negative remainder must read `expired`, never a negative countdown');
+
+  // The boundary belongs to the number, exactly as it does on the phone: 10_000
+  // renders `10s left`, not `expiring`.
+  assert.equal(formatRemaining(10_000).text, '10s left',
+    'the 10s boundary fell into the no-number band — the phone puts it on the number side and the two must not disagree');
+  // 31s is the OTHER side of the escalation threshold, and without it `escalate`
+  // could be a constant true above 10s.
+  assert.equal(formatRemaining(31_000).escalate, false,
+    'the escalation has no upper edge — everything above 30s is escalating, so nothing is');
+});
+
+// ─── GATE-05 — the banner, on the markup the operator actually sees ───────────────────
+
+/** A resolved-or-live ask reason for BlockedBanner. */
+const askReason = (extra = {}) => ({
+  ...blockReasonFromApproval(askPayload(), 'Ada', 1_000_000),
+  ...extra
+});
+
+/**
+ * The countdown span's inline style.
+ *
+ * This file's house rule is "assert semantics, never markup strings" (:41-47), and this
+ * is the one deliberate exception in it. The rule the criterion enforces is a MEASURED
+ * contrast ratio — `--cth-coral` on the banner's `--cth-coral-light` fill is 2.43:1 in
+ * light mode, a fail, while `--cth-ink-900` is 12.96:1 — and a colour token has no
+ * accessible name, no role and no visible text to be asserted through. T-04-ASK-23 is
+ * "a countdown unreadable exactly when it matters", so the token IS the property.
+ * Located by `margin-left:auto`, which the countdown is the only element in the banner
+ * to carry (it is the row's right-aligned member), never by ordinal position.
+ */
+const countdownStyle = (markup) => {
+  const m = markup.match(/<span style="([^"]*margin-left:auto[^"]*)"/);
+  assert.ok(m, 'no right-aligned countdown span in the banner markup at all');
+  return m[1];
+};
+
+test('GATE-05 rule 1: the countdown escalates on the INK ramp, and never to coral', () => {
+  const live = html(React.createElement(BlockedBanner, {
+    reason: askReason({ receivedAt: Date.now(), expiresInMs: 31_000 }), onAction: () => {}
+  }));
+  const urgent = html(React.createElement(BlockedBanner, {
+    reason: askReason({ receivedAt: Date.now(), expiresInMs: 30_000 }), onAction: () => {}
+  }));
+
+  assert.match(countdownStyle(live), /--cth-ink-700/,
+    'the un-escalated countdown is not on ink-700 (8.89:1 light / 6.47:1 dark on the banner fill)');
+  assert.doesNotMatch(countdownStyle(live), /font-weight:600/,
+    'the countdown is already at weight 600 at 31s, so the escalation at 30s carries no weight channel at all');
+
+  assert.match(countdownStyle(urgent), /--cth-ink-900/,
+    'at 30s the countdown did not move to ink-900 (12.96:1 / 10.13:1) — this is the moment it most has to be readable');
+  assert.match(countdownStyle(urgent), /font-weight:600/,
+    'the escalation is colour-only. DESIGN.md:707: colour + icon + position, never colour alone');
+
+  // The negative that T-04-ASK-23 is actually about, in BOTH states, with its
+  // positive control in the same case: the banner's own fill IS --cth-coral-light
+  // and must still be there, so an empty render cannot satisfy this.
+  for (const [name, markup] of [['31s', live], ['30s', urgent]]) {
+    assert.doesNotMatch(countdownStyle(markup), /cth-coral/,
+      `the ${name} countdown paints itself coral. --cth-coral on --cth-coral-light measures 2.43:1 in LIGHT mode — a fail — so the countdown would become unreadable at exactly the moment it matters`);
+    assert.match(markup, /--cth-coral-light/,
+      'the banner lost its own coral fill — the positive control for the negative above');
+  }
+});
+
+test('GATE-05: the clock icon rides the ask and nothing else', () => {
+  const ask = html(React.createElement(BlockedBanner, { reason: askReason(), onAction: () => {} }));
+  const notice = html(React.createElement(BlockedBanner, {
+    reason: blockReasonFromApproval(refusal({ command: 'rm -rf build' }), 'Ada'), onAction: () => {}
+  }));
+
+  // Counted, not merely matched: the bell is already an <svg> in this banner, so
+  // "an svg is present" would pass on a render with no clock at all.
+  const svgs = (m) => (m.match(/<svg/g) ?? []).length;
+  assert.equal(svgs(ask), 2, 'the ask render is missing the countdown clock beside the bell');
+  assert.equal(svgs(notice), 1, 'a GATE-03 notice grew a clock — there is nothing counting down on a call that was already denied');
+});
+
+test('GATE-05 rule 3: a command under approval is NEVER ellipsised; a notice keeps its ellipsis AND gains a tooltip', () => {
+  const command = 'git push origin +main --force';
+  const ask = html(React.createElement(BlockedBanner, { reason: askReason(), onAction: () => {} }));
+  const notice = html(React.createElement(BlockedBanner, {
+    reason: blockReasonFromApproval(refusal({ command }), 'Ada'), onAction: () => {}
+  }));
+
+  // `git push origin +ma…` hides the dangerous half, and the dangerous half is
+  // frequently at the end. Under approval the block wraps and scrolls instead.
+  assert.doesNotMatch(ask, /text-overflow:ellipsis/,
+    'the command awaiting approval is still ellipsised — the operator is being asked to authorise a string they cannot fully read');
+  assert.match(ask, /white-space:pre-wrap/, 'the command block does not wrap');
+  assert.match(ask, /word-break:break-all/, 'a single unbroken token (a long URL, a base64 blob) would still overflow');
+  assert.match(ask, /max-height:96px/, 'the block is unbounded, so a heredoc pushes the answer buttons off screen');
+  assert.match(ask, /overflow-y:auto/, 'the block is capped but not scrollable, so anything past 96px is unreachable');
+
+  // The GATE-03 half is UNCHANGED behaviour plus plan 04-14's deferred rider:
+  // that command already did not run, so the ellipsis is fine — but the full
+  // string must be one hover away rather than only in the terminal feed.
+  assert.match(notice, /text-overflow:ellipsis/, "the notice's ellipsis was removed — this direction was not asked for and costs vertical space on a banner that is not a prompt");
+  assert.match(notice, new RegExp(`title="${command.replace(/[+]/g, '\\+')}"`),
+    'the notice command has no `title` — plan 04-14 deferred this rider here because D-35 forbade it that file, and without it the truncated half is readable nowhere in the UI');
+});
+
+test('GATE-05 rule 4: a resolved ask keeps its banner, shows an outcome, and offers dismiss', () => {
+  // The post-resolution SHAPE, which is prop-driven and therefore visible to a
+  // server render. What is NOT asserted here, and is named so nobody mistakes
+  // the silence for coverage: that a CLICK produced this shape, and that focus
+  // moved to `dismiss`. There is no `document` in this harness and no events
+  // fire (:23-38) — both are task-4 acceptance criteria.
+  const resolved = html(React.createElement(BlockedBanner, {
+    reason: askReason({ actions: [], outcome: 'approved — the command was allowed to run' }),
+    onAction: () => {}
+  }));
+
+  assert.match(resolved, /--cth-coral-light/,
+    'the banner vanished on resolution. A banner that silently disappears leaves the operator unable to tell whether they approved something (T-04-ASK-24)');
+  assert.match(visibleText(resolved), /approved — the command was allowed to run/,
+    'the outcome line is missing, so the banner is still mounted and says nothing about what happened');
+  assert.match(visibleText(resolved), /dismiss/,
+    'the resolved banner has no control that closes it');
+  assert.doesNotMatch(visibleText(resolved), /approve\b(?!d)/,
+    'the action row survived resolution — the operator can click approve on an ask that is already settled');
+
+  // A resolved ask stops counting: `expiring — will deny` beside `approved` is a
+  // sentence the operator has to reconcile at 3am.
+  assert.doesNotMatch(resolved, /margin-left:auto/,
+    'the countdown is still rendered on a settled ask');
 });
 
 // ─── VIGIL-03 — a blocked agent is visibly blocked, even under a tripped breaker ──────
