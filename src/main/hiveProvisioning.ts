@@ -17,7 +17,7 @@
  */
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
-  symlinkSync, copyFileSync, rmSync, chmodSync
+  symlinkSync, linkSync, copyFileSync, rmSync, chmodSync
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -179,11 +179,34 @@ export function installCodexHooks(dir: string, shimPath: string | null, nodeRunU
     // (config.toml is NOT symlinked — we write our own below, seeded from theirs,
     // because it must carry our [hooks] tables.) Fall back to copy where symlinks
     // need privilege (Windows). Idempotent — skip if already linked.
+    // SHARE the credential — never duplicate it. codex's auth.json holds an OAuth
+    // refresh token, and refresh tokens are SINGLE-USE and ROTATING: the moment any
+    // holder refreshes, the server invalidates that token and issues a new one, which
+    // is written only to the file that did the refresh. Every other copy is instantly
+    // dead, and codex says so:
+    //
+    //   Your access token could not be refreshed because your refresh token was
+    //   already used. Please log out and sign in again.
+    //
+    // Observed live on win32 with three identical 4566-byte COPIES — the operator's
+    // and two agents' — because `symlinkSync` needs elevation on Windows and the old
+    // fallback went straight to `copyFileSync`. So every codex agent was a stale
+    // credential waiting to happen, and the failure surfaces long after spawn, as an
+    // auth error that looks like the operator's fault.
+    //
+    // linkSync (a HARD link) sits between them: same inode, so a refresh by anyone is
+    // seen by everyone, and unlike a symlink it needs no privilege on NTFS. It does
+    // require the same volume, which is why copy remains the last resort — a harness
+    // home on a different drive from the user profile still gets a working agent, it
+    // just inherits the rotation problem, and that beats no credential at all.
     const authSrc = join(userHome, 'auth.json');
     const authDest = join(home, 'auth.json');
     if (existsSync(authSrc) && !existsSync(authDest)) {
       try { symlinkSync(authSrc, authDest); }
-      catch { try { copyFileSync(authSrc, authDest); } catch { /* best-effort */ } }
+      catch {
+        try { linkSync(authSrc, authDest); }
+        catch { try { copyFileSync(authSrc, authDest); } catch { /* best-effort */ } }
+      }
     }
     // The managed app-server daemon used by Codex Remote Control is launched
     // from the standalone install rooted at $CODEX_HOME/packages. Share the
