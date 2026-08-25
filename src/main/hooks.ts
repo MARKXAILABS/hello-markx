@@ -511,6 +511,13 @@ const HOOK_IDLE_MS = 2_000;
  *  silent fail-OPEN that would pass every Claude test (RESEARCH § L-02). */
 const ASK_POLL_MS = 1_000;
 
+/** What an unanswered ask ends up being, in the audit trail and on the wire.
+ *  Declared once so the row and the reply cannot say different things about the
+ *  same event. */
+const ASK_EXPIRED_REASON =
+  'Denied: this tool call was refused, or its approval window closed before an operator answered. '
+  + 'Re-run it if it is still the right thing to do — a fresh call opens a fresh question.';
+
 /**
  * The reply every bound writes before it closes. Declared once so the exits
  * cannot drift apart, and deliberately the SAME shape `handle` returns for a
@@ -876,7 +883,18 @@ export class HookServer {
    *  asked for: the unguessable single-use id IS the capability on these two
    *  paths, which is GATE-05 ceiling item (f) below. */
   answerApproval(id: string, approved: boolean): boolean {
-    return this.approvals.answer(id, approved);
+    const entry = this.approvals.list().find((e) => e.id === id);
+    const settled = this.approvals.answer(id, approved);
+    // RECORD-01 — an operator's answer is a verdict on a tool call, so it lands
+    // in the ledger for the same reason an expiry does: an ask whose only row
+    // reads `'ask'` is a question the audit trail never sees answered.
+    if (settled && entry) {
+      this.record(
+        entry.agentId, entry.tool, entry.command, approved ? 'allow' : 'deny',
+        approved ? 'Approved by the operator.' : 'Refused by the operator.'
+      );
+    }
+    return settled;
   }
 
   /**
@@ -1053,18 +1071,36 @@ export class HookServer {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason:
-          'Denied: this tool call was refused, or its approval window closed before an operator '
-          + 'answered. Re-run it if it is still the right thing to do — a fresh call opens a fresh '
-          + 'question.'
+        permissionDecisionReason: ASK_EXPIRED_REASON
       }
     };
   }
 
-  /** Expire whatever is past its deadline. One call site's worth of indirection
-   *  so that RECORD-01's row rewrite has exactly one place to hang. */
+  /**
+   * Expire whatever is past its deadline, and write the denial each expiry
+   * actually was.
+   *
+   * WITHOUT THIS, `tool_calls` holds `decision = 'ask'` forever for a call that
+   * was in fact denied, and the Repudiation mitigation RESEARCH names does not
+   * exist (T-04-ASK-30). `sweep` needs a caller and this is it — driven from the
+   * `ApprovalPoll` branch (a pending ask is polled once a second by definition)
+   * and from `openApproval`, so the poll loop is the clock and there is no new
+   * timer and no new scheduler slot.
+   *
+   * IT APPENDS A SECOND ROW RATHER THAN REWRITING THE FIRST, and that is a
+   * deliberate departure from the plan's wording. `PersistStore` exposes an
+   * INSERT and no UPDATE, and `src/main/db.ts` has exactly one owner for this
+   * whole phase (plan 04-02) — so adding one here would be a drive-by edit to
+   * another plan's file. It is also the better record: plan 04-02's own note
+   * says these rows are DISCRETE EVENTS rather than cumulative snapshots, and
+   * "a1 asked to run X at T1; that ask was denied at T2" is strictly more than a
+   * mutated row that has forgotten the question was ever open. `toolCalls()`
+   * returns newest-first, so the LATEST row for a call is its final verdict.
+   */
   private sweepApprovals(): void {
-    this.approvals.sweep(Date.now());
+    for (const e of this.approvals.sweep(Date.now())) {
+      this.record(e.agentId, e.tool, e.command, 'deny', ASK_EXPIRED_REASON);
+    }
   }
 
   /**
@@ -1133,6 +1169,74 @@ export class HookServer {
         .join(' ').trim() || null;
     }
     return null;
+  }
+
+  /**
+   * WHAT a tool call acted on, for the audit row — the SAME extraction
+   * `protectedPathDenial` already performs, in the same key order, over the same
+   * object. A second spelling of "what did this call touch" is how the gate and
+   * the record start disagreeing about what happened.
+   *
+   * NULL IS A REAL ANSWER, not a failure: a tool with no path-shaped argument and
+   * no command genuinely has no target, `tool_calls.target` is nullable on
+   * purpose, and plan 04-02's tests already distinguish "null by design" from
+   * "null because nothing was written".
+   */
+  private targetOf(ti: Record<string, unknown>): string | null {
+    for (const key of ['file_path', 'path', 'notebook_path']) {
+      const v = ti[key];
+      if (typeof v === 'string' && v) return v;
+    }
+    return this.commandOf(ti);
+  }
+
+  /**
+   * RECORD-01 — one tool call, persisted with its FINAL verdict.
+   *
+   * ONE helper for every PreToolUse exit, declared for the same stated reason as
+   * `boundDeny` above — *"so the exits cannot drift apart"*. There are ~30 return
+   * points in `handle` and five of them are PreToolUse verdicts; a writer at
+   * `handle`'s ENTRY, where the obvious placement is, could only ever record
+   * `decision: 'pending'`, because `decision` and `reason` do not exist yet up
+   * there. That is the half of the requirement RECORD-01 exists for
+   * (T-04-ASK-31).
+   *
+   * `agentId` is whatever `authorized()` derived from the caller's per-agent
+   * token — NEVER a value the payload claimed. That is GATE-01 doing its work
+   * here: without it a persisted tool-call record attributes to an agent id any
+   * shell could forge (T-04-LOG-09).
+   *
+   * BEST-EFFORT AND SWALLOWED. A recording failure must never change a verdict: a
+   * gate that fails open because its audit log was unavailable is a worse bug
+   * than a missing row (T-04-LOG-10). The store arrives as an injected thunk, so
+   * an unwired floor records nothing and gates exactly as before.
+   *
+   * WHY THIS IS NOT ON THE TELEMETRY PATH, measured rather than assumed, so a
+   * future reader does not "fix" it by moving it there: (1) `ToolSpan`
+   * (`telemetry.ts`) has no `target` field at all; (2) `ATTR_ALLOWLIST` admits no
+   * path key and no command key, so the string would be dropped even if a field
+   * existed; and (3) the whole OTel path is behind
+   * `if (claudeProvider && this._otelEndpoint)` in `hive.ts`, i.e. one engine and
+   * only when an endpoint is configured. The data lives HERE, on the socket, where
+   * `tool_name`, `tool_input` and the token-derived agent id are all already in
+   * hand. `telemetry.ts` is deliberately untouched — its 200-entry span ring stays
+   * the hot read path for the waterfall UI.
+   */
+  private record(
+    agentId: string,
+    tool: string | undefined,
+    target: string | null,
+    decision: 'allow' | 'deny' | 'ask',
+    reason?: string
+  ): void {
+    if (!agentId) return;
+    try {
+      this.recordToolCall?.({
+        agentId, ts: Date.now(), tool: String(tool ?? ''), target, decision, reason
+      });
+    } catch (e) {
+      console.error('[hive] tool-call record failed (the verdict is unaffected):', e);
+    }
   }
 
   /**
@@ -1875,11 +1979,13 @@ export class HookServer {
     // the path arm's deny payload below. `commandOf` is the entry condition of a
     // security gate; a third spelling of it in this file is how the two arms
     // start disagreeing about what a command is.
-    const preCmd = event === 'PreToolUse'
-      ? this.commandOf((p.tool_input && typeof p.tool_input === 'object')
-        ? p.tool_input as Record<string, unknown>
-        : {})
-      : null;
+    const preTi = (p.tool_input && typeof p.tool_input === 'object')
+      ? p.tool_input as Record<string, unknown>
+      : {};
+    const preCmd = event === 'PreToolUse' ? this.commandOf(preTi) : null;
+    // RECORD-01's `target`, extracted ONCE for this payload and reused by all
+    // five verdict exits below — same discipline, same reason, as `preCmd`.
+    const preTarget = event === 'PreToolUse' ? this.targetOf(preTi) : null;
     if (event === 'PreToolUse') {
       const shapeCmd = preCmd;
       if (shapeCmd) {
@@ -1900,6 +2006,7 @@ export class HookServer {
           // the reply on the wire IS a deny, whatever a later poll may say.
           if (verdict.kind === 'ask') {
             this.emit(agentId, event, p, true);
+            this.record(agentId, p.tool_name, preTarget, 'ask', verdict.reason);
             return this.openApproval({
               agentId, tool: String(p.tool_name ?? ''), command: shapeCmd, reason: verdict.reason
             });
@@ -1911,6 +2018,7 @@ export class HookServer {
           );
           this.emitControl(agentId, p.tool_name, verdict.reason, shapeCmd);
           this.emit(agentId, event, p, true);
+          this.record(agentId, p.tool_name, preTarget, 'deny', verdict.reason);
           return {
             hookSpecificOutput: {
               hookEventName: 'PreToolUse',
@@ -1939,9 +2047,7 @@ export class HookServer {
         //
         // Truncated on purpose — a tool_input can carry a whole heredoc, and the
         // point is identifying WHICH command, not archiving it.
-        const denyTi = (p.tool_input && typeof p.tool_input === 'object')
-          ? p.tool_input as Record<string, unknown>
-          : {};
+        const denyTi = preTi;
         const denyWhat = preCmd
           ?? (typeof denyTi.file_path === 'string' ? denyTi.file_path : '');
         console.warn(
@@ -1951,6 +2057,7 @@ export class HookServer {
         );
         this.emitControl(agentId, p.tool_name, denial, preCmd ?? undefined);
         this.emit(agentId, event, p, true);
+        this.record(agentId, p.tool_name, preTarget, 'deny', denial);
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
@@ -1968,17 +2075,27 @@ export class HookServer {
     if (event === 'PreToolUse' && agentId && this.control) {
       const d = this.control.toolDecision(agentId, p.tool_name ?? '');
       if (d.deny) {
+        const reason = d.reason ?? 'Denied by operator.';
         this.emitControl(agentId, p.tool_name, d.reason);
         this.emit(agentId, event, p);
+        this.record(agentId, p.tool_name, preTarget, 'deny', reason);
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
-            permissionDecisionReason: d.reason ?? 'Denied by operator.'
+            permissionDecisionReason: reason
           }
         };
       }
     }
+
+    // RECORD-01's FIFTH exit — the fall-through allow. Every judge above has had
+    // its say and nothing below this line can refuse a PreToolUse: `steer` is
+    // UserPromptSubmit/PostToolUse only, `roster` is SessionStart/UserPromptSubmit
+    // only, and the Notification toast is its own event. So a PreToolUse that
+    // reaches here IS allowed, and recording it here rather than at each of the
+    // tail returns keeps the exits from drifting apart.
+    if (event === 'PreToolUse') this.record(agentId, p.tool_name, preTarget, 'allow');
 
     // 7C.2 — mid-run steering: inject queued operator guidance as context on the
     // next eligible hook (no fragile typing into the TUI). Delivered once.
