@@ -77,6 +77,28 @@ export interface AgentTeardownDeps {
     enabled: () => boolean;
     setArchived: (agentId: string, archived: boolean) => void;
     root: () => string | null;
+    /** The task ledger for readers (`HiveManager.tasks`). Deliberately
+     *  `unknown` on the class too — it returns the persisted ledger widened
+     *  with the card meter's derived fields — so it is narrowed at the read
+     *  site here ({@link ReleasableCard}) rather than imported. */
+    tasks: () => unknown;
+    /** Patch ONE card against the latest on-disk ledger under `writeTasks`'s
+     *  `expectedRev` compare-and-swap (`HiveManager`'s mutator of the same
+     *  name, which every main-side card write already routes through). Main's
+     *  sanctioned ledger path — agents get `bin/task.cjs` instead, and both
+     *  share the same `tasks.lock`. A hand-rolled whole-ledger rewrite from
+     *  here would be the concurrent-writer bug the god's own prompt warns
+     *  about; this module names no ledger FILE at all, which is asserted.
+     *
+     *  The patch is spelled out to exactly the keys VIGIL-02's two writes use.
+     *  A `Record<string, unknown>` would not typecheck: under
+     *  `strictFunctionTypes` this parameter is checked contravariantly, and
+     *  `unknown` is not assignable to `HiveTask['status']`'s union. */
+    patchTask: (id: string, patch: {
+      status?: 'todo' | 'doing' | 'blocked' | 'done';
+      assignee?: string;
+      released?: { by: string; at: string; branch?: string; detail?: string };
+    }) => boolean;
   };
   /** ptyId → its isolated worktree's absolute path. */
   worktreePaths: Map<string, string>;
@@ -122,6 +144,70 @@ export interface AgentTeardownDeps {
    *  (index.ts calls it directly too, for spawn-rejection notices unrelated
    *  to teardown), so it is injected rather than moved. */
   informGod: (subject: string, body: string, slack?: { channel: string; thread_ts: string }) => void;
+}
+
+/**
+ * The four card fields VIGIL-02's two writes read, named STRUCTURALLY rather
+ * than imported from `../hive`. This module names no ledger module — that is
+ * the whole point of `deps.hive` — and a type-only import would break it just
+ * as loudly as a value one. `deps.hive.tasks()` is `unknown` at the interface,
+ * so this is the narrowing applied at the read site.
+ *
+ * Every field is optional because this describes a row read back off disk,
+ * which may predate any of them.
+ */
+interface ReleasableCard {
+  id?: string;
+  status?: string;
+  assignee?: string;
+  released?: { by: string; at: string; branch?: string; detail?: string };
+}
+
+/** Every card off `deps.hive.tasks()`, narrowed and never throwing: the ledger
+ *  is read back from disk and any shape is possible. */
+function ledgerCards(deps: Pick<AgentTeardownDeps, 'hive'>): ReleasableCard[] {
+  const ledger = deps.hive.tasks() as { tasks?: unknown } | null | undefined;
+  return Array.isArray(ledger?.tasks) ? (ledger.tasks as ReleasableCard[]) : [];
+}
+
+/**
+ * VIGIL-02, **write 1 of 2** — put every card this agent still held back on the
+ * board, naming who dropped it. Returns the ids it released, which is what
+ * {@link finalizeAgentWorktree}'s continuation patches the branch onto a moment
+ * later (write 2).
+ *
+ * Called SYNCHRONOUSLY from {@link teardownPty}, immediately after
+ * `hive.setArchived`, with no `await` in between (D-27) — `teardownPty` runs on
+ * node-pty's `onExit`, so the card is freed in the same tick the agent died and
+ * "within a minute" needs no sweep to be true.
+ *
+ * `released.branch` is deliberately NOT written here and NOT given a
+ * placeholder. Where the work is can only come from `worktreeHasUnintegratedWork`,
+ * which shells git and cannot answer in this tick; absence is the correct
+ * representation of "not known yet", and a sentinel would be indistinguishable
+ * from a real branch named `unknown` (04-UI-SPEC §S6b rule R-1).
+ *
+ * Never throws. Teardown is a cleanup path for a process that has already
+ * exited: its breaker, control and telemetry state must be forgotten whether or
+ * not the ledger was reachable, so a write failure degrades to a log.
+ */
+function releaseCardsHeldBy(agentId: string, deps: AgentTeardownDeps): string[] {
+  const releasedIds: string[] = [];
+  try {
+    const at = new Date().toISOString();
+    for (const card of ledgerCards(deps)) {
+      if (!card?.id || card.status !== 'doing' || card.assignee !== agentId) continue;
+      // `assignee: undefined` is how the field is CLEARED: patchTask merges at
+      // the top level and the JSON write then drops undefined keys, which is
+      // also what frees the kanban meta row for "DROPPED BY …" (rule R-2).
+      if (deps.hive.patchTask(card.id, { status: 'todo', assignee: undefined, released: { by: agentId, at } })) {
+        releasedIds.push(card.id);
+      }
+    }
+  } catch (e) {
+    console.error(`[hive] releasing ${agentId}'s in-flight cards failed:`, e);
+  }
+  return releasedIds;
 }
 
 /** The hive scratch dir for a worker (its inbox/outbox/memory):
@@ -222,6 +308,10 @@ export async function finalizeAgentWorktree(
 export function teardownPty(id: string, deps: AgentTeardownDeps): void {
   try { deps.integrationBroker.revoke(id); } catch { /* best-effort */ }
   const agentId = deps.ptyToAgent.get(id);
+  // VIGIL-02: the cards write 1 (below, in the same tick) put back on the board.
+  // Write 2 patches the branch onto exactly these ids from
+  // `finalizeAgentWorktree`'s continuation, once its git call has answered.
+  let releasedCards: string[] = [];
   if (agentId) {
     deps.ptyToAgent.delete(id);
     try { deps.breaker.forget(agentId); } catch { /* best-effort */ }
@@ -230,6 +320,11 @@ export function teardownPty(id: string, deps: AgentTeardownDeps): void {
     try { deps.hive.stopProxyBridge(agentId); } catch (e) { console.error('[hive] stopProxyBridge failed:', e); }
     if (deps.hive.enabled()) {
       try { deps.hive.setArchived(agentId, true); } catch (e) { console.error('[hive] setArchived failed:', e); }
+      // VIGIL-02 write 1 of 2, and it is SYNCHRONOUS on purpose: nothing may be
+      // awaited between the archive above and this line, or the card is no
+      // longer freed in the tick the PTY exit was observed (D-27). Write 2 is
+      // finalizeAgentWorktree's continuation, ~a git shell later.
+      releasedCards = releaseCardsHeldBy(agentId, deps);
     }
   }
   const wtPath = deps.worktreePaths.get(id);
