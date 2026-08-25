@@ -1122,6 +1122,12 @@ const api = {
   /** Push a breaker state to the renderer (Lane A's policy / interim glue calls this). */
   setBreakerState: (state: BreakerState): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('control:setBreakerState', state),
+  /** Pull the CURRENT breaker state for every registered agent, keyed by agent id.
+   *  `onBreakerState` only fires on the next ~30s beat, so a card that mounts with a
+   *  fresh window would render `healthy` for a stopped agent until then. `{}` when the
+   *  hive is disabled. */
+  getBreakerSnapshot: (): Promise<Record<string, BreakerState>> =>
+    ipcRenderer.invoke('control:breakerSnapshot'),
 
   // ─── Operator control over agents (#7C.1–7C.3) ──────────────────────────────
   /** Pause/unpause an agent — paused → its tool calls are denied at PreToolUse. */

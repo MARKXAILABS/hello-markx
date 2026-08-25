@@ -36,7 +36,7 @@ import {
 } from './delivery';
 import type { QueueOp, QueuedDelivery } from '../shared/queueDelivery';
 import { HookServer } from './hooks';
-import { CircuitBreaker, type BreakerInput } from './breaker';
+import { CircuitBreaker, type BreakerInput, type BreakerState } from './breaker';
 import type { UsageProvider } from './usage';
 import { MemoryManager } from './memory';
 import { KnowledgeManager } from './knowledge';
@@ -3678,6 +3678,25 @@ ipcMain.handle('telemetry:snapshot', () => telemetry.snapshot());
 ipcMain.handle('control:setBreakerState', (_evt, state: unknown) => {
   try { liveWebContents()?.send('control:breakerState', state); } catch { /* window tore down */ }
   return { ok: true };
+});
+
+// The PULL counterpart of that push. A card mounts with a fresh window and would
+// otherwise render `healthy` for every agent until the next ~30s beat — a stopped
+// agent reading as fine is the fail-UNSAFE direction. Every agent in the registry
+// gets a row: `snapshotAll()` only knows agents the breaker has ticked, so one the
+// beat has not reached yet is filled in as the `healthy` default it genuinely has.
+// Read-only; takes no renderer input beyond the invoke itself. Its one production
+// caller lands in 03-08 (agentView.ts's first-subscriber init) — the channel is
+// defined here because the main-process half is what the renderer cannot build.
+ipcMain.handle('control:breakerSnapshot', () => {
+  if (!hive.enabled()) return {};
+  const reg = hive.registry();
+  const seen = breaker.snapshotAll();
+  const out: Record<string, BreakerState> = {};
+  for (const id of Object.keys(reg.agents)) {
+    out[id] = seen[id] ?? { agentId: id, level: 'healthy', reason: '', ts: Date.now() };
+  }
+  return out;
 });
 
 // ─── IPC: operator control over agents (#7C.1–7C.3) ─────────────────────────

@@ -174,6 +174,26 @@ export class CircuitBreaker {
     return this.agents.get(agentId)?.level ?? 'healthy';
   }
 
+  /** Every agent this breaker has SEEN, as the already-public `BreakerState` shape.
+   *  The PULL counterpart of the `control:breakerState` push event: a card that
+   *  reloads with its window would otherwise render `healthy` until the next ~30s
+   *  beat, which is fail-UNSAFE — a stopped agent reads as fine. Carries `reason`,
+   *  which `levelFor` cannot give.
+   *
+   *  An agent the breaker never ticked is ABSENT, not `healthy`: "not seen" and
+   *  "seen and fine" are different claims, and the caller that wants the registry's
+   *  full roster (`control:breakerSnapshot`) fills the gap itself from `reg.agents`.
+   *  `ts` is stamped at read time — `AgentBreakerState` keeps no transition
+   *  timestamp, so a truthful "as of now" beats inventing an age. */
+  snapshotAll(): Record<string, BreakerState> {
+    const out: Record<string, BreakerState> = {};
+    const ts = Date.now();
+    for (const [agentId, s] of this.agents) {
+      out[agentId] = { agentId, level: s.level, reason: s.reason, ts };
+    }
+    return out;
+  }
+
   // ── event-driven inputs (fed by HookServer) ──────────────────────────────
 
   /** A tool call ran. A NEW (name+input) key counts as forward progress (resets
