@@ -354,6 +354,32 @@ function shortRand(): string {
  *  same append-only migration for existing agents for free. */
 const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/', 'kimi-config.toml', 'mcp.json'];
 
+/** Whether the INSTALLED codex accepts `--dangerously-bypass-hook-trust`.
+ *
+ *  It is not a constant of the world. Older codex builds took the flag; `codex-cli
+ *  0.128.0` removed it, and codex refuses an unknown argument rather than ignoring
+ *  it — `error: unexpected argument … found` / `process exited (code 2)` — so
+ *  passing it blind killed every codex hive agent at spawn, before a single token.
+ *
+ *  Probed once per process and cached. `shell: true` on win32 because the binary is
+ *  `codex.cmd` there and Node cannot exec a .cmd directly — the same lesson
+ *  `scripts/mcp-live-probe.cjs` and `pty.ts`'s `where` probe already encode.
+ *
+ *  Fails CLOSED to "not supported": if the probe cannot run at all, spawning
+ *  without the flag still produces a working agent (hooks may not fire), whereas
+ *  spawning with an unsupported flag produces no agent at all. */
+let codexHookTrust: boolean | null = null;
+function codexAcceptsHookTrust(bin: string): boolean {
+  if (codexHookTrust !== null) return codexHookTrust;
+  try {
+    const res = spawnSync(bin, ['--help'], {
+      encoding: 'utf8', timeout: 10_000, shell: process.platform === 'win32'
+    });
+    codexHookTrust = /--dangerously-bypass-hook-trust/.test(`${res.stdout ?? ''}${res.stderr ?? ''}`);
+  } catch { codexHookTrust = false; }
+  return codexHookTrust;
+}
+
 /** Idempotently ensure `<agentDir>/.gitignore` excludes the non-memory files.
  *  Append-only: writes only the missing lines, leaving any existing entries. */
 function ensureMineIgnore(agentDir: string): void {
@@ -1039,7 +1065,22 @@ export class HiveManager {
               // for this automated spawn — the flag's documented use ("automation
               // that already vets hook sources"). Without it the hooks silently
               // never fire. Must precede the positional prompt.
-              preArgs.push('--dangerously-bypass-hook-trust');
+              //
+              // GATED ON SUPPORT, because passing it blind is worse than not
+              // passing it. `codex-cli 0.128.0` REMOVED this flag, and codex
+              // rejects an unknown argument outright:
+              //   error: unexpected argument '--dangerously-bypass-hook-trust' found
+              //   – process exited (code 2) –
+              // i.e. EVERY codex hive agent died at spawn, before printing a
+              // single token. Observed live on 0.128.0 by the operator. A silent
+              // hook degradation is recoverable; an engine that cannot start is
+              // not, and PARITY says codex is a first-class citizen.
+              if (codexAcceptsHookTrust(preset.defaultCommand)) preArgs.push('--dangerously-bypass-hook-trust');
+              else console.warn(
+                `[hive] codex does not accept --dangerously-bypass-hook-trust (${preset.defaultCommand}); `
+                + 'spawning without it. Lifecycle hooks may not fire for this agent, so mail may not '
+                + 'wake it — but the agent starts. Older codex builds took the flag; 0.128.0 removed it.'
+              );
             }
             else if (desc.shim === 'kimi') {
               // Kimi Code (Moonshot) — the CODEX case (installKimiConfig,

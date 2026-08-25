@@ -1038,3 +1038,43 @@ test('FLOOR-09: the number the budget arm enforces against includes the proxy ti
     + 'not on a mention, because this source is comment-stripped first.'
   );
 });
+
+/* ── codex's hook-trust flag is PROBED, never assumed (operator-found, 2026-08-25) ──
+ *
+ * Found live: spawning a codex hive agent on `codex-cli 0.128.0` produced
+ *
+ *   error: unexpected argument '--dangerously-bypass-hook-trust' found
+ *     tip: a similar argument exists: '--dangerously-bypass-approvals-and-sandbox'
+ *   – process exited (code 2) –
+ *
+ * before a single token. Older codex builds accepted the flag; 0.128.0 removed it,
+ * and codex REFUSES an unknown argument rather than ignoring it. So passing it
+ * unconditionally meant every codex agent was dead on arrival — while every unit
+ * test stayed green, because none of them spawns a real codex.
+ *
+ * PARITY-02/PARITY-01a call codex a first-class citizen with an inbox. An engine
+ * that cannot start is not first-class. */
+test('codex: the hook-trust flag is gated on a real probe, not pushed blind', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hive.ts'), 'utf8');
+
+  const push = src.indexOf("preArgs.push('--dangerously-bypass-hook-trust')");
+  assert.ok(push > 0, 'sanity: the flag must still be pushed on builds that accept it');
+
+  // The push must be guarded, on the same line or the one before it.
+  const lineStart = src.lastIndexOf('\n', src.lastIndexOf('\n', push - 1) - 1);
+  const guarded = src.slice(lineStart, push + 60);
+  assert.ok(/codexAcceptsHookTrust\(/.test(guarded),
+    'pushing --dangerously-bypass-hook-trust unconditionally kills every codex agent on any '
+    + 'codex build that does not accept it (0.128.0 removed it). It must be gated on a probe '
+    + 'of the INSTALLED binary.');
+
+  // And the probe must actually shell out on win32, or it cannot read codex.cmd.
+  const probe = src.slice(src.indexOf('function codexAcceptsHookTrust'), src.indexOf('function codexAcceptsHookTrust') + 700);
+  assert.ok(/spawnSync\(/.test(probe), 'the probe must really execute the binary');
+  assert.ok(/shell:\s*process\.platform === 'win32'/.test(probe),
+    'on win32 the binary is codex.cmd, which Node cannot exec directly — the probe needs '
+    + "shell:true there, the same lesson pty.ts's `where` probe and mcp-live-probe.cjs encode.");
+  assert.ok(/codexHookTrust = false/.test(probe),
+    'the probe must fail CLOSED to "unsupported": spawning without the flag still yields a '
+    + 'working agent, spawning with an unsupported one yields no agent at all.');
+});
