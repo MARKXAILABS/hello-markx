@@ -355,4 +355,38 @@ test('NEGATIVE CONTROL: an agent under every threshold stays healthy for several
     `a quiet agent was tripped by this change: ${levels.join(',')}`);
 });
 
+// ─── Plan 03-02 Task 1: snapshotAll() — the PULL side of breaker state ──────
+//
+// `levelFor()` answers one agent and drops `reason`. SCALE-05's card reloads with
+// a window and cannot wait ~30s for the next push beat, so `control:breakerSnapshot`
+// pulls the whole map. These two cases exist because the method is trivially
+// stubbable: a `return {}` must not pass the suite.
+
+test('snapshotAll() on a fresh breaker that has never ticked is an empty map', () => {
+  const b = makeBreaker();
+  assert.deepEqual(b.snapshotAll(), {}, 'a non-empty map from a breaker that never ticked means the private agents map is being pre-populated — every card would render a fabricated "healthy" for an agent the breaker has never seen');
+});
+
+test('snapshotAll() carries the escalated agent CURRENT level AND the reason levelFor drops', () => {
+  // Same two-beat cost-cap escalation the "card in the band" case above drives.
+  const b = makeBreaker({ costCapUsd: 5 });
+  const inp = (ts) => ({ agentId: 'a', sample: spending('a', ts, 12), progressing: true, budget: inBand() });
+
+  beatIn(b, inp(T0), T0);
+  const d = beatIn(b, inp(T0 + BEAT), T0 + BEAT);
+
+  const snap = b.snapshotAll();
+  assert.ok(snap.a, 'snapshotAll() dropped a ticked agent entirely — a `return {}` stub');
+  // Compare against the tick's OWN decision, never a hard-coded level: the ladder
+  // moves one rank per beat today and a future change must not silently red this.
+  assert.equal(snap.a.level, d.state.level,
+    `snapshotAll() reports ${snap.a.level} while the same tick decided ${d.state.level} — a stale or hard-coded 'healthy' row`);
+  assert.equal(snap.a.reason, d.state.reason,
+    'snapshotAll() dropped or altered `reason` — the field levelFor() cannot give the card, and the one a { level } stub omits');
+  assert.match(snap.a.reason, /cost cap/,
+    `the escalation that fired was not the cost cap: ${snap.a.reason}`);
+  assert.equal(snap.a.agentId, 'a', 'snapshotAll() must key each row by, and stamp, the agent id');
+  assert.equal(typeof snap.a.ts, 'number', 'snapshotAll() row is missing a numeric ts');
+});
+
 process.exit(failures ? 1 : 0);
