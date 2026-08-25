@@ -409,3 +409,39 @@ export function floorQuietPushPayload(
 ): { agent: string; body: string; taskId: string } {
   return { agent: a.title, body: a.body, taskId: FLOOR_QUIET_TAG };
 }
+
+/**
+ * GATE-05's tool-approval push (04-UI-SPEC §S6a rule Q-4, §S1).
+ *
+ * **The title is the AGENT NAME, and that is the whole compatibility argument.**
+ * `sw.js` renders `data.agent` as the title and, on a worker installed before
+ * this change, hard-codes `body: 'is waiting on you'`. So an old worker shows
+ * `Ada is waiting on you` — which for an approval is true. (Contrast the floor
+ * alarm, where the title has to be a full sentence fragment because "Floor is
+ * waiting on you" would be false.)
+ *
+ * **What the body may and may not carry, and this is a boundary rather than a
+ * style rule.** The ask LIST is behind the phone's bearer; a notification
+ * renders on a LOCKED SCREEN with no authentication at all. So the body carries
+ * the agent's intent and how long is left, and **never the command string**,
+ * never a path, never the question — even though the list itself shows the
+ * command (T-04-ASK-18). `sw.js:33-35` is where that rule is written down.
+ *
+ * `tag: 'ask:' + taskId` (`sw.js:38`) means an ask replaces its own previous
+ * notification and never stacks, so the id goes on the wire under the UNCHANGED
+ * field name (rule G-1).
+ *
+ * COMPOSITION ONLY, exactly like {@link floorQuietPushPayload}: this process
+ * has never held a `PushSubscription` — `webhook.ts` has no subscription-intake
+ * route, so nothing here has ever captured one. Nothing calls this yet, and
+ * the push leg of GATE-05 is **not** delivered by this plan. When the intake
+ * lands, this is the payload it hands to {@link sendPush}.
+ */
+export function askPushPayload(
+  a: { agent: string; taskId: string; expiresInMs?: number }
+): { agent: string; body: string; taskId: string } {
+  const left = typeof a.expiresInMs === 'number' && a.expiresInMs > 0
+    ? ` — ${Math.max(1, Math.round(a.expiresInMs / 1000))}s to answer`
+    : '';
+  return { agent: a.agent, body: `wants to run a command${left}`, taskId: a.taskId };
+}

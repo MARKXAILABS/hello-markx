@@ -991,6 +991,57 @@ test('floorQuiet is a SIBLING of asks, in both directions — a snapshot produce
   assert.deepEqual(res3.body, { ok: true, asks: [] });
 });
 
+test('the GATE-05 push body leaks nothing to a lock screen, and its title is self-sufficient on an OLD service worker', () => {
+  const { askPushPayload } = loadTs('src/main/push.ts');
+  const command = 'rm -rf /home/ada/projects/build/vendor';
+  const wire = askPushPayload({ agent: 'Ada', taskId: 'ask-deadbeef', expiresInMs: 118_000 });
+
+  // The ask LIST is behind the bearer. A notification is not: it renders on a
+  // locked screen with no authentication at all (T-04-ASK-18).
+  assert.equal(wire.body.includes(command), false, 'the command string must never reach a lock screen');
+  assert.equal(wire.body.includes('rm -rf'), false);
+  assert.equal(/[/\\]/.test(wire.body), false, 'no path separator — the floor quotes source and paths');
+  assert.equal(wire.body.includes('?'), false, 'no question text');
+  // Positive control: an EMPTY body would satisfy every clause above.
+  assert.ok(wire.body.length > 0, 'the body must still say something');
+  assert.match(wire.body, /wants to run a command/);
+  assert.match(wire.body, /118s to answer/, 'a duration is allowed, and it is a duration — never a deadline');
+
+  // `sw.js` renders `data.agent` as the TITLE and, on an installed old worker,
+  // hard-codes `body: 'is waiting on you'` — so `Ada is waiting on you` is
+  // still true where `Floor is waiting on you` would not be.
+  assert.equal(wire.agent, 'Ada');
+  assert.notEqual(wire.agent, 'Floor');
+  assert.notEqual(wire.agent, 'Alert');
+  assert.equal(wire.taskId, 'ask-deadbeef', 'the id rides the UNCHANGED field name, so sw.js:38 tags it as its own');
+
+  // No duration is a shorter body, never a broken one or a fabricated number.
+  const noTtl = askPushPayload({ agent: 'Ada', taskId: 'ask-deadbeef' });
+  assert.equal(noTtl.body, 'wants to run a command');
+  assert.equal(/\d/.test(noTtl.body), false, 'a missing duration is omitted, never guessed');
+});
+
+test('sw.js falls back for an OLD server and renders a new one — both directions, and no other line moved', () => {
+  const sw = fs.readFileSync(path.join(__dirname, '..', 'resources', 'phone', 'sw.js'), 'utf8');
+  // Rule Q-5: this worker is INSTALLED on the operator's phone and updates on
+  // its own schedule, so a mismatch has no local reproduction.
+  assert.ok(sw.includes("body: (typeof data.body === 'string' && data.body) ? data.body : 'is waiting on you',"),
+    'the body fallback is the ONE line this plan is allowed to change in sw.js');
+  assert.equal(sw.split("tag: 'ask:' + taskId").length - 1, 1, 'the tag scheme was not touched');
+  assert.ok(sw.includes('self.skipWaiting()') && sw.includes('self.clients.claim()'),
+    'the update discipline the fallback depends on is intact');
+
+  // Run the fallback expression itself, both directions, against the shipped
+  // source rather than a re-statement of it.
+  const expr = sw.match(/\(typeof data\.body === 'string' && data\.body\) \? data\.body : 'is waiting on you'/);
+  assert.ok(expr, 'the fallback expression was not found');
+  const pick = new Function('data', `return ${expr[0]};`);
+  assert.equal(pick({}), 'is waiting on you', 'OLD SERVER + new SW: no body on the wire, identical to today');
+  assert.equal(pick({ body: '' }), 'is waiting on you', 'an empty body is not a body');
+  assert.equal(pick({ body: 42 }), 'is waiting on you', 'a non-string body is not a body');
+  assert.equal(pick({ body: 'wants to run a command' }), 'wants to run a command', 'NEW server: the sender composes it');
+});
+
 test("index.ts reads the quiet snapshot and the approval settle through plan 04-11's and 04-15's named accessors", () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
   assert.equal(src.split('floor.watchdog.current()').length - 1, 1,
