@@ -1463,9 +1463,36 @@ test('GATE-03: a codex-shaped payload is refused in BOTH command shapes — stri
     // ever dropped, both arms would exit and GATE-03 would refuse nothing on the
     // one non-Claude engine installed on this machine, with every other test in
     // this file still green.
-    const codex = (command) => runShim(ctx, {
-      hook_event_name: 'PreToolUse', tool_name: 'shell', tool_input: { command }
-    });
+    // ON THE WAIT (plan 04-16, wave 5): three of GATE-03's four shapes are
+    // ASKS, and codex runs HOOK_SHIM, which since wave 5 no longer prints main's
+    // ask reply — it polls until an operator answers, for up to ASK_TTL_MS. Both
+    // deny calls below measured 120 s each before this helper existed, blowing
+    // 04-VALIDATION's 90 s full-suite budget on its own. So refuse the ask the
+    // way an operator would and read the verdict off the shim's stdout as
+    // before; a benign command opens no ask and the race resolves on the run.
+    // The wait itself belongs to test/gate05-bounded-wait.test.cjs.
+    const codex = async (command) => {
+      const run = runShim(ctx, {
+        hook_event_name: 'PreToolUse', tool_name: 'shell', tool_input: { command }
+      });
+      const ask = await Promise.race([
+        (async () => {
+          const until = Date.now() + 3_000;
+          for (;;) {
+            const open = ctx.server.openApprovals()[0];
+            if (open) return open;
+            if (Date.now() > until) return null;
+            await new Promise((r) => setTimeout(r, 25));
+          }
+        })(),
+        run.then(() => null)
+      ]);
+      if (ask) {
+        assert.equal(ctx.server.answerApproval(ask.id, false), true,
+          'the operator\'s refusal was not accepted, so this case would wait out the real TTL');
+      }
+      return run;
+    };
     const denialOf = (res) => {
       assert.equal(res.code, 0, `the shim exited ${res.code}: ${res.stderr}`);
       const parsed = JSON.parse(res.stdout || '{}');
