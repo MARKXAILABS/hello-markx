@@ -1071,6 +1071,86 @@ test('both composition-root seams are still fed — FLOOR-09 and FLOOR-10 are no
   );
 });
 
+/** Comment-stripped source of every .ts under src/main/**, joined. Same
+ *  discipline as `joinedSrcText` below, scoped to the process that is allowed
+ *  to hold a bot token. */
+function joinedMainText() {
+  return sourceFiles(path.join(root, 'src', 'main'))
+    .map((rel) => readStripped(rel))
+    .join(' ')
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * D-38 / SCALE-04: `postSlackDigest` has a PRODUCTION caller, not just a
+ * definition and a unit test.
+ *
+ * This file's founding defect in its purest form (`app:openLogs`, complete in
+ * main with zero callers) applied to an outbound sender: a Slack poster that
+ * nothing in `src/main/**` ever calls is indistinguishable from a shipped daily
+ * digest until an operator waits a day for a post that never comes.
+ *
+ * The count SUBTRACTS the declaration. `postSlackDigest(` matches
+ * `export function postSlackDigest(` too, so a callerless sender would satisfy a
+ * naive `>= 1` on its own declaration alone — and the subtrahend is asserted to
+ * be exactly 1 in its own right, so the pin cannot instead be satisfied by a
+ * SECOND declaration.
+ */
+test('SCALE-04 / D-38: postSlackDigest has a production call site under src/main/**', () => {
+  const main = joinedMainText();
+  const declarations = (main.match(/function postSlackDigest\(/g) || []).length;
+  assert.equal(declarations, 1,
+    `found ${declarations} \`function postSlackDigest(\` declaration(s) under src/main/**. The `
+    + 'call-site count below subtracts this number, so a second declaration would silently pay '
+    + 'for the caller this pin exists to require.');
+  const callSites = (main.match(/postSlackDigest\(/g) || []).length - declarations;
+  assert.ok(callSites >= 1,
+    `postSlackDigest is declared under src/main/** and called ${callSites} time(s) there. A sender `
+    + 'with no production caller is exactly the defect D-38 names: the function is correct, the '
+    + 'unit test is green, and the operator gets no digest, forever.');
+});
+
+/**
+ * SCALE-04: the digest switch in Settings is a real control, and it tells the
+ * truth about what it needs.
+ *
+ * Two halves, both load-bearing. A toggle that renders and never writes is the
+ * `app:openLogs` defect wearing a different hat — the operator flips it, the
+ * pixel changes, and `dailyDigest` is still false at the next boot. And the
+ * sub-label has to name the control that EXISTS: the app's real one is
+ * `openAtLogin`, labelled "OPEN AT LOGIN" in OnboardingWizard, and it is not
+ * reachable from Settings after onboarding. "Start at login" sends the operator
+ * hunting for a switch this app has never had.
+ */
+test('SCALE-04: the Settings digest toggle writes config, and names the control that exists', () => {
+  const settings = readStripped('src/renderer/src/components/SettingsModal.tsx');
+  const raw = readRaw('src/renderer/src/components/SettingsModal.tsx');
+
+  assert.match(settings, /updateConfig\(\s*\{\s*dailyDigest/,
+    'the digest toggle never calls window.cth.updateConfig({ dailyDigest: ... }) — a switch that '
+    + 'renders and writes nothing is a decoration, and the operator finds out a day later');
+  assert.match(settings, /slackDigestChannelId/,
+    'Settings has no input for slackDigestChannelId, so the Slack arm can never be turned on '
+    + 'from the UI that offers the toggle');
+
+  assert.ok(raw.includes('Requires Open at login'),
+    "the digest toggle does not name the app's real startup control. It is `openAtLogin`, "
+    + 'labelled "OPEN AT LOGIN" in OnboardingWizard.tsx and set only during onboarding — '
+    + '"Start at login" names nothing in this app.');
+  assert.equal(
+    (raw.match(/Requires Start at login/g) || []).length, 0,
+    'the older "Requires Start at login." copy is back. 03-UI-SPEC.md still carries that line '
+    + '(round-3 #38, an accepted residual of plan 03-05 since no plan in the phase owns that '
+    + 'file) — the SHIPPED string is the one that names openAtLogin.');
+
+  // The onboarding label this sentence points at, asserted in the file that
+  // owns it: if it is ever renamed, this pin must move with it rather than
+  // leaving Settings pointing at a control that no longer goes by that name.
+  assert.match(readRaw('src/renderer/src/components/OnboardingWizard.tsx'), /OPEN AT LOGIN/,
+    'OnboardingWizard no longer labels the startup control "OPEN AT LOGIN", so the Settings '
+    + 'sentence that tells the operator to look for it now points at nothing');
+});
+
 /**
  * JSX elements of one tag name, as `{ openTag, body }`, nesting-aware and
  * quote-aware. Written by hand rather than pulled in as a parser dependency:

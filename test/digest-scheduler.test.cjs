@@ -438,6 +438,56 @@ test('SCALE-04: a floor armed BEFORE its fire hour sends nothing yet', async (t)
     + 'catch-up branch fires unconditionally, which makes it fire-on-every-boot, not catch-up');
 });
 
+test('SCALE-04 / T-03-05f: the Slack arm is dispatched from the REAL fire path, and only on all four', async (t) => {
+  const env = floorEnv(t, { dailyDigest: true });
+  const { deps } = fakeDeps(env);
+  const { bootFloor, fireDigest } = loadTs('src/main/floor/boot.ts');
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  // Replace the sender on the module boot.ts really imports, so nothing here
+  // can reach slack.com, and assert the substitution TOOK — a fake that was
+  // never installed would make every negative below vacuously true.
+  const slack = loadTs('src/main/slack.ts');
+  const real = slack.postSlackDigest;
+  const posts = [];
+  slack.postSlackDigest = async (opts) => { posts.push(opts); return { ok: true }; };
+  t.after(() => { slack.postSlackDigest = real; });
+  assert.notStrictEqual(slack.postSlackDigest, real, 'the module export is not writable — this test would prove nothing');
+
+  const cfg = (extra) => writeCfg({
+    harnessHome: env.harnessHome, webhookTriggers: [], notifications: false, dailyDigest: true, ...extra
+  });
+
+  // The off-state that matters (T-03-05f): the Slack master switch is off, and
+  // BOTH Slack credentials are present and valid.
+  cfg({ slackEnabled: false, slackBotToken: 'xoxb-fixture', slackDigestChannelId: 'C-DIGEST' });
+  await fireDigest();
+  assert.equal(posts.length, 0,
+    `the digest posted to Slack with slackEnabled OFF: ${JSON.stringify(posts)}. An operator who `
+    + 'flips that switch reasonably believes nothing reaches Slack');
+
+  cfg({ slackEnabled: true, slackBotToken: 'xoxb-fixture', slackDigestChannelId: undefined });
+  await fireDigest();
+  assert.equal(posts.length, 0, 'the digest posted with no channel id configured');
+
+  cfg({ slackEnabled: true, slackDigestChannelId: 'C-DIGEST' }); // no bot token
+  await fireDigest();
+  assert.equal(posts.length, 0, 'the digest posted with no bot token');
+
+  // ...and the ON state, so every negative above is contrasted against a
+  // PROVEN positive rather than against a path that never worked.
+  cfg({ slackEnabled: true, slackBotToken: 'xoxb-fixture', slackDigestChannelId: 'C-DIGEST' });
+  await fireDigest();
+  assert.equal(posts.length, 1,
+    'all four switches are set and the digest still did not reach Slack — the arm is dead code');
+  assert.equal(posts[0].channel, 'C-DIGEST');
+  assert.ok(posts[0].text.includes(env.label),
+    `the Slack post does not name the project (${env.label}) — D-31 is about exactly this arm: N `
+    + 'installs firing into ONE channel at the same hour');
+  assert.ok(!('thread_ts' in posts[0]), 'the digest was handed a thread_ts');
+});
+
 test('SCALE-04: fireDigest calls deps.notify and never deps.send (structural, T-03-05d)', () => {
   const { fireDigest } = loadTs('src/main/floor/boot.ts');
   // COMMENT-STRIPPED, both directions. `Function.prototype.toString` returns the
