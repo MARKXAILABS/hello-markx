@@ -106,7 +106,7 @@ Module._load = function (request, ...rest) {
 };
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
-let relAge, TaskCard, TaskAge, TaskDetail, parseTasks;
+let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ BlockedBanner } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
@@ -115,6 +115,11 @@ try {
   ({ autoModeFlagForProvider, AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts'));
   ({ relAge } = loadTs('src/shared/relAge.ts'));
   ({ TaskCard, TaskAge, TaskDetail, parseTasks } = loadTs('src/renderer/src/components/TasksKanban.tsx'));
+  ({ AskMeTab } = loadTs('src/renderer/src/components/AskMeTab.tsx'));
+  // The SAME module instance AskMeTab resolved through `@/hooks/useHiveTasks` — loadTs
+  // caches by absolute path, and the alias above lands on this one. Reaching the shared
+  // poll's module cache is the only way to render a board that has any cards on it.
+  ({ refreshHiveTasks } = loadTs('src/renderer/src/hooks/useHiveTasks.ts'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -128,7 +133,7 @@ try {
 // default exports "per convention (implied by React/Vite tooling)"; measured 2026-08-21,
 // `grep -rl "export default" src/renderer/src --include=*.tsx` matches 0 of 63 files, so
 // a harness reaching for `.default` would get `undefined` from every one of them.
-for (const [name, value] of Object.entries({ PixelBadge, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks })) {
+for (const [name, value] of Object.entries({ PixelBadge, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks })) {
   assert.equal(typeof value, 'function',
     `${name} did not come back from loadTs as a function — the component tests below would all render undefined`);
 }
@@ -621,4 +626,104 @@ test('VIGIL-04: parseTasks carries updatedAt and released through its whitelist,
     'the write-1 shape (no branch yet) does not survive parsing, so the card could never render between the two writes');
   assert.equal(garbage.released, undefined,
     'a released block with no `by` survives parsing — the ledger is a hand-written file, and that reaches the card as undefined.toUpperCase()');
+});
+
+// ─── VIGIL-04 — the ASK ME age, on the real board ────────────────────────────────────
+
+/**
+ * Render the REAL ASK ME board with real cards on it.
+ *
+ * `AskMeTab` fills its card list from `useHiveTasks()`, whose payload lives in one
+ * module-level cache shared by the whole renderer (`useHiveTasks.ts:20`). A server render
+ * runs NO effect phase, so the only way that cache is populated at first paint is to
+ * populate it before rendering — which is what `refreshHiveTasks()` does, through
+ * `window.cth.hiveTasks`.
+ *
+ * `window.cth` is the preload bridge (`src/preload/index.ts`), i.e. something the real
+ * build already provides — the same category as the harness's `globalThis.self` shim, and
+ * the same shape as TESTING.md's documented `require.cache` injection. It is NOT standing
+ * in for a component, a prop or a derivation: the real `parse()`, the real `waitsOnHuman()`
+ * and the real `recipientOf()` all run on the payload it delivers.
+ *
+ * `window` is installed and removed per test, never at module scope, because several
+ * libraries in this process branch on `typeof window`.
+ */
+async function renderAskBoard(t, tasks) {
+  const hadWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  globalThis.window = { cth: { hiveTasks: async () => ({ tasks }) } };
+  t.after(() => {
+    if (hadWindow) Object.defineProperty(globalThis, 'window', hadWindow);
+    else delete globalThis.window;
+  });
+  refreshHiveTasks();
+  // read() is async; one macrotask is enough for the awaited stub above to settle.
+  await new Promise((resolve) => setImmediate(resolve));
+  return html(React.createElement(AskMeTab));
+}
+
+const openAsk = (askedAt, extra = {}) => ({
+  id: 'ask-1', title: 'approve the production key rotation', status: 'blocked',
+  dependsOn: [], priority: 3, createdAt: ago(NINE_HOURS),
+  humanQA: [{ q: 'which key should I rotate first?', ...(askedAt ? { askedAt } : {}) }], ...extra
+});
+
+test('VIGIL-04: every unanswered ASK ME question renders its age, between the title and the recipient badge', async (t) => {
+  const markup = await renderAskBoard(t, [openAsk(ago(FOUR_MINUTES))]);
+
+  // Positive lower bound FIRST (D-33/D-40): the board actually rendered the ask. Without
+  // this, every assertion below would pass just as happily against an empty board.
+  assert.match(visibleText(markup), /which key should I rotate first\?/,
+    'the ASK ME board rendered no question at all, so nothing below is measuring the real surface');
+
+  const age = ageElement(markup, 'asked ');
+  assert.equal(visibleText(age), '4m', 'an unanswered ask renders no age — VIGIL-04 names asks explicitly, not just cards');
+
+  // Rule A-4's placement, on the MARKUP rather than on the source: after the title button,
+  // before the wrapper span that carries the recipient badge. The badge is located by its
+  // own tooltip, the same one sendAnswer's recipient is derived from.
+  const titleAt = markup.indexOf('which key should I rotate first?');
+  const askTitleAt = markup.indexOf('approve the production key rotation');
+  const ageAt = markup.indexOf('title="asked ');
+  const badgeAt = markup.indexOf('your answer will be sent to');
+  assert.ok(askTitleAt >= 0 && badgeAt >= 0, 'the header lost either its title button or its recipient badge — re-derive this anchor');
+  assert.ok(askTitleAt < ageAt, 'the age renders BEFORE the task title — rule A-4 puts it after the title button, which is the element that gives up the width for it');
+  assert.ok(ageAt < badgeAt, "the age renders after the recipient badge — rule A-4 inserts it immediately before the badge's wrapper span");
+  assert.ok(badgeAt < titleAt, 'the question body now precedes the header, so the ordering assertions above are measuring the wrong region');
+
+  assert.match(age, /flex-shrink:0/, 'the age can shrink, so a long task title will squeeze it to nothing instead of ellipsing itself');
+});
+
+test('VIGIL-04: a four-minute ask and a nine-hour ask differ on ALL FOUR channels, exactly as the cards do', async (t) => {
+  const fresh = ageElement(await renderAskBoard(t, [openAsk(ago(FOUR_MINUTES))]), 'asked ');
+  const stale = ageElement(await renderAskBoard(t, [openAsk(ago(NINE_HOURS))]), 'asked ');
+
+  // 1 — unit letter
+  assert.equal(visibleText(fresh), '4m');
+  assert.equal(visibleText(stale), '9h');
+  // 2 — colour
+  assert.match(fresh, /color:var\(--cth-ink-500\)/, 'the fresh ask lost its ink-500 whisper treatment');
+  assert.match(stale, /color:var\(--cth-ink-900\)/, 'a nine-hour ask is drawn no darker than a four-minute one');
+  assert.doesNotMatch(fresh, /color:var\(--cth-ink-900\)/, 'a four-minute ask is already at ink-900, so the stale one cannot escalate past it');
+  // 3 — weight
+  assert.match(stale, /font-weight:600/, 'the stale ask is not bolder than the fresh one');
+  assert.doesNotMatch(fresh, /font-weight:600/, 'a four-minute ask already renders at weight 600');
+  // 4 — icon
+  assert.ok(hasClock(stale), 'a nine-hour ask carries no clock icon — DESIGN.md:707 forbids colour alone, and this is the channel that survives a colour-blind operator');
+  assert.ok(!hasClock(fresh), 'a four-minute ask shows the clock icon, so the icon says nothing');
+});
+
+test('VIGIL-04: an ask with no askedAt falls back to the card clock and SAYS which one it read', async (t) => {
+  // `askedAt` is optional on the shared HumanQA shape and `openPhoneAsks` already guards
+  // for its absence (`index.ts:1232`) — a hand-written god edit produces exactly this card.
+  // Rendering `0s` for it would disguise a nine-hour-old ask as one that just arrived,
+  // which is precisely the failure VIGIL-04 exists to make impossible (T-04-AGE-07).
+  const markup = await renderAskBoard(t, [openAsk(undefined)]);
+
+  assert.match(visibleText(markup), /which key should I rotate first\?/, 'the board rendered no ask, so the assertions below are vacuous');
+  const age = ageElement(markup, 'asked ');
+  assert.notEqual(visibleText(age), '0s',
+    'an ask carrying no askedAt renders as brand new — a stale ask permanently disguised as a fresh one is the exact failure VIGIL-04 exists to prevent');
+  assert.equal(visibleText(age), '9h', 'the fallback did not read the card clock');
+  assert.match(markup, /the ask carries no timestamp/,
+    'the tooltip does not name which clock it read, so "asked nine hours ago" cannot be told from "the card is nine hours old and the ask has no timestamp at all"');
 });
