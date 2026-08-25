@@ -100,6 +100,17 @@ export interface AgentProviderPreset {
   /** Flag appended when the floor is in auto (skip-permissions) mode.
    *  PR #54 consumers read this; mirrors `autoModeFlag`. */
   autoFlag?: string;
+  /** GATE-04 / D-14. The sandboxed ALTERNATIVE to `autoModeFlag`, used only when the
+   *  operator turns this engine's sandbox opt-in on (`providerSandbox[provider]`).
+   *  Absent = this engine has no sandbox the floor can turn on, which is every engine
+   *  but codex today; `sandboxFlagsForProvider` returns '' for those, so no non-codex
+   *  command can grow a sandbox flag by accident. Presence of this field IS the
+   *  supported-engine predicate the Settings row count derives from — never a literal. */
+  sandboxFlags?: string;
+  /** The flag that names an ADDITIONAL writable root, appended by the splice sites with
+   *  that agent's own directory. Deliberately NOT a path: a preset carrying a concrete
+   *  path is wrong for every agent but one, and the value is per-agent (T-04-SBX-07). */
+  sandboxDirFlag?: string;
   /** Claude Code accepts the hive identity injection (`--append-system-prompt`
    *  + hook `--settings`). Other CLIs don't — they spawn with the shared AGENT_*
    *  env only. Gates the Claude-specific spawn injection in hive.ensureAgent.
@@ -259,17 +270,38 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     label: 'Codex · GPT',
     defaultCommand: 'codex',
     commandGroups: CODEX_COMMAND_GROUPS,
-    // Full claude-parity auto mode: skip ALL approval prompts AND drop the sandbox,
-    // exactly like Claude's `bypassPermissions` / agy's `--dangerously-skip-permissions`.
-    // The earlier `-a never -s workspace-write` confined writes to the PTY cwd
-    // (the user's project), but a hive worker must also write to its agent folder
-    // at <harnessHome>/hive/agents/<id>/ (inbox→.done, memory.md, outbox JSON,
-    // deliverables) — a DIFFERENT path tree from cwd, which workspace-write blocked,
-    // so codex workers couldn't do HIVE PROTOCOL housekeeping. The single bypass flag
-    // is codex's documented equivalent of `--dangerously-skip-permissions` (no -a/-s
-    // alongside it). The app already runs claude/agy in this same full-access posture.
+    // DEFAULT (opt-in off): full claude-parity auto mode — skip ALL approval prompts AND
+    // drop the sandbox, exactly like Claude's `bypassPermissions` / agy's
+    // `--dangerously-skip-permissions`. WHY it was ever dropped: the earlier
+    // `-a never -s workspace-write` confined writes to the PTY cwd (the user's project),
+    // but a hive worker must also write to its agent folder at
+    // <harnessHome>/hive/agents/<id>/ (inbox→.done, memory.md, outbox JSON, deliverables)
+    // — a DIFFERENT path tree from cwd, which workspace-write blocked, so codex workers
+    // couldn't do HIVE PROTOCOL housekeeping. The single bypass flag is codex's documented
+    // equivalent of `--dangerously-skip-permissions` (no -a/-s alongside it). The app
+    // already runs claude/agy in this same full-access posture.
+    //
+    // AND WHAT `--add-dir` NOW MAKES POSSIBLE (GATE-04 / D-14): the blocker above is a
+    // PATH-TREE problem, not a security judgement, and codex 0.128.0 documents
+    // `--add-dir <DIR>` — "Additional directories that should be writable alongside the
+    // primary workspace". So `-s workspace-write --add-dir <that agent's own dir>` reaches
+    // the same housekeeping outcome WITHOUT dropping the sandbox, and the writable set is
+    // the project plus exactly one named sibling instead of the whole filesystem.
+    //
+    // WHAT IS AND IS NOT MEASURED. 04-SPIKE-codex-sandbox.md's verdict is INCONCLUSIVE:
+    // `--add-dir` is measurably ADMITTED into the writable-root set (codex's own startup
+    // banner enumerates it, and the negative control without the flag does not), so the
+    // flag PLUMBING holds — but no write was ever attempted, because this machine's stored
+    // ChatGPT refresh token is revoked (401 `refresh_token_reused`) and both spike runs
+    // died before a model turn. ENFORCEMENT is therefore unmeasured, and
+    // openai/codex#23552 ("workspace-write writable_roots still prompts for approval on
+    // listed Windows directories", OPEN) neither reproduced nor was ruled out. That is why
+    // this ships OPT-IN and DEFAULT OFF (D-15): the line below is the verified fallback and
+    // must stay reachable byte-for-byte.
     autoModeFlag: '--dangerously-bypass-approvals-and-sandbox',
     autoFlag: '--dangerously-bypass-approvals-and-sandbox',
+    sandboxFlags: '-s workspace-write',
+    sandboxDirFlag: '--add-dir',
     // Suppresses first-run interactive prompts (directory-trust gate, installer).
     nonInteractiveEnv: { CODEX_NON_INTERACTIVE: '1' },
     supportsModel: true,
@@ -699,6 +731,39 @@ export function defaultCommandForProvider(provider: AgentProvider, fallback = ''
 /** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */
 export function autoModeFlagForProvider(provider: AgentProvider): string {
   return providerPreset(provider).autoModeFlag ?? '';
+}
+
+/** GATE-04 / D-14. The sandboxed replacement for `autoModeFlagForProvider`, or '' for an
+ *  engine that has no sandbox the floor can turn on.
+ *
+ *  WHY THIS IS A FUNCTION AND NOT TWO SPLICES. The auto-mode flag is appended TWICE and
+ *  independently — `commandForAutoMode` (src/main/config.ts) and `buildSpawnCommand`
+ *  (src/renderer/src/store/config.ts) — and those files sit in DIFFERENT tsconfig projects
+ *  (tsconfig.node.json / tsconfig.web.json), so `npm run typecheck` cannot see a drift
+ *  between them (L-08). A drift means the operator approves a command that is not the one
+ *  that spawns (T-04-SBX-04). Both splices call THIS, so the flag TEXT has one author;
+ *  test/spawn-command-parity.test.cjs then calls both functions and asserts they agree,
+ *  because one author is not the same as one result.
+ *
+ *  `agentDir` is the FIRST per-agent, path-valued input in this file. Without one the
+ *  writable set is workspace-only — the agent folder is a sibling tree, so a missing dir
+ *  means codex cannot do hive housekeeping, which is a degradation the caller can see
+ *  rather than a silently widened sandbox. */
+export function sandboxFlagsForProvider(provider: AgentProvider, agentDir?: string): string {
+  const preset = providerPreset(provider);
+  if (!preset.sandboxFlags) return '';
+  if (!agentDir || !preset.sandboxDirFlag) return preset.sandboxFlags;
+  // Same whitespace-quoting convention buildSpawnCommand already uses for model labels,
+  // so a harnessHome under "C:\Users\A B\..." survives the command tokenizer.
+  const dir = /\s/.test(agentDir) ? `"${agentDir}"` : agentDir;
+  return `${preset.sandboxFlags} ${preset.sandboxDirFlag} ${dir}`;
+}
+
+/** The engines whose sandbox the floor can turn on, derived from the preset table — the
+ *  Settings row list and its "the other N engines" counterpart both read this, so adding
+ *  `sandboxFlags` to a second preset moves both numbers with no UI edit (rule S-3). */
+export function sandboxCapableProviders(): AgentProvider[] {
+  return AGENT_PROVIDER_PRESETS.filter((p) => p.sandboxFlags).map((p) => p.id);
 }
 
 /** Returns any env vars the provider needs for non-interactive / first-run suppression. */
