@@ -298,6 +298,21 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // listed Windows directories", OPEN) neither reproduced nor was ruled out. That is why
     // this ships OPT-IN and DEFAULT OFF (D-15): the line below is the verified fallback and
     // must stay reachable byte-for-byte.
+    //
+    // LIVE-UNVERIFIED (GATE-04, codex sandbox path). No live codex agent has ever run
+    // with `sandboxFlags` on. Plan 04-13 task 4 was the run that would have settled it and
+    // it could not execute: this machine's codex auth is dead
+    // (`401 refresh_token_reused`), re-tested at the top of that plan's execution and
+    // failing exactly as it did in the spike ~90 minutes earlier. So codex 0.128.0 ADMITS
+    // the writable root (measured, twice) but has never been observed HONOURING it, and
+    // openai/codex#23552 — "workspace-write writable_roots still prompts for approval on
+    // listed Windows directories", OPEN — is neither reproduced nor ruled out.
+    // WHAT WOULD SETTLE IT: `codex login` (browser sign-in; no OPENAI_API_KEY exists here,
+    // so `--with-api-key` is not available), then one INTERACTIVE hive agent — not
+    // `codex exec` — spawned with this opt-in on, completing a card, mailing, and writing
+    // <agentDir>/memory.md with no write refused. The interactive path is the one that
+    // matters because #23552 is a PROMPT defect and `codex exec` runs `approval: never`,
+    // so it cannot reproduce the defect even when the defect is present.
     autoModeFlag: '--dangerously-bypass-approvals-and-sandbox',
     autoFlag: '--dangerously-bypass-approvals-and-sandbox',
     sandboxFlags: '-s workspace-write',

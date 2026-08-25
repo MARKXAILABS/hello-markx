@@ -1289,14 +1289,19 @@ test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => 
  *  marker count to the previous ledger, and never copied from a plan file or
  *  a prior SUMMARY. Plan 02-12 found a real gap the arithmetic way round.
  *  `src/main/hiveTemplates.ts` went 3 → 5: GATE-03 gave pi a request/response
- *  PreToolUse path and OpenCode a veto, and each carries its own marker. */
+ *  PreToolUse path and OpenCode a veto, and each carries its own marker.
+ *  RE-MEASURED AGAIN by plan 04-13 (2026-08-25, wave 4) with the command above,
+ *  in the same commit as the marker it adds. `src/shared/agentProvider.ts`
+ *  went 3 → 4: GATE-04's codex sandbox path. The FILE SET is unchanged — no
+ *  file gained or lost its first marker — which is why the file-set assertion
+ *  below stays green while the two counts move. */
 const MARKER_LEDGER = {
   'src/main/hive.ts': 3,
   'src/main/hiveProvisioning.ts': 5,
   'src/main/hiveTemplates.ts': 5,
   'src/main/index.ts': 1,
   'src/main/webhook.ts': 3,
-  'src/shared/agentProvider.ts': 3
+  'src/shared/agentProvider.ts': 4
 };
 
 /** The repo-wide EXACT total of raw `LIVE-UNVERIFIED` occurrences under
@@ -1305,8 +1310,14 @@ const MARKER_LEDGER = {
  *  `grep -rc 'LIVE-UNVERIFIED' src --include=*.ts | grep -v ':0' | awk -F: '{s+=$2} END {print s}'`.
  *  The ONLY reason this number is allowed to change is a real marker being
  *  added or removed in source — never a refactor, a rename, or a change to
- *  how this file strips comments. 18 → 20: GATE-03's two new engine paths. */
-const LIVE_UNVERIFIED_TOTAL = 20;
+ *  how this file strips comments. 18 → 20: GATE-03's two new engine paths.
+ *  20 → 21, re-measured by plan 04-13 (2026-08-25, wave 4) with the command
+ *  above and NOT by adding one to 20: GATE-04's codex sandbox path ships
+ *  built-but-unverified, because this machine's codex auth is dead
+ *  (401 `refresh_token_reused`, re-tested live in that session) so the plan's
+ *  own live interactive run could not execute. openai/codex#23552 is OPEN and
+ *  neither reproduced nor ruled out. */
+const LIVE_UNVERIFIED_TOTAL = 21;
 
 /** The five engines this project built bridges for and never live-verified
  *  (D-33, D-35), mapped to the MINIMUM number of marker blocks that must
@@ -1326,7 +1337,18 @@ const LIVE_UNVERIFIED_TOTAL = 20;
  *  session, not arithmetic: pi 3 → 4 and opencode 4 → 5 because GATE-03 gave
  *  each a second marker (pi's request/response PreToolUse path, OpenCode's
  *  veto), on top of their pre-existing bridge markers. Lowering any of these
- *  is a claim that a real session ran against a real account — say which. */
+ *  is a claim that a real session ran against a real account — say which.
+ *
+ *  DELIBERATELY UNCHANGED by plan 04-13, which is a decision rather than an
+ *  oversight. That plan added a marker on codex's SANDBOX path, and codex is
+ *  not in this map: this map is about BRIDGES that were never live-verified,
+ *  and codex's bridge is not one of them — codex is installed here (0.128.0)
+ *  and its hook bridge does run. Adding `codex` would conflate an unverified
+ *  sandbox with an unverified bridge, and the floor would be met by any of the
+ *  five pre-existing marker blocks that merely CROSS-REFERENCE codex (kimi's
+ *  says "the CODEX case, not the grok case"), so it would pin almost nothing.
+ *  Measured, not assumed: 6 blocks name codex with the new marker, 5 without.
+ *  The repo-wide total above is what holds the new marker in place. */
 const LIVE_UNVERIFIED_ENGINES = {
   pi: 4, opencode: 5, crush: 1, qwen: 1, kimi: 5
 };
@@ -1694,6 +1716,76 @@ test('FLOOR-04: the line cap is applied per file, not to the whole staged diff',
   // The per-file cap comparison must be against that file's own line count.
   assert.ok(/lines > SECRET_SCAN_MAX_LINES/.test(fn),
     'the cap must be compared against each FILE\'s line count, not the commit total');
+});
+
+// ─── GATE-04 (04-13): the Settings sandbox group says what it does ───────────
+//
+// The copy is fixed by 04-UI-SPEC rule S-4 and pinned VERBATIM, because the
+// sub-label is the operator's escape hatch: this feature's own failure mode is a
+// floor that silently stops working at 3am, and "turn it off if this engine stops
+// writing" is the sentence that gets them back out. A paraphrase loses that.
+test('GATE-04: the Settings sandbox group carries rule S-4\'s copy verbatim, with a DERIVED count', () => {
+  const settings = readRaw('src/renderer/src/components/SettingsModal.tsx');
+
+  for (const copy of [
+    "Codex — sandbox off (today's behaviour)",
+    'Codex — sandbox on, agent folder writable',
+    'Applies to newly spawned agents. Turn it off if this engine stops writing.'
+  ]) {
+    assert.ok(settings.includes(copy), `rule S-4 copy missing or paraphrased: ${copy}`);
+  }
+
+  // Rule S-3: ONE row per sandbox-capable engine, and the rest named in one quiet
+  // sentence whose number is DERIVED. A hard-coded "ten" is the failure this pins —
+  // when a second engine gains support the row appears and the number must drop by
+  // itself, with no edit here and no stale sentence left behind.
+  assert.equal(
+    (settings.match(/other ten engines/g) || []).length, 0,
+    'the "other N engines" count is hard-coded. It must be derived from the preset '
+    + 'table, so a second sandbox-capable engine moves the row list and the number together.'
+  );
+  assert.ok(
+    /AGENT_PROVIDER_PRESETS\.length - sandboxEngines\.length/.test(settings),
+    'the count must be the preset table minus the sandbox-capable engines'
+  );
+  assert.ok(
+    /sandboxEngines\.map\(/.test(settings),
+    'rows must be mapped from the derived sandbox-capable list, never written out one by one'
+  );
+
+  // D-33/D-40: the positive lower bound beside the negatives. The derivation must
+  // actually produce ONE row and TEN others today — a derivation that yields zero
+  // rows would satisfy every assertion above while showing the operator nothing.
+  const shared = readRaw('src/shared/agentProvider.ts');
+  const capable = (shared.match(/^\s{4}sandboxFlags:/gm) || []).length;
+  const presets = (shared.match(/^\s{4}id: '/gm) || []).length;
+  assert.equal(capable, 1, 'D-15: exactly one engine ships the opt-in');
+  assert.equal(presets - capable, 10, 'and the sentence therefore says ten');
+});
+
+// AddAgentModal is a READ-ONLY reflection of that setting, never a second control:
+// a per-engine setting with two controls in two places is how the two splice sites
+// drift in the UI as well as in the code (L-08 / T-04-SBX-04).
+test('GATE-04: AddAgentModal previews the sandbox without offering a second control', () => {
+  const modal = readRaw('src/renderer/src/components/AddAgentModal.tsx');
+  assert.ok(
+    modal.includes('Command (auto mode on · sandbox on)'),
+    'the command preview must report the sandbox when it is on'
+  );
+  // Narrowly: it must never WRITE providerSandbox. It legitimately writes other
+  // config (registeredRepos, agentTokenCaps), so a blanket "no updateConfig" ban
+  // would be a false claim about this file — the invariant is about THIS key.
+  assert.ok(
+    !/providerSandbox\s*:/.test(modal),
+    'AddAgentModal must never WRITE providerSandbox — Settings owns that control, and a '
+    + 'per-engine setting with two controls in two places drifts exactly like the two splices do'
+  );
+  // …but it must still READ it, or the preview label is decorative (D-33/D-40's
+  // positive bound: this is what proves the negative above is not vacuous).
+  assert.ok(
+    /config\.providerSandbox\?\.\[provider\]/.test(modal),
+    'the preview must READ providerSandbox, or the sandbox label can never appear'
+  );
 });
 
 test('FLOOR-04: the bypass register does not claim a bypass that is now closed', () => {
