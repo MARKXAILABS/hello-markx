@@ -576,7 +576,14 @@ function joinedStripped(rel) {
 // bucket's merged event+cost rows). Both are THIN — every piece of arithmetic
 // and every argument check is in `src/main/timeline.ts`, driven for real by
 // `test/timeline.test.cjs`, because index.ts cannot be loaded here.
-const B_IPC_JOINED = 163;
+// 163 -> 164: plan 03-04 (wave 4) adds SCALE-02's `team:export`, the ONE new
+// channel team@1 needs. The IMPORT half rides the existing `hire:openFile`
+// channel — `readHireManifestFile` branches on the parsed spec tag internally —
+// so importing a team adds no channel here. `team:export` is thin for the same
+// reason the two above are: the strip, the validate-before-write self-check and
+// the skipped count are `buildTeamExport` in `src/main/hire.ts`, driven for real
+// by `test/hire-manifest.test.cjs`.
+const B_IPC_JOINED = 164;
 
 test('D-40: ipcMain.handle( count over joined, comment-stripped index.ts is exactly B-ipc-joined', () => {
   const joined = joinedStripped('src/main/index.ts');
@@ -624,7 +631,8 @@ const B_IPC_NAMES = [
   'realtime:setSessionLive', 'realtime:waitFor', 'roster:read', 'roster:write',
   'session:resolveCwd', 'skills:catalog', 'skills:install', 'skills:local', 'skills:reveal',
   'skills:uninstall', 'slack:reply', 'slack:replyScriptPath', 'slack:setConfig',
-  'slack:start', 'slack:status', 'slack:stop', 'telemetry:snapshot', 'telemetry:spans',
+  'slack:start', 'slack:status', 'slack:stop', 'team:export',
+  'telemetry:snapshot', 'telemetry:spans',
   'telemetry:usage', 'terminal:openAtFolder', 'tools:status', 'triggerHistory:clear',
   'triggerHistory:decide', 'triggerHistory:list', 'triggers:getContext',
   'triggers:setContext', 'tunnel:start', 'tunnel:status', 'tunnel:stop',

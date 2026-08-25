@@ -5,12 +5,24 @@
  *
  * WHY THIS FILE EXISTS
  * `src/shared/hire.ts` was a finished, security-reviewed single-agent format with no
- * producer and no direct test file. `validateHireManifest`'s default-deny allowlists
- * (`SAFE_FLAG_NAMES`, `MODEL_RE`, `FLAG_RE`, the provider set) were asserted only by
- * greps over the source. team@1 delegates EVERY member back through that exact
- * function; if a parallel, weaker per-member validator ever appears, the delegation
- * tests below stop proving anything — so they assert the ERROR TEXT
- * `validateHireManifest` itself produces, not merely `ok === false`.
+ * producer and no direct test file. Two things here are load-bearing and were
+ * previously asserted only by greps over the source:
+ *
+ *   1. `validateHireManifest`'s default-deny allowlists (`SAFE_FLAG_NAMES`, `MODEL_RE`,
+ *      `FLAG_RE`, the provider set). team@1 delegates EVERY member back through that
+ *      exact function; if a parallel, weaker per-member validator ever appears, the
+ *      delegation tests below stop proving anything — so they assert the ERROR TEXT
+ *      `validateHireManifest` itself produces, not merely `ok === false`.
+ *   2. `stripAgentForExport` and `buildTeamExport` (main/hire.ts) — D-16's seven-field
+ *      strip and T-03-04e's validate-before-write self-check. The strip is the only
+ *      thing standing between `team:export` and a file carrying an operator's account
+ *      name, home folder and worktree paths, and it had ZERO coverage before this file.
+ *
+ * WHY buildTeamExport IS NOT INLINE IN THE HANDLER. `src/main/index.ts` cannot be
+ * loaded under this harness, so anything written inside an `ipcMain.handle` body is
+ * only ever pinned by a grep that `return {}` also satisfies (03-03's recorded
+ * finding). A security control asserted that way is a control nobody has run. So the
+ * export path's decisions live in `main/hire.ts`, which loads, and the handler is thin.
  *
  * THE ASSERTION STYLE THAT MATTERS HERE: key ABSENCE, not `=== undefined`.
  * `validateHireManifest` returns an object literal that names every optional field, so
@@ -21,6 +33,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const loadTs = require('./load-ts.cjs');
 
@@ -35,6 +50,7 @@ const {
 } = loadTs('src/shared/hire.ts');
 
 const { AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts');
+const { readHireManifestFile, stripAgentForExport, buildTeamExport } = loadTs('src/main/hire.ts');
 
 /** A minimal manifest that validates today, used as the base for every fixture. */
 function hire(extra = {}) {
@@ -234,3 +250,261 @@ test('the surviving fields of a validated team member are intact', () => {
   assert.equal(m.model, 'claude-sonnet-4-6');
 });
 
+// ─── D-16: stripAgentForExport ──────────────────────────────────────────────
+
+/** Every field D-16 names, plus everything that SHOULD survive. */
+const ROSTER_AGENT = {
+  id: 'agent-7',
+  name: 'Ada',
+  description: 'Docs writer',
+  goal: 'Keep the docs true',
+  character: 'pam',
+  accent: 'mint',
+  provider: 'opencode',
+  model: 'claude-sonnet-4-6',
+  status: 'idle',
+  // The seven D-16 fields.
+  cwd: 'C:/Users/operator/secret-project',
+  account: 'operator@example.com',
+  accountPolicy: 'pinned',
+  worktreePath: 'C:/Users/operator/secret-project/.worktrees/ada',
+  ptyId: 'pty-31337',
+  command: 'opencode --model claude-sonnet-4-6 --dangerously-skip-permissions',
+  commandFlags: ['--dangerously-skip-permissions']
+};
+
+const D16_STRIPPED = ['cwd', 'account', 'accountPolicy', 'worktreePath', 'ptyId', 'command', 'commandFlags'];
+
+test('D-16: stripAgentForExport drops all seven fields — key ABSENCE, not undefined', () => {
+  const result = stripAgentForExport(ROSTER_AGENT);
+
+  // Named individually as well as in the loop, so a failure says which field leaked.
+  assert.equal('cwd' in result, false, 'cwd leaked — an export must never carry a home folder');
+  assert.equal('account' in result, false, 'account leaked');
+  assert.equal('accountPolicy' in result, false, 'accountPolicy leaked');
+  assert.equal('worktreePath' in result, false, 'worktreePath leaked');
+  assert.equal('ptyId' in result, false, 'ptyId leaked');
+  assert.equal('command' in result, false, 'the raw command leaked — team@1 must stay binary-free');
+  assert.equal('commandFlags' in result, false, 'commandFlags leaked');
+
+  for (const field of D16_STRIPPED) {
+    assert.equal(Object.keys(result).includes(field), false, `${field} is present in Object.keys`);
+  }
+
+  // ...and the fixture really did carry all seven, or the above proves nothing.
+  for (const field of D16_STRIPPED) {
+    assert.equal(field in ROSTER_AGENT, true, `the fixture must carry ${field}`);
+  }
+
+  // Nothing else sneaks through either: the picker is an ALLOWLIST, so an unrelated
+  // roster field (id, status) must not appear just because it was on the input.
+  assert.deepEqual(
+    Object.keys(result).sort(),
+    ['accent', 'character', 'description', 'goal', 'model', 'name', 'provider', 'spec'],
+    'stripAgentForExport must be an allowlist of fields to INCLUDE, never a denylist of fields to drop'
+  );
+});
+
+test('D-16: a stripped agent round-trips through the unmodified validateHireManifest', () => {
+  // Through JSON, because that is what actually gets written and re-read — a field that
+  // survives in memory but not in the file (or vice versa) is the bug this catches.
+  const onDisk = JSON.parse(JSON.stringify(stripAgentForExport(ROSTER_AGENT)));
+  const v = validateHireManifest(onDisk);
+  assert.equal(v.ok, true, `an exported member must be re-importable, got: ${v.errors.join('; ')}`);
+  assert.equal(v.manifest.name, 'Ada');
+  assert.equal(v.manifest.provider, 'opencode');
+  assert.equal(v.manifest.model, 'claude-sonnet-4-6');
+});
+
+test('D-16: an agent on a widened-allowlist engine round-trips — the old 3-provider allowlist rejected 8 of 11', () => {
+  // This is the gap that made export produce files the app itself refused: before this
+  // plan only claude/antigravity/codex validated, so a realistic mixed floor exported
+  // members that came back `ok:false` on `provider`.
+  const floor = ['grok', 'kimi', 'qwen', 'opencode', 'crush', 'pi', 'copilot', 'claude', 'codex', 'antigravity'];
+  for (const provider of floor) {
+    const stripped = JSON.parse(JSON.stringify(stripAgentForExport({ ...ROSTER_AGENT, provider })));
+    const v = validateHireManifest(stripped);
+    assert.equal(v.ok, true, `a ${provider} agent must re-import, got: ${v.errors.join('; ')}`);
+  }
+});
+
+test('D-16: a "custom" agent is NOT exportable — it fails the validate-before-write check', () => {
+  const stripped = JSON.parse(JSON.stringify(stripAgentForExport({ ...ROSTER_AGENT, provider: 'custom' })));
+  assert.equal(validateHireManifest(stripped).ok, false,
+    'a custom-binary agent must be dropped and counted by the exporter, never shipped');
+});
+
+test('stripAgentForExport survives a junk roster entry rather than throwing', () => {
+  // RosterSnapshot.agents is `unknown[]` — main never trusts its shape.
+  for (const junk of [{}, { name: 42 }, { name: '  ' }, { provider: 99, model: {} }]) {
+    const out = stripAgentForExport(junk);
+    assert.equal(out.spec, HIRE_SPEC_V1);
+    for (const field of D16_STRIPPED) assert.equal(field in out, false);
+  }
+});
+
+// ─── T-03-04e: buildTeamExport's validate-before-write self-check ───────────
+
+test('buildTeamExport: every member it returns has already been proven re-importable', () => {
+  const floor = [
+    { ...ROSTER_AGENT, name: 'Ada', provider: 'grok' },
+    { ...ROSTER_AGENT, name: 'Bo', provider: 'qwen' },
+    { ...ROSTER_AGENT, name: 'Cy', provider: 'opencode' }
+  ];
+  const out = buildTeamExport(floor);
+  assert.equal(out.skipped, 0);
+  assert.equal(out.members.length, 3);
+  for (const m of out.members) {
+    assert.equal(validateHireManifest(m).ok, true, `member ${m.name} is not re-importable`);
+    for (const field of D16_STRIPPED) assert.equal(field in m, false, `${field} leaked into the export`);
+  }
+});
+
+test('buildTeamExport: an unimportable member is DROPPED AND COUNTED, never silently shipped', () => {
+  const floor = [
+    { ...ROSTER_AGENT, name: 'Ada' },
+    // Over validateHireManifest's 200-char description cap. Nothing else in the
+    // export path looks at description length, so without the self-check this
+    // member would be written into a file the app itself then refuses.
+    { ...ROSTER_AGENT, name: 'TooChatty', description: 'x'.repeat(400) },
+    // A 'custom' agent: a real floor can hold one, and team@1 can never carry it.
+    { ...ROSTER_AGENT, name: 'Bespoke', provider: 'custom' },
+    // A model id with shell metacharacters — MODEL_RE's job, delegated not re-implemented.
+    { ...ROSTER_AGENT, name: 'Sneaky', model: 'gpt & calc.exe' },
+    { ...ROSTER_AGENT, name: 'Bo', provider: 'kimi' }
+  ];
+  const out = buildTeamExport(floor);
+
+  assert.equal(out.skipped, 3, 'three members could not be re-imported and must be counted');
+  assert.deepEqual(out.members.map((m) => m.name), ['Ada', 'Bo'], 'surviving members keep roster order');
+  for (const m of out.members) assert.equal(validateHireManifest(m).ok, true);
+});
+
+test('buildTeamExport: an empty roster is an empty team, not a throw and not a refusal', () => {
+  assert.deepEqual(buildTeamExport([]), { members: [], skipped: 0 });
+});
+
+test('buildTeamExport: a roster where EVERY member is skipped still yields a valid empty team', () => {
+  const out = buildTeamExport([
+    { ...ROSTER_AGENT, provider: 'custom' },
+    { ...ROSTER_AGENT, provider: 'custom' }
+  ]);
+  assert.deepEqual(out.members, []);
+  assert.equal(out.skipped, 2, 'members:0 with skipped:2 must be distinguishable from a genuinely empty floor');
+});
+
+test('buildTeamExport: a junk roster entry is skipped, not thrown on (agents is unknown[])', () => {
+  const out = buildTeamExport([null, 'nope', 42, {}, { name: '' }, { ...ROSTER_AGENT, name: 'Ada' }]);
+  assert.deepEqual(out.members.map((m) => m.name), ['Ada']);
+  assert.equal(out.skipped, 5);
+});
+
+test('the exported bytes round-trip back in through the real reader — the whole loop, end to end', () => {
+  // This is the promise team@1 exists to keep: export is the only safe producer
+  // BECAUSE what it writes can be re-imported. Anything less than writing the real
+  // file and reading it back with the real reader is a claim, not a proof.
+  const floor = ['grok', 'kimi', 'qwen', 'opencode', 'crush', 'pi', 'copilot', 'claude', 'codex', 'antigravity']
+    .map((provider, i) => ({ ...ROSTER_AGENT, name: `Agent${i}`, provider }));
+  floor.push({ ...ROSTER_AGENT, name: 'Bespoke', provider: 'custom' });
+
+  const { members, skipped } = buildTeamExport(floor);
+  assert.equal(skipped, 1);
+  assert.equal(members.length, 10);
+
+  const p = path.join(tmp, 'exported.json');
+  fs.writeFileSync(p, JSON.stringify({ spec: HIRE_TEAM_SPEC_V1, members }, null, 2), 'utf8');
+
+  const bytes = fs.readFileSync(p, 'utf8');
+  for (const leak of ['secret-project', 'operator@example.com', 'pty-31337', '.worktrees', 'dangerously-skip-permissions']) {
+    assert.equal(bytes.includes(leak), false, `the written file leaks ${leak}`);
+  }
+
+  const res = readHireManifestFile(p);
+  assert.equal(res.ok, true, `the app cannot re-import its own export: ${res.error}`);
+  assert.equal(res.team.members.length, 10, 'every exported member re-validated');
+  assert.deepEqual(res.team.members.map((m) => m.provider),
+    ['grok', 'kimi', 'qwen', 'opencode', 'crush', 'pi', 'copilot', 'claude', 'codex', 'antigravity']);
+});
+
+// ─── the two byte caps ──────────────────────────────────────────────────────
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'md-hire-'));
+
+/** Write a JSON document padded with filler to `bytes`, and return its path. */
+function writeSized(name, doc, bytes) {
+  const p = path.join(tmp, name);
+  const base = JSON.stringify(doc);
+  // Pad inside a filler key so the document still PARSES — the point is file SIZE.
+  const pad = Math.max(0, bytes - Buffer.byteLength(base, 'utf8') - 12);
+  const padded = JSON.stringify({ ...doc, _filler: 'x'.repeat(pad) });
+  fs.writeFileSync(p, padded, 'utf8');
+  return p;
+}
+
+test('the single-manifest 64KB ceiling is NOT raised to 256KB as a side effect of the team branch', () => {
+  const big = writeSized('big-hire.json', hire(), 100 * 1024);
+  assert.ok(fs.statSync(big).size > HIRE_MAX_BYTES, 'the fixture must actually exceed the single-manifest cap');
+  assert.ok(fs.statSync(big).size < TEAM_MAX_BYTES, 'and must sit UNDER the team cap, or this proves nothing');
+
+  const res = readHireManifestFile(big);
+  assert.deepEqual(res, { ok: false, error: 'manifest too large' });
+});
+
+test('a team@1 file of the SAME size is accepted', () => {
+  const doc = { spec: HIRE_TEAM_SPEC_V1, members: [hire()] };
+  const big = writeSized('big-team.json', doc, 100 * 1024);
+  assert.ok(fs.statSync(big).size > HIRE_MAX_BYTES);
+  assert.ok(fs.statSync(big).size < TEAM_MAX_BYTES);
+
+  const res = readHireManifestFile(big);
+  assert.equal(res.ok, true, `expected the team file to be accepted, got: ${res.error}`);
+  assert.equal(res.team.members.length, 1);
+  assert.equal(res.team.members[0].name, 'Nora');
+});
+
+test('a team@1 file over the 256KB team cap is rejected before JSON.parse ever runs', () => {
+  const doc = { spec: HIRE_TEAM_SPEC_V1, members: [hire()] };
+  const huge = writeSized('huge-team.json', doc, TEAM_MAX_BYTES + 4096);
+  assert.deepEqual(readHireManifestFile(huge), { ok: false, error: 'manifest too large' });
+});
+
+test('a normal hire@1 file still reads exactly as it did before the team branch', () => {
+  const p = path.join(tmp, 'plain.json');
+  fs.writeFileSync(p, JSON.stringify(hire({ provider: 'grok', goal: 'ship it' })), 'utf8');
+  const res = readHireManifestFile(p);
+  assert.equal(res.ok, true, res.error);
+  assert.equal(res.manifest.name, 'Nora');
+  assert.equal(res.manifest.provider, 'grok');
+  assert.equal(res.team, undefined);
+});
+
+test('a team@1 file whose members are partly invalid still reads, carrying only the valid ones', () => {
+  const p = path.join(tmp, 'mixed.json');
+  fs.writeFileSync(p, JSON.stringify({
+    spec: HIRE_TEAM_SPEC_V1,
+    members: [hire({ name: 'Ada' }), hire({ name: 'Bad', provider: 'custom' })]
+  }), 'utf8');
+  const res = readHireManifestFile(p);
+  assert.equal(res.ok, true, res.error);
+  assert.equal(res.team.members.length, 1);
+  assert.equal(res.team.members[0].name, 'Ada');
+});
+
+test('a structurally broken team@1 file is an error, not a silently empty team', () => {
+  const p = path.join(tmp, 'overcap.json');
+  fs.writeFileSync(p, JSON.stringify({
+    spec: HIRE_TEAM_SPEC_V1,
+    members: Array.from({ length: TEAM_MAX_MEMBERS + 1 }, () => hire())
+  }), 'utf8');
+  const res = readHireManifestFile(p);
+  assert.equal(res.ok, false);
+  assert.ok(res.error.includes('"members" exceeds'), res.error);
+});
+
+test('a file that is not JSON at all is still the existing read error', () => {
+  const p = path.join(tmp, 'junk.json');
+  fs.writeFileSync(p, 'not json {{{', 'utf8');
+  const res = readHireManifestFile(p);
+  assert.equal(res.ok, false);
+  assert.ok(res.error.startsWith('could not read manifest:'), res.error);
+});
