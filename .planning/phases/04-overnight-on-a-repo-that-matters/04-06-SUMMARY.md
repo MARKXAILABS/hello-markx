@@ -226,6 +226,13 @@ No placeholder data, no hardcoded empties reaching a UI, no TODO/FIXME added.
 - **Plan 04-19** should copy the NARROWER host-arm wording (see Threat Flags) into SECURITY.md, not the register's.
 - **Plan 04-20** wires `hostAllowlist` and `openAsk` at `boot.ts` and must re-check that a denied host comes back as an ask rather than the bare deny it is today.
 
+## Self-Check: PASSED
+
+All four created files exist on disk (`src/main/commandShape.ts`, `test/command-shape.test.cjs`,
+`test/gate03-roundtrip.test.cjs`, this SUMMARY) and all five task commits plus this metadata commit
+are in `git log`: `e4beb36`, `92240df`, `8468132`, `6ec95b6`, `2c2a3ce`, `0dc15b3`. Working tree clean.
+`STATE.md` and `ROADMAP.md` were not modified — the orchestrator owns those writes.
+
 ---
 *Phase: 04-overnight-on-a-repo-that-matters*
 *Completed: 2026-08-25*
