@@ -374,8 +374,13 @@ const GIT_HOOKS_DISABLED = '/dev/null';
  *  a dozen writers and was never rotated. */
 const LOG_ROTATE_BYTES = 8 * 1024 * 1024;
 /** How much of log.jsonl's tail logTail() reads. Bounded so an IPC/voice read
- *  never slurps a multi-megabyte file to show the last 200 events. */
-const LOG_TAIL_BYTES = 64 * 1024;
+ *  never slurps a multi-megabyte file to show the last 200 events.
+ *
+ *  EXPORTED for SCALE-03's driver in `test/hive-durability.test.cjs`, which
+ *  must push a fixture past this exact number to prove the events table answers
+ *  a time range this read cannot. A test that hardcoded `64 * 1024` would keep
+ *  passing after someone widened the window, while measuring nothing. */
+export const LOG_TAIL_BYTES = 64 * 1024;
 
 /** Filesystem- and sort-safe timestamp, e.g. 2026-05-30T14-03-11-123Z. */
 function stamp(): string {
@@ -540,6 +545,60 @@ export function redactSecrets(text: unknown): string {
   s = s.replace(/\bsk_(?:ant|live|test|proj)_[A-Za-z0-9_]{10,}/g, '[redacted]');
   s = s.replace(/\brk_(?:live|test)_[A-Za-z0-9_]{10,}/g, '[redacted]');
   return s;
+}
+
+/** One cumulative cost-ledger row, as it is written to cost-ledger.jsonl. */
+export interface CostLedgerRow {
+  agent_id?: string | null;
+  session_id?: string | null;
+  task_id?: string | null;
+  ts?: number;
+  input?: number;
+  output?: number;
+  usd?: number;
+}
+
+/**
+ * Fold one ledger row into the accumulators, and RETURN the delta it carried.
+ *
+ * Shared by the startup scan, the incremental append, and — since SCALE-03 —
+ * `dailyCostRows`, so the three can never disagree. It was a private method and
+ * is now a module-level export for exactly that third caller: the day band asks
+ * "what was spent between 09:15 and 09:30", which is the same clamped
+ * consecutive diff read by TIME rather than by card, and D-22 exists because
+ * re-deriving that arithmetic a second way is how the ledger contract got broken
+ * the first time. The body references nothing on `this`; it always was a pure
+ * function of its three arguments.
+ *
+ * THE ARITHMETIC IS UNCHANGED — the series key, the clamp, the `cumulative.set`,
+ * the `byTask` accumulation, and the `if (!taskId)` condition are all exactly as
+ * they were. What changed is the return channel, at BOTH exits.
+ *
+ * The null-task exit returning `delta` is not cosmetic. That guard is right that
+ * the spend belongs to no card, but the DAY total is not card-scoped: a cost
+ * sample recorded while an agent was between cards is still real money spent
+ * that day. Returning nothing there loses every one of them, silently, and under
+ * `"strict": true` it does not even compile.
+ */
+export function applyCostRow(
+  byTask: Map<string, { tokens: number; usd: number }>,
+  cumulative: Map<string, { tokens: number; usd: number }>,
+  row: CostLedgerRow
+): { tokens: number; usd: number } {
+  const key = `${row.agent_id ?? ''}\u0000${row.session_id ?? ''}`;
+  const now = { tokens: (row.input ?? 0) + (row.output ?? 0), usd: row.usd ?? 0 };
+  const previous = cumulative.get(key);
+  const delta = previous
+    ? { tokens: Math.max(0, now.tokens - previous.tokens), usd: Math.max(0, now.usd - previous.usd) }
+    : now;
+  cumulative.set(key, now);
+  const taskId = row.task_id;
+  if (!taskId) return delta; // advanced the baseline, credits no card
+  const acc = byTask.get(taskId) ?? { tokens: 0, usd: 0 };
+  acc.tokens += delta.tokens;
+  acc.usd += delta.usd;
+  byTask.set(taskId, acc);
+  return delta;
 }
 
 // ─── HiveManager ────────────────────────────────────────────────────────────
@@ -2857,7 +2916,7 @@ export class HiveManager {
     // Keep the per-card accumulator current without re-reading the file. Only
     // when it has already been built — otherwise the first taskSpend() call
     // scans the whole ledger and would double-count anything applied here first.
-    if (this.costByTask) this.applyCostRow(this.costByTask, this.costCumulative, row);
+    if (this.costByTask) applyCostRow(this.costByTask, this.costCumulative, row);
   }
 
   // ─── RECORD-03 / RECORD-04 — what one card has actually cost ────────────────
@@ -2909,27 +2968,11 @@ export class HiveManager {
    *  is what the next row is diffed against. */
   private costCumulative = new Map<string, { tokens: number; usd: number }>();
 
-  /** Fold one ledger row into the accumulators. Shared by the startup scan and
-   *  the incremental append so the two can never disagree. */
-  private applyCostRow(
-    byTask: Map<string, { tokens: number; usd: number }>,
-    cumulative: Map<string, { tokens: number; usd: number }>,
-    row: { agent_id?: string | null; session_id?: string | null; task_id?: string | null; input?: number; output?: number; usd?: number }
-  ): void {
-    const key = `${row.agent_id ?? ''}\u0000${row.session_id ?? ''}`;
-    const now = { tokens: (row.input ?? 0) + (row.output ?? 0), usd: row.usd ?? 0 };
-    const previous = cumulative.get(key);
-    const delta = previous
-      ? { tokens: Math.max(0, now.tokens - previous.tokens), usd: Math.max(0, now.usd - previous.usd) }
-      : now;
-    cumulative.set(key, now);
-    const taskId = row.task_id;
-    if (!taskId) return; // advanced the baseline, credits no card
-    const acc = byTask.get(taskId) ?? { tokens: 0, usd: 0 };
-    acc.tokens += delta.tokens;
-    acc.usd += delta.usd;
-    byTask.set(taskId, acc);
-  }
+  // `applyCostRow` used to live here as a private method. It is now the
+  // module-level export near the top of this file — the SAME arithmetic, plus
+  // the delta returned at both exits — so SCALE-03's `dailyCostRows` reads the
+  // ledger through the diff this class already uses rather than re-deriving it
+  // a second way (D-22, and ADR-0005 for what that cost the first time).
 
   /** Rebuild both accumulators from the WHOLE ledger. Runs once per process, on
    *  the first `taskSpend()` — which after an app restart is what stops a card
@@ -2945,13 +2988,73 @@ export class HiveManager {
       try { raw = readFileSync(join(root, 'cost-ledger.jsonl'), 'utf8'); } catch { raw = ''; }
       for (const line of raw.split('\n')) {
         if (!line) continue;
-        try { this.applyCostRow(byTask, cumulative, JSON.parse(line)); } catch { /* skip a torn line */ }
+        try { applyCostRow(byTask, cumulative, JSON.parse(line)); } catch { /* skip a torn line */ }
       }
     }
     this.costCumulative = cumulative;
     this.costByTask = byTask;
     this.pruneCostByTask();
     return byTask;
+  }
+
+  /**
+   * SCALE-03 — the ledger's DELTAS for one day, in ledger order.
+   *
+   * `taskSpend` answers "what did this card cost". The day band asks the same
+   * rows a different question — "what was spent between 09:15 and 09:30" — so
+   * this returns per-ROW deltas rather than a per-task total, and it gets each
+   * one from `applyCostRow`'s return value rather than diffing a second way.
+   * That is D-22: two lanes deriving the same arithmetic independently is how
+   * the cumulative-ledger contract got broken once already (ADR-0005).
+   *
+   * Scans the WHOLE file, exactly as `rescanCostLedger` does, and filters to
+   * the range AFTER diffing. That order is the point: a row at 00:04 must be
+   * diffed against yesterday's last snapshot, not treated as a series opening
+   * that bills its whole cumulative total to the first bucket of the day.
+   *
+   * Rows with a null `task_id` ARE included. They credit no card — the shared
+   * `applyCostRow` still skips the per-task accumulator for them — but a cost
+   * sample recorded while an agent was between cards is real money spent that
+   * day, and the day total is not card-scoped.
+   *
+   * Deliberately NOT memoized. It runs on an explicit day change in the day
+   * picker, not per keystroke, and it repeats a whole-file read profile this
+   * file already has rather than introducing a new one. If it is ever measured
+   * to matter, the upgrade path is the one `rescanCostLedger` already names:
+   * PersistStore's reserved `cost_ledger` table, or a size+mtime memo like
+   * `usage.ts`'s. ponytail: whole-file scan, memoize when measured.
+   */
+  dailyCostRows(dayStartMs: number, dayEndMs: number): Array<{
+    ts: number; agentId: string | null; taskId: string | null; usd: number; tokens: number;
+  }> {
+    const out: Array<{ ts: number; agentId: string | null; taskId: string | null; usd: number; tokens: number }> = [];
+    // Non-finite bounds read nothing rather than everything — same fail-closed
+    // rule `pruneEvents`/`eventsBetween` apply, and the argument ultimately
+    // comes from the renderer.
+    if (!Number.isFinite(dayStartMs) || !Number.isFinite(dayEndMs)) return out;
+    const root = this.root();
+    if (!root) return out;
+    let raw = '';
+    try { raw = readFileSync(join(root, 'cost-ledger.jsonl'), 'utf8'); } catch { return out; }
+    // Throwaway accumulators: this must never disturb the live per-card maps.
+    const byTask = new Map<string, { tokens: number; usd: number }>();
+    const cumulative = new Map<string, { tokens: number; usd: number }>();
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      let row: CostLedgerRow;
+      try { row = JSON.parse(line) as CostLedgerRow; } catch { continue; /* skip a torn line */ }
+      const delta = applyCostRow(byTask, cumulative, row);
+      const ts = typeof row.ts === 'number' ? row.ts : NaN;
+      if (!(ts >= dayStartMs && ts < dayEndMs)) continue;
+      out.push({
+        ts,
+        agentId: row.agent_id ?? null,
+        taskId: row.task_id ?? null,
+        usd: delta.usd,
+        tokens: delta.tokens
+      });
+    }
+    return out;
   }
 
   /** Drop accumulator entries for cards that are no longer on the board. The

@@ -449,10 +449,15 @@ test('03-02: ensureAgent stamps spawnedAt, and a RESPAWN advances it', async (t)
 // passing after someone widened the window, while proving nothing.
 
 test('SCALE-03: the morning falls out of logTail\'s window but stays readable in SQLite', (t) => {
-  const { hive, home, root } = floor(t);
-  const store = new PersistStore(path.join(home, 'harness.db'));
+  const { hive, root } = floor(t);
+  // The DB gets its OWN temp dir, not the harness home. On Windows an open
+  // SQLite handle (plus its -wal/-shm) makes `rmSync` throw EPERM, and `floor`
+  // registered its cleanup first — so a shared dir fails the test in teardown
+  // no matter what the assertions found.
+  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-hive-timeline-'));
+  const store = new PersistStore(path.join(dbDir, 'harness.db'));
   store.open();
-  t.after(() => store.close());
+  t.after(() => { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); });
 
   // NEGATIVE CONTROL, before any wiring: an event appended with no store must
   // not appear in SQLite. Without this the assertions below would also pass if
