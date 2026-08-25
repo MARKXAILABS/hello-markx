@@ -468,6 +468,25 @@ export class PersistStore {
     return this.db.prepare('DELETE FROM events WHERE ts < ?').run(Math.floor(olderThanMs)).changes;
   }
 
+  /** The earliest event timestamp STILL STORED, or null when nothing is.
+   *
+   *  SCALE-03 reports this to the renderer as `firstTs`, and the distinction in
+   *  that first sentence is the whole point: pruneEvents above moves MIN(ts)
+   *  forward every day, so this is NOT "the first event ever". A day-band that
+   *  draws "no record before 09:14" is making a claim about what this store can
+   *  answer RIGHT NOW; sourcing that claim from anything older would promise
+   *  coverage the retention window already deleted.
+   *
+   *  null, never 0, on an empty table — 0 is a real epoch timestamp and a UI
+   *  cannot tell a sentinel apart from a claim that records began in 1970.
+   *  MIN(ts) reads straight off idx_ev_ts, so this is an index seek and not the
+   *  full-table scan the row count would otherwise imply. */
+  earliestEventTs(): number | null {
+    if (!this.db) return null;
+    const row = this.db.prepare('SELECT MIN(ts) AS ts FROM events').get() as { ts: number | null } | undefined;
+    return row?.ts ?? null;
+  }
+
   // ─── memory_fts (FLOOR-07 keyword recall) ──────────────────────────────────
 
   /** Re-index ONE agent's memory as `chunks`, replacing everything previously
