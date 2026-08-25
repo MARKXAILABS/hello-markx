@@ -424,7 +424,34 @@ phase's watchdog lives in).
      more work. Every card and every unanswered ASK ME question renders its age, so a card nine
      hours in `doing` is distinguishable at a glance from one four minutes in.
      — VIGIL-01, VIGIL-02, VIGIL-03, VIGIL-04
-**Plans**: TBD
+**Plans**: 19 plans in 7 waves (planned 2026-08-25). Sliced on `04-RESEARCH.md`'s four-track proposal
+(A = the gate, B = env + sandbox, C = the record, D = absence), with **one owner per file per wave**
+per D-35 and `04-PATTERNS.md`'s measured Collision Map. Two collisions were dissolved rather than
+serialized: VIGIL-01's timer lives in `floor/watchdog.ts` and reuses the already-wired `deps.notify`, so
+`index.ts` needs no VIGIL-01 edit at all; and the watchdog reads the ledger `rev` + `appendLog` rather
+than `tool_calls` or a per-card `updatedAt`, which dissolves S-3 and S-5 and buys the VIGIL and RECORD
+tracks full independence.
+
+Plans:
+- [ ] 04-01-PLAN.md — wave 1 — Wave 0: the codex `--add-dir` spike (with a negative control) and the shared real-shim to real-HookServer harness — GATE-04, GATE-03, GATE-05
+- [ ] 04-02-PLAN.md — wave 1 — RECORD-01 + RECORD-02 storage: ONE migration, two tables, five `PersistStore` methods (S-4: `db.ts` has one owner for the whole phase)
+- [ ] 04-03-PLAN.md — wave 1 — VIGIL-03's durable guard at `delivery.ts:740`, with a test that MUST be red against today's source
+- [ ] 04-04-PLAN.md — wave 1 — VIGIL-04 + VIGIL-02 ledger schema: `updatedAt` and `released` on `HiveTask`, stamped in BOTH writers
+- [ ] 04-05-PLAN.md — wave 1 — GATE-02's env allowlist at the one `pty.spawn` choke point, with its ceiling list and a live codex smoke (S-7: first in the GATE track, never mid-wave)
+- [ ] 04-06-PLAN.md — wave 2 — GATE-03's command-shape judge in main, before `protectedPathDenial` (L-01), fail-closed host allowlist, extended ceiling
+- [ ] 04-07-PLAN.md — wave 2 — VIGIL-03's main-side detection: one shared `BLOCK_HINTS`, evaluated where the buffer fills with no renderer attached
+- [ ] 04-08-PLAN.md — wave 2 — VIGIL-02's released card: same-tick release, branch enriched from the git call that already ran (L-09 option a)
+- [ ] 04-09-PLAN.md — wave 2 — RECORD-05's restore points over a shadow `GIT_DIR`, plus RECORD-02's `appendLog` mirror
+- [ ] 04-10-PLAN.md — wave 3 — GATE-03's cross-engine reach (pi, OpenCode) and the honest claim, with the marker ledger reconciled
+- [ ] 04-11-PLAN.md — wave 3 — VIGIL-01's absence watchdog in the boot seam: one alarm per quiet edge, and it fires when the god is the dead one
+- [ ] 04-12-PLAN.md — wave 3 — VIGIL-04 + VIGIL-02 board surfaces: age on every card and ask, `DROPPED BY` on the row the assignee vacated
+- [ ] 04-13-PLAN.md — wave 4 — GATE-04's per-engine codex sandbox opt-in, both splice sites (L-08), and a live run
+- [ ] 04-14-PLAN.md — wave 4 — GATE-03 denial legibility + VIGIL-03's swallowed badge, plus the measured 1.85:1 `PixelButton` fix
+- [ ] 04-15-PLAN.md — wave 4 — GATE-05's third answer, its registry and TTL, plus RECORD-01's writer on the hook socket
+- [ ] 04-16-PLAN.md — wave 5 — GATE-05's shim poll loops (a poll, not a stream — L-02 measured a silent fail-open on grok and agy)
+- [ ] 04-17-PLAN.md — wave 5 — GATE-05 + VIGIL-01 on the phone, publishing into Phase 2's finished trust boundary
+- [ ] 04-18-PLAN.md — wave 6 — GATE-05's desktop banner and VIGIL-01's `QUIET` chip, with the titlebar constants re-measured
+- [ ] 04-19-PLAN.md — wave 7 — phase close: SECURITY.md, TELEMETRY.md, the final ledger, and the honest open concerns
 **UI hint**: yes
 
 ### Phase 5: The Floor Gets Better at Its Own Job
