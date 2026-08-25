@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
 import { MCP_CATALOG, type McpTier } from '@shared/mcpCatalog';
-import { getMcpGrantsSnapshot, setMcpGrants } from '@/store/config';
+import { getMcpGrantsSnapshot, grantMcpBatch, setMcpGrants } from '@/store/config';
 import type { Agent } from '@/store/store';
 
 /**
@@ -110,20 +110,27 @@ export function McpConsentModal({ agent, onClose, onRestart }: McpConsentModalPr
   const submitGrant = async () => {
     setBusy(true);
     setActionError(null);
-    for (const id of checkedIds) {
-      const res = await window.cth.mcpGrant({ agentId: agent.id, mcpId: id, secret: keys[id] });
-      if (!res.ok) {
-        setActionError(res.error ?? `${id}: grant failed`);
-        setBusy(false);
-        return;
-      }
-    }
-    setChecked({});
-    setKeys((prev) => {
+    const { granted, error } = await grantMcpBatch(checkedIds, (id) =>
+      window.cth.mcpGrant({ agentId: agent.id, mcpId: id, secret: keys[id] })
+    );
+    // Straight-line on purpose (CR-01): a partial batch failure still means main
+    // GRANTED everything in `granted`, so the checked rows and their submitted
+    // secrets clear for exactly those ids — the write-once-clear-immediately
+    // invariant this file documents does not get a failure exemption — and
+    // `load()` republishes the grants mirror on every path. An early return here
+    // is what left the modal and every AgentCard reporting an already-granted
+    // server as ungranted for the rest of the session.
+    setChecked((prev) => {
       const next = { ...prev };
-      for (const id of checkedIds) delete next[id];
+      for (const id of granted) delete next[id];
       return next;
     });
+    setKeys((prev) => {
+      const next = { ...prev };
+      for (const id of granted) delete next[id];
+      return next;
+    });
+    setActionError(error);
     setBusy(false);
     load();
   };

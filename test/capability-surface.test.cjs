@@ -296,3 +296,204 @@ test('AgentCard.tsx\'s aria-label carries both the gap sentences and the MCP cla
   const around = text.slice(Math.max(0, chipSpanIdx - 200), chipSpanIdx + 50);
   assert.match(around, /aria-hidden="true"/, 'the capability chip span must carry aria-hidden="true"');
 });
+
+// ─── CR-01 / CR-02 — the consent modal's partial-batch path and the defaults
+//     snapshot's staleness (02-REVIEW.md). Both are renderer-state defects on a
+//     capability surface, so they are pinned here rather than in a new file.
+//
+// THE CEILING, STATED UP FRONT: this repo renders components with
+// `renderToStaticMarkup` (test/renderer-components.test.cjs's own documented
+// constraint) — no effects, no events. `submitGrant` and `toggle` are closures
+// behind a click and CANNOT be invoked from any harness in this repo. So each
+// finding gets BOTH halves and neither is claimed to be the other: a real
+// behavioural test of the extracted logic, plus one source clause pinning the
+// component to it. The source clauses are the ones that go red on the bug.
+
+/** The body of `const <name> = ... => { ... }` in already-stripped source, matched
+ *  by brace depth. Returns null when the binding is not found. */
+function arrowBody(text, name) {
+  const head = text.indexOf(`const ${name} =`);
+  if (head < 0) return null;
+  const arrow = text.indexOf('=>', head);
+  if (arrow < 0) return null;
+  const open = text.indexOf('{', arrow);
+  if (open < 0) return null;
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return text.slice(open + 1, i);
+  }
+  return null;
+}
+
+/**
+ * The same body with every nested CLOSURE body blanked out — offsets preserved,
+ * whitespace kept — and every ordinary block (`if`, `for`, `try`) left intact.
+ *
+ * Both halves are load-bearing and were measured, not assumed. Blanking by plain
+ * brace depth (the first thing tried) blanks the `if (!res.ok) { ... return; }`
+ * INSIDE the `for` loop, which is exactly the early exit this clause exists to
+ * catch — the assertion then passes against the buggy source, vacuously. Blanking
+ * nothing instead trips on the `return next;` inside `setKeys((prev) => { ... })`,
+ * which is not an early exit at all, so a CORRECT fix would read as a violation.
+ * A closure opener is a `{` whose preceding non-space characters are `=>`.
+ */
+function withoutNestedClosures(body) {
+  const out = body.split('');
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== '{') continue;
+    let j = i - 1;
+    while (j >= 0 && /\s/.test(body[j])) j--;
+    if (!(j >= 1 && body[j] === '>' && body[j - 1] === '=')) continue;
+    let depth = 0;
+    for (let k = i; k < body.length; k++) {
+      if (body[k] === '{') depth++;
+      else if (body[k] === '}') depth--;
+      if (!/\s/.test(body[k])) out[k] = ' ';
+      if (depth === 0) { i = k; break; }
+    }
+  }
+  return out.join('');
+}
+
+test('CR-01 behaviour: grantMcpBatch reports the ids main actually granted when a later grant fails', async () => {
+  const { grantMcpBatch } = loadTs('src/renderer/src/store/config.ts');
+  assert.equal(typeof grantMcpBatch, 'function',
+    'grantMcpBatch is not exported — the partial-batch path has no testable seam at all');
+
+  const calls = [];
+  const partial = await grantMcpBatch(['github-token', 'db', 'email-calendar'], async (id) => {
+    calls.push(id);
+    return id === 'db' ? { ok: false, error: 'db: could not store the key' } : { ok: true };
+  });
+  // The whole of CR-01: main HAS granted github-token. Discarding that fact is what
+  // leaves every AgentCard rendering it as ungranted for the rest of the session.
+  assert.deepEqual(partial.granted, ['github-token'],
+    'a partial batch failure must still report the ids main genuinely granted');
+  assert.equal(partial.error, 'db: could not store the key', 'the failure must be surfaced, never swallowed');
+  assert.deepEqual(calls, ['github-token', 'db'],
+    'the batch must stop at the first failure — a later grant is not attempted past a failed one');
+
+  // Both directions: an all-ok batch reports every id and no error, so a fix that
+  // simply always reported [] would fail here instead of passing the clause above.
+  const all = await grantMcpBatch(['github-token', 'db'], async () => ({ ok: true }));
+  assert.deepEqual(all.granted, ['github-token', 'db']);
+  assert.equal(all.error, null);
+  assert.deepEqual(await grantMcpBatch([], async () => ({ ok: true })), { granted: [], error: null });
+});
+
+test('CR-01 behaviour: a REJECTED grant is reported like any other failure, never propagated', async () => {
+  const { grantMcpBatch } = loadTs('src/renderer/src/store/config.ts');
+  // An IPC-level throw is one of the failure modes 02-REVIEW.md names. If it escapes,
+  // the modal's `setBusy(false)` never runs and the dialog is wedged busy forever.
+  const res = await grantMcpBatch(['github-token', 'db'], async (id) => {
+    if (id === 'db') throw new Error('ipc channel closed');
+    return { ok: true };
+  });
+  assert.deepEqual(res.granted, ['github-token']);
+  assert.equal(res.error, 'ipc channel closed');
+});
+
+test('CR-01 wiring: submitGrant republishes the grants mirror on the partial-failure path too', () => {
+  const body = arrowBody(readStripped('src/renderer/src/components/McpConsentModal.tsx'), 'submitGrant');
+  assert.ok(body, 'submitGrant not found in McpConsentModal.tsx');
+  const flat = withoutNestedClosures(body);
+
+  const republish = flat.indexOf('load()');
+  assert.ok(republish >= 0,
+    'submitGrant no longer republishes via load() — the mcpGrantsSnapshot every AgentCard reads has no other writer on this path');
+  const earlyReturn = flat.search(/\breturn\b/);
+  assert.ok(earlyReturn === -1 || earlyReturn > republish,
+    'submitGrant returns before it republishes: after a partial batch failure the modal and every AgentCard keep showing an ALREADY-GRANTED server as ungranted, in the permissive direction (CR-01)');
+
+  assert.match(body, /grantMcpBatch\(/,
+    'submitGrant must route through grantMcpBatch — an inline loop has no test coverage in this repo');
+  const keysIdx = body.indexOf('setKeys(');
+  assert.ok(keysIdx >= 0 && body.slice(keysIdx, body.indexOf('load()')).includes('granted'),
+    'the secrets cleared after a batch must be the ids that actually succeeded (granted); clearing nothing leaves plaintext keys in React state, which this file documents as forbidden');
+});
+
+test('CR-02 wiring: the floor-wide defaults toggle publishes its write into the grants snapshot', () => {
+  const text = readStripped('src/renderer/src/components/McpDefaultsSettings.tsx');
+  const body = arrowBody(text, 'toggle');
+  assert.ok(body, 'toggle not found in McpDefaultsSettings.tsx');
+  const write = body.indexOf('updateConfig(');
+  assert.ok(write >= 0, 'the toggle must still persist the defaults map to config');
+  const publish = body.indexOf('setMcpGrants(');
+  assert.ok(publish > write,
+    'the safe-readonly defaults toggle writes config and republishes nothing: ensureMcpGrants() latches once per session, so every card’s "MCP N safe" count renders the pre-change number until the app restarts (CR-02)');
+});
+
+test('CR-02 payoff: a republished mcpDefaults map moves the card safe count and notifies subscribers', () => {
+  const cfg = loadTs('src/renderer/src/store/config.ts');
+  const { MCP_CATALOG } = loadTs('src/shared/mcpCatalog.ts');
+  const safeOn = MCP_CATALOG.filter((e) => e.tier === 'safe-readonly' && e.defaultEnabled);
+  assert.ok(safeOn.length >= 1, 'the catalog must carry at least one on-by-default safe-readonly entry');
+
+  const original = cfg.getMcpGrantsSnapshot();
+  let fired = 0;
+  const off = cfg.subscribeMcpGrants(() => { fired++; });
+  try {
+    const before = cfg.mcpCardSummary(cfg.getMcpGrantsSnapshot(), 'a1', { supportsMcp: true }).safeCount;
+    cfg.setMcpGrants({ ...cfg.getMcpGrantsSnapshot(), mcpDefaults: { [safeOn[0].id]: { enabled: false } } });
+    const after = cfg.mcpCardSummary(cfg.getMcpGrantsSnapshot(), 'a1', { supportsMcp: true }).safeCount;
+    assert.equal(after, before - 1, 'turning one safe-readonly default off must drop the card count by exactly one');
+    assert.equal(fired, 1, 'the publish must notify subscribers — AgentCard reads this through useSyncExternalStore');
+  } finally {
+    off();
+    cfg.setMcpGrants(original);
+  }
+});
+
+/* ─────────────── T-P02-11-10: the card must not imply a channel nothing writes ───────────────
+ *
+ * `supportsMcp` answers "can this engine take MCP AT ALL" (the static preset claim).
+ * `mcpWiredFor` answers "does THIS engine's spawn path actually write a server bundle" —
+ * and `MCP_WIRED_PROVIDERS` is `['claude']`. `hive.ts:1162` gates the real write on the
+ * SAME predicate: a non-wired provider gets `{}`, no `mcp.json`, no `--mcp-config`.
+ *
+ * NINE presets declare `supportsMcp: true`; ONE is wired. Before this guard, eight engines
+ * rendered `MCP 6 safe` on their card out of the box while their agents spawned with zero
+ * MCP servers. `mcpCatalog.ts`'s own header names this exact failure: "Conflating the two
+ * is how a capability card starts lying about a channel nothing writes." */
+test('T-P02-11-10: a supportsMcp engine that is NOT wired renders no MCP element at all', () => {
+  const cfg = loadTs('src/renderer/src/store/config.ts');
+  const { MCP_WIRED_PROVIDERS } = loadTs('src/shared/mcpCatalog.ts');
+  const snap = cfg.getMcpGrantsSnapshot();
+
+  // Sanity: exactly one provider is wired today. If this changes, the rows below must too.
+  assert.deepEqual([...MCP_WIRED_PROVIDERS], ['claude'],
+    'MCP_WIRED_PROVIDERS changed — update this case and re-check every card that reads it');
+
+  // claude: supportsMcp AND wired -> a real summary.
+  const wired = cfg.mcpCardSummary(snap, 'a1', { supportsMcp: true, provider: 'claude' });
+  assert.ok(wired && typeof wired.safeCount === 'number',
+    'claude is wired — its card must still render its safe count');
+
+  // The eight that claim MCP but are not wired: null, i.e. render NOTHING.
+  // `null` is the contract AgentCard already honours for "engine cannot take MCP at all";
+  // reusing it means an unwired engine renders no element rather than a truthful-looking
+  // count for servers it will never receive.
+  for (const provider of ['codex', 'grok', 'kimi', 'antigravity', 'qwen', 'opencode', 'crush', 'copilot']) {
+    assert.equal(
+      cfg.mcpCardSummary(snap, 'a1', { supportsMcp: true, provider }),
+      null,
+      `${provider} declares supportsMcp but is not in MCP_WIRED_PROVIDERS — its card must not `
+      + 'imply MCP. hive.ts writes it zero servers.'
+    );
+  }
+
+  // supportsMcp:false still short-circuits first, wired or not (pi, custom).
+  assert.equal(cfg.mcpCardSummary(snap, 'a1', { supportsMcp: false, provider: 'claude' }), null);
+});
+
+test('T-P02-11-10: AgentCard passes the resolved provider, not just the preset flag', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'AgentCard.tsx'), 'utf8');
+  const i = src.indexOf('mcpCardSummary(');
+  assert.ok(i > 0, 'sanity: AgentCard must still build its MCP summary');
+  const call = src.slice(i, i + 400);
+  assert.ok(/provider:/.test(call),
+    'AgentCard must pass `provider` into mcpCardSummary — without it the wired check cannot '
+    + 'run and the card falls back to the preset claim, which is the T-P02-11-10 defect.');
+});

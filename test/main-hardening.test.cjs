@@ -2,10 +2,16 @@
 
 // Guards for the main-process hardening pass (#1, #8, #9).
 //
-// src/main/index.ts itself cannot be loaded here — it imports 'electron' — so
-// each assertion targets the pure function the handler now delegates to. That
-// is deliberate: index.ts was untestable precisely because every guard used to
-// be inline in a handler.
+// src/main/index.ts itself is not loaded here — but not because it imports
+// 'electron': test/load-ts.cjs has stubbed that import since #55, and lets
+// the module load. The real blocker is module-scope side effects — an
+// `app.on(...)` call and an `initFileLogging()` that opens a real write
+// stream, both executed at import time (D-02) — which a stub cannot paper
+// over and which cross-contaminate parallel test files through a shared
+// stub path. The composed boot path this file's guards feed into IS tested,
+// in test/boot-floor.test.cjs, against `bootFloor(deps)` — the injected
+// composition root D-02's fix extracted. Each assertion here targets the
+// pure function the handler now delegates to, same as before.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

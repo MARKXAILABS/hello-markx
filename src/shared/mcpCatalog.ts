@@ -208,3 +208,30 @@ export const MCP_WIRED_PROVIDERS: readonly string[] = ['claude'];
 export function mcpWiredFor(provider: string): boolean {
   return MCP_WIRED_PROVIDERS.includes(provider);
 }
+
+/** MAIN-02. `agentId` reaches `mcp:agentState`/`mcp:grant`/`mcp:revoke` from the
+ *  RENDERER — the less-trusted side of that boundary by design — and then selects
+ *  both a secret-store namespace (`mcpGrantKey`) and a filesystem path
+ *  (`HiveManager.agentDir` = `join(root, 'agents', id)`). A bare
+ *  `typeof id === 'string'` check defends neither: `'../agents/someone-else'` is a
+ *  perfectly good string, and was MEASURED returning another agent's armed server
+ *  list before this guard existed.
+ *
+ *  Deliberately a SHAPE guard, NOT a membership guard. Membership was tried first
+ *  and was wrong: `hive.registry()` is not the agent roster. `spawnAgentCore` only
+ *  calls `hive.ensureAgent` under `if (opts.hive && hive.enabled())`, and its
+ *  missing-CLI installer rung returns earlier still, while the renderer persists
+ *  the agent card either way — so a registry test rejects real, working, non-hive
+ *  agents and breaks DAEMON-04's consent modal for them.
+ *
+ *  The charset is a superset of everything `uniqueId()` can emit
+ *  (`pty-<name-slug>-<base36>`, i.e. `[a-z0-9-]`), so it cannot reject a
+ *  legitimate id, while excluding every separator and traversal form. `..` is
+ *  refused explicitly because `.` is otherwise a legal character in the class.
+ *
+ *  Lives here rather than in `index.ts` so it has a testable seam — `index.ts`
+ *  imports `electron` at module scope and cannot be loaded by `node --test`. */
+const SAFE_AGENT_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+export function isSafeAgentId(id: unknown): id is string {
+  return typeof id === 'string' && SAFE_AGENT_ID_RE.test(id) && !id.includes('..');
+}

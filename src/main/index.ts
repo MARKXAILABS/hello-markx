@@ -71,8 +71,8 @@ import { TelemetryCollector } from './telemetry';
 import { analytics } from './analytics';
 import { IntegrationBroker } from './integrationBroker';
 import * as integrations from './integrations';
-import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES } from '../shared/integrations';
-import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor } from '../shared/mcpCatalog';
+import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, INTEGRATION_SLUG_RE } from '../shared/integrations';
+import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { RosterStore } from './roster';
 import { ControlRegistry } from './control';
 import { fetchHireManifest, readHireManifestFile } from './hire';
@@ -120,6 +120,7 @@ import {
   type Floor
 } from './floor/boot';
 import type { FloorDeps } from './floor/deps';
+import { releaseWorkerPty } from './floor/lifecycle';
 import { isHeadless, quitDecision, shouldQuitOnLastWindowClose } from './floor/headless';
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
@@ -2550,6 +2551,20 @@ ipcMain.handle('integrations:upsert', (_evt, record: unknown) => integrations.up
 ipcMain.handle('integrations:setSecret', (_evt, payload: unknown) => {
   const p = (payload ?? {}) as { id?: unknown; secret?: unknown };
   if (typeof p.id !== 'string' || !p.id) return { ok: false, error: 'id required' };
+  // IPC-02. `secretRefFor(id)` is `int:${id}` — the SAME namespace `mcp:grant`
+  // writes into as `secretRefFor(mcpGrantKey(agentId, mcpId))` =
+  // `int:mcp:<agentId>:<mcpId>`. `integrations:upsert` validates its id against
+  // INTEGRATION_SLUG_RE (which excludes `:`), but this sibling handler never
+  // did — so a renderer could call
+  // `setSecret({ id: 'mcp:<agentId>:<mcpId>', secret: '<attacker value>' })`
+  // and write straight into an agent's MCP credential slot, bypassing
+  // mcp:grant's isSafeAgentId gate, its catalog-existence check, its tier
+  // refusal and its mcpWiredFor refusal — silently replacing a real stored
+  // credential that the next spawn then arms. Same class as SEC-02: a charset
+  // rule enforced at one call site and not at its sibling.
+  if (!INTEGRATION_SLUG_RE.test(p.id)) {
+    return { ok: false, error: 'id must be a lowercase slug (2–40 chars, a–z 0–9 -, no leading/trailing hyphen)' };
+  }
   if (typeof p.secret !== 'string' || !p.secret) return { ok: false, error: 'secret required' };
   return integrations.setSecret(secretRefFor(p.id), p.secret);
 });
@@ -3053,6 +3068,14 @@ function mcpGrantHasSecret(agentId: string, mcpId: string): boolean {
 
 ipcMain.handle('mcp:agentState', (_evt, agentId: unknown) => {
   if (typeof agentId !== 'string' || !agentId) return { ok: false, error: 'invalid agentId' };
+  // MAIN-02 shape guard (see `isSafeAgentId` in shared/mcpCatalog.ts for why this
+  // is a shape check and NOT a registry-membership check — membership rejects real
+  // non-hive agents and breaks DAEMON-04's consent modal for them). Traversal is
+  // still blocked twice: here, and again inside `hive.mcpArmed`.
+  if (!isSafeAgentId(agentId)) return { ok: false, error: 'invalid agentId' };
+  // An id the hive registry never issued is NOT an error — a non-hive agent is a
+  // real, working agent with no hive dir, and `mcpArmed` answers [] for it. The
+  // modal must render its (empty) state, not a load failure.
   const provider = hive.registry().agents[agentId]?.provider ?? 'claude';
   const wired = mcpWiredFor(provider);
   const cfg = readConfig();
@@ -3070,6 +3093,7 @@ ipcMain.handle('mcp:agentState', (_evt, agentId: unknown) => {
 ipcMain.handle('mcp:grant', (_evt, opts: unknown) => {
   const p = (opts ?? {}) as { agentId?: unknown; mcpId?: unknown; secret?: unknown };
   if (typeof p.agentId !== 'string' || !p.agentId) return { ok: false, error: 'invalid agentId' };
+  if (!isSafeAgentId(p.agentId)) return { ok: false, error: 'invalid agentId' };
   if (typeof p.mcpId !== 'string' || !p.mcpId) return { ok: false, error: 'invalid mcpId' };
   const entry = mcpCatalogEntry(p.mcpId);
   if (!entry) return { ok: false, error: `unknown MCP server: ${p.mcpId}` };
@@ -3100,6 +3124,7 @@ ipcMain.handle('mcp:grant', (_evt, opts: unknown) => {
 ipcMain.handle('mcp:revoke', (_evt, opts: unknown) => {
   const p = (opts ?? {}) as { agentId?: unknown; mcpId?: unknown };
   if (typeof p.agentId !== 'string' || !p.agentId) return { ok: false, error: 'invalid agentId' };
+  if (!isSafeAgentId(p.agentId)) return { ok: false, error: 'invalid agentId' };
   if (typeof p.mcpId !== 'string' || !p.mcpId) return { ok: false, error: 'invalid mcpId' };
   const entry = mcpCatalogEntry(p.mcpId);
   if (!entry) return { ok: false, error: `unknown MCP server: ${p.mcpId}` };
@@ -3374,18 +3399,17 @@ ipcMain.handle('window:newFloor', () => {
 // The third quit-dialog button. The god broadcasts closing time, every worker
 // saves its memory and ACKs, the god concludes with CLOSING-TIME-COMPLETE —
 // only then does the harness tear down. See closingTime.ts for the protocol.
-const closingTime = new ClosingTimeController(
-  hive,
-  // Roster source: agents with a live PTY right now (ptyToAgent is pruned on
-  // every teardown). The registry alone would include ghost workers from
-  // sessions that ended with a hard quit — never archived, never able to ACK.
-  () => [...new Set(ptyToAgent.values())],
-  () => liveWebContents(),
-  () => teardownAndQuit(),
-  // #7C.2 steering — the graceful interrupt that reaches deeply busy agents
-  // at their next hook boundary instead of waiting for a Stop.
-  control
-);
+//
+// CONSTRUCTED POST-BOOT, not here. `hive` and `control` are built inside
+// `bootFloor()` and are `undefined` at module scope, and ClosingTimeController
+// stores both BY VALUE — so constructing it here froze `undefined` into the
+// controller for the whole process lifetime. Nothing threw at load, which is
+// what made this worse than the `setRoutedObserver` crash below: the failure
+// landed later, the first time an operator pressed "closing time"
+// (`this.hive.registry()` on undefined). Assigned beside wirePtyExitHandler()
+// in `whenReady`; every use below sits inside a callback that cannot run
+// before that. Guarded by test/boot-order.test.cjs.
+let closingTime: ClosingTimeController;
 // `hive.setRoutedObserver(...)` is NOT wired here — `hive` is constructed inside
 // `bootFloor()` and is `undefined` at module scope, so calling it here threw
 // `TypeError: Cannot read properties of undefined (reading 'setRoutedObserver')`
@@ -3983,11 +4007,24 @@ ipcMain.handle('tunnel:start', async () => {
   writeConfig({ tunnelEnabled: true });
   tunnelIsEnabled = true;
   // Ensure the webhook local server is listening — the phone's origin
-  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has
-  // nothing to expose yet (a phone route family becomes servable in plan 02-05);
-  // that refusal is returned verbatim rather than papered over.
+  // (D-18, D-23). A floor with no ENABLED webhook endpoint still has the
+  // phone route to expose — servable since plan 02-05, but only once
+  // `phoneArmed()` is true (`webhook.ts` `start()`'s own guard). Arm it
+  // here, the SAME mint-then-start order `phone:pairing` uses below, so
+  // this one explicit operator action ("expose to the internet") is
+  // self-sufficient on a fresh install: previously this deadlocked —
+  // `tunnel:start` refused with zero endpoints, and the only thing that
+  // could arm the phone (`phone:pairing`) is never invoked by the
+  // renderer until AFTER a tunnel is already reported running (02-12
+  // fix; the deadlock is otherwise unreachable from the shipped UI, which
+  // has exactly one control for this: `SettingsModal.tsx`'s "expose to
+  // the internet" button). A real webhook endpoint still takes the normal
+  // path unarmed — only the "nothing else configured" case arms the
+  // phone as part of fulfilling the operator's own request to expose.
   if (!webhookServer) {
-    const started = await startWebhookServer();
+    const noEndpoints = enabledWebhookEndpoints().length === 0;
+    if (noEndpoints) ensureWebhookServerInstance().mintEnrollment();
+    const started = await startWebhookServer({ forPhone: noEndpoints });
     if (!started.ok) {
       emitTunnelChanged({ enabled: true, running: false, url: null });
       return started;
@@ -4501,6 +4538,17 @@ async function gcPreservedWorktrees(): Promise<void> {
   }
 }
 
+/** Every worker release — reap or manual stop — goes through here (MAIN-01).
+ *  A function, not a module-scope const: `ptyManager`, `liveWorkers` and
+ *  `floor` are all bound later, so their reads must happen at call time. */
+function releaseWorker(workerId: string): { ok: boolean; error?: string } {
+  return releaseWorkerPty(workerId, {
+    killPty: (id) => ptyManager.kill(id),
+    teardownPty: (id) => { floor?.teardownPty(id); },
+    liveWorkers
+  });
+}
+
 /** One controller tick: (1) finish/reap live workers (frees slots), then (2) pull
  *  new requests up to the concurrency cap. Order matters so a freed slot is reused
  *  the same tick. */
@@ -4516,15 +4564,16 @@ async function ephemeralWorkerTick(): Promise<void> {
     const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0
       ? cfg.defaultWorkerTokenCap : 0;
 
-    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive
-    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.
+    // (1) Finish or reap. releaseWorker → kill + UNCONDITIONAL teardownPty →
+    //     gated worktree + archive + liveWorkers.delete. `releasing` guards
+    //     re-entry within the tick; teardown, not onExit, is what frees the slot.
     for (const [workerId, rec] of [...liveWorkers]) {
       if (rec.releasing) continue;
       if (workerSignaledDone(workerId, rec.spawnedAt)) {
         // Success: the worker already replied in-thread; just release it.
         rec.releasing = true;
         console.log(`[worker] ${workerId} signaled done — releasing`);
-        ptyManager.kill(workerId);
+        releaseWorker(workerId);
         continue;
       }
       // Token-cap reap (default-off plumbing). An effective cap > 0 → reap when the
@@ -4540,7 +4589,7 @@ async function ephemeralWorkerTick(): Promise<void> {
             `Worker ${workerId} used ${used.toLocaleString()} tokens (> its cap of ${tokenCap.toLocaleString()}) and was reaped. Any committed work on its branch is preserved for you.`,
             rec.slack
           );
-          ptyManager.kill(workerId);
+          releaseWorker(workerId);
           continue;
         }
       }
@@ -4554,7 +4603,7 @@ async function ephemeralWorkerTick(): Promise<void> {
           `Worker ${workerId} produced no output for ${Math.round(idleMs / 60000)} min (> the ${Math.round(idleTimeoutMs / 60000)} min cap) and never signaled done, so it was reaped. Any committed work on its branch is preserved for you.`,
           rec.slack
         );
-        ptyManager.kill(workerId);
+        releaseWorker(workerId);
       }
     }
 
@@ -4649,8 +4698,11 @@ ipcMain.handle('workers:list', (): { live: WorkerSnapshot[]; preserved: Preserve
 });
 
 /** Manually stop a live ephemeral worker. Mirrors the done-release path: mark
- *  releasing, then kill → teardownPty runs the SAFETY-GATED worktree teardown
- *  (committed work is preserved, never force-discarded). Idempotent. */
+ *  releasing, then `releaseWorker` → kill + teardownPty runs the SAFETY-GATED
+ *  worktree teardown (committed work is preserved, never force-discarded).
+ *  Idempotent — and a kill that FAILED is reported as a failure, never as the
+ *  `{ ok:true }` a stranded `releasing` used to answer for a worker that never
+ *  died (MAIN-01). */
 ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: string } => {
   if (typeof workerId !== 'string' || !workerId) return { ok: false, error: 'invalid worker id' };
   const rec = liveWorkers.get(workerId);
@@ -4658,8 +4710,7 @@ ipcMain.handle('workers:stop', (_evt, workerId: string): { ok: boolean; error?: 
   if (rec.releasing) return { ok: true }; // already stopping
   rec.releasing = true;
   console.log(`[worker] manual stop requested for ${workerId}`);
-  try { ptyManager.kill(workerId); } catch (e) { return { ok: false, error: String(e) }; }
-  return { ok: true };
+  return releaseWorker(workerId);
 });
 
 /** Wall-clock instant we last observed the machine suspend or lock, so a resume
@@ -4867,6 +4918,23 @@ app.whenReady().then(() => {
   // (too large/IPC-shaped to move — see boot.ts's header) — wired right after
   // construction, exactly where it used to run.
   wirePtyExitHandler();
+  // Closing time captures `hive`/`control` BY VALUE, so it must be built after
+  // bootFloor() has assigned them — the same synchronous-assignment guarantee
+  // wirePtyExitHandler() above relies on. Built at module scope it held
+  // `undefined` forever and failed the first time the operator pressed the
+  // button, with nothing thrown at load to point at the cause.
+  closingTime = new ClosingTimeController(
+    hive,
+    // Roster source: agents with a live PTY right now (ptyToAgent is pruned on
+    // every teardown). The registry alone would include ghost workers from
+    // sessions that ended with a hard quit — never archived, never able to ACK.
+    () => [...new Set(ptyToAgent.values())],
+    () => liveWebContents(),
+    () => teardownAndQuit(),
+    // #7C.2 steering — the graceful interrupt that reaches deeply busy agents
+    // at their next hook boundary instead of waiting for a Stop.
+    control
+  );
   // Closing-time needs the routed-message stream, and `hive` is constructed
   // inside `bootFloor()` — so this MUST be post-boot. At module scope `hive`
   // is still `undefined` and this threw on every packaged launch (the dev

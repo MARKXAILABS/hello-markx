@@ -774,3 +774,28 @@ test('start() alone opens no tunnel — DAEMON-05\'s off-by-default clause, prov
   assert.equal(server.publicUrl(), null, 'start() must not have opened any tunnel as a side effect');
   assert.equal(server.listening(), true, 'the local security boundary must still be live on its own');
 });
+
+/* ───────────── D-23's circularity, and the 02-12 fresh-install fix ──────── */
+
+test('start() refuses to bind with zero endpoints and an unarmed phone — a stone-cold-default install has nothing to expose', async (t) => {
+  const { server } = makeServer({ opts: { endpoints: [] } });
+  t.after(() => server.stop());
+  const res = await server.start();
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'no enabled webhook endpoints');
+  assert.equal(server.listening(), false, 'a refused start() must not leave a port bound');
+});
+
+test('mint-then-start with zero endpoints binds once the phone is armed — the exact sequence tunnel:start now uses on a fresh install', async (t) => {
+  const { server } = makeServer({ opts: { endpoints: [] } });
+  t.after(() => server.stop());
+  // The same order index.ts's tunnel:start handler runs when
+  // enabledWebhookEndpoints() is empty (02-12 fix): mint an enrollment
+  // BEFORE calling start(), never after — start()'s own guard reads
+  // phoneArmed() synchronously and a mint that arrives later is too late.
+  server.mintEnrollment();
+  const res = await server.start();
+  assert.equal(res.ok, true, 'an armed phone must be enough to bind with zero webhook endpoints configured');
+  assert.equal(server.listening(), true);
+  assert.equal(server.publicUrl(), null, 'start() still opens no tunnel by itself — arming is not the same as exposing');
+});

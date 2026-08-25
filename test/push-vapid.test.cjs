@@ -211,3 +211,146 @@ test('ensureVapidKeys persists atomically and re-reads the same keypair', () => 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('case 8 — a malformed endpoint or a corrupt VAPID key resolves {ok:false}, never rejects (the docstring contract)', async () => {
+  const { sub } = makeUaSubscription();
+  const keys = generateVapidKeys();
+
+  // `endpoint` arrives unmodified from the browser client, so it is
+  // externally-supplied data crossing a trust boundary.
+  for (const endpoint of ['not-a-url', '', 'wpush/abc123', 'file:///etc/passwd', 'javascript:alert(1)']) {
+    let calls = 0;
+    const res = await sendPush({ ...sub, endpoint }, 'x', {
+      vapid: keys,
+      subject: 'mailto:ops@example.com',
+      transport: async () => { calls += 1; return { status: 201 }; }
+    });
+    assert.equal(res.ok, false, `endpoint ${JSON.stringify(endpoint)} must fail closed, not throw`);
+    assert.equal(calls, 0, `a rejected endpoint must never reach the transport (${JSON.stringify(endpoint)})`);
+    assert.doesNotMatch(String(res.error), /etc\/passwd|alert\(1\)/, 'the error must not echo the endpoint — it is a capability URL');
+  }
+
+  // The other pre-`try` throw on the same line: a corrupt stored VAPID key.
+  const corrupt = await sendPush(sub, 'x', {
+    vapid: { publicKey: 'AAAA', privateKey: keys.privateKey },
+    subject: 'mailto:ops@example.com',
+    transport: async () => ({ status: 201 })
+  });
+  assert.equal(corrupt.ok, false, 'a malformed VAPID public key must fail closed, not throw');
+});
+
+test('case 9 — a corrupt/legacy VAPID state file regenerates rather than being trusted', () => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-push-vapid-corrupt-'));
+  const file = path.join(dir, 'push-state.json');
+  try {
+    // Shape-valid JSON, both fields strings — but not a P-256 keypair. The
+    // `typeof === 'string'` check alone passes this through and it blows up
+    // later, inside the signing path.
+    fs.writeFileSync(file, JSON.stringify({ publicKey: 'bm90LWEta2V5', privateKey: 'bm9wZQ' }));
+    const keys = ensureVapidKeys({ statePath: () => file });
+    assert.notEqual(keys.publicKey, 'bm90LWEta2V5', 'a corrupt stored key must not be handed back');
+    const point = fromB64url(keys.publicKey);
+    assert.equal(point.length, 65, 'the regenerated public key must be an uncompressed P-256 point');
+    assert.equal(point[0], 0x04);
+    // usable for the one thing the corrupt file could not do
+    assert.match(
+      vapidAuthHeader('https://push.example.com/wpush/abc123', keys, 'mailto:ops@example.com'),
+      /^vapid t=/, 'the regenerated keypair must actually sign'
+    );
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(file, 'utf8')), keys,
+      'the corrupt file must be replaced by the regenerated keypair'
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('case 10 — a null/undefined/shapeless subscription resolves {ok:false}, never rejects (the docstring contract)', async () => {
+  const keys = generateVapidKeys();
+  const endpoint = 'https://push.example.com/wpush/abc123';
+  // `sub` is the browser's own `PushSubscription.toJSON()`, forwarded
+  // unmodified — so its SHAPE is externally supplied too, not just its
+  // `endpoint` string. Every dereference of it must sit behind a guard that
+  // cannot itself throw.
+  const malformed = [
+    ['null', null],
+    ['undefined', undefined],
+    ['{}', {}],
+    ['a bare string', 'not-a-subscription'],
+    ['no endpoint', { keys: { p256dh: 'AAAA', auth: 'AAAA' } }],
+    ['no keys', { endpoint }],
+    ['keys not an object', { endpoint, keys: 'nope' }],
+    ['keys missing p256dh', { endpoint, keys: { auth: 'AAAA' } }],
+    ['keys missing auth', { endpoint, keys: { p256dh: 'AAAA' } }]
+  ];
+  for (const [name, sub] of malformed) {
+    let calls = 0;
+    let res;
+    try {
+      res = await sendPush(sub, 'x', {
+        vapid: keys,
+        subject: 'mailto:ops@example.com',
+        transport: async () => { calls += 1; return { status: 201 }; }
+      });
+    } catch (e) {
+      assert.fail(`sendPush(${name}) REJECTED with "${e && e.message}" — the docstring promises it never throws across this boundary`);
+    }
+    assert.equal(res.ok, false, `${name}: must fail closed`);
+    assert.equal(typeof res.error, 'string', `${name}: must carry an error string`);
+    assert.equal(calls, 0, `${name}: must never reach the transport`);
+  }
+});
+
+test('case 11 — a stored VAPID private key that does not match the advertised public key regenerates', () => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const advertised = generateVapidKeys();
+  const foreign = generateVapidKeys();
+  // Every one of these is accepted unchanged by `createPrivateKey({ format:
+  // 'jwk' })` on Node v24.13.0 — importing is a SHAPE check, not a pair check.
+  // Each would sign VAPID JWTs that never verify against the advertised `k=`:
+  // silent, permanent 401s from every push service, with no regeneration.
+  const fixtures = {
+    'a DIFFERENT keypair': { publicKey: advertised.publicKey, privateKey: foreign.privateKey },
+    'an empty private key': { publicKey: advertised.publicKey, privateKey: '' },
+    'a truncated private key': { publicKey: advertised.publicKey, privateKey: Buffer.from([1, 2, 3, 4]).toString('base64url') },
+    'a non-base64 private key': { publicKey: advertised.publicKey, privateKey: '!!!not base64!!!' },
+    'a legacy PKCS8-sized private key': { publicKey: advertised.publicKey, privateKey: Buffer.alloc(120, 7).toString('base64url') }
+  };
+
+  for (const [name, stored] of Object.entries(fixtures)) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-push-vapid-mismatch-'));
+    const file = path.join(dir, 'push-state.json');
+    try {
+      fs.writeFileSync(file, JSON.stringify(stored));
+      const got = ensureVapidKeys({ statePath: () => file });
+      assert.notEqual(got.privateKey, stored.privateKey, `${name}: must not be handed back`);
+
+      // The real assertion: whatever comes back must sign a JWT that verifies
+      // against the very public key it advertises in `k=`.
+      const header = vapidAuthHeader('https://push.example.com/wpush/abc123', got, 'mailto:ops@example.com');
+      const [headerB64, claimsB64, sigB64] = /t=([^,]+),/.exec(header)[1].split('.');
+      const point = fromB64url(got.publicKey);
+      const pub = crypto.createPublicKey({
+        key: Buffer.concat([P256_SPKI_PREFIX, point.subarray(1)]), format: 'der', type: 'spki'
+      });
+      assert.equal(
+        crypto.verify('sha256', Buffer.from(`${headerB64}.${claimsB64}`, 'utf8'), { key: pub, dsaEncoding: 'ieee-p1363' }, fromB64url(sigB64)),
+        true,
+        `${name}: the keypair handed back must sign JWTs that verify against its own advertised k=`
+      );
+      assert.deepEqual(
+        JSON.parse(fs.readFileSync(file, 'utf8')), got,
+        `${name}: the unusable file must be replaced by the regenerated keypair`
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});

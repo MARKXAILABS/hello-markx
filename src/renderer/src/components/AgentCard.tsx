@@ -272,6 +272,10 @@ export function AgentCard({
   const mcpSummary = row
     ? mcpCardSummary(mcpGrants, row.id, {
       supportsMcp: providerPreset(inferAgentProvider(row.command, row.provider)).supportsMcp,
+      // T-P02-11-10: the card must reflect the channel that is actually WIRED,
+      // not the preset's "could take MCP" claim — `hive.ts` writes a server
+      // bundle only for `mcpWiredFor(provider)`.
+      provider: inferAgentProvider(row.command, row.provider),
       ptyId
     })
     : null;

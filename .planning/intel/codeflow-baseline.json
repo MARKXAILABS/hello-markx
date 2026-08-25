@@ -1,7 +1,7 @@
 {
   "label": "baseline",
   "projectRoot": "E:\\munder-difflin",
-  "capturedAt": "2026-08-24T11:31:04.331Z",
+  "capturedAt": "2026-08-24T18:51:29.139Z",
   "fileCount": 365,
   "codeFileCount": 311,
   "skipped": [],
@@ -450,7 +450,7 @@
         "folder": "root",
         "content": null,
         "functions": [],
-        "lines": 310,
+        "lines": 313,
         "layer": "note",
         "churn": 0,
         "isCode": false,
@@ -581,7 +581,7 @@
         "folder": "root",
         "content": null,
         "functions": [],
-        "lines": 331,
+        "lines": 361,
         "layer": "note",
         "churn": 0,
         "isCode": false,
@@ -1723,7 +1723,7 @@
         "folder": "root",
         "content": null,
         "functions": [],
-        "lines": 172,
+        "lines": 222,
         "layer": "note",
         "churn": 0,
         "isCode": false,
@@ -5288,14 +5288,14 @@
             "name": "emitTunnelChanged",
             "file": "src/main/index.ts",
             "line": 3978,
-            "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
+            "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint still has the\n  // phone route to expose — servable since plan 02-05, but only once\n  // `phoneArmed()` is true (`webhook.ts` `start()`'s own guard). Arm it\n  // here, the SAME mint-then-start order `phone:pairing` uses below, so\n  // this one explicit operator action (\"expose to the internet\") is\n  // self-sufficient on a fresh install: previously this deadlocked —\n  // `tunnel:start` refused with zero endpoints, and the only thing that\n  // ...",
             "isTopLevel": true,
             "type": "function"
           },
           {
             "name": "spawnRequestsDir",
             "file": "src/main/index.ts",
-            "line": 4286,
+            "line": 4299,
             "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5303,7 +5303,7 @@
           {
             "name": "archiveRequest",
             "file": "src/main/index.ts",
-            "line": 4292,
+            "line": 4305,
             "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5311,7 +5311,7 @@
           {
             "name": "workerSignaledDone",
             "file": "src/main/index.ts",
-            "line": 4318,
+            "line": 4331,
             "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5319,7 +5319,7 @@
           {
             "name": "processSpawnRequest",
             "file": "src/main/index.ts",
-            "line": 4348,
+            "line": 4361,
             "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -5327,7 +5327,7 @@
           {
             "name": "workerTokensUsed",
             "file": "src/main/index.ts",
-            "line": 4450,
+            "line": 4463,
             "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5335,7 +5335,7 @@
           {
             "name": "gcPreservedWorktrees",
             "file": "src/main/index.ts",
-            "line": 4466,
+            "line": 4479,
             "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -5343,7 +5343,7 @@
           {
             "name": "ephemeralWorkerTick",
             "file": "src/main/index.ts",
-            "line": 4507,
+            "line": 4520,
             "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -5351,7 +5351,7 @@
           {
             "name": "startEphemeralWorkerWatcher",
             "file": "src/main/index.ts",
-            "line": 4587,
+            "line": 4600,
             "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5359,7 +5359,7 @@
           {
             "name": "stopEphemeralWorkerWatcher",
             "file": "src/main/index.ts",
-            "line": 4594,
+            "line": 4607,
             "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5367,7 +5367,7 @@
           {
             "name": "healthCheckPtys",
             "file": "src/main/index.ts",
-            "line": 4681,
+            "line": 4694,
             "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5375,7 +5375,7 @@
           {
             "name": "onSystemResume",
             "file": "src/main/index.ts",
-            "line": 4712,
+            "line": 4725,
             "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -5383,19 +5383,19 @@
           {
             "name": "electronDeps",
             "file": "src/main/index.ts",
-            "line": 4753,
+            "line": 4766,
             "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
             "isTopLevel": true,
             "type": "function"
           }
         ],
-        "lines": 4968,
+        "lines": 4981,
         "layer": "utils",
         "churn": 0,
         "isCode": true,
         "dependencies": [],
         "complexity": {
-          "score": 1592,
+          "score": 1596,
           "level": "critical"
         },
         "parserProvenance": "heuristic-regex"
@@ -14902,7 +14902,7 @@
           {
             "name": "response",
             "file": "src/shared/agentProvider.ts",
-            "line": 577,
+            "line": 580,
             "code": "    // Non-interactive autonomy: -s prints only the agent's final response (clean\r\n    // stdout), --allow-all-tools never blocks on a permission prompt (env:\r\n    // COPILOT_ALLOW_ALL), --no-ask-user disables the ask_user tool so it never\r\n    // stops to ask. Gated by the floor `config.autoMode` toggle like the rest.\r\n    autoModeFlag: '-s --allow-all-tools --no-ask-user',\r\n    autoFlag: '-s --allow-all-tools --no-ask-user',\r\n    supportsModel: true,\r\n    modelFlag: '--model', // e.g. claude-sonnet-4.5 (default), gpt-5.4, or 'auto'\r\n    hiveAware: false, // no --append-system-prompt/--settings; protocol rides in via -p\r\n    initialPromptFlag: '-p', // copilot -p \"<orchestrator/worker brief>\" runs it non-interactively\r\n    recommendedOrchestratorModel: 'claude-sonnet-4.5', // Copilot's default; user may pick gpt-5.4\r\n    // Copilot supports session resume by id (`--resume=<id>`); attached only when a\r\n    // prior session id was recorded (no hook bridge captures it yet → best-effort).\r\n    resumeFlag: '--resume',\r\n    // Print mode exits per turn and there is no hook bridge to drain on idle, so a\r\n  // ...",
             "isTopLevel": false,
             "type": "method"
@@ -14910,7 +14910,7 @@
           {
             "name": "isAgentProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 612,
+            "line": 615,
             "code": "export function isAgentProvider(value: unknown): value is AgentProvider {\r\n  return (\r\n    value === 'claude' ||\r\n    value === 'codex' ||\r\n    value === 'grok' ||\r\n    value === 'kimi' ||\r\n    value === 'antigravity' ||\r\n    value === 'qwen' ||\r\n    value === 'opencode' ||\r\n    value === 'crush' ||\r\n    value === 'pi' ||\r\n    value === 'copilot' ||\r\n    value === 'custom'\r\n  );\r\n}\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14918,7 +14918,7 @@
           {
             "name": "normalizeAgentProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 628,
+            "line": 631,
             "code": "export function normalizeAgentProvider(value: unknown): AgentProvider | undefined {\r\n  return isAgentProvider(value) ? value : undefined;\r\n}\r\n\r\nexport function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14926,7 +14926,7 @@
           {
             "name": "providerPreset",
             "file": "src/shared/agentProvider.ts",
-            "line": 632,
+            "line": 635,
             "code": "export function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14934,7 +14934,7 @@
           {
             "name": "isClaudeProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 636,
+            "line": 639,
             "code": "export function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14942,7 +14942,7 @@
           {
             "name": "isHiveAwareProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 641,
+            "line": 644,
             "code": "export function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14950,7 +14950,7 @@
           {
             "name": "canReceiveInbox",
             "file": "src/shared/agentProvider.ts",
-            "line": 648,
+            "line": 651,
             "code": "export function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14958,7 +14958,7 @@
           {
             "name": "commandBinary",
             "file": "src/shared/agentProvider.ts",
-            "line": 653,
+            "line": 656,
             "code": "function commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14966,7 +14966,7 @@
           {
             "name": "inferAgentProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 661,
+            "line": 664,
             "code": "export function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  if (bin === 'agy' || bin === 'antigravity') return 'antigravity';\r\n  if (bin === 'qwen') return 'qwen';\r\n  if (bin === 'opencode') return 'opencode';\r\n  if (bin === 'crush') return 'crush';\r\n  if (bin === 'pi') return 'pi';\r\n  if (bin === 'copilot') return 'copilot';\r\n  if (bin === 'claude' || !bin) return 'claude';\r\n  return 'custom';\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14974,7 +14974,7 @@
           {
             "name": "bridgeOf",
             "file": "src/shared/agentProvider.ts",
-            "line": 684,
+            "line": 687,
             "code": "export function bridgeOf(provider: AgentProvider | undefined): BridgeDescriptor | undefined {\r\n  const preset = providerPreset(provider ?? 'claude');\r\n  if (preset.bridge) return preset.bridge;\r\n  if (preset.hookBridge) return { kind: 'hooks', shim: preset.hookBridge };\r\n  return undefined;\r\n}\r\n\r\nexport function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14982,7 +14982,7 @@
           {
             "name": "defaultCommandForProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 691,
+            "line": 694,
             "code": "export function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14990,7 +14990,7 @@
           {
             "name": "autoModeFlagForProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 697,
+            "line": 700,
             "code": "export function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -14998,7 +14998,7 @@
           {
             "name": "nonInteractiveEnvForProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 702,
+            "line": 705,
             "code": "export function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -15006,7 +15006,7 @@
           {
             "name": "commandGroupsForProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 707,
+            "line": 710,
             "code": "export function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  /** A node-free installer for this platform, when the vendor ships one. */\r\n  nativeCommand?: string;\r\n  label: string;\r\n  docsUrl?: string;\r\n}\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
@@ -15014,19 +15014,19 @@
           {
             "name": "installInfoForProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 723,
+            "line": 726,
             "code": "export function installInfoForProvider(\r\n  provider: AgentProvider,\r\n  platform: string = process.platform\r\n): ProviderInstallInfo {\r\n  const p = providerPreset(provider);\r\n  const native = p.nativeInstallCommand;\r\n  return {\r\n    command: p.installCommand,\r\n    nativeCommand: native ? (platform === 'win32' ? native.win32 : native.posix) : undefined,\r\n    label: p.label,\r\n    docsUrl: p.docsUrl\r\n  };\r\n}\r\n",
             "isTopLevel": true,
             "type": "function"
           }
         ],
-        "lines": 736,
+        "lines": 739,
         "layer": "utils",
         "churn": 0,
         "isCode": true,
         "dependencies": [],
         "complexity": {
-          "score": 96,
+          "score": 97,
           "level": "critical"
         },
         "parserProvenance": "heuristic-regex"
@@ -17728,20 +17728,20 @@
           {
             "name": "tempDir",
             "file": "test/main-hardening.test.cjs",
-            "line": 23,
+            "line": 29,
             "code": "function tempDir(t, prefix) {\r\n  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));\r\n  t.after(() => { try { rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); } catch { /* noop */ } });\r\n  return dir;\r\n}\r\n\r\nconst git = (cwd, args) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf8' });\r\n\r\n// ─── #1: a teardown of a dirty isolated worktree must NOT remove it ──────────\r\n// teardownPty now routes EVERY isolated agent (not just ephemeral workers)\r\n// through this gate before `git worktree remove --force`. `keep: true` is the\r\n// answer that saves an hour of uncommitted work when an agent's CLI crashes.\r\ntest('worktreeHasUnintegratedWork keeps a dirty worktree and releases a clean one', async (t) => {\r\n  const root = tempDir(t, 'mh-repo-');\r\n  const repo = join(root, 'repo');\r\n  // ...",
             "isTopLevel": true,
             "type": "function"
           }
         ],
-        "lines": 148,
+        "lines": 154,
         "layer": "utils",
         "churn": 0,
         "isCode": true,
         "dependencies": [],
         "complexity": {
-          "score": 9,
-          "level": "low"
+          "score": 12,
+          "level": "medium"
         },
         "parserProvenance": "heuristic-regex"
       },
@@ -18528,19 +18528,35 @@
           {
             "name": "rawOccurrences",
             "file": "test/repo-claims.test.cjs",
-            "line": 1282,
-            "code": "function rawOccurrences(rel, needle) {\n  const text = fs.readFileSync(path.join(root, rel), 'utf8');\n  return (text.match(new RegExp(needle, 'g')) || []).length;\n}\n\ntest('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo-wide (D-35/D-40)', () => {\n  let ledgerSum = 0;\n  for (const [rel, expected] of Object.entries(MARKER_LEDGER)) {\n    const full = path.join(root, rel);\n    assert.ok(\n      fs.existsSync(full) && fs.statSync(full).isFile() && fs.statSync(full).size > 0,\n      `${rel} is listed in MARKER_LEDGER but is missing or empty — deleting the bridges (or `\n      + 'deleting the file) must FAIL this clause, not satisfy it by removing every match'\n    );\n    const found = rawOccurrences(rel, 'LIVE-UNVERIFIED');\n  // ...",
+            "line": 1328,
+            "code": "function rawOccurrences(rel, needle) {\n  return (readRaw(rel).match(new RegExp(needle, 'g')) || []).length;\n}\n\n/** For every `LIVE-UNVERIFIED` occurrence in the RAW text of `rel`, the\n *  comment block it sits in — bounded by the block's own structure, never\n *  by a character count: the smallest enclosing `/* ... *\\/` (or `/**` doc)\n *  block, or, when the marker sits in `//` comments instead, the maximal\n *  contiguous run of `//` lines touching it. Two markers in the same block\n *  yield the same block text twice — attribution must not silently drop\n *  the second occurrence because its neighbour already answered. */\nfunction markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  // ...",
+            "isTopLevel": true,
+            "type": "function"
+          },
+          {
+            "name": "markerBlocks",
+            "file": "test/repo-claims.test.cjs",
+            "line": 1339,
+            "code": "function markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  let bm;\n  while ((bm = blockRe.exec(text))) blockRanges.push([bm.index, bm.index + bm[0].length]);\n\n  const lines = text.split('\\n');\n  const lineStart = [0];\n  for (const l of lines) lineStart.push(lineStart[lineStart.length - 1] + l.length + 1);\n  const lineOf = (idx) => lineStart.findIndex((s, i) => idx >= s && idx < lineStart[i + 1]);\n\n  const blocks = [];\n  const markerRe = /LIVE-UNVERIFIED/g;\n  let mm;\n  // ...",
+            "isTopLevel": true,
+            "type": "function"
+          },
+          {
+            "name": "joinedDocText",
+            "file": "test/repo-claims.test.cjs",
+            "line": 1479,
+            "code": "function joinedDocText(rel) {\n  return readRaw(rel).replace(/\\r/g, '').replace(/\\n/g, ' ').replace(/ +/g, ' ');\n}\n\nconst ONE_GATE_DOCS = ['HIVE.md', 'docs/message-queue.md', 'docs/adr/0001-one-gate-for-pty-writes.md'];\n\ntest('ADR-0001: all three one-gate copies name the drain, none still hands the title to the deleted useHive.ts effect #4 (D-02/D-12)', () => {\n  assert.ok(\n    fs.existsSync(path.join(root, 'docs/adr/0001-one-gate-for-pty-writes.md'))\n    && readRaw('docs/adr/0001-one-gate-for-pty-writes.md').length > 0,\n    'docs/adr/0001-one-gate-for-pty-writes.md is missing or empty — deleting the ADR must FAIL '\n    + 'this clause, not satisfy the negative half by removing the stale claim along with it. It '\n    + 'belongs to plan 02-03; this clause asserts over it, never edits it.'\n  );\n\n  // ...",
             "isTopLevel": true,
             "type": "function"
           }
         ],
-        "lines": 1331,
+        "lines": 1642,
         "layer": "utils",
         "churn": 0,
         "isCode": true,
         "dependencies": [],
         "complexity": {
-          "score": 360,
+          "score": 432,
           "level": "critical"
         },
         "parserProvenance": "heuristic-regex"
@@ -19248,13 +19264,13 @@
             "type": "function"
           }
         ],
-        "lines": 777,
+        "lines": 802,
         "layer": "utils",
         "churn": 0,
         "isCode": true,
         "dependencies": [],
         "complexity": {
-          "score": 64,
+          "score": 70,
           "level": "critical"
         },
         "parserProvenance": "heuristic-regex"
@@ -24222,7 +24238,7 @@
         "name": "emitTunnelChanged",
         "file": "src/main/index.ts",
         "line": 3978,
-        "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
+        "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint still has the\n  // phone route to expose — servable since plan 02-05, but only once\n  // `phoneArmed()` is true (`webhook.ts` `start()`'s own guard). Arm it\n  // here, the SAME mint-then-start order `phone:pairing` uses below, so\n  // this one explicit operator action (\"expose to the internet\") is\n  // self-sufficient on a fresh install: previously this deadlocked —\n  // `tunnel:start` refused with zero endpoints, and the only thing that\n  // ...",
         "isTopLevel": true,
         "type": "function",
         "folder": "src/main",
@@ -24231,7 +24247,7 @@
       {
         "name": "spawnRequestsDir",
         "file": "src/main/index.ts",
-        "line": 4286,
+        "line": 4299,
         "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24241,7 +24257,7 @@
       {
         "name": "archiveRequest",
         "file": "src/main/index.ts",
-        "line": 4292,
+        "line": 4305,
         "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24251,7 +24267,7 @@
       {
         "name": "workerSignaledDone",
         "file": "src/main/index.ts",
-        "line": 4318,
+        "line": 4331,
         "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24261,7 +24277,7 @@
       {
         "name": "processSpawnRequest",
         "file": "src/main/index.ts",
-        "line": 4348,
+        "line": 4361,
         "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -24271,7 +24287,7 @@
       {
         "name": "workerTokensUsed",
         "file": "src/main/index.ts",
-        "line": 4450,
+        "line": 4463,
         "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24281,7 +24297,7 @@
       {
         "name": "gcPreservedWorktrees",
         "file": "src/main/index.ts",
-        "line": 4466,
+        "line": 4479,
         "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -24291,7 +24307,7 @@
       {
         "name": "ephemeralWorkerTick",
         "file": "src/main/index.ts",
-        "line": 4507,
+        "line": 4520,
         "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -24301,7 +24317,7 @@
       {
         "name": "startEphemeralWorkerWatcher",
         "file": "src/main/index.ts",
-        "line": 4587,
+        "line": 4600,
         "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24311,7 +24327,7 @@
       {
         "name": "stopEphemeralWorkerWatcher",
         "file": "src/main/index.ts",
-        "line": 4594,
+        "line": 4607,
         "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24321,7 +24337,7 @@
       {
         "name": "healthCheckPtys",
         "file": "src/main/index.ts",
-        "line": 4681,
+        "line": 4694,
         "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24331,7 +24347,7 @@
       {
         "name": "onSystemResume",
         "file": "src/main/index.ts",
-        "line": 4712,
+        "line": 4725,
         "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -24341,7 +24357,7 @@
       {
         "name": "electronDeps",
         "file": "src/main/index.ts",
-        "line": 4753,
+        "line": 4766,
         "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32431,7 +32447,7 @@
       {
         "name": "response",
         "file": "src/shared/agentProvider.ts",
-        "line": 577,
+        "line": 580,
         "code": "    // Non-interactive autonomy: -s prints only the agent's final response (clean\r\n    // stdout), --allow-all-tools never blocks on a permission prompt (env:\r\n    // COPILOT_ALLOW_ALL), --no-ask-user disables the ask_user tool so it never\r\n    // stops to ask. Gated by the floor `config.autoMode` toggle like the rest.\r\n    autoModeFlag: '-s --allow-all-tools --no-ask-user',\r\n    autoFlag: '-s --allow-all-tools --no-ask-user',\r\n    supportsModel: true,\r\n    modelFlag: '--model', // e.g. claude-sonnet-4.5 (default), gpt-5.4, or 'auto'\r\n    hiveAware: false, // no --append-system-prompt/--settings; protocol rides in via -p\r\n    initialPromptFlag: '-p', // copilot -p \"<orchestrator/worker brief>\" runs it non-interactively\r\n    recommendedOrchestratorModel: 'claude-sonnet-4.5', // Copilot's default; user may pick gpt-5.4\r\n    // Copilot supports session resume by id (`--resume=<id>`); attached only when a\r\n    // prior session id was recorded (no hook bridge captures it yet → best-effort).\r\n    resumeFlag: '--resume',\r\n    // Print mode exits per turn and there is no hook bridge to drain on idle, so a\r\n  // ...",
         "isTopLevel": false,
         "type": "method",
@@ -32441,7 +32457,7 @@
       {
         "name": "isAgentProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 612,
+        "line": 615,
         "code": "export function isAgentProvider(value: unknown): value is AgentProvider {\r\n  return (\r\n    value === 'claude' ||\r\n    value === 'codex' ||\r\n    value === 'grok' ||\r\n    value === 'kimi' ||\r\n    value === 'antigravity' ||\r\n    value === 'qwen' ||\r\n    value === 'opencode' ||\r\n    value === 'crush' ||\r\n    value === 'pi' ||\r\n    value === 'copilot' ||\r\n    value === 'custom'\r\n  );\r\n}\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32451,7 +32467,7 @@
       {
         "name": "normalizeAgentProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 628,
+        "line": 631,
         "code": "export function normalizeAgentProvider(value: unknown): AgentProvider | undefined {\r\n  return isAgentProvider(value) ? value : undefined;\r\n}\r\n\r\nexport function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32461,7 +32477,7 @@
       {
         "name": "providerPreset",
         "file": "src/shared/agentProvider.ts",
-        "line": 632,
+        "line": 635,
         "code": "export function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32471,7 +32487,7 @@
       {
         "name": "isClaudeProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 636,
+        "line": 639,
         "code": "export function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32481,7 +32497,7 @@
       {
         "name": "isHiveAwareProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 641,
+        "line": 644,
         "code": "export function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32491,7 +32507,7 @@
       {
         "name": "canReceiveInbox",
         "file": "src/shared/agentProvider.ts",
-        "line": 648,
+        "line": 651,
         "code": "export function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32501,7 +32517,7 @@
       {
         "name": "commandBinary",
         "file": "src/shared/agentProvider.ts",
-        "line": 653,
+        "line": 656,
         "code": "function commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32511,7 +32527,7 @@
       {
         "name": "inferAgentProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 661,
+        "line": 664,
         "code": "export function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  if (bin === 'agy' || bin === 'antigravity') return 'antigravity';\r\n  if (bin === 'qwen') return 'qwen';\r\n  if (bin === 'opencode') return 'opencode';\r\n  if (bin === 'crush') return 'crush';\r\n  if (bin === 'pi') return 'pi';\r\n  if (bin === 'copilot') return 'copilot';\r\n  if (bin === 'claude' || !bin) return 'claude';\r\n  return 'custom';\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32521,7 +32537,7 @@
       {
         "name": "bridgeOf",
         "file": "src/shared/agentProvider.ts",
-        "line": 684,
+        "line": 687,
         "code": "export function bridgeOf(provider: AgentProvider | undefined): BridgeDescriptor | undefined {\r\n  const preset = providerPreset(provider ?? 'claude');\r\n  if (preset.bridge) return preset.bridge;\r\n  if (preset.hookBridge) return { kind: 'hooks', shim: preset.hookBridge };\r\n  return undefined;\r\n}\r\n\r\nexport function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32531,7 +32547,7 @@
       {
         "name": "defaultCommandForProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 691,
+        "line": 694,
         "code": "export function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32541,7 +32557,7 @@
       {
         "name": "autoModeFlagForProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 697,
+        "line": 700,
         "code": "export function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32551,7 +32567,7 @@
       {
         "name": "nonInteractiveEnvForProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 702,
+        "line": 705,
         "code": "export function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32561,7 +32577,7 @@
       {
         "name": "commandGroupsForProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 707,
+        "line": 710,
         "code": "export function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  /** A node-free installer for this platform, when the vendor ships one. */\r\n  nativeCommand?: string;\r\n  label: string;\r\n  docsUrl?: string;\r\n}\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -32571,7 +32587,7 @@
       {
         "name": "installInfoForProvider",
         "file": "src/shared/agentProvider.ts",
-        "line": 723,
+        "line": 726,
         "code": "export function installInfoForProvider(\r\n  provider: AgentProvider,\r\n  platform: string = process.platform\r\n): ProviderInstallInfo {\r\n  const p = providerPreset(provider);\r\n  const native = p.nativeInstallCommand;\r\n  return {\r\n    command: p.installCommand,\r\n    nativeCommand: native ? (platform === 'win32' ? native.win32 : native.posix) : undefined,\r\n    label: p.label,\r\n    docsUrl: p.docsUrl\r\n  };\r\n}\r\n",
         "isTopLevel": true,
         "type": "function",
@@ -34621,7 +34637,7 @@
       {
         "name": "tempDir",
         "file": "test/main-hardening.test.cjs",
-        "line": 23,
+        "line": 29,
         "code": "function tempDir(t, prefix) {\r\n  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));\r\n  t.after(() => { try { rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); } catch { /* noop */ } });\r\n  return dir;\r\n}\r\n\r\nconst git = (cwd, args) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf8' });\r\n\r\n// ─── #1: a teardown of a dirty isolated worktree must NOT remove it ──────────\r\n// teardownPty now routes EVERY isolated agent (not just ephemeral workers)\r\n// through this gate before `git worktree remove --force`. `keep: true` is the\r\n// answer that saves an hour of uncommitted work when an agent's CLI crashes.\r\ntest('worktreeHasUnintegratedWork keeps a dirty worktree and releases a clean one', async (t) => {\r\n  const root = tempDir(t, 'mh-repo-');\r\n  const repo = join(root, 'repo');\r\n  // ...",
         "isTopLevel": true,
         "type": "function",
@@ -35201,8 +35217,28 @@
       {
         "name": "rawOccurrences",
         "file": "test/repo-claims.test.cjs",
-        "line": 1282,
-        "code": "function rawOccurrences(rel, needle) {\n  const text = fs.readFileSync(path.join(root, rel), 'utf8');\n  return (text.match(new RegExp(needle, 'g')) || []).length;\n}\n\ntest('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo-wide (D-35/D-40)', () => {\n  let ledgerSum = 0;\n  for (const [rel, expected] of Object.entries(MARKER_LEDGER)) {\n    const full = path.join(root, rel);\n    assert.ok(\n      fs.existsSync(full) && fs.statSync(full).isFile() && fs.statSync(full).size > 0,\n      `${rel} is listed in MARKER_LEDGER but is missing or empty — deleting the bridges (or `\n      + 'deleting the file) must FAIL this clause, not satisfy it by removing every match'\n    );\n    const found = rawOccurrences(rel, 'LIVE-UNVERIFIED');\n  // ...",
+        "line": 1328,
+        "code": "function rawOccurrences(rel, needle) {\n  return (readRaw(rel).match(new RegExp(needle, 'g')) || []).length;\n}\n\n/** For every `LIVE-UNVERIFIED` occurrence in the RAW text of `rel`, the\n *  comment block it sits in — bounded by the block's own structure, never\n *  by a character count: the smallest enclosing `/* ... *\\/` (or `/**` doc)\n *  block, or, when the marker sits in `//` comments instead, the maximal\n *  contiguous run of `//` lines touching it. Two markers in the same block\n *  yield the same block text twice — attribution must not silently drop\n *  the second occurrence because its neighbour already answered. */\nfunction markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  // ...",
+        "isTopLevel": true,
+        "type": "function",
+        "folder": "test",
+        "layer": "utils"
+      },
+      {
+        "name": "markerBlocks",
+        "file": "test/repo-claims.test.cjs",
+        "line": 1339,
+        "code": "function markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  let bm;\n  while ((bm = blockRe.exec(text))) blockRanges.push([bm.index, bm.index + bm[0].length]);\n\n  const lines = text.split('\\n');\n  const lineStart = [0];\n  for (const l of lines) lineStart.push(lineStart[lineStart.length - 1] + l.length + 1);\n  const lineOf = (idx) => lineStart.findIndex((s, i) => idx >= s && idx < lineStart[i + 1]);\n\n  const blocks = [];\n  const markerRe = /LIVE-UNVERIFIED/g;\n  let mm;\n  // ...",
+        "isTopLevel": true,
+        "type": "function",
+        "folder": "test",
+        "layer": "utils"
+      },
+      {
+        "name": "joinedDocText",
+        "file": "test/repo-claims.test.cjs",
+        "line": 1479,
+        "code": "function joinedDocText(rel) {\n  return readRaw(rel).replace(/\\r/g, '').replace(/\\n/g, ' ').replace(/ +/g, ' ');\n}\n\nconst ONE_GATE_DOCS = ['HIVE.md', 'docs/message-queue.md', 'docs/adr/0001-one-gate-for-pty-writes.md'];\n\ntest('ADR-0001: all three one-gate copies name the drain, none still hands the title to the deleted useHive.ts effect #4 (D-02/D-12)', () => {\n  assert.ok(\n    fs.existsSync(path.join(root, 'docs/adr/0001-one-gate-for-pty-writes.md'))\n    && readRaw('docs/adr/0001-one-gate-for-pty-writes.md').length > 0,\n    'docs/adr/0001-one-gate-for-pty-writes.md is missing or empty — deleting the ADR must FAIL '\n    + 'this clause, not satisfy the negative half by removing the stale claim along with it. It '\n    + 'belongs to plan 02-03; this clause asserts over it, never edits it.'\n  );\n\n  // ...",
         "isTopLevel": true,
         "type": "function",
         "folder": "test",
@@ -36331,6 +36367,12 @@
         "count": 1
       },
       {
+        "source": "src/main/delivery.ts",
+        "target": "HIVE.md",
+        "fn": "drainQueue",
+        "count": 1
+      },
+      {
         "source": "src/renderer/src/components/SettingsModal.tsx",
         "target": "HIVE.md",
         "fn": "status",
@@ -37033,15 +37075,21 @@
         "count": 1
       },
       {
-        "source": "src/main/config.ts",
-        "target": "SECURITY.md",
-        "fn": "tunnel",
-        "count": 1
-      },
-      {
         "source": "src/main/kg-core.cjs",
         "target": "SECURITY.md",
         "fn": "list",
+        "count": 1
+      },
+      {
+        "source": "resources/phone/index.html",
+        "target": "SECURITY.md",
+        "fn": "boot",
+        "count": 1
+      },
+      {
+        "source": "test/webhook-endpoints.test.cjs",
+        "target": "SECURITY.md",
+        "fn": "endpoints",
         "count": 1
       },
       {
@@ -37054,7 +37102,7 @@
         "source": "src/renderer/src/freeflow/recorder.ts",
         "target": "SECURITY.md",
         "fn": "stop",
-        "count": 2
+        "count": 3
       },
       {
         "source": "src/shared/codexRemote.ts",
@@ -40306,7 +40354,7 @@
         "source": "resources/phone/index.html",
         "target": "src/main/index.ts",
         "fn": "if",
-        "count": 549
+        "count": 550
       },
       {
         "source": "src/main/hiveTemplates.ts",
@@ -40330,7 +40378,7 @@
         "source": "src/main/slack.ts",
         "target": "src/main/index.ts",
         "fn": "start",
-        "count": 21
+        "count": 22
       },
       {
         "source": "src/main/accountPool.ts",
@@ -49456,7 +49504,7 @@
         "source": "src/main/telemetry.ts",
         "target": "src/shared/agentProvider.ts",
         "fn": "session",
-        "count": 1
+        "count": 2
       },
       {
         "source": "src/main/hiveProvisioning.ts",
@@ -52897,6 +52945,18 @@
         "count": 4
       },
       {
+        "source": "src/main/index.ts",
+        "target": "test/main-hardening.test.cjs",
+        "fn": "initFileLogging",
+        "count": 1
+      },
+      {
+        "source": "src/main/floor/boot.ts",
+        "target": "test/main-hardening.test.cjs",
+        "fn": "bootFloor",
+        "count": 1
+      },
+      {
         "source": "test/memory-hygiene.test.cjs",
         "target": "test/main-hardening.test.cjs",
         "fn": "tmpdir",
@@ -54448,13 +54508,13 @@
         "source": "test/agent-provider.test.cjs",
         "target": "test/repo-claims.test.cjs",
         "fn": "test",
-        "count": 59
+        "count": 82
       },
       {
         "source": "src/shared/codexRemote.ts",
         "target": "test/repo-claims.test.cjs",
         "fn": "it",
-        "count": 5
+        "count": 6
       },
       {
         "source": "test/delivery-main.test.cjs",
@@ -54496,13 +54556,13 @@
         "source": "test/capability-surface.test.cjs",
         "target": "test/repo-claims.test.cjs",
         "fn": "sourceFiles",
-        "count": 10
+        "count": 15
       },
       {
         "source": "resources/phone/index.html",
         "target": "test/repo-claims.test.cjs",
         "fn": "if",
-        "count": 42
+        "count": 46
       },
       {
         "source": "src/main/hiveTemplates.ts",
@@ -54532,13 +54592,13 @@
         "source": "src/main/hiveTemplates.ts",
         "target": "test/repo-claims.test.cjs",
         "fn": "ok",
-        "count": 42
+        "count": 56
       },
       {
         "source": "src/main/slack.ts",
         "target": "test/repo-claims.test.cjs",
         "fn": "start",
-        "count": 1
+        "count": 2
       },
       {
         "source": "src/renderer/src/components/AskMeTab.tsx",
@@ -54571,6 +54631,18 @@
         "count": 1
       },
       {
+        "source": "src/renderer/src/freeflow/recorder.ts",
+        "target": "test/repo-claims.test.cjs",
+        "fn": "stop",
+        "count": 1
+      },
+      {
+        "source": "src/renderer/src/components/AddAgentModal.tsx",
+        "target": "test/repo-claims.test.cjs",
+        "fn": "engine",
+        "count": 15
+      },
+      {
         "source": "test/db-fts.test.cjs",
         "target": "test/repo-claims.test.cjs",
         "fn": "table",
@@ -54598,7 +54670,7 @@
         "source": "test/tunnel.test.cjs",
         "target": "test/repo-claims.test.cjs",
         "fn": "stripped",
-        "count": 3
+        "count": 6
       },
       {
         "source": "src/renderer/src/components/AskMeTab.tsx",
@@ -54616,7 +54688,7 @@
         "source": "src/renderer/src/scene/office/portraitArt.ts",
         "target": "test/repo-claims.test.cjs",
         "fn": "set",
-        "count": 3
+        "count": 4
       },
       {
         "source": "src/renderer/src/components/FullscreenTerminal.tsx",
@@ -54647,6 +54719,24 @@
         "target": "test/repo-claims.test.cjs",
         "fn": "shutdown",
         "count": 1
+      },
+      {
+        "source": "tools/mapgen/build_map.py",
+        "target": "test/repo-claims.test.cjs",
+        "fn": "idx",
+        "count": 1
+      },
+      {
+        "source": "src/main/delivery.ts",
+        "target": "test/repo-claims.test.cjs",
+        "fn": "drainQueue",
+        "count": 2
+      },
+      {
+        "source": "src/main/procKill.ts",
+        "target": "test/repo-claims.test.cjs",
+        "fn": "hardKillTree",
+        "count": 2
       },
       {
         "source": "test/agent-provider.test.cjs",
@@ -55660,13 +55750,13 @@
         "source": "src/main/slack.ts",
         "target": "test/webhook-endpoints.test.cjs",
         "fn": "start",
-        "count": 7
+        "count": 14
       },
       {
         "source": "test/agent-provider.test.cjs",
         "target": "test/webhook-endpoints.test.cjs",
         "fn": "test",
-        "count": 39
+        "count": 41
       },
       {
         "source": "test/load-ts.cjs",
@@ -55750,6 +55840,12 @@
         "source": "src/renderer/src/freeflow/recorder.ts",
         "target": "test/webhook-endpoints.test.cjs",
         "fn": "stop",
+        "count": 3
+      },
+      {
+        "source": "src/main/index.ts",
+        "target": "test/webhook-endpoints.test.cjs",
+        "fn": "enabledWebhookEndpoints",
         "count": 1
       },
       {
@@ -56902,7 +56998,7 @@
       },
       "if": {
         "internal": 40,
-        "external": 5063,
+        "external": 5068,
         "callers": [
           {
             "file": "e2e/smoke.spec.ts",
@@ -57102,7 +57198,7 @@
           {
             "file": "src/main/index.ts",
             "name": "index.ts",
-            "count": 549
+            "count": 550
           },
           {
             "file": "src/main/integrationBroker.ts",
@@ -58067,7 +58163,7 @@
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 42
+            "count": 46
           },
           {
             "file": "test/slack.test.cjs",
@@ -58160,7 +58256,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 5103
+        "count": 5108
       },
       "wireEvents": {
         "internal": 1,
@@ -58673,8 +58769,13 @@
       },
       "boot": {
         "internal": 1,
-        "external": 23,
+        "external": 24,
         "callers": [
+          {
+            "file": "SECURITY.md",
+            "name": "SECURITY.md",
+            "count": 1
+          },
           {
             "file": "src/main/analytics.ts",
             "name": "analytics.ts",
@@ -58726,7 +58827,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 24
+        "count": 25
       },
       "build": {
         "internal": 1,
@@ -61196,16 +61297,11 @@
       },
       "tunnel": {
         "internal": 1,
-        "external": 17,
+        "external": 16,
         "callers": [
           {
             "file": "scripts/tunnel-live-check.cjs",
             "name": "tunnel-live-check.cjs",
-            "count": 1
-          },
-          {
-            "file": "SECURITY.md",
-            "name": "SECURITY.md",
             "count": 1
           },
           {
@@ -61259,7 +61355,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 18
+        "count": 17
       },
       "configPath": {
         "internal": 4,
@@ -62026,8 +62122,19 @@
       },
       "drainQueue": {
         "internal": 2,
-        "external": 0,
-        "callers": [],
+        "external": 3,
+        "callers": [
+          {
+            "file": "HIVE.md",
+            "name": "HIVE.md",
+            "count": 1
+          },
+          {
+            "file": "test/repo-claims.test.cjs",
+            "name": "repo-claims.test.cjs",
+            "count": 2
+          }
+        ],
         "file": "src/main/delivery.ts",
         "folder": "src/main",
         "line": 588,
@@ -62038,7 +62145,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 2
+        "count": 5
       },
       "deliverQueued": {
         "internal": 2,
@@ -63172,7 +63279,7 @@
       },
       "bootFloor": {
         "internal": 5,
-        "external": 34,
+        "external": 35,
         "callers": [
           {
             "file": "src/main/index.ts",
@@ -63205,6 +63312,11 @@
             "count": 1
           },
           {
+            "file": "test/main-hardening.test.cjs",
+            "name": "main-hardening.test.cjs",
+            "count": 1
+          },
+          {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
             "count": 3
@@ -63225,7 +63337,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 39
+        "count": 40
       },
       "startHiveServices": {
         "internal": 1,
@@ -66486,7 +66598,7 @@
       },
       "ok": {
         "internal": 2,
-        "external": 589,
+        "external": 603,
         "callers": [
           {
             "file": "scripts/phone-curl-check.cjs",
@@ -66776,7 +66888,7 @@
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 42
+            "count": 56
           },
           {
             "file": "test/roster.test.cjs",
@@ -66859,7 +66971,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 591
+        "count": 605
       },
       "read": {
         "internal": 3,
@@ -68070,8 +68182,14 @@
       },
       "initFileLogging": {
         "internal": 2,
-        "external": 0,
-        "callers": [],
+        "external": 1,
+        "callers": [
+          {
+            "file": "test/main-hardening.test.cjs",
+            "name": "main-hardening.test.cjs",
+            "count": 1
+          }
+        ],
         "file": "src/main/index.ts",
         "folder": "src/main",
         "line": 178,
@@ -68082,7 +68200,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 2
+        "count": 3
       },
       "runCodexDaemonCommand": {
         "internal": 2,
@@ -68547,9 +68665,15 @@
         "count": 6
       },
       "enabledWebhookEndpoints": {
-        "internal": 6,
-        "external": 0,
-        "callers": [],
+        "internal": 8,
+        "external": 1,
+        "callers": [
+          {
+            "file": "test/webhook-endpoints.test.cjs",
+            "name": "webhook-endpoints.test.cjs",
+            "count": 1
+          }
+        ],
         "file": "src/main/index.ts",
         "folder": "src/main",
         "line": 971,
@@ -68560,7 +68684,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 6
+        "count": 9
       },
       "hashWebhookToken": {
         "internal": 4,
@@ -68739,7 +68863,7 @@
         "count": 1
       },
       "ensureWebhookServerInstance": {
-        "internal": 4,
+        "internal": 5,
         "external": 0,
         "callers": [],
         "file": "src/main/index.ts",
@@ -68752,7 +68876,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 4
+        "count": 5
       },
       "startWebhookServer": {
         "internal": 5,
@@ -69205,7 +69329,7 @@
         "file": "src/main/index.ts",
         "folder": "src/main",
         "line": 3978,
-        "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
+        "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint still has the\n  // phone route to expose — servable since plan 02-05, but only once\n  // `phoneArmed()` is true (`webhook.ts` `start()`'s own guard). Arm it\n  // here, the SAME mint-then-start order `phone:pairing` uses below, so\n  // this one explicit operator action (\"expose to the internet\") is\n  // self-sufficient on a fresh install: previously this deadlocked —\n  // `tunnel:start` refused with zero endpoints, and the only thing that\n  // ...",
         "isTopLevel": true,
         "isExported": false,
         "isClassMethod": false,
@@ -69220,7 +69344,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4286,
+        "line": 4299,
         "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69236,7 +69360,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4292,
+        "line": 4305,
         "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69252,7 +69376,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4318,
+        "line": 4331,
         "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69268,7 +69392,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4348,
+        "line": 4361,
         "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
         "isTopLevel": false,
         "isExported": false,
@@ -69284,7 +69408,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4450,
+        "line": 4463,
         "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69300,7 +69424,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4466,
+        "line": 4479,
         "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
         "isTopLevel": false,
         "isExported": false,
@@ -69316,7 +69440,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4507,
+        "line": 4520,
         "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
         "isTopLevel": false,
         "isExported": false,
@@ -69332,7 +69456,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4587,
+        "line": 4600,
         "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69348,7 +69472,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4594,
+        "line": 4607,
         "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69364,7 +69488,7 @@
         "callers": [],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4681,
+        "line": 4694,
         "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69386,7 +69510,7 @@
         ],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4712,
+        "line": 4725,
         "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -69408,7 +69532,7 @@
         ],
         "file": "src/main/index.ts",
         "folder": "src/main",
-        "line": 4753,
+        "line": 4766,
         "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -71302,7 +71426,7 @@
       },
       "hardKillTree": {
         "internal": 1,
-        "external": 11,
+        "external": 13,
         "callers": [
           {
             "file": "src/main/slack.ts",
@@ -71323,6 +71447,11 @@
             "file": "test/proc-kill.test.cjs",
             "name": "proc-kill.test.cjs",
             "count": 4
+          },
+          {
+            "file": "test/repo-claims.test.cjs",
+            "name": "repo-claims.test.cjs",
+            "count": 2
           }
         ],
         "file": "src/main/procKill.ts",
@@ -71335,7 +71464,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 12
+        "count": 14
       },
       "ensureKilled": {
         "internal": 0,
@@ -73775,7 +73904,7 @@
       },
       "start": {
         "internal": 4,
-        "external": 132,
+        "external": 141,
         "callers": [
           {
             "file": "resources/skills/last30Days/SKILL.md",
@@ -73890,7 +74019,7 @@
           {
             "file": "src/main/index.ts",
             "name": "index.ts",
-            "count": 21
+            "count": 22
           },
           {
             "file": "src/main/integrationBroker.ts",
@@ -74050,7 +74179,7 @@
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 1
+            "count": 2
           },
           {
             "file": "test/slack.test.cjs",
@@ -74065,7 +74194,7 @@
           {
             "file": "test/webhook-endpoints.test.cjs",
             "name": "webhook-endpoints.test.cjs",
-            "count": 7
+            "count": 14
           },
           {
             "file": "tools/make-logo.cjs",
@@ -74083,7 +74212,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 136
+        "count": 145
       },
       "startTunnel": {
         "internal": 2,
@@ -74412,7 +74541,7 @@
       },
       "session": {
         "internal": 4,
-        "external": 37,
+        "external": 38,
         "callers": [
           {
             "file": "HIVE.md",
@@ -74512,7 +74641,7 @@
           {
             "file": "src/shared/agentProvider.ts",
             "name": "agentProvider.ts",
-            "count": 1
+            "count": 2
           },
           {
             "file": "src/shared/claudeCommands.ts",
@@ -74535,7 +74664,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 41
+        "count": 42
       },
       "pushSpan": {
         "internal": 2,
@@ -76165,7 +76294,7 @@
       },
       "engine": {
         "internal": 2,
-        "external": 25,
+        "external": 40,
         "callers": [
           {
             "file": "src/main/hive.ts",
@@ -76211,6 +76340,11 @@
             "file": "test/engine-parity.test.cjs",
             "name": "engine-parity.test.cjs",
             "count": 1
+          },
+          {
+            "file": "test/repo-claims.test.cjs",
+            "name": "repo-claims.test.cjs",
+            "count": 15
           }
         ],
         "file": "src/renderer/src/components/AddAgentModal.tsx",
@@ -76223,7 +76357,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 27
+        "count": 42
       },
       "basename": {
         "internal": 3,
@@ -83121,7 +83255,7 @@
       },
       "stop": {
         "internal": 6,
-        "external": 103,
+        "external": 107,
         "callers": [
           {
             "file": "CHANGELOG.md",
@@ -83141,7 +83275,7 @@
           {
             "file": "SECURITY.md",
             "name": "SECURITY.md",
-            "count": 2
+            "count": 3
           },
           {
             "file": "src/main/config.ts",
@@ -83264,6 +83398,11 @@
             "count": 1
           },
           {
+            "file": "test/repo-claims.test.cjs",
+            "name": "repo-claims.test.cjs",
+            "count": 1
+          },
+          {
             "file": "test/slack.test.cjs",
             "name": "slack.test.cjs",
             "count": 8
@@ -83281,7 +83420,7 @@
           {
             "file": "test/webhook-endpoints.test.cjs",
             "name": "webhook-endpoints.test.cjs",
-            "count": 1
+            "count": 3
           }
         ],
         "file": "src/renderer/src/freeflow/recorder.ts",
@@ -83294,7 +83433,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 109
+        "count": 113
       },
       "toggle": {
         "internal": 1,
@@ -86100,7 +86239,7 @@
       },
       "set": {
         "internal": 257,
-        "external": 204,
+        "external": 205,
         "callers": [
           {
             "file": "eslint.config.js",
@@ -86400,7 +86539,7 @@
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 3
+            "count": 4
           },
           {
             "file": "test/runtime-forget.test.cjs",
@@ -86443,7 +86582,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 461
+        "count": 462
       },
       "alphaAt": {
         "internal": 9,
@@ -88401,7 +88540,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 612,
+        "line": 615,
         "code": "export function isAgentProvider(value: unknown): value is AgentProvider {\r\n  return (\r\n    value === 'claude' ||\r\n    value === 'codex' ||\r\n    value === 'grok' ||\r\n    value === 'kimi' ||\r\n    value === 'antigravity' ||\r\n    value === 'qwen' ||\r\n    value === 'opencode' ||\r\n    value === 'crush' ||\r\n    value === 'pi' ||\r\n    value === 'copilot' ||\r\n    value === 'custom'\r\n  );\r\n}\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88417,7 +88556,7 @@
         "callers": [],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 628,
+        "line": 631,
         "code": "export function normalizeAgentProvider(value: unknown): AgentProvider | undefined {\r\n  return isAgentProvider(value) ? value : undefined;\r\n}\r\n\r\nexport function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88489,7 +88628,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 632,
+        "line": 635,
         "code": "export function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88546,7 +88685,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 636,
+        "line": 639,
         "code": "export function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88568,7 +88707,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 641,
+        "line": 644,
         "code": "export function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88620,7 +88759,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 648,
+        "line": 651,
         "code": "export function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88636,7 +88775,7 @@
         "callers": [],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 653,
+        "line": 656,
         "code": "function commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88728,7 +88867,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 661,
+        "line": 664,
         "code": "export function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  if (bin === 'agy' || bin === 'antigravity') return 'antigravity';\r\n  if (bin === 'qwen') return 'qwen';\r\n  if (bin === 'opencode') return 'opencode';\r\n  if (bin === 'crush') return 'crush';\r\n  if (bin === 'pi') return 'pi';\r\n  if (bin === 'copilot') return 'copilot';\r\n  if (bin === 'claude' || !bin) return 'claude';\r\n  return 'custom';\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88760,7 +88899,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 684,
+        "line": 687,
         "code": "export function bridgeOf(provider: AgentProvider | undefined): BridgeDescriptor | undefined {\r\n  const preset = providerPreset(provider ?? 'claude');\r\n  if (preset.bridge) return preset.bridge;\r\n  if (preset.hookBridge) return { kind: 'hooks', shim: preset.hookBridge };\r\n  return undefined;\r\n}\r\n\r\nexport function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88782,7 +88921,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 691,
+        "line": 694,
         "code": "export function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88824,7 +88963,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 697,
+        "line": 700,
         "code": "export function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88846,7 +88985,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 702,
+        "line": 705,
         "code": "export function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88862,7 +89001,7 @@
         "callers": [],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 707,
+        "line": 710,
         "code": "export function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  /** A node-free installer for this platform, when the vendor ships one. */\r\n  nativeCommand?: string;\r\n  label: string;\r\n  docsUrl?: string;\r\n}\r\n  // ...",
         "isTopLevel": true,
         "isExported": false,
@@ -88894,7 +89033,7 @@
         ],
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 723,
+        "line": 726,
         "code": "export function installInfoForProvider(\r\n  provider: AgentProvider,\r\n  platform: string = process.platform\r\n): ProviderInstallInfo {\r\n  const p = providerPreset(provider);\r\n  const native = p.nativeInstallCommand;\r\n  return {\r\n    command: p.installCommand,\r\n    nativeCommand: native ? (platform === 'win32' ? native.win32 : native.posix) : undefined,\r\n    label: p.label,\r\n    docsUrl: p.docsUrl\r\n  };\r\n}\r\n",
         "isTopLevel": true,
         "isExported": false,
@@ -89788,7 +89927,7 @@
       },
       "it": {
         "internal": 1,
-        "external": 66,
+        "external": 67,
         "callers": [
           {
             "file": "HIVE.md",
@@ -90003,7 +90142,7 @@
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 5
+            "count": 6
           }
         ],
         "file": "src/shared/codexRemote.ts",
@@ -90016,7 +90155,7 @@
         "type": "method",
         "decorators": null,
         "className": null,
-        "count": 67
+        "count": 68
       },
       "codexRemoteAliasPath": {
         "internal": 0,
@@ -91902,7 +92041,7 @@
       },
       "test": {
         "internal": 7,
-        "external": 1153,
+        "external": 1178,
         "callers": [
           {
             "file": ".github/workflows/e2e.yml",
@@ -92422,7 +92561,7 @@
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 59
+            "count": 82
           },
           {
             "file": "test/roster.test.cjs",
@@ -92502,7 +92641,7 @@
           {
             "file": "test/webhook-endpoints.test.cjs",
             "name": "webhook-endpoints.test.cjs",
-            "count": 39
+            "count": 41
           },
           {
             "file": "test/win-cmd-shim.test.cjs",
@@ -92520,7 +92659,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 1160
+        "count": 1185
       },
       "isSupported": {
         "internal": 2,
@@ -92879,12 +93018,12 @@
       },
       "sourceFiles": {
         "internal": 3,
-        "external": 10,
+        "external": 15,
         "callers": [
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 10
+            "count": 15
           }
         ],
         "file": "test/capability-surface.test.cjs",
@@ -92897,7 +93036,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 13
+        "count": 18
       },
       "scanCalls": {
         "internal": 6,
@@ -95678,7 +95817,7 @@
         "count": 5
       },
       "joinedSrcText": {
-        "internal": 2,
+        "internal": 3,
         "external": 0,
         "callers": [],
         "file": "test/repo-claims.test.cjs",
@@ -95691,7 +95830,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 2
+        "count": 3
       },
       "site": {
         "internal": 1,
@@ -95737,8 +95876,8 @@
         "callers": [],
         "file": "test/repo-claims.test.cjs",
         "folder": "test",
-        "line": 1282,
-        "code": "function rawOccurrences(rel, needle) {\n  const text = fs.readFileSync(path.join(root, rel), 'utf8');\n  return (text.match(new RegExp(needle, 'g')) || []).length;\n}\n\ntest('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo-wide (D-35/D-40)', () => {\n  let ledgerSum = 0;\n  for (const [rel, expected] of Object.entries(MARKER_LEDGER)) {\n    const full = path.join(root, rel);\n    assert.ok(\n      fs.existsSync(full) && fs.statSync(full).isFile() && fs.statSync(full).size > 0,\n      `${rel} is listed in MARKER_LEDGER but is missing or empty — deleting the bridges (or `\n      + 'deleting the file) must FAIL this clause, not satisfy it by removing every match'\n    );\n    const found = rawOccurrences(rel, 'LIVE-UNVERIFIED');\n  // ...",
+        "line": 1328,
+        "code": "function rawOccurrences(rel, needle) {\n  return (readRaw(rel).match(new RegExp(needle, 'g')) || []).length;\n}\n\n/** For every `LIVE-UNVERIFIED` occurrence in the RAW text of `rel`, the\n *  comment block it sits in — bounded by the block's own structure, never\n *  by a character count: the smallest enclosing `/* ... *\\/` (or `/**` doc)\n *  block, or, when the marker sits in `//` comments instead, the maximal\n *  contiguous run of `//` lines touching it. Two markers in the same block\n *  yield the same block text twice — attribution must not silently drop\n *  the second occurrence because its neighbour already answered. */\nfunction markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  // ...",
         "isTopLevel": true,
         "isExported": false,
         "isClassMethod": false,
@@ -95746,6 +95885,38 @@
         "decorators": null,
         "className": null,
         "count": 4
+      },
+      "markerBlocks": {
+        "internal": 1,
+        "external": 0,
+        "callers": [],
+        "file": "test/repo-claims.test.cjs",
+        "folder": "test",
+        "line": 1339,
+        "code": "function markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  let bm;\n  while ((bm = blockRe.exec(text))) blockRanges.push([bm.index, bm.index + bm[0].length]);\n\n  const lines = text.split('\\n');\n  const lineStart = [0];\n  for (const l of lines) lineStart.push(lineStart[lineStart.length - 1] + l.length + 1);\n  const lineOf = (idx) => lineStart.findIndex((s, i) => idx >= s && idx < lineStart[i + 1]);\n\n  const blocks = [];\n  const markerRe = /LIVE-UNVERIFIED/g;\n  let mm;\n  // ...",
+        "isTopLevel": true,
+        "isExported": false,
+        "isClassMethod": false,
+        "type": "function",
+        "decorators": null,
+        "className": null,
+        "count": 1
+      },
+      "joinedDocText": {
+        "internal": 2,
+        "external": 0,
+        "callers": [],
+        "file": "test/repo-claims.test.cjs",
+        "folder": "test",
+        "line": 1479,
+        "code": "function joinedDocText(rel) {\n  return readRaw(rel).replace(/\\r/g, '').replace(/\\n/g, ' ').replace(/ +/g, ' ');\n}\n\nconst ONE_GATE_DOCS = ['HIVE.md', 'docs/message-queue.md', 'docs/adr/0001-one-gate-for-pty-writes.md'];\n\ntest('ADR-0001: all three one-gate copies name the drain, none still hands the title to the deleted useHive.ts effect #4 (D-02/D-12)', () => {\n  assert.ok(\n    fs.existsSync(path.join(root, 'docs/adr/0001-one-gate-for-pty-writes.md'))\n    && readRaw('docs/adr/0001-one-gate-for-pty-writes.md').length > 0,\n    'docs/adr/0001-one-gate-for-pty-writes.md is missing or empty — deleting the ADR must FAIL '\n    + 'this clause, not satisfy the negative half by removing the stale claim along with it. It '\n    + 'belongs to plan 02-03; this clause asserts over it, never edits it.'\n  );\n\n  // ...",
+        "isTopLevel": true,
+        "isExported": false,
+        "isClassMethod": false,
+        "type": "function",
+        "decorators": null,
+        "className": null,
+        "count": 2
       },
       "storeAt": {
         "internal": 12,
@@ -96287,12 +96458,12 @@
       },
       "stripped": {
         "internal": 11,
-        "external": 12,
+        "external": 15,
         "callers": [
           {
             "file": "test/repo-claims.test.cjs",
             "name": "repo-claims.test.cjs",
-            "count": 3
+            "count": 6
           },
           {
             "file": "test/suite-integrity.test.cjs",
@@ -96315,7 +96486,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 23
+        "count": 26
       },
       "tsFilesUnder": {
         "internal": 2,
@@ -96490,8 +96661,13 @@
       },
       "endpoints": {
         "internal": 2,
-        "external": 4,
+        "external": 5,
         "callers": [
+          {
+            "file": "SECURITY.md",
+            "name": "SECURITY.md",
+            "count": 1
+          },
           {
             "file": "src/main/index.ts",
             "name": "index.ts",
@@ -96513,10 +96689,10 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 6
+        "count": 7
       },
       "makeServer": {
-        "internal": 46,
+        "internal": 50,
         "external": 0,
         "callers": [],
         "file": "test/webhook-endpoints.test.cjs",
@@ -96529,7 +96705,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 46
+        "count": 50
       },
       "request": {
         "internal": 74,
@@ -97135,7 +97311,7 @@
       },
       "idx": {
         "internal": 3,
-        "external": 25,
+        "external": 26,
         "callers": [
           {
             "file": "src/main/kg-core.cjs",
@@ -97168,6 +97344,11 @@
             "count": 3
           },
           {
+            "file": "test/repo-claims.test.cjs",
+            "name": "repo-claims.test.cjs",
+            "count": 1
+          },
+          {
             "file": "tools/agent-env.cjs",
             "name": "agent-env.cjs",
             "count": 1
@@ -97188,7 +97369,7 @@
         "type": "function",
         "decorators": null,
         "className": null,
-        "count": 28
+        "count": 29
       },
       "setw": {
         "internal": 20,
@@ -102322,14 +102503,14 @@
                       "name": "emitTunnelChanged",
                       "file": "src/main/index.ts",
                       "line": 3978,
-                      "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint genuinely has\n  // nothing to expose yet (a phone route family becomes servable in plan 02-05);\n  // that refusal is returned verbatim rather than papered over.\n  if (!webhookServer) {\n    const started = await startWebhookServer();\n    if (!started.ok) {\n      emitTunnelChanged({ enabled: true, running: false, url: null });\n  // ...",
+                      "code": "function emitTunnelChanged(status: { enabled: boolean; running: boolean; url: string | null }): void {\n  try { liveWebContents()?.send('tunnel:changed', status); } catch { /* window gone */ }\n}\n\nipcMain.handle('tunnel:start', async () => {\n  writeConfig({ tunnelEnabled: true });\n  tunnelIsEnabled = true;\n  // Ensure the webhook local server is listening — the phone's origin\n  // (D-18, D-23). A floor with no ENABLED webhook endpoint still has the\n  // phone route to expose — servable since plan 02-05, but only once\n  // `phoneArmed()` is true (`webhook.ts` `start()`'s own guard). Arm it\n  // here, the SAME mint-then-start order `phone:pairing` uses below, so\n  // this one explicit operator action (\"expose to the internet\") is\n  // self-sufficient on a fresh install: previously this deadlocked —\n  // `tunnel:start` refused with zero endpoints, and the only thing that\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
                     },
                     {
                       "name": "spawnRequestsDir",
                       "file": "src/main/index.ts",
-                      "line": 4286,
+                      "line": 4299,
                       "code": "function spawnRequestsDir(): string | null {\n  const root = hive.root();\n  return root ? join(root, 'spawn-requests') : null;\n}\n\n/** Move a processed request out of the queue so it's never reprocessed. */\nfunction archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102337,7 +102518,7 @@
                     {
                       "name": "archiveRequest",
                       "file": "src/main/index.ts",
-                      "line": 4292,
+                      "line": 4305,
                       "code": "function archiveRequest(filePath: string, sub: '.done' | '.failed'): void {\n  const queue = spawnRequestsDir();\n  try {\n    if (!queue) throw new Error('no hive root');\n    const dir = join(queue, sub);\n    mkdirSync(dir, { recursive: true });\n    renameSync(filePath, join(dir, basename(filePath)));\n  } catch (e) {\n    // Last resort: delete it so a poison file can't loop forever.\n    try { unlinkSync(filePath); } catch { /* noop */ }\n    console.error('[worker] archiveRequest failed:', e);\n  }\n}\n\n/** Did this worker post a terminal `act:\"done\"` yet? Scans its own outbox AND\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102345,7 +102526,7 @@
                     {
                       "name": "workerSignaledDone",
                       "file": "src/main/index.ts",
-                      "line": 4318,
+                      "line": 4331,
                       "code": "function workerSignaledDone(workerId: string, spawnedAt: number): boolean {\n  const root = hive.root();\n  if (!root) return false;\n  const base = join(root, 'agents', workerId, 'outbox');\n  for (const dir of [base, join(base, '.sent')]) {\n    if (!existsSync(dir)) continue;\n    let files: string[];\n    try { files = readdirSync(dir); } catch { continue; }\n    for (const f of files) {\n      if (!f.endsWith('.json')) continue;\n      const fp = join(dir, f);\n      try {\n        const msg = JSON.parse(readFileSync(fp, 'utf8')) as { act?: string; created_at?: string };\n        if (msg.act !== 'done') continue;\n        let ts = Date.parse(msg.created_at ?? '');\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102353,7 +102534,7 @@
                     {
                       "name": "processSpawnRequest",
                       "file": "src/main/index.ts",
-                      "line": 4348,
+                      "line": 4361,
                       "code": "async function processSpawnRequest(filePath: string): Promise<void> {\n  let raw: SpawnRequest;\n  try {\n    raw = JSON.parse(readFileSync(filePath, 'utf8')) as SpawnRequest;\n  } catch (e) {\n    console.error('[worker] unparseable spawn-request:', filePath, e);\n    informGod('[worker spawn rejected] unparseable request', `Could not parse spawn-request ${basename(filePath)} — ${String(e)}`);\n    archiveRequest(filePath, '.failed');\n    return;\n  }\n  const slack = raw.slack && typeof raw.slack.channel === 'string' && typeof raw.slack.thread_ts === 'string'\n    ? { channel: raw.slack.channel, thread_ts: raw.slack.thread_ts } : undefined;\n  const fail = (reason: string): void => {\n    informGod(`[worker spawn rejected] ${reason}`, `Spawn-request ${basename(filePath)} rejected: ${reason}.`, slack);\n    archiveRequest(filePath, '.failed');\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -102361,7 +102542,7 @@
                     {
                       "name": "workerTokensUsed",
                       "file": "src/main/index.ts",
-                      "line": 4450,
+                      "line": 4463,
                       "code": "function workerTokensUsed(workerId: string): number {\n  const s = telemetry.getAgentUsage(workerId);\n  return s ? s.input + s.output + s.cacheRead + s.cacheCreation : 0;\n}\n\n/** Throttle for the GC sweep — git checks are cheap but pointless every 1.5s tick. */\nconst GC_SWEEP_MS = 60_000;\nlet lastGcSweepAt = 0;\nlet gcSweepRunning = false;\n\n/** Reclaim preserved worker worktrees (+ their scratch dirs) whose work is now\n *  integrated, or whose worktree was already removed by hand. Fail-safe: a worktree\n *  is removed ONLY when `worktreeIsGcSafe` proves it clean AND integrated; any doubt\n *  KEEPS it (never discards un-integrated work — god is the sole integrator). Runs\n *  inside the worker tick, throttled to GC_SWEEP_MS, and is a no-op when nothing is\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102369,7 +102550,7 @@
                     {
                       "name": "gcPreservedWorktrees",
                       "file": "src/main/index.ts",
-                      "line": 4466,
+                      "line": 4479,
                       "code": "async function gcPreservedWorktrees(): Promise<void> {\n  if (gcSweepRunning || preservedWorktrees.size === 0) return;\n  gcSweepRunning = true;\n  try {\n    for (const [key, e] of [...preservedWorktrees]) {\n      // A worker id that is live again (reqId reuse) → never GC its worktree or\n      // scratch out from under the new run; leave the stale entry for a later sweep.\n      if (liveWorkers.has(e.workerId)) continue;\n      // (a) Worktree already gone (removed at clean teardown, or god removed it by\n      //     hand per the preserve note) → just reclaim the scratch dir + drop tracking.\n      if (!existsSync(e.wtPath)) {\n        removeWorkerScratch(e.workerId);\n        preservedWorktrees.delete(key);\n        console.log(`[worker gc] ${e.workerId}: worktree already gone — reclaimed scratch`);\n        continue;\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -102377,7 +102558,7 @@
                     {
                       "name": "ephemeralWorkerTick",
                       "file": "src/main/index.ts",
-                      "line": 4507,
+                      "line": 4520,
                       "code": "async function ephemeralWorkerTick(): Promise<void> {\n  if (workerTickRunning) return;\n  workerTickRunning = true;\n  try {\n    const cfg = readConfig();\n    const maxWorkers = Math.max(1, cfg.maxConcurrentWorkers ?? 4);\n    const idleTimeoutMs = Math.max(1, cfg.workerIdleTimeoutMinutes ?? 20) * 60_000;\n    // Per-worker token cap. 0 = UNLIMITED (the default — wired but never throttles\n    // unless a positive cap is set per-request or via defaultWorkerTokenCap).\n    const defaultTokenCap = typeof cfg.defaultWorkerTokenCap === 'number' && cfg.defaultWorkerTokenCap > 0\n      ? cfg.defaultWorkerTokenCap : 0;\n\n    // (1) Finish or reap. ptyManager.kill → teardownPty → gated worktree + archive\n    //     + liveWorkers.delete. `releasing` guards the gap before onExit fires.\n    for (const [workerId, rec] of [...liveWorkers]) {\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -102385,7 +102566,7 @@
                     {
                       "name": "startEphemeralWorkerWatcher",
                       "file": "src/main/index.ts",
-                      "line": 4587,
+                      "line": 4600,
                       "code": "function startEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer || !hive.enabled()) return;\n  const dir = spawnRequestsDir();\n  if (dir) { try { mkdirSync(dir, { recursive: true }); } catch { /* noop */ } }\n  workerWatchTimer = setInterval(() => { void ephemeralWorkerTick(); }, WORKER_TICK_MS);\n}\n\nfunction stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102393,7 +102574,7 @@
                     {
                       "name": "stopEphemeralWorkerWatcher",
                       "file": "src/main/index.ts",
-                      "line": 4594,
+                      "line": 4607,
                       "code": "function stopEphemeralWorkerWatcher(): void {\n  if (workerWatchTimer) { clearInterval(workerWatchTimer); workerWatchTimer = null; }\n}\n\n/** Snapshot of one live ephemeral worker for the renderer Workers tab. */\ninterface WorkerSnapshot {\n  workerId: string;\n  reqId: string;\n  name: string;\n  baseBranch: string;\n  spawnedAt: number;\n  ageMs: number;\n  idleMs: number | null;        // null = PTY already gone\n  tokensUsed: number;\n  tokenCap: number | null;      // effective cap (per-request or config default); null = unlimited\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102401,7 +102582,7 @@
                     {
                       "name": "healthCheckPtys",
                       "file": "src/main/index.ts",
-                      "line": 4681,
+                      "line": 4694,
                       "code": "function healthCheckPtys(reason: string, awayMs: number | null): void {\n  const ptys = ptyManager.list();\n  const dead: string[] = [];\n  for (const p of ptys) {\n    if (typeof p.pid === 'number' && p.pid > 0) {\n      try { process.kill(p.pid, 0); }   // liveness probe only — never kills\n      catch { dead.push(p.id); }        // ESRCH: process gone but PTY still registered\n    }\n  }\n  const away = awayMs != null ? ` (away ~${Math.round(awayMs / 1000)}s)` : '';\n  if (dead.length) {\n    console.warn(`[power] ${reason}${away}: ${dead.length}/${ptys.length} PTY(s) look wedged (process gone):`, dead.join(', '));\n    breakerToast('Agents need a restart', `${dead.length} agent terminal(s) didn't survive sleep — re-open them to resume.`);\n  } else {\n    console.log(`[power] ${reason}${away}: ${ptys.length} PTY(s) healthy`);\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102409,7 +102590,7 @@
                     {
                       "name": "onSystemResume",
                       "file": "src/main/index.ts",
-                      "line": 4712,
+                      "line": 4725,
                       "code": "function onSystemResume(reason: string): void {\n  console.log(`[power] ${reason} — re-arming scheduler, beats, router, keep-awake`);\n  try { syncMissions(); } catch (e) { console.error('[power] syncMissions on resume', e); }\n  // Same freeze, same catch-up: the context timers honour elapsed-time-since-last-\n  // run, so a compact/clear that came due while the machine slept fires ONCE here\n  // rather than being lost or replayed N times.\n  try { syncContextTriggers(); } catch (e) { console.error('[power] syncContextTriggers on resume', e); }\n  try { armAlwaysOnBeats(); } catch (e) { console.error('[power] armAlwaysOnBeats on resume', e); }\n  // The hive message router (outbox→inbox drain) is a setInterval that freezes\n  // during true system sleep exactly like the beats above — but it was the one\n  // always-on timer never re-armed on wake. Symptom: after a long sleep the\n  // scheduler→god path recovered (it injects straight into god's inbox), while\n  // every agent's outbox silently stopped draining, so god→worker and\n  // worker↔worker mail piled up undelivered. Re-arm the poll loop (clear-then-set,\n  // idempotent) and immediately drain the backlog that accrued while we were out\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -102417,19 +102598,19 @@
                     {
                       "name": "electronDeps",
                       "file": "src/main/index.ts",
-                      "line": 4753,
+                      "line": 4766,
                       "code": "function electronDeps(): FloorDeps {\n  return {\n    paths: () => ({\n      userData: app.getPath('userData'),\n      logs: app.getPath('logs'),\n      appPath: app.getAppPath()\n    }),\n    version: app.getVersion(),\n    packaged: app.isPackaged,\n    secrets: {\n      available: () => safeStorage.isEncryptionAvailable(),\n      encrypt: (plaintext) => safeStorage.encryptString(plaintext).toString('base64'),\n      decrypt: (ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')).toString()\n    },\n    notify: ({ title, body }) => {\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
                     }
                   ],
-                  "lines": 4968,
+                  "lines": 4981,
                   "layer": "utils",
                   "churn": 0,
                   "isCode": true,
                   "dependencies": [],
                   "complexity": {
-                    "score": 1592,
+                    "score": 1596,
                     "level": "critical"
                   },
                   "parserProvenance": "heuristic-regex"
@@ -112080,7 +112261,7 @@
                     {
                       "name": "response",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 577,
+                      "line": 580,
                       "code": "    // Non-interactive autonomy: -s prints only the agent's final response (clean\r\n    // stdout), --allow-all-tools never blocks on a permission prompt (env:\r\n    // COPILOT_ALLOW_ALL), --no-ask-user disables the ask_user tool so it never\r\n    // stops to ask. Gated by the floor `config.autoMode` toggle like the rest.\r\n    autoModeFlag: '-s --allow-all-tools --no-ask-user',\r\n    autoFlag: '-s --allow-all-tools --no-ask-user',\r\n    supportsModel: true,\r\n    modelFlag: '--model', // e.g. claude-sonnet-4.5 (default), gpt-5.4, or 'auto'\r\n    hiveAware: false, // no --append-system-prompt/--settings; protocol rides in via -p\r\n    initialPromptFlag: '-p', // copilot -p \"<orchestrator/worker brief>\" runs it non-interactively\r\n    recommendedOrchestratorModel: 'claude-sonnet-4.5', // Copilot's default; user may pick gpt-5.4\r\n    // Copilot supports session resume by id (`--resume=<id>`); attached only when a\r\n    // prior session id was recorded (no hook bridge captures it yet → best-effort).\r\n    resumeFlag: '--resume',\r\n    // Print mode exits per turn and there is no hook bridge to drain on idle, so a\r\n  // ...",
                       "isTopLevel": false,
                       "type": "method"
@@ -112088,7 +112269,7 @@
                     {
                       "name": "isAgentProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 612,
+                      "line": 615,
                       "code": "export function isAgentProvider(value: unknown): value is AgentProvider {\r\n  return (\r\n    value === 'claude' ||\r\n    value === 'codex' ||\r\n    value === 'grok' ||\r\n    value === 'kimi' ||\r\n    value === 'antigravity' ||\r\n    value === 'qwen' ||\r\n    value === 'opencode' ||\r\n    value === 'crush' ||\r\n    value === 'pi' ||\r\n    value === 'copilot' ||\r\n    value === 'custom'\r\n  );\r\n}\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112096,7 +112277,7 @@
                     {
                       "name": "normalizeAgentProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 628,
+                      "line": 631,
                       "code": "export function normalizeAgentProvider(value: unknown): AgentProvider | undefined {\r\n  return isAgentProvider(value) ? value : undefined;\r\n}\r\n\r\nexport function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112104,7 +112285,7 @@
                     {
                       "name": "providerPreset",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 632,
+                      "line": 635,
                       "code": "export function providerPreset(provider: AgentProvider): AgentProviderPreset {\r\n  return AGENT_PROVIDER_PRESETS.find((p) => p.id === provider) ?? AGENT_PROVIDER_PRESETS[0];\r\n}\r\n\r\nexport function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112112,7 +112293,7 @@
                     {
                       "name": "isClaudeProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 636,
+                      "line": 639,
                       "code": "export function isClaudeProvider(provider: AgentProvider | undefined): boolean {\r\n  return provider === 'claude';\r\n}\r\n\r\n/** Whether this provider takes the hive's Claude-only identity injection. */\r\nexport function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112120,7 +112301,7 @@
                     {
                       "name": "isHiveAwareProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 641,
+                      "line": 644,
                       "code": "export function isHiveAwareProvider(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').hiveAware;\r\n}\r\n\r\n/** Whether the router may deliver inbox mail to this provider (else bounce to\r\n *  the god). True when lifecycle status supports guarded idle delivery; false\r\n *  for hookless custom commands. */\r\nexport function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112128,7 +112309,7 @@
                     {
                       "name": "canReceiveInbox",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 648,
+                      "line": 651,
                       "code": "export function canReceiveInbox(provider: AgentProvider | undefined): boolean {\r\n  return providerPreset(provider ?? 'claude').canReceiveInbox;\r\n}\r\n\r\n/** The bare executable from a command string ('agy --model x' → 'agy'). */\r\nfunction commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112136,7 +112317,7 @@
                     {
                       "name": "commandBinary",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 653,
+                      "line": 656,
                       "code": "function commandBinary(command: string | undefined): string {\r\n  const first = (command ?? '').trim().split(/\\s+/)[0] ?? '';\r\n  // strip a path + extension so 'C:\\...\\agy.exe' and '/usr/bin/claude' both map\r\n  const leaf = first.split(/[\\\\/]/).pop() ?? first;\r\n  return leaf.replace(/\\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();\r\n}\r\n\r\n/** Infer the provider from a command (or honor an explicit override). */\r\nexport function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112144,7 +112325,7 @@
                     {
                       "name": "inferAgentProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 661,
+                      "line": 664,
                       "code": "export function inferAgentProvider(command: string | undefined, explicit?: unknown): AgentProvider {\r\n  const normalized = normalizeAgentProvider(explicit);\r\n  if (normalized) return normalized;\r\n  const bin = commandBinary(command);\r\n  if (bin === 'codex') return 'codex';\r\n  if (bin === 'grok') return 'grok';\r\n  if (bin === 'kimi') return 'kimi';\r\n  if (bin === 'agy' || bin === 'antigravity') return 'antigravity';\r\n  if (bin === 'qwen') return 'qwen';\r\n  if (bin === 'opencode') return 'opencode';\r\n  if (bin === 'crush') return 'crush';\r\n  if (bin === 'pi') return 'pi';\r\n  if (bin === 'copilot') return 'copilot';\r\n  if (bin === 'claude' || !bin) return 'claude';\r\n  return 'custom';\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112152,7 +112333,7 @@
                     {
                       "name": "bridgeOf",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 684,
+                      "line": 687,
                       "code": "export function bridgeOf(provider: AgentProvider | undefined): BridgeDescriptor | undefined {\r\n  const preset = providerPreset(provider ?? 'claude');\r\n  if (preset.bridge) return preset.bridge;\r\n  if (preset.hookBridge) return { kind: 'hooks', shim: preset.hookBridge };\r\n  return undefined;\r\n}\r\n\r\nexport function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112160,7 +112341,7 @@
                     {
                       "name": "defaultCommandForProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 691,
+                      "line": 694,
                       "code": "export function defaultCommandForProvider(provider: AgentProvider, fallback = ''): string {\r\n  if (provider === 'custom') return fallback;\r\n  return providerPreset(provider).defaultCommand || fallback;\r\n}\r\n\r\n/** Returns the preset's auto-mode CLI flag for the given provider. Empty string = no flag. */\r\nexport function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112168,7 +112349,7 @@
                     {
                       "name": "autoModeFlagForProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 697,
+                      "line": 700,
                       "code": "export function autoModeFlagForProvider(provider: AgentProvider): string {\r\n  return providerPreset(provider).autoModeFlag ?? '';\r\n}\r\n\r\n/** Returns any env vars the provider needs for non-interactive / first-run suppression. */\r\nexport function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112176,7 +112357,7 @@
                     {
                       "name": "nonInteractiveEnvForProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 702,
+                      "line": 705,
                       "code": "export function nonInteractiveEnvForProvider(provider: AgentProvider): Record<string, string> {\r\n  return providerPreset(provider).nonInteractiveEnv ?? {};\r\n}\r\n\r\n/** Returns the command reference groups for the given provider. */\r\nexport function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112184,7 +112365,7 @@
                     {
                       "name": "commandGroupsForProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 707,
+                      "line": 710,
                       "code": "export function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  /** A node-free installer for this platform, when the vendor ships one. */\r\n  nativeCommand?: string;\r\n  label: string;\r\n  docsUrl?: string;\r\n}\r\n  // ...",
                       "isTopLevel": true,
                       "type": "function"
@@ -112192,19 +112373,19 @@
                     {
                       "name": "installInfoForProvider",
                       "file": "src/shared/agentProvider.ts",
-                      "line": 723,
+                      "line": 726,
                       "code": "export function installInfoForProvider(\r\n  provider: AgentProvider,\r\n  platform: string = process.platform\r\n): ProviderInstallInfo {\r\n  const p = providerPreset(provider);\r\n  const native = p.nativeInstallCommand;\r\n  return {\r\n    command: p.installCommand,\r\n    nativeCommand: native ? (platform === 'win32' ? native.win32 : native.posix) : undefined,\r\n    label: p.label,\r\n    docsUrl: p.docsUrl\r\n  };\r\n}\r\n",
                       "isTopLevel": true,
                       "type": "function"
                     }
                   ],
-                  "lines": 736,
+                  "lines": 739,
                   "layer": "utils",
                   "churn": 0,
                   "isCode": true,
                   "dependencies": [],
                   "complexity": {
-                    "score": 96,
+                    "score": 97,
                     "level": "critical"
                   },
                   "parserProvenance": "heuristic-regex"
@@ -114900,20 +115081,20 @@
                 {
                   "name": "tempDir",
                   "file": "test/main-hardening.test.cjs",
-                  "line": 23,
+                  "line": 29,
                   "code": "function tempDir(t, prefix) {\r\n  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));\r\n  t.after(() => { try { rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); } catch { /* noop */ } });\r\n  return dir;\r\n}\r\n\r\nconst git = (cwd, args) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf8' });\r\n\r\n// ─── #1: a teardown of a dirty isolated worktree must NOT remove it ──────────\r\n// teardownPty now routes EVERY isolated agent (not just ephemeral workers)\r\n// through this gate before `git worktree remove --force`. `keep: true` is the\r\n// answer that saves an hour of uncommitted work when an agent's CLI crashes.\r\ntest('worktreeHasUnintegratedWork keeps a dirty worktree and releases a clean one', async (t) => {\r\n  const root = tempDir(t, 'mh-repo-');\r\n  const repo = join(root, 'repo');\r\n  // ...",
                   "isTopLevel": true,
                   "type": "function"
                 }
               ],
-              "lines": 148,
+              "lines": 154,
               "layer": "utils",
               "churn": 0,
               "isCode": true,
               "dependencies": [],
               "complexity": {
-                "score": 9,
-                "level": "low"
+                "score": 12,
+                "level": "medium"
               },
               "parserProvenance": "heuristic-regex"
             },
@@ -115700,19 +115881,35 @@
                 {
                   "name": "rawOccurrences",
                   "file": "test/repo-claims.test.cjs",
-                  "line": 1282,
-                  "code": "function rawOccurrences(rel, needle) {\n  const text = fs.readFileSync(path.join(root, rel), 'utf8');\n  return (text.match(new RegExp(needle, 'g')) || []).length;\n}\n\ntest('PARITY-03: the LIVE-UNVERIFIED ledger is pinned exactly, per file and repo-wide (D-35/D-40)', () => {\n  let ledgerSum = 0;\n  for (const [rel, expected] of Object.entries(MARKER_LEDGER)) {\n    const full = path.join(root, rel);\n    assert.ok(\n      fs.existsSync(full) && fs.statSync(full).isFile() && fs.statSync(full).size > 0,\n      `${rel} is listed in MARKER_LEDGER but is missing or empty — deleting the bridges (or `\n      + 'deleting the file) must FAIL this clause, not satisfy it by removing every match'\n    );\n    const found = rawOccurrences(rel, 'LIVE-UNVERIFIED');\n  // ...",
+                  "line": 1328,
+                  "code": "function rawOccurrences(rel, needle) {\n  return (readRaw(rel).match(new RegExp(needle, 'g')) || []).length;\n}\n\n/** For every `LIVE-UNVERIFIED` occurrence in the RAW text of `rel`, the\n *  comment block it sits in — bounded by the block's own structure, never\n *  by a character count: the smallest enclosing `/* ... *\\/` (or `/**` doc)\n *  block, or, when the marker sits in `//` comments instead, the maximal\n *  contiguous run of `//` lines touching it. Two markers in the same block\n *  yield the same block text twice — attribution must not silently drop\n *  the second occurrence because its neighbour already answered. */\nfunction markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  // ...",
+                  "isTopLevel": true,
+                  "type": "function"
+                },
+                {
+                  "name": "markerBlocks",
+                  "file": "test/repo-claims.test.cjs",
+                  "line": 1339,
+                  "code": "function markerBlocks(rel) {\n  const text = readRaw(rel);\n  const blockRanges = [];\n  const blockRe = /\\/\\*[\\s\\S]*?\\*\\//g;\n  let bm;\n  while ((bm = blockRe.exec(text))) blockRanges.push([bm.index, bm.index + bm[0].length]);\n\n  const lines = text.split('\\n');\n  const lineStart = [0];\n  for (const l of lines) lineStart.push(lineStart[lineStart.length - 1] + l.length + 1);\n  const lineOf = (idx) => lineStart.findIndex((s, i) => idx >= s && idx < lineStart[i + 1]);\n\n  const blocks = [];\n  const markerRe = /LIVE-UNVERIFIED/g;\n  let mm;\n  // ...",
+                  "isTopLevel": true,
+                  "type": "function"
+                },
+                {
+                  "name": "joinedDocText",
+                  "file": "test/repo-claims.test.cjs",
+                  "line": 1479,
+                  "code": "function joinedDocText(rel) {\n  return readRaw(rel).replace(/\\r/g, '').replace(/\\n/g, ' ').replace(/ +/g, ' ');\n}\n\nconst ONE_GATE_DOCS = ['HIVE.md', 'docs/message-queue.md', 'docs/adr/0001-one-gate-for-pty-writes.md'];\n\ntest('ADR-0001: all three one-gate copies name the drain, none still hands the title to the deleted useHive.ts effect #4 (D-02/D-12)', () => {\n  assert.ok(\n    fs.existsSync(path.join(root, 'docs/adr/0001-one-gate-for-pty-writes.md'))\n    && readRaw('docs/adr/0001-one-gate-for-pty-writes.md').length > 0,\n    'docs/adr/0001-one-gate-for-pty-writes.md is missing or empty — deleting the ADR must FAIL '\n    + 'this clause, not satisfy the negative half by removing the stale claim along with it. It '\n    + 'belongs to plan 02-03; this clause asserts over it, never edits it.'\n  );\n\n  // ...",
                   "isTopLevel": true,
                   "type": "function"
                 }
               ],
-              "lines": 1331,
+              "lines": 1642,
               "layer": "utils",
               "churn": 0,
               "isCode": true,
               "dependencies": [],
               "complexity": {
-                "score": 360,
+                "score": 432,
                 "level": "critical"
               },
               "parserProvenance": "heuristic-regex"
@@ -116420,13 +116617,13 @@
                   "type": "function"
                 }
               ],
-              "lines": 777,
+              "lines": 802,
               "layer": "utils",
               "churn": 0,
               "isCode": true,
               "dependencies": [],
               "complexity": {
-                "score": 64,
+                "score": 70,
                 "level": "critical"
               },
               "parserProvenance": "heuristic-regex"
@@ -117171,7 +117368,7 @@
           "folder": "root",
           "content": null,
           "functions": [],
-          "lines": 310,
+          "lines": 313,
           "layer": "note",
           "churn": 0,
           "isCode": false,
@@ -117302,7 +117499,7 @@
           "folder": "root",
           "content": null,
           "functions": [],
-          "lines": 331,
+          "lines": 361,
           "layer": "note",
           "churn": 0,
           "isCode": false,
@@ -117452,7 +117649,7 @@
           "folder": "root",
           "content": null,
           "functions": [],
-          "lines": 172,
+          "lines": 222,
           "layer": "note",
           "churn": 0,
           "isCode": false,
@@ -117688,7 +117885,7 @@
           {
             "name": "commandGroupsForProvider",
             "file": "src/shared/agentProvider.ts",
-            "line": 707,
+            "line": 710,
             "code": "export function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  /** A node-free installer for this platform, when the vendor ships one. */\r\n  nativeCommand?: string;\r\n  label: string;\r\n  docsUrl?: string;\r\n}\r\n  // ..."
           },
           {
@@ -117780,7 +117977,7 @@
             "name": "index.ts (81 fns)",
             "file": "src/main/index.ts",
             "fns": 81,
-            "lines": 4968
+            "lines": 4981
           },
           {
             "name": "kg-core.cjs (25 fns)",
@@ -117887,6 +118084,11 @@
             "imports": 47
           },
           {
+            "name": "repo-claims.test.cjs (39 imports)",
+            "file": "test/repo-claims.test.cjs",
+            "imports": 39
+          },
+          {
             "name": "config.ts (38 imports)",
             "file": "src/main/config.ts",
             "imports": 38
@@ -117915,11 +118117,6 @@
             "name": "SettingsModal.tsx (35 imports)",
             "file": "src/renderer/src/components/SettingsModal.tsx",
             "imports": 35
-          },
-          {
-            "name": "repo-claims.test.cjs (34 imports)",
-            "file": "test/repo-claims.test.cjs",
-            "imports": 34
           },
           {
             "name": "FullscreenTerminal.tsx (33 imports)",
@@ -118107,6 +118304,11 @@
             "imports": 18
           },
           {
+            "name": "webhook-endpoints.test.cjs (18 imports)",
+            "file": "test/webhook-endpoints.test.cjs",
+            "imports": 18
+          },
+          {
             "name": "reflect.ts (17 imports)",
             "file": "src/main/reflect.ts",
             "imports": 17
@@ -118129,11 +118331,6 @@
           {
             "name": "renderer-runstate.test.cjs (17 imports)",
             "file": "test/renderer-runstate.test.cjs",
-            "imports": 17
-          },
-          {
-            "name": "webhook-endpoints.test.cjs (17 imports)",
-            "file": "test/webhook-endpoints.test.cjs",
             "imports": 17
           },
           {
@@ -118197,6 +118394,11 @@
             "imports": 15
           },
           {
+            "name": "HIVE.md (14 imports)",
+            "file": "HIVE.md",
+            "imports": 14
+          },
+          {
             "name": "kg-core.cjs (14 imports)",
             "file": "src/main/kg-core.cjs",
             "imports": 14
@@ -118257,11 +118459,6 @@
             "imports": 13
           },
           {
-            "name": "HIVE.md (13 imports)",
-            "file": "HIVE.md",
-            "imports": 13
-          },
-          {
             "name": "realtimeActions.ts (13 imports)",
             "file": "src/main/realtimeActions.ts",
             "imports": 13
@@ -118294,6 +118491,11 @@
           {
             "name": "ide-image.test.cjs (13 imports)",
             "file": "test/ide-image.test.cjs",
+            "imports": 13
+          },
+          {
+            "name": "main-hardening.test.cjs (13 imports)",
+            "file": "test/main-hardening.test.cjs",
             "imports": 13
           },
           {
@@ -118347,6 +118549,11 @@
             "imports": 12
           },
           {
+            "name": "SECURITY.md (11 imports)",
+            "file": "SECURITY.md",
+            "imports": 11
+          },
+          {
             "name": "breaker.ts (11 imports)",
             "file": "src/main/breaker.ts",
             "imports": 11
@@ -118382,11 +118589,6 @@
             "imports": 11
           },
           {
-            "name": "main-hardening.test.cjs (11 imports)",
-            "file": "test/main-hardening.test.cjs",
-            "imports": 11
-          },
-          {
             "name": "provider-config.test.cjs (11 imports)",
             "file": "test/provider-config.test.cjs",
             "imports": 11
@@ -118399,11 +118601,6 @@
           {
             "name": "md-slack-reply.cjs (10 imports)",
             "file": "resources/md-slack-reply.cjs",
-            "imports": 10
-          },
-          {
-            "name": "SECURITY.md (10 imports)",
-            "file": "SECURITY.md",
             "imports": 10
           },
           {
@@ -118510,7 +118707,7 @@
       },
       {
         "type": "critical",
-        "title": "111 Circular Dependencies",
+        "title": "112 Circular Dependencies",
         "desc": "Files that import each other",
         "items": [
           {
@@ -118973,6 +119170,13 @@
             "files": [
               "src/main/hooks.ts",
               "test/boot-floor.test.cjs"
+            ]
+          },
+          {
+            "name": "index.ts ↔ webhook-endpoints.test.cjs",
+            "files": [
+              "src/main/index.ts",
+              "test/webhook-endpoints.test.cjs"
             ]
           },
           {
@@ -122328,10 +122532,10 @@
         "desc": "Files with complexity score >30",
         "items": [
           {
-            "name": "index.ts (1592)",
+            "name": "index.ts (1596)",
             "file": "src/main/index.ts",
-            "score": 1592,
-            "lines": 4968
+            "score": 1596,
+            "lines": 4981
           },
           {
             "name": "hive.ts (778)",
@@ -122352,6 +122556,12 @@
             "lines": 1537
           },
           {
+            "name": "repo-claims.test.cjs (432)",
+            "file": "test/repo-claims.test.cjs",
+            "score": 432,
+            "lines": 1642
+          },
+          {
             "name": "useHive.ts (397)",
             "file": "src/renderer/src/hooks/useHive.ts",
             "score": 397,
@@ -122368,12 +122578,6 @@
             "file": "src/renderer/src/components/SettingsModal.tsx",
             "score": 363,
             "lines": 2304
-          },
-          {
-            "name": "repo-claims.test.cjs (360)",
-            "file": "test/repo-claims.test.cjs",
-            "score": 360,
-            "lines": 1331
           },
           {
             "name": "hiveTemplates.ts (341)",
@@ -122640,16 +122844,16 @@
             "lines": 770
           },
           {
+            "name": "agentProvider.ts (97)",
+            "file": "src/shared/agentProvider.ts",
+            "score": 97,
+            "lines": 739
+          },
+          {
             "name": "TriggerHistoryTab.tsx (96)",
             "file": "src/renderer/src/components/triggers/TriggerHistoryTab.tsx",
             "score": 96,
             "lines": 566
-          },
-          {
-            "name": "agentProvider.ts (96)",
-            "file": "src/shared/agentProvider.ts",
-            "score": 96,
-            "lines": 736
           },
           {
             "name": "delivery-main.test.cjs (95)",
@@ -122784,6 +122988,12 @@
             "lines": 350
           },
           {
+            "name": "webhook-endpoints.test.cjs (70)",
+            "file": "test/webhook-endpoints.test.cjs",
+            "score": 70,
+            "lines": 802
+          },
+          {
             "name": "closingTime.ts (66)",
             "file": "src/main/closingTime.ts",
             "score": 66,
@@ -122806,12 +123016,6 @@
             "file": "src/main/usage.ts",
             "score": 64,
             "lines": 247
-          },
-          {
-            "name": "webhook-endpoints.test.cjs (64)",
-            "file": "test/webhook-endpoints.test.cjs",
-            "score": 64,
-            "lines": 777
           },
           {
             "name": "TiledMapRenderer.ts (62)",
@@ -123851,6 +124055,10 @@
             "path": "test/hooks-notify.test.cjs"
           },
           {
+            "name": "main-hardening.test.cjs",
+            "path": "test/main-hardening.test.cjs"
+          },
+          {
             "name": "net-binding.test.cjs",
             "path": "test/net-binding.test.cjs"
           },
@@ -123892,7 +124100,7 @@
           }
         ],
         "metrics": {
-          "emitters": 84
+          "emitters": 85
         }
       },
       {
@@ -123995,6 +124203,10 @@
           {
             "name": "smoke.spec.ts",
             "path": "e2e/smoke.spec.ts"
+          },
+          {
+            "name": "README.md",
+            "path": "README.md"
           },
           {
             "name": "breaker.ts",
@@ -124178,7 +124390,7 @@
           }
         ],
         "metrics": {
-          "contexts": 49
+          "contexts": 50
         }
       },
       {
@@ -124359,7 +124571,7 @@
           {
             "name": "index.ts",
             "path": "src/main/index.ts",
-            "lines": 4968
+            "lines": 4981
           },
           {
             "name": "kg-core.cjs",
@@ -124509,7 +124721,7 @@
           {
             "name": "agentProvider.ts",
             "path": "src/shared/agentProvider.ts",
-            "lines": 736
+            "lines": 739
           },
           {
             "name": "ci-config.test.cjs",
@@ -124539,7 +124751,7 @@
           {
             "name": "repo-claims.test.cjs",
             "path": "test/repo-claims.test.cjs",
-            "lines": 1331
+            "lines": 1642
           },
           {
             "name": "telemetry-auth.test.cjs",
@@ -124554,12 +124766,12 @@
           {
             "name": "webhook-endpoints.test.cjs",
             "path": "test/webhook-endpoints.test.cjs",
-            "lines": 777
+            "lines": 802
           }
         ],
         "metrics": {
           "files": 50,
-          "avgLines": 1024
+          "avgLines": 1031
         }
       },
       {
@@ -124609,7 +124821,7 @@
             "name": "index.ts",
             "path": "src/main/index.ts",
             "fns": 81,
-            "lines": 4968
+            "lines": 4981
           },
           {
             "name": "kg-core.cjs",
@@ -129182,7 +129394,7 @@
         "name": "commandGroupsForProvider",
         "file": "src/shared/agentProvider.ts",
         "folder": "src/shared",
-        "line": 707,
+        "line": 710,
         "code": "export function commandGroupsForProvider(provider: AgentProvider): CmdGroup[] {\r\n  return providerPreset(provider).commandGroups ?? [];\r\n}\r\n\r\n/** Install metadata for a provider's engine CLI, consumed by the missing-CLI\r\n *  auto-install path. `command` is the (trusted, hardcoded) installer to run when\r\n *  present; when undefined the caller shows a manual hint and runs NOTHING. `label`\r\n *  is the friendly CLI name; `docsUrl` is an optional manual-setup link. */\r\nexport interface ProviderInstallInfo {\r\n  command?: string;\r\n  /** A node-free installer for this platform, when the vendor ships one. */\r\n  nativeCommand?: string;\r\n  label: string;\r\n  docsUrl?: string;\r\n}\r\n  // ...",
         "codeLines": 16,
         "ext": "ts"
@@ -129236,18 +129448,18 @@
     "excludePatterns": [],
     "stats": {
       "files": 365,
-      "functions": 1625,
-      "connections": 3371,
+      "functions": 1627,
+      "connections": 3381,
       "dead": 17,
       "patterns": 7,
       "security": 45,
       "duplicates": 10,
       "violations": 392,
-      "loc": 103528,
+      "loc": 103969,
       "languages": [
         {
           "ext": "ts",
-          "lines": 47834,
+          "lines": 47850,
           "pct": 46
         },
         {
@@ -129257,13 +129469,13 @@
         },
         {
           "ext": "cjs",
-          "lines": 24047,
+          "lines": 24389,
           "pct": 23
         },
         {
           "ext": "md",
-          "lines": 3603,
-          "pct": 3
+          "lines": 3686,
+          "pct": 4
         },
         {
           "ext": "yml",

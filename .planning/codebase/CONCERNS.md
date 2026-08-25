@@ -68,19 +68,61 @@ Take this as the standing rule for this document: a partially-landed fix is an o
 
 ## Fragile Areas
 
-**Engine bridge coverage: only 1 of 11 engines gets the whole protocol (issue #19):**
-- Files: `src/shared/agentProvider.ts:165-508`, `src/main/providerAutomation.ts:49-137`, `src/main/hive.ts:679-820`, `src/main/telemetry.ts:199-203`
-- Why fragile: per the audit's own coverage table (reproduced in `#19`), only `claude` has native lifecycle hooks, a routed inbox, wake nudges, live cost accounting, and `/compact`. Four bridges — `pi`, `opencode`, `crush`, `qwen` — are marked live-unverified or partial in that table (pi and opencode's lifecycle-hook integration is flagged "live-unverified"; qwen's inbox is terminal-work-order only; crush has no wake nudge). `kimi`, `copilot`, and `custom` have no lifecycle hooks or cost accounting at all and bounce mail to the orchestrator. `CostSample` from the proxy tier (qwen/crush) reaches the ledger but not the breaker, so spend on those engines cannot trip the circuit breaker.
-- Safe modification: changes to `agentProvider.ts`'s per-engine tables need manual verification against a live session of that engine — there is no automated protocol-conformance test across the 11 engines.
-- Test coverage: `test/engine-parity.test.cjs` and `test/provider-automation.test.cjs` exist but exercise the pure capability tables, not live engine sessions.
+**Engine bridge coverage: re-derived from source after Phase 2 (issue #19, largely closed, re-measured 2026-08-24):**
+- Files: `src/shared/agentProvider.ts` (per-engine preset table), `src/shared/providerAutomation.ts:305-315` (`providerCapabilities`), `src/main/hive.ts:1009-1187` (the bridge dispatch; this entry's earlier line pointer named a range that plan 02-01's split moved out of `hive.ts` entirely), `src/main/hiveProvisioning.ts`/`hiveTemplates.ts` (the per-engine installer functions and shim templates), `src/main/telemetry.ts:326` (`recordCostSample`)
+- Re-derived this session by reading `providerCapabilities(id, 'linux')` for all eleven presets: **9 of 11 engines can now receive hive mail** (only `copilot` and `custom` bounce — no bridge of any kind, hooks or proxy). `claude`, `codex`, `grok`, `kimi`, `antigravity`, `opencode`, `pi` have a real hooks-tier bridge (a config-file shim or bundled extension/plugin); `qwen` and `crush` are proxy-tier (a loopback reverse-proxy sidecar that synthesizes the same hive events). **`kimi` no longer belongs in the "no lifecycle hooks" set** — PARITY-01a (plan 02-07) gave it a hooks bridge reusing `HOOK_SHIM` verbatim (Claude-shaped payload), unverified against a live account but structurally identical to codex's. `copilot` and `custom` are the only two with genuinely no lifecycle hooks and no cost accounting, by construction (no hook surface to bridge, no per-agent signal to read).
+- **`CostSample` from the proxy tier now reaches the breaker, not only the ledger** — this is a real fix, not a stale claim. `telemetry.ts`'s `recordCostSample` (added under PARITY-02) routes a proxy-tier sample into the SAME accumulator the OTel path fills, so `getAgentUsage` — and therefore the breaker's cost/token caps and velocity arms — now sees `qwen`/`crush` spend identically to a Claude agent's. The old "reaches the ledger but not the breaker" gap is closed for those two engines.
+- Six of the eleven still cannot report cost at all (`spend: 'none'`): `grok`, `kimi`, `antigravity`, `opencode`, `pi`, and the two mail-bounced engines `copilot`/`custom` — five of those six for the same reason (no telemetry, no hook-surface cost signal, no proxy route), and `copilot`/`custom` because nothing per-agent reaches this app at all. This is PARITY-02's own restated ceiling (`.planning/REQUIREMENTS.md`), not a new gap.
+- Safe modification: changes to `agentProvider.ts`'s per-engine tables need manual verification against a live session of that engine — there is no automated protocol-conformance test across the eleven engines. Five bridges (`pi`, `opencode`, `crush`, `qwen`, `kimi`) are marked `LIVE-UNVERIFIED` in source (18 raw markers spread across six files, pinned by `test/repo-claims.test.cjs`'s PARITY-03 clause) — none has ever run against a real paid account.
+- Test coverage: `test/engine-parity.test.cjs`, `test/provider-automation.test.cjs` and `test/capability-surface.test.cjs` exist but exercise the pure capability tables and the renderer-facing derivation, not live engine sessions.
+
+## Phase 2 limitations (tracked, not SUMMARY prose)
+
+Six limitations Phase 2 could not close, each already stated in source/docs/UI by the plan that owns the surface. Tracked here per `02-VALIDATION.md`'s own wording so they stay findable outside a plan SUMMARY.
+
+**No stable public URL at $0 (DAEMON-05):**
+- What's not done: the tunnel is a Cloudflare Quick Tunnel (`cloudflared … --url`), which mints a fresh `trycloudflare.com` hostname on every open — there is no way to reserve or pin a hostname without a paid Cloudflare account (a named tunnel).
+- Files: `src/main/tunnel.ts`, `src/main/cloudflared.ts`, `SECURITY.md`
+- Risk: an installed phone PWA cannot hardcode an origin; every pairing needs a fresh QR scan, and a long-lived bookmark to a previous session's URL goes dead the moment the tunnel is reopened.
+- Priority: Low — accepted under the zero-recurring-cost rule; a paid named-tunnel path is a future upgrade, not a defect.
+
+**`setLoginItemSettings` is a no-op on Linux (DAEMON-01):**
+- What's not done: Electron's `app.setLoginItemSettings` has no Linux implementation, so the headless "start at login" toggle silently does nothing there — no error, no UI feedback.
+- Files: `src/main/index.ts:3645-3650` (states it in a source comment), `:4811-4818`
+- Risk: a Linux operator who enables "start at login" reasonably believes it worked; nothing tells them otherwise on that platform.
+- Priority: Low — stated in source; a UI-level "unsupported on Linux" affordance is the natural next step, not shipped this phase.
+
+**`setActivationPolicy('accessory')` is UNVERIFIED — needs a macOS machine (DAEMON-01):**
+- What's not done: the headless-floor Dock-icon suppression on macOS (`app.setActivationPolicy('accessory')`) has never been confirmed against a real Mac. No Mac was available to this project during Phase 2.
+- Files: `src/main/index.ts:4820-4826` (the source comment states the same thing, in the same register as the LIVE-UNVERIFIED engine markers)
+- Risk: low if it works as Apple's docs describe; a macOS user could see an unwanted Dock icon in headless mode if it does not.
+- Priority: Low — stated, not claimed working; needs a macOS live-verify pass whenever a Mac is available.
+
+**DAEMON-02 is a localhost-verified auth path, not a device-verified install:**
+- What's not done: WebAPK installation, `display:standalone` PWA behaviour, and Web Push while the phone is asleep have never been tested against a physical Android device — the requirement's own fallback ("a localhost-verified auth path is the honest fallback") is what actually shipped and is recorded as exactly that, never as completion.
+- Files: `SECURITY.md`, `resources/phone/`, `src/main/push.ts`, `02-09-SUMMARY.md`
+- Risk: an operator who installs the PWA on a real phone may hit an untested code path; the auth round-trip itself is verified, everything device-specific is not.
+- Priority: Medium — blocks calling DAEMON-02 complete; needs an operator-supplied Android device.
+
+**Five `LIVE-UNVERIFIED` bridges (PARITY-03, D-33/D-35):**
+- What's not done: `pi`, `opencode`, `crush`, `qwen` and `kimi`'s bridges have never run against a real paid account for that engine. The first four because the CLI is not installed on this machine; `kimi` because its bridge is new (PARITY-01a) and no Moonshot account exists here either.
+- Files: 18 raw `LIVE-UNVERIFIED` markers across `src/main/hive.ts`, `hiveProvisioning.ts`, `hiveTemplates.ts`, `index.ts`, `webhook.ts` and `agentProvider.ts` — pinned exactly, per-file, per-engine and by file set in `test/repo-claims.test.cjs`'s PARITY-03 clause.
+- Risk: none of the five bridges is battle-tested against a real session; a wrong guess in any of them (wrong hook payload shape, wrong config path) fails silently, with the renderer's idle inbox-wake nudge as the stated fallback drain.
+- Priority: Low under the zero-recurring-cost rule — this is the expected outcome, not a failure a future plan is scheduled to close without an operator account.
+
+**DAEMON-05's "always visible" is met in purpose, not literally at 800px (D-41):**
+- What's not done: at the narrowest supported width (~800px) the titlebar's `PUBLIC` chip degrades to the word alone; the untruncated tunnel URL is one click away in the panel the chip opens, not inline in the titlebar.
+- Files: `src/renderer/src/components/` (the titlebar chip, plan 02-10), `README.md`, `.planning/ROADMAP.md`
+- Risk: none functionally — presence of the chip is the signal, and the tunnel can never be up without the operator seeing it — but a literal reading of "URL always visible" would be false at that width, which is why it is stated as met-in-purpose here rather than ticked verbatim.
+- Priority: Low — a documentation-precision item, not a functional gap.
 
 ## Test Coverage Gaps
 
-**No renderer component tests; e2e now exists but is a single smoke spec (issue #45, partially fixed):**
-- What's not tested: of 130 files under `src/renderer/src/**/*.ts(x)`, tests touch 8 (`agentPatch.ts`, `terminalPoolPolicy.ts`, `terminalSelection.ts`, `terminalAutomation.ts`, `mdLinks.ts`, `config.ts`, `queueDelivery.ts`, `terminalRecovery.ts`) — all pure, framework-free logic modules loaded via `test/load-ts.cjs`. Zero React components (`.tsx`) are rendered or asserted on anywhere in `test/`.
-- Files: `test/renderer-runstate.test.cjs`, `test/terminal-selection.test.cjs`, `test/terminal-automation.test.cjs`, `test/ide-image.test.cjs`, `test/provider-config.test.cjs`, `test/queue-delivery.test.cjs`, `test/terminal-recovery.test.cjs`, `test/commit-graph.test.cjs`
-- Risk: a change to any of the ~122 untested renderer files (component logic, layout, state wiring inside components) can regress silently. `e2e/smoke.spec.ts` (added since the audit — `.github/workflows/e2e.yml` runs it on Linux under `xvfb-run`) now covers boot → onboarding → first spawn end-to-end, which closes the "no e2e at all" half of the original issue, but the "no component tests" half is unchanged.
-- Priority: Low (per the issue's own severity) — the e2e smoke test now catches full-flow regressions; component-level gaps are narrower in blast radius.
+**No renderer component RENDER tests; source-level coverage widened this phase (issue #45, partially fixed, re-measured 2026-08-24):**
+- What's not tested: of 134 files under `src/renderer/src/**/*.ts(x)`, tests now touch 17 (`agentPatch.ts`, `terminalPoolPolicy.ts`, `terminalSelection.ts`, `terminalAutomation.ts`, `terminalRecovery.ts`, `mdLinks.ts`, `config.ts`, `store.ts`, `autoMode.ts`, `sidebarLayout.ts`, `AgentCard.tsx`, `BlockedBanner.tsx`, `MessageQueueComposer.tsx`, `PixelBadge.tsx`, `QrCode.tsx`, `components/git/graph.ts`, `hooks/useHive.ts`) — up from 8 before Phase 2. Two Phase 2 plans widened this: 02-06 added `AgentCard.tsx` and `store/config.ts`'s `capabilityGaps`/`mcpCardSummary` derivation (source-level assertions — `aria-label` text, call counts, structural shape — never a mounted DOM), and 02-10 added `QrCode.tsx` (the SVG module-matrix renderer). Zero React components are still rendered through an actual DOM/testing-library pass anywhere in `test/` — every renderer assertion is source-level (`loadTs()` + string/structural checks) or e2e (real Electron, one flow).
+- Files: `test/renderer-runstate.test.cjs`, `test/terminal-selection.test.cjs`, `test/terminal-automation.test.cjs`, `test/ide-image.test.cjs`, `test/provider-config.test.cjs`, `test/queue-delivery.test.cjs`, `test/terminal-recovery.test.cjs`, `test/commit-graph.test.cjs`, `test/capability-surface.test.cjs`, `test/qr-vendor.test.cjs`
+- Risk: a change to any of the ~117 still-untested renderer files (component logic, layout, state wiring inside components) can regress silently. `e2e/smoke.spec.ts` still covers exactly one flow (boot → onboarding → first spawn); component-level gaps in every other flow are narrower in blast radius but still real.
+- Priority: Low (per the issue's own severity) — the e2e smoke test catches full-flow regressions; component-level gaps are narrower in blast radius, and the trend this phase is toward more source-level coverage, not less.
 
 **Accessibility coverage is improved but incomplete (issue #26, partially fixed):**
 - What's not tested/fixed: `aria-label` coverage is now 49 across 133 `<button>` elements in `src/renderer/src` (up from the audit's 27/128, but still well under half of all buttons). Text-size tokens in `src/renderer/src/design/tokens.css:61-68` still include `--cth-text-display-sm: 8px`, `--cth-text-display-md: 12px`, and `--cth-text-body-sm`/`--cth-text-mono-sm: 13px`, all below the floor `DESIGN.md:706` itself states: *"never go below 14 px for any user-facing text."* Two already-fixed items worth noting as history, not debt: the focus ring is now 2px (`src/renderer/src/design/global.css:93-95`, `:focus-visible { outline: 2px solid ...; outline-offset: 2px; }`, up from the audited 1px), and the `role="button"` nested inside a `<button>` in `CommandCenterPanel.tsx` is gone — the two remaining `role="button"` usages (`AgentCard.tsx:145`, `FullscreenTerminal.tsx:604`) are `<div role="button">`, each with a comment explaining why a native `<button>` doesn't fit (the element carries multiple independent interactive children).

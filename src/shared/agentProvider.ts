@@ -396,6 +396,9 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     modelFlag: '--model',
     autoFlag: '--yolo',
     hiveAware: false,
+    // LIVE-UNVERIFIED: `qwen` is not installed on this machine and no account
+    // exists to run it against, so the proxy-bridge routing below has never
+    // round-tripped a live qwen-code session (D-33/D-35 — PARITY-03).
     // SPIKE/TODO-verify: confirm qwen-code reads OPENAI_BASE_URL for its upstream
     // ('serve' inboxDelivery is reserved for a later qwen-serve HTTP push path).
     bridge: { kind: 'proxy', api: 'openai', baseUrlEnv: 'OPENAI_BASE_URL', inboxDelivery: 'terminal' },
@@ -505,8 +508,8 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // Do NOT "fix" this to a real env var — it would have no effect.
     bridge: { kind: 'proxy', api: 'openai', baseUrlEnv: 'CRUSH_PROXY_BASE_URL', inboxDelivery: 'terminal' },
     // OpenAI-WIRE default so the out-of-box Crush god routes through the proxy
-    // cleanly (the proxy serves one wire-shape; an anthropic/* default would route to
-    // the wrong upstream — Dwight verify-crush MF1). Advisory/editable; non-OpenAI-wire
+    // cleanly (the proxy serves one wire-shape; an anthropic-wire default would route
+    // to the wrong upstream — Dwight verify-crush MF1). Advisory/editable; non-OpenAI-wire
     // Crush-via-proxy is on-device live-verify. // exact long-context id humanQA
     recommendedOrchestratorModel: 'openai/gpt-4o',
     // god-eligible via the proxy bridge (terminal inbox delivery on synthesized idle).
