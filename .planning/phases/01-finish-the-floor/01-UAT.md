@@ -3,13 +3,13 @@ status: partial
 phase: 01-finish-the-floor
 source: [01-VERIFICATION.md]
 started: 2026-08-25T14:20:00Z
-updated: 2026-08-25T14:20:00Z
-build_under_test: dist\win-unpacked\Hello MarkX.exe — rebuilt 2026-08-25 13:48 from merged main (95f1cb8)
+updated: 2026-08-25T16:35:00Z
+build_under_test: dist\win-unpacked\Hello MarkX.exe — rebuilt 2026-08-25 16:24, carrying five operator-found fixes made during this session
 ---
 
 ## Current Test
 
-5. Delivery survives a closed window (FLOOR-02)
+6. Auto-mode chip truthfulness (FLOOR-01) — and the kanban/god deny, still open
 
 > Rows are recorded ONLY from operator-observed evidence or from a measurement the
 > orchestrator ran against real on-disk state. Nothing here is inferred from a SUMMARY.
@@ -67,10 +67,33 @@ off-screen at the default width — a usability observation, not a clipping bug.
 Remaining for this row: a deliberate sweep of the ~600 swept FLOOR-12 surfaces and the Pixi
 bubbles at normal window size.
 
-### 5. Delivery survives a closed window — FLOOR-02
-expected: with the window CLOSED (not quit), a producer's message reaches an idle agent's inbox
-and is typed into its terminal
-result: [pending]
+### 5. Hive mail round-trip — FLOOR-02
+expected: a producer's message reaches an idle agent's inbox and is acted on
+result: **PASS** (2026-08-25) — with a serious bug found and fixed on the way
+
+The god dispatched a task to `jim-mt8h0wci`; Jim listed his workspace, wrote
+`E:\markx-scratch\jim\notes.md` (166 B, ISO timestamp), and the god independently verified
+the file. The god's own memory records it: *"Mail round-trip: DONE, god-verified … Proven end
+to end."*
+
+Then four further messages were observed by the orchestrator reading the hive directly —
+`Ping: agent id + current time`, `Re: agent id and current time`, and an unprompted
+`Correction: agent id and current time (valid ISO-8601)` Jim sent after noticing his own
+timestamp was malformed. All BOM-free, all delivered, **0 dropped, 0 newly quarantined**.
+
+**The bug this test exposed (fixed, `eb2cdaf`):** Jim's FIRST two reports were silently
+destroyed. PowerShell's `Set-Content` / `Out-File -Encoding utf8` write a UTF-8 BOM by default
+on Windows; `JSON.parse` rejects a leading BOM; and the router's catch renamed the file to
+`.sent/bad-*` with **no log and no bounce**. Both ends believed it worked. The god drew the
+wrong conclusion in his own memory ("either in transit or didn't happen") and only learned the
+task was done by inspecting the deliverable by hand.
+
+Proven precisely: both quarantined files begin `0xEF 0xBB 0xBF` and parse cleanly once the BOM
+is stripped — `to: god, act: done, "Hive mail round-trip proven"` and `to: god, act: inform,
+"BLOCKED: … Knowledge Graph is empty (0 docs)"`. Jim wrote valid JSON both times.
+
+NOT YET DONE for this row: the **window-closed** half. The round trip above ran with the window
+open. Closing the window and confirming delivery continues remains outstanding.
 
 ### 6. Auto-mode chip truthfulness — FLOOR-01
 expected: the chip reflects what the running agent is actually doing, is keyboard-reachable and
@@ -90,7 +113,25 @@ result: [pending]
 ### 9. Secret scrub on the hive commit path — FLOOR-04
 expected: a fake API key dropped into a live agent's workspace does not appear in `git log -p`
 of the hive
-result: [pending]
+result: **partial** (2026-08-25) — the scrub works; a size cap bypasses it
+
+Demonstrated live without planting anything: a codex agent's `auth.json` was caught and held
+out of history by the scrubber itself —
+```
+[hive] FLOOR-04: unstaged agents/jim-mt8fhr2i/.codex/auth.json — it carries a secret-shaped
+value, and it has been kept OUT of the hive's git history.
+```
+
+**But the same log shows the gap, twice today:**
+```
+[hive] FLOOR-04: staged diff is 105089 lines, over the 20000 scan cap — committing UNSCANNED
+[hive] FLOOR-04: staged diff is 106609 lines, over the 20000 scan cap — committing UNSCANNED
+```
+A commit larger than `SECRET_SCAN_MAX_LINES` skips the secret scan entirely. The requirement
+says a secret-shaped value written into a workspace is scrubbed from the hive's history; a
+large enough diff walks past it. The code is honest about this rather than silent, which is the
+right design — but the row cannot close while size alone can mean "skip". Suggested fix is to
+scan in chunks, not to raise the number.
 
 ### 10. Release provenance — FLOOR-06
 expected: cutting a `v*` tag from merged main and running
