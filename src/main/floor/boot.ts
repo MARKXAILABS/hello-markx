@@ -40,7 +40,7 @@ import { CircuitBreaker, type BreakerInput } from '../breaker';
 import { TelemetryCollector } from '../telemetry';
 import { MemoryManager } from '../memory';
 import { MemoryReflector, type ReflectSettings } from '../reflect';
-import { PersistStore } from '../db';
+import { PersistStore, EVENT_RETENTION_MS } from '../db';
 import { RestorePoints, SNAPSHOT_CADENCE_MS } from '../restorePoints';
 import { SPAWN_SAFE_SESSION_ID } from '../transcript';
 import {
@@ -545,7 +545,34 @@ export function armAlwaysOnBeats(): void {
  * Best-effort end to end: a repo that cannot be snapshotted is logged by
  * RestorePoints itself and must never take the beat — or the floor — down.
  */
+/** When the events table was last pruned, so the beat above can run the prune
+ *  once a DAY off a 15-minute slot rather than 96 times. 0 = not yet this boot. */
+let lastEventPruneAt = 0;
+const EVENT_PRUNE_EVERY_MS = 24 * 60 * 60_000;
+
+/**
+ * RECORD-02's retention, run once at boot and once a day.
+ *
+ * `EVENT_RETENTION_MS` is imported from db.ts, where it is exported and pinned
+ * by a test, rather than re-declared here: a second copy of the number is how
+ * "the window is 30 days" becomes true in one file and false in the other. The
+ * value itself is `[ASSUMED]` — nothing measured how far back an operator
+ * actually asks what the floor ran — and D-18 makes the whole policy one
+ * `DELETE FROM events WHERE ts < ?`, so changing it is a one-line act.
+ */
+function pruneEventsIfDue(): void {
+  if (Date.now() - lastEventPruneAt < EVENT_PRUNE_EVERY_MS) return;
+  lastEventPruneAt = Date.now();
+  try {
+    const gone = persist.pruneEvents(Date.now() - EVENT_RETENTION_MS);
+    if (gone) console.warn('[db] pruned', gone, 'event(s) past the retention window');
+  } catch (e) { console.error('[db] event prune failed:', e); }
+}
+
 async function restorePointBeat(): Promise<void> {
+  // Off the same scheduler slot, and BEFORE the early return below: retention
+  // must keep running on a floor that has no agents in a git repo.
+  pruneEventsIfDue();
   if (!hive.enabled()) return;
   const cwds = new Set<string>();
   for (const a of Object.values(hive.registry().agents)) {
@@ -1230,6 +1257,12 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   roster = new RosterStore(() => readConfig().harnessHome);
 
   try { persist.open(); } catch (e) { console.error('[db] open failed:', e); }
+  // RECORD-02's mirror, wired AFTER open() — appendLog's sink, injected so
+  // hive.ts never imports db.ts. Best-effort inside appendLog: a closed or
+  // locked store costs the mirror and never the JSONL line.
+  hive.setEventStore(persist);
+  lastEventPruneAt = 0;
+  pruneEventsIfDue();  // once at boot, then once a day off the restore-point beat
   try { accountPool.load(); } catch (e) { console.error('[account-pool] load failed:', e); }
 
   // RECORD-05's snapshot beat. Guarded (clear-then-set) like armAlwaysOnBeats,
