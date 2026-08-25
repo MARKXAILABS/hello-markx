@@ -21,6 +21,7 @@
  *     auto-enabled (consistent with "import only pre-fills; human clicks spawn").
  */
 
+import { AGENT_PROVIDER_PRESETS, type AgentProvider } from './agentProvider';
 import { mcpCatalogEntry } from './mcpCatalog';
 
 export const HIRE_SPEC_V1 = 'hello-markx/hire@1';
@@ -34,10 +35,18 @@ export const BUNDLED_SKILL_IDS: ReadonlySet<string> = new Set([
   'md-audit'
 ]);
 
-/** Providers a manifest may request ('agy' is accepted as an alias for
- *  'antigravity'). 'custom' is deliberately NOT allowed — it would let a
- *  manifest choose an arbitrary local binary. */
-export type HireProvider = 'claude' | 'antigravity' | 'codex';
+/** Providers a manifest may request: every `AgentProvider` EXCEPT `'custom'`
+ *  ('agy' is still accepted as an alias for 'antigravity').
+ *
+ *  `'custom'` is the one deliberate exclusion, and the only one that is a real
+ *  security boundary — it would let a manifest choose an arbitrary local binary.
+ *  Every other engine (grok, kimi, qwen, opencode, crush, pi, copilot) was
+ *  excluded only because this allowlist was hand-typed with three entries while
+ *  `agentProvider.ts` grew to eleven. That was an oversight, not a second
+ *  boundary: it made `team:export` produce files the app's own validator then
+ *  rejected on `provider`. The set is now DERIVED from AGENT_PROVIDER_PRESETS
+ *  (below) so a twelfth engine cannot silently reopen the same gap. */
+export type HireProvider = Exclude<AgentProvider, 'custom'>;
 
 export interface HireManifest {
   /** Spec tag; exactly `hello-markx/hire@1` for this version. */
@@ -90,7 +99,11 @@ export interface HireValidation {
   consentRequired?: string[];
 }
 
-const PROVIDERS: readonly string[] = ['claude', 'antigravity', 'codex'];
+/** Derived from the canonical preset list, never hand-maintained — the two can
+ *  then not drift apart. `'custom'` is filtered out; see HireProvider. */
+const PROVIDERS: readonly string[] = AGENT_PROVIDER_PRESETS
+  .map((p) => p.id)
+  .filter((id) => id !== 'custom');
 const MAX_BYTES = 64 * 1024;
 
 /** A flag ("-x", "--flag", "--flag=value") or a bare value token that may follow
@@ -313,6 +326,125 @@ export function validateHireManifest(raw: unknown): HireValidation {
     errors: [],
     consentRequired: consentRequired.length > 0 ? consentRequired : undefined,
     manifest: { spec: HIRE_SPEC_V1, name, description, goal, character, accent, provider, model, commandFlags, capabilities, isolate, tokenCap, author, homepage, skills, mcpServers }
+  };
+}
+
+// ─── team@1 — a wrapper around N hire@1 members ──────────────────────────────
+
+export const HIRE_TEAM_SPEC_V1 = 'hello-markx/team@1';
+
+/** Most members one team file may carry.
+ *
+ *  NOT a measured ceiling — 03-CONTEXT's own safety guess, kept because a cap
+ *  that exists is worth more than a cap that is correct. It bounds member count
+ *  INDEPENDENTLY of TEAM_MAX_BYTES: 4,000 one-line members fit comfortably under
+ *  256 KB, and "it was under the byte cap" is not a reason to spawn 4,000 agents. */
+export const TEAM_MAX_MEMBERS = 16;
+
+/** Byte cap for a team file, checked by the file reader before JSON.parse.
+ *
+ *  Its OWN constant, deliberately not a reuse of HIRE_MAX_BYTES: 16 members at
+ *  the single-manifest limits do not fit in 64 KB, and silently widening the
+ *  single-manifest ceiling to make team files fit would raise the cap on the
+ *  hire@1 path too. Both caps are applied; see main/hire.ts. */
+export const TEAM_MAX_BYTES = 256 * 1024;
+
+/**
+ * A team file: a spec tag and N hire@1 members, nothing else.
+ *
+ * DELIBERATELY NOT PART OF team@1 v1 (D-19): `skills`, `mcpServers` and
+ * `commandFlags`. All three are legal on a SINGLE hire@1 manifest because the
+ * import flow shows the operator exactly what they are about to run — the
+ * command is previewed and editable, and a write/secret-tier MCP id raises
+ * `consentRequired` for an explicit decision. The team-import path has no such
+ * surface: no per-member command preview, no per-member consent prompt. So a
+ * team member that carries any of the three comes back from
+ * `validateTeamManifest` WITHOUT it rather than riding into a bulk spawn the
+ * operator never reviewed. `stripAgentForExport` never emits them either.
+ */
+export interface TeamManifest {
+  spec: typeof HIRE_TEAM_SPEC_V1;
+  members: HireManifest[];
+}
+
+/** One `validateHireManifest` result, tagged with the member's position so a
+ *  review sheet can say WHICH row failed and why. */
+export interface TeamMemberValidation {
+  index: number;
+  ok: boolean;
+  manifest?: HireManifest;
+  errors: string[];
+}
+
+export interface TeamValidation {
+  /** Whether the DOCUMENT is structurally valid. A member failing its own
+   *  validation does NOT make this false — that member simply does not appear in
+   *  `team.members`, and its errors are in `members[i]`. An empty team is valid. */
+  ok: boolean;
+  /** Present when `ok`; carries only the members that validated. */
+  team?: TeamManifest;
+  /** One entry per input member, in input order. Empty when `ok` is false. */
+  members: TeamMemberValidation[];
+  /** Document-level errors only (spec tag, members shape, member cap). */
+  errors: string[];
+}
+
+/** Fields a team member may not carry — see TeamManifest's doc comment. */
+const TEAM_MEMBER_OMITTED = ['commandFlags', 'skills', 'mcpServers'] as const;
+
+/**
+ * Validate an untrusted parsed JSON value as a team@1 document.
+ *
+ * EVERY member is delegated back through the UNMODIFIED `validateHireManifest`.
+ * There is no per-member flag allowlist, length cap or model pattern in here, and
+ * there must never be one: a second implementation is a second thing to keep in
+ * sync, and the one that drifts is always the one nobody is looking at. Pure; no I/O.
+ */
+export function validateTeamManifest(raw: unknown): TeamValidation {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, members: [], errors: ['team file must be a JSON object'] };
+  }
+  const o = raw as Record<string, unknown>;
+
+  if (o.spec !== HIRE_TEAM_SPEC_V1) {
+    return {
+      ok: false, members: [],
+      errors: [`unsupported spec "${String(o.spec)}" (expected "${HIRE_TEAM_SPEC_V1}")`]
+    };
+  }
+
+  if (!Array.isArray(o.members)) {
+    return { ok: false, members: [], errors: ['"members" must be an array'] };
+  }
+  // Before mapping ANY member: an over-cap document is rejected outright rather
+  // than handed back partially validated.
+  if (o.members.length > TEAM_MAX_MEMBERS) {
+    return {
+      ok: false, members: [],
+      errors: [`"members" exceeds ${TEAM_MAX_MEMBERS} — a team file may carry at most ${TEAM_MAX_MEMBERS} members`]
+    };
+  }
+
+  const members: TeamMemberValidation[] = o.members.map((entry, index) => {
+    const v = validateHireManifest(entry);
+    if (!v.ok || !v.manifest) return { index, ok: false, errors: v.errors };
+    // delete commandFlags, skills and mcpServers from the validator's OWN output
+    // object — never a second parse. `delete` rather than "leave it unread":
+    // validateHireManifest names every optional field in its returned literal, so
+    // an unread key is still a PRESENT key that JSON.stringify would write into
+    // the file and a caller could read straight back out.
+    for (const field of TEAM_MEMBER_OMITTED) delete v.manifest[field];
+    return { index, ok: true, manifest: v.manifest, errors: [] };
+  });
+
+  return {
+    ok: true,
+    team: {
+      spec: HIRE_TEAM_SPEC_V1,
+      members: members.flatMap((m) => (m.manifest ? [m.manifest] : []))
+    },
+    members,
+    errors: []
   };
 }
 
