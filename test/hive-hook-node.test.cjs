@@ -141,7 +141,7 @@ test('every hook installer routes through the launcher — none left on bare nod
   const hiveRoot = path.join(home, 'hive');
   installAgyHooks(hiveRoot, hive.nodeRunUnquoted.bind(hive));
   installGrokHooks(hiveRoot, hive.nodeRun.bind(hive));
-  installCodexHooks(path.join(home, 'hive/agents/a1'), hive.shimPath(), hive.nodeRunUnquoted.bind(hive));
+  installCodexHooks(path.join(home, 'hive/agents/a1'), hive.shimPath(), hive.nodeRunUnquoted.bind(hive), path.join(home, 'work'));
 
   const launcher = launcherIn(home);
   const commands = hookCommandsUnder(home);
@@ -200,4 +200,117 @@ test('a hook fires with NO node on PATH, and its payload reaches HIVE_SOCK', { s
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.ok(received.length > 0, 'nothing arrived at HIVE_SOCK');
   assert.match(received[0], /"hook_event_name"\s*:\s*"Stop"/);
+});
+
+/* ── codex directory trust is written, not prompted for (operator-found, 2026-08-25) ──
+ *
+ * codex-cli 0.128.0 removed `--dangerously-bypass-hook-trust` and replaced it with an
+ * INTERACTIVE gate, seen live on a real spawn:
+ *
+ *   Do you trust the contents of this directory? … Trusting the directory allows
+ *   project-local config, hooks, and exec policies to load.
+ *     1. Yes, continue   2. No, quit
+ *
+ * A hive worker has nobody to press 1, so it sits there idle forever — never reading
+ * its inbox, while LOOKING like a healthy agent. Worse than the flag error it replaced,
+ * which at least died loudly.
+ *
+ * The supported non-interactive answer is the table codex itself writes when the
+ * operator picks "Yes". */
+test('installCodexHooks trusts the agent cwd in the per-agent config, so no prompt blocks the spawn', () => {
+  const home = tmpHome('md-codex-trust-');
+  const agentDir = path.join(home, 'hive', 'agents', 'a1');
+  const cwd = path.join(home, 'work', 'Project-X');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+
+  const codexHome = installCodexHooks(agentDir, null, (s) => `node ${s}`, cwd);
+  const cfg = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
+
+  assert.match(cfg, /trust_level = "trusted"/,
+    'the per-agent config must trust something, or codex stops on its interactive gate');
+  assert.ok(cfg.toLowerCase().includes(`[projects.'${cwd.toLowerCase()}']`),
+    `the trusted path must be the AGENT'S OWN cwd (${cwd}) — trusting some other path does `
+    + 'not clear the prompt for this workspace');
+
+  // TOML literal strings do not process escapes, so a Windows path survives verbatim.
+  // Double quotes here would turn every backslash into an escape and corrupt the key.
+  const line = cfg.split('\n').find((l) => l.toLowerCase().startsWith("[projects.'"));
+  assert.ok(line && line.includes("'"), 'the project key must be a single-quoted TOML literal');
+});
+
+test('installCodexHooks does not emit a duplicate trust table when the seed already has one', () => {
+  const home = tmpHome('md-codex-trust2-');
+  const agentDir = path.join(home, 'hive', 'agents', 'a1');
+  const cwd = path.join(home, 'work');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+
+  // installCodexHooks seeds from the operator's ~/.codex/config.toml. If that file
+  // already trusts this path, appending our own copy produces a DUPLICATE TOML table,
+  // which codex refuses to parse — a config it cannot read is worse than a prompt.
+  const codexHome = installCodexHooks(agentDir, null, (s) => `node ${s}`, cwd);
+  const cfg = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
+  const key = `[projects.'${cwd.toLowerCase()}']`;
+  const hits = cfg.toLowerCase().split(key).length - 1;
+  assert.equal(hits, 1, `the trust table for ${cwd} must appear exactly once, found ${hits}`);
+});
+
+/* ── codex auth.json is SHARED, never duplicated (operator-found, 2026-08-25) ──
+ *
+ * codex's auth.json holds an OAuth refresh token, and refresh tokens are SINGLE-USE
+ * and ROTATING. Copy the file and the first refresh by any holder kills every other
+ * copy — observed live as
+ *
+ *   Your access token could not be refreshed because your refresh token was already
+ *   used. Please log out and sign in again.
+ *
+ * with three identical 4566-byte copies on disk (the operator's and two agents'),
+ * because symlinkSync needs elevation on win32 and the fallback went straight to
+ * copyFileSync. A hard link shares the inode with no privilege required. */
+test('installCodexHooks SHARES the operator credential rather than duplicating it', () => {
+  const home = tmpHome('md-codex-auth-');
+  const agentDir = path.join(home, 'hive', 'agents', 'a1');
+  const cwd = path.join(home, 'work');
+  const fakeUserCodex = path.join(home, 'fake-user-home', '.codex');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.mkdirSync(fakeUserCodex, { recursive: true });
+
+  // The real function reads homedir(); this case asserts the SHARING PROPERTY on a
+  // controlled pair instead, exercising the exact symlink → hardlink → copy ladder
+  // the installer uses, so the property is pinned even where homedir() is not ours.
+  const src = path.join(fakeUserCodex, 'auth.json');
+  const dest = path.join(agentDir, '.codex-auth-probe.json');
+  fs.writeFileSync(src, JSON.stringify({ refresh_token: 'original' }), 'utf8');
+
+  let shared = false;
+  try { fs.symlinkSync(src, dest); shared = true; }
+  catch {
+    try { fs.linkSync(src, dest); shared = true; }
+    catch { fs.copyFileSync(src, dest); shared = false; }
+  }
+  assert.ok(shared,
+    'neither symlink nor hard link worked on this platform/volume — the installer would '
+    + 'fall back to a copy, and a copied OAuth refresh token dies on first rotation');
+
+  // The decisive property: a refresh written by ONE holder must be visible to the other.
+  fs.writeFileSync(src, JSON.stringify({ refresh_token: 'rotated' }), 'utf8');
+  const seen = JSON.parse(fs.readFileSync(dest, 'utf8')).refresh_token;
+  assert.equal(seen, 'rotated',
+    'the agent must observe the rotated token. If this reads "original", the credential '
+    + 'was DUPLICATED and every agent will 401 the moment the operator refreshes.');
+});
+
+test('installCodexHooks prefers sharing over copying in source order', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'main', 'hiveProvisioning.ts'), 'utf8');
+  const block = src.slice(src.indexOf("const authSrc = join(userHome"), src.indexOf("const authSrc = join(userHome") + 500);
+  const sym = block.indexOf('symlinkSync');
+  const hard = block.indexOf('linkSync(authSrc');
+  const copy = block.indexOf('copyFileSync');
+  assert.ok(sym > 0 && hard > sym && copy > hard,
+    'the ladder must be symlink → hard link → copy. copyFileSync must be LAST: it is the '
+    + 'only rung that duplicates a rotating credential, and on win32 (no symlink privilege) '
+    + 'skipping the hard-link rung sends every agent straight to a doomed copy.');
 });

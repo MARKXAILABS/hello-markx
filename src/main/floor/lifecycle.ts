@@ -252,3 +252,46 @@ export function teardownPty(id: string, deps: AgentTeardownDeps): void {
   deps.delivery.forgetPty(id);
   deps.syncKeepAwake();
 }
+
+/** The collaborators {@link releaseWorkerPty} needs. Deliberately NARROW rather
+ *  than the full {@link AgentTeardownDeps}: index.ts holds the bound
+ *  `floor?.teardownPty` (boot.ts owns the dep set), not the dep set itself. */
+export interface WorkerReleaseDeps {
+  /** `PtyManager.kill` — returns `{ ok:false }` on failure and NEVER throws. */
+  killPty: (id: string) => { ok: boolean; error?: string };
+  /** The bound {@link teardownPty} (`floor?.teardownPty` at the call site). */
+  teardownPty: (id: string) => void;
+  liveWorkers: Map<string, WorkerRec>;
+}
+
+/**
+ * Release a live ephemeral worker: kill its PTY, then run teardown
+ * UNCONDITIONALLY — exactly what `pty:kill` and `killAgent` already do.
+ *
+ * The unconditional teardown is load-bearing, not belt-and-braces. `kill()`
+ * deletes the session from `PtyManager.sessions` BEFORE node-pty's `onExit`
+ * fires, and that callback's identity guard (`sessions.get(id) !== session`)
+ * then returns early — so the exit handler NEVER reaches teardown for an
+ * EXPLICIT kill. `killByOwner`'s own comment says so: "kill()'s callers all
+ * follow it with teardownPty". The worker paths did not, so every stop left
+ * its record in `liveWorkers` with `releasing = true`: the reap loop skips it
+ * (`if (rec.releasing) continue`), a repeat `workers:stop` answers `{ ok:true }`
+ * for a worker that never died, and it holds a `maxConcurrentWorkers` slot
+ * until the app restarts (MAIN-01).
+ *
+ * The kill result crosses back VERBATIM, so a manual stop reports the truth
+ * about the process rather than the truth about our bookkeeping. If teardown
+ * could not drop the record (no floor bound yet — `floor?.teardownPty` is a
+ * no-op then), `releasing` is cleared so a later reap retries instead of
+ * skipping it forever.
+ */
+export function releaseWorkerPty(workerId: string, deps: WorkerReleaseDeps): { ok: boolean; error?: string } {
+  const res = deps.killPty(workerId);
+  if (!res.ok) {
+    console.error(`[worker] kill failed for ${workerId}: ${res.error ?? 'unknown'} — tearing down anyway to free its slot`);
+  }
+  deps.teardownPty(workerId);
+  const rec = deps.liveWorkers.get(workerId);
+  if (rec) rec.releasing = false;
+  return res;
+}

@@ -25,7 +25,7 @@ import {
 } from '@shared/claudeAccounts';
 import { fmtCountdown, describeHealth, type PoolSnapshot, type AccountHealth } from '@shared/claudeAccountPool';
 import { providerCapabilities, remoteControlAvailability } from '@shared/providerAutomation';
-import { MCP_CATALOG, type McpTier } from '@shared/mcpCatalog';
+import { MCP_CATALOG, mcpWiredFor, type McpTier } from '@shared/mcpCatalog';
 
 export {
   AGENT_PROVIDER_PRESETS,
@@ -631,6 +631,40 @@ export function ensureMcpGrants(): void {
 }
 
 /**
+ * Grant a batch of MCP servers one at a time and report WHICH ids main actually
+ * accepted when one of them fails partway through (CR-01).
+ *
+ * The inline loop this replaced `return`ed on the first failure and threw that
+ * list away, so the caller could neither clear the plaintext secrets for the ids
+ * already granted nor republish the grants mirror every `AgentCard` reads — the
+ * floor kept showing a genuinely-granted server as ungranted for the rest of the
+ * session, wrong in the permissive direction. Partial success is reported, never
+ * discarded; the caller decides what to do with it.
+ *
+ * Stops at the first failure (a batch that has already failed is not one whose
+ * remaining grants should be attempted) and NEVER throws across this boundary:
+ * a rejected call is reported as `error` exactly like an `{ ok: false }`, so an
+ * IPC-level throw cannot leave the caller's `busy` flag stuck on.
+ */
+export async function grantMcpBatch(
+  ids: string[],
+  grant: (id: string) => Promise<{ ok: boolean; error?: string }>
+): Promise<{ granted: string[]; error: string | null }> {
+  const granted: string[] = [];
+  for (const id of ids) {
+    let res: { ok: boolean; error?: string };
+    try {
+      res = await grant(id);
+    } catch (e) {
+      return { granted, error: e instanceof Error ? e.message : String(e) };
+    }
+    if (!res.ok) return { granted, error: res.error ?? `${id}: grant failed` };
+    granted.push(id);
+  }
+  return { granted, error: null };
+}
+
+/**
  * The MCP element's data for one agent's card (S2). `null` when the engine
  * cannot take MCP servers at all — the caller renders the `NO MCP` gap chip
  * from `capabilityGaps` and MUST NEVER render an empty `MCP 0 safe`
@@ -645,9 +679,27 @@ export function ensureMcpGrants(): void {
 export function mcpCardSummary(
   cfg: McpGrantsSnapshot,
   agentId: string,
-  opts: { supportsMcp: boolean; ptyId?: string }
+  opts: { supportsMcp: boolean; provider?: string; ptyId?: string }
 ): { safeCount: number; granted: McpCardMark[] } | null {
   if (!opts.supportsMcp) return null;
+  // T-P02-11-10. `supportsMcp` answers "can this engine take MCP AT ALL" (the
+  // static preset claim, Rule C-1b). `mcpWiredFor` answers "does THIS engine's
+  // spawn path actually write a server bundle" — and only `claude` does today
+  // (`MCP_WIRED_PROVIDERS`). `hive.ts` gates the real write on the SAME
+  // predicate: a non-wired provider gets `{}`, no `mcp.json`, no
+  // `--mcp-config`.
+  //
+  // Gating the card on `supportsMcp` alone is precisely the conflation
+  // `mcpCatalog.ts`'s own header warns about — "how a capability card starts
+  // lying about a channel nothing writes". Nine presets declare
+  // `supportsMcp: true` while one is wired, so before this guard EIGHT engines
+  // rendered `MCP 6 safe` out of the box while their agents were spawned with
+  // zero MCP servers. That is the out-of-the-box state, not an edge case, and
+  // it is the exact failure PARITY-01b exists to prevent.
+  //
+  // `provider` is optional so a caller that has not resolved one keeps the old
+  // behaviour rather than silently losing its card; AgentCard always passes it.
+  if (opts.provider !== undefined && !mcpWiredFor(opts.provider)) return null;
   const safeCount = MCP_CATALOG.filter(
     (e) => e.tier === 'safe-readonly' && (cfg.mcpDefaults[e.id]?.enabled ?? e.defaultEnabled)
   ).length;

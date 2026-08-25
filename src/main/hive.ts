@@ -38,7 +38,7 @@ import {
   type AgentProvider
 } from '../shared/agentProvider';
 import { capabilityLine, providerCapabilities } from '../shared/providerAutomation';
-import { MCP_CATALOG, mcpWiredFor } from '../shared/mcpCatalog';
+import { MCP_CATALOG, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { expandTilde } from './fs';
 import { memoryBin } from './memory';
 import {
@@ -354,6 +354,32 @@ function shortRand(): string {
  *  same append-only migration for existing agents for free. */
 const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/', 'kimi-config.toml', 'mcp.json'];
 
+/** Whether the INSTALLED codex accepts `--dangerously-bypass-hook-trust`.
+ *
+ *  It is not a constant of the world. Older codex builds took the flag; `codex-cli
+ *  0.128.0` removed it, and codex refuses an unknown argument rather than ignoring
+ *  it — `error: unexpected argument … found` / `process exited (code 2)` — so
+ *  passing it blind killed every codex hive agent at spawn, before a single token.
+ *
+ *  Probed once per process and cached. `shell: true` on win32 because the binary is
+ *  `codex.cmd` there and Node cannot exec a .cmd directly — the same lesson
+ *  `scripts/mcp-live-probe.cjs` and `pty.ts`'s `where` probe already encode.
+ *
+ *  Fails CLOSED to "not supported": if the probe cannot run at all, spawning
+ *  without the flag still produces a working agent (hooks may not fire), whereas
+ *  spawning with an unsupported flag produces no agent at all. */
+let codexHookTrust: boolean | null = null;
+function codexAcceptsHookTrust(bin: string): boolean {
+  if (codexHookTrust !== null) return codexHookTrust;
+  try {
+    const res = spawnSync(bin, ['--help'], {
+      encoding: 'utf8', timeout: 10_000, shell: process.platform === 'win32'
+    });
+    codexHookTrust = /--dangerously-bypass-hook-trust/.test(`${res.stdout ?? ''}${res.stderr ?? ''}`);
+  } catch { codexHookTrust = false; }
+  return codexHookTrust;
+}
+
 /** Idempotently ensure `<agentDir>/.gitignore` excludes the non-memory files.
  *  Append-only: writes only the missing lines, leaving any existing entries. */
 function ensureMineIgnore(agentDir: string): void {
@@ -522,7 +548,25 @@ export class HiveManager {
   enabled(): boolean {
     return this.root() !== null;
   }
+  /** IPC-01 / MAIN-02 class. Every per-agent path in this class is built here,
+   *  so this is the one place a hostile id has to be stopped. `id` reaches this
+   *  method from the RENDERER through `hive:memory`, `hive:inbox`,
+   *  `hive:messages` and `mcp:agentState` — `'../agents/someone-else'` is a
+   *  perfectly good string, and `mcpArmed('../agents/a1')` was MEASURED
+   *  returning another agent's armed server list before any guard existed.
+   *
+   *  Guarding the callers one at a time is how this defect kept reappearing:
+   *  `mcp:agentState` was fixed, then `mcp:grant`/`mcp:revoke` turned out to
+   *  share the same ungated input, then the phase-02 security audit found
+   *  `hive:memory`/`hive:inbox`/`voiceMessages` ungated as well. This guard is
+   *  at the chokepoint instead, so a caller added tomorrow inherits it.
+   *
+   *  Throws rather than returning a sanitized path: a caller asking for an
+   *  impossible agent has a bug or is hostile, and both deserve to fail loudly
+   *  rather than silently read some other directory. The public read accessors
+   *  below convert it to their own empty-value contract. */
   private agentDir(id: string): string {
+    if (!isSafeAgentId(id)) throw new Error('unsafe agent id');
     return join(this.root()!, 'agents', id);
   }
   /** IPC endpoint the cth-hook shim talks to (Phase 1 autonomy).
@@ -1014,14 +1058,29 @@ export class HiveManager {
           if (desc.kind === 'hooks') {
             if (desc.shim === 'agy') installAgyHooks(root, this.nodeRunUnquoted.bind(this));
             else if (desc.shim === 'codex') {
-              env.CODEX_HOME = installCodexHooks(dir, this.shimPath(), this.nodeRunUnquoted.bind(this));
+              env.CODEX_HOME = installCodexHooks(dir, this.shimPath(), this.nodeRunUnquoted.bind(this), meta.cwd);
               // Codex refuses to run hooks from a config dir without persisted
               // "hook trust" (normally an interactive gate). Our hooks.json is
               // hive-authored inside an isolated CODEX_HOME, so we bypass that gate
               // for this automated spawn — the flag's documented use ("automation
               // that already vets hook sources"). Without it the hooks silently
               // never fire. Must precede the positional prompt.
-              preArgs.push('--dangerously-bypass-hook-trust');
+              //
+              // GATED ON SUPPORT, because passing it blind is worse than not
+              // passing it. `codex-cli 0.128.0` REMOVED this flag, and codex
+              // rejects an unknown argument outright:
+              //   error: unexpected argument '--dangerously-bypass-hook-trust' found
+              //   – process exited (code 2) –
+              // i.e. EVERY codex hive agent died at spawn, before printing a
+              // single token. Observed live on 0.128.0 by the operator. A silent
+              // hook degradation is recoverable; an engine that cannot start is
+              // not, and PARITY says codex is a first-class citizen.
+              if (codexAcceptsHookTrust(preset.defaultCommand)) preArgs.push('--dangerously-bypass-hook-trust');
+              else console.warn(
+                `[hive] codex does not accept --dangerously-bypass-hook-trust (${preset.defaultCommand}); `
+                + 'spawning without it. Lifecycle hooks may not fire for this agent, so mail may not '
+                + 'wake it — but the agent starts. Older codex builds took the flag; 0.128.0 removed it.'
+              );
             }
             else if (desc.shim === 'kimi') {
               // Kimi Code (Moonshot) — the CODEX case (installKimiConfig,
@@ -1165,16 +1224,6 @@ export class HiveManager {
       if (Object.keys(mcpServers).length) {
         this.writeJson(mcpPath, { mcpServers }, 0o600);
         args.push('--mcp-config', mcpPath);
-        // POLICY (this plan, D-25/RESEARCH §5): --strict-mcp-config is
-        // deliberate, not incidental. Without it the operator's own
-        // ~/.claude.json servers would be silently inherited by every hive
-        // agent — one already running with --permission-mode
-        // bypassPermissions would then hold tools the card never showed,
-        // using the operator's own credentials. The cost is real and is
-        // recorded in the SUMMARY: an operator who relied on their personal
-        // MCP servers inside hive agents loses them here and re-grants the
-        // catalog equivalent per agent.
-        args.push('--strict-mcp-config');
       } else {
         // Nothing armed (no consent, an unwired provider, or a revoke) — a
         // STALE file must not survive to re-arm the server on the next
@@ -1182,6 +1231,25 @@ export class HiveManager {
         // running session actually get" (D-29).
         try { rmSync(mcpPath, { force: true }); } catch { /* best-effort */ }
       }
+      // POLICY (D-25/RESEARCH §5): --strict-mcp-config is deliberate, not
+      // incidental. Without it the operator's own ~/.claude.json servers are
+      // silently inherited by every hive agent — one already running with
+      // --permission-mode bypassPermissions would then hold tools the card
+      // never showed, using the operator's own credentials. The cost is real
+      // and recorded in the SUMMARY: an operator who relied on their personal
+      // MCP servers inside hive agents loses them here and re-grants the
+      // catalog equivalent per agent.
+      //
+      // T-P02-11-07: this MUST be tied to the provider being wired, NOT to
+      // whether this agent happens to have anything armed. It used to sit
+      // inside the non-empty branch above, so a freshly spawned agent with
+      // zero grants — the DEFAULT state of every new agent, and the common
+      // case — launched with neither flag and inherited the operator's
+      // servers anyway. The mitigation was defeated in exactly the situation
+      // it was written for. Pushing it unconditionally for a wired provider
+      // is harmless when nothing is armed: it simply asserts "no servers
+      // beyond what I was given", which with no --mcp-config means none.
+      if (mcpWiredFor(meta.provider ?? 'claude')) args.push('--strict-mcp-config');
     }
     return { args, env };
   }
@@ -1733,15 +1801,73 @@ export class HiveManager {
         if (!f.endsWith('.json')) continue;
         const full = join(outbox, f);
         try {
-          const partial = JSON.parse(readFileSync(full, 'utf8')) as Partial<HiveMessage>;
+          // STRIP THE BOM BEFORE PARSING. Windows agents write their outbox with
+          // PowerShell, and `Set-Content` / `Out-File -Encoding utf8` emit a UTF-8
+          // BOM (U+FEFF) by default there. JSON.parse rejects a leading BOM, so
+          // every message a Windows worker sent the obvious way landed in the
+          // catch below and was thrown away. Measured live: TWO of Jim's reports
+          // — the round-trip completion and a blocked-task finding — were both
+          // quarantined, and god's inbox simply stayed empty.
+          //
+          // The BOM is not corruption and carries no meaning in JSON: stripping it
+          // is what every tolerant reader does. Fixing it here fixes it for every
+          // engine on every platform, rather than asking eleven CLIs to remember
+          // an encoding flag.
+          const raw = readFileSync(full, 'utf8').replace(/^﻿/, '');
+          const partial = JSON.parse(raw) as Partial<HiveMessage>;
           const msg = this.normalize(partial, id);
           msg.from = id; // sender is authoritative — the owning directory
           this.routeMessage(msg);
           renameSync(full, join(outbox, '.sent', f)); // archive, don't reprocess
           routed++;
-        } catch {
-          // malformed file — quarantine so we don't spin on it
+        } catch (e) {
+          // Malformed file — quarantine so we don't spin on it. But NEVER silently:
+          // this is a mail system, and a message that vanishes with no log and no
+          // bounce is worse than one that fails loudly. The sender believed it sent;
+          // the recipient never knew to expect it; and the only evidence was a
+          // `bad-*.json` nobody reads. That is exactly how Jim's two reports were
+          // lost before the BOM strip above existed.
+          const why = e instanceof Error ? e.message : String(e);
+          console.error(`[hive] DROPPED malformed outbox message ${id}/${f}: ${why}. `
+            + `Quarantined as .sent/bad-${f}; the sender was NOT told.`);
+          // KEY THE ADVICE TO THE ACTUAL CAUSE. The first version of this bounce
+          // appended canned "your file has a BOM" guidance to EVERY parse failure.
+          // A worker agent caught it within minutes of it shipping: it had been
+          // told to strip a BOM from a file that demonstrably had none, while the
+          // real fault was malformed JSON. Its point was exact — because the read
+          // above now strips a UTF-8 BOM BEFORE parsing, a UTF-8 BOM can no longer
+          // BE a parse failure, so that advice was not merely unhelpful, it was
+          // guaranteed wrong on every bounce that carried it. Canned advice on a
+          // diagnostic is worse than none: it sends the reader to chase a bug that
+          // is already fixed.
+          //
+          // Encoding is still worth naming for the one shape it CAN still break: a
+          // UTF-16 file (older PowerShell's `Out-File` default), whose bytes are
+          // nothing like JSON. That is detectable from the leading bytes rather
+          // than guessed at, so the hint is offered only when evidence supports it.
+          let hint = 'Check the file is a single well-formed JSON object.';
+          try {
+            const head = readFileSync(full);
+            const utf16 = (head[0] === 0xFF && head[1] === 0xFE) || (head[0] === 0xFE && head[1] === 0xFF);
+            if (utf16 || head.subarray(0, 64).includes(0)) {
+              hint = 'The file looks UTF-16 encoded, which is not valid JSON here. From PowerShell use '
+                + '[System.IO.File]::WriteAllText(path, json, (New-Object System.Text.UTF8Encoding $false)) '
+                + '— Out-File defaults to UTF-16 on older PowerShell. Rewrite the message and send again.';
+            }
+          } catch { /* the generic hint stands */ }
           try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
+          // Bounce to the sender so the failure reaches whoever can fix it — the
+          // agent that wrote the file. Best-effort by construction: if the bounce
+          // itself cannot be delivered the log line above is still the record.
+          try {
+            this.routeMessage(this.normalize({
+              to: id,
+              act: 'inform',
+              subject: `Your message ${f} could not be delivered`,
+              body: `The hive router could not parse ${f} and has quarantined it as `
+                + `.sent/bad-${f}. It was NOT delivered to anyone.\n\nParser said: ${why}\n\n${hint}`
+            }, 'system'));
+          } catch { /* the log line above is the record */ }
         }
       }
     }
@@ -2176,6 +2302,7 @@ export class HiveManager {
     });
   }
   memory(id: string): string {
+    if (!isSafeAgentId(id)) return ''; // IPC-01: renderer-supplied; fail closed, never throw across IPC
     const p = join(this.agentDir(id), 'memory.md');
     return existsSync(p) ? readFileSync(p, 'utf8') : '';
   }
@@ -2186,6 +2313,7 @@ export class HiveManager {
    *  but most of the floor's history lives in a handful of them). Cheap: reads a
    *  small markdown file; never throws. Works for ANY id, active OR archived. */
   hasMemory(id: string): boolean {
+    if (!isSafeAgentId(id)) return false; // IPC-01
     const p = join(this.agentDir(id), 'memory.md');
     if (!existsSync(p)) return false;
     try {
@@ -2195,12 +2323,14 @@ export class HiveManager {
     } catch { return false; }
   }
   inbox(id: string): HiveMessage[] {
+    if (!isSafeAgentId(id)) return []; // IPC-01: reachable from the renderer via `hive:inbox`
     return this.listMessages(join(this.agentDir(id), 'inbox'));
   }
   /** Read an agent's OUTBOX (messages it has authored/sent). Symmetric with
    *  inbox(); the router drains live outbox files into recipients' inboxes and
    *  archives the original under outbox/.sent, so a sent message survives there. */
   outbox(id: string): HiveMessage[] {
+    if (!isSafeAgentId(id)) return []; // IPC-01
     return this.listMessages(join(this.agentDir(id), 'outbox'));
   }
 
@@ -2211,6 +2341,15 @@ export class HiveManager {
    *  difference — main never asserts a live connection. `[]` when the file is
    *  absent or unparseable; never throws. */
   mcpArmed(agentId: string): string[] {
+    // MAIN-02: `agentId` arrives here straight from the RENDERER (mcp:agentState),
+    // and a `typeof agentId === 'string'` shape check is not a membership check —
+    // `../agents/<someone-else>` is a perfectly good string. Validate against the
+    // live registry BEFORE constructing any path, so an id the roster never issued
+    // cannot be used to read a `mcpServers` key list off an arbitrary JSON file.
+    // Fails closed on a hive with no home too: `registry()` answers `{ agents:{} }`
+    // there, which also keeps `agentDir`'s `root()!` non-null assertion — a
+    // compile-time fiction — from throwing a TypeError across a sync IPC handler.
+    if (!this.registry().agents[agentId]) return [];
     const p = join(this.agentDir(agentId), 'mcp.json');
     if (!existsSync(p)) return [];
     try {
@@ -2249,6 +2388,9 @@ export class HiveManager {
     const includeArchived = opts.includeArchived !== false; // default true
 
     let owners: string[];
+    // IPC-01: `opts.agentId` reaches here from the renderer via `hive:messages`
+    // and is about to become `join(root,'agents',<id>)`. Fail closed.
+    if (onlyAgent && !isSafeAgentId(onlyAgent)) return [];
     try {
       owners = onlyAgent
         ? [onlyAgent]
@@ -2302,6 +2444,7 @@ export class HiveManager {
   }
   /** Count undrained inbox messages for an agent (cheap — for the fleet snapshot). */
   inboxBacklog(id: string): number {
+    if (!isSafeAgentId(id)) return 0; // IPC-01
     const dir = join(this.agentDir(id), 'inbox');
     if (!existsSync(dir)) return 0;
     try { return readdirSync(dir).filter((f) => f.endsWith('.json')).length; } catch { return 0; }

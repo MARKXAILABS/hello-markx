@@ -241,13 +241,44 @@ function win32Components(p: string): string | null {
 function driveRelative(target: string): boolean {
   if (process.platform !== 'win32') return false;
   if (/^[A-Za-z]:[^\\/]/.test(target) && /[\\/]/.test(target)) return true;
-  return /^[\\/][^\\/]+[\\/]/.test(target);
+  // BACKSLASH-ROOTED ONLY. This rule exists for Windows's rooted-relative form
+  // (`\x\y`), which is measured from a per-drive current directory main cannot
+  // see. The character class used to be `[\\/]`, which also caught every
+  // FORWARD-slash-rooted path — and on win32 that is not a Windows path at all,
+  // it is an ordinary POSIX/MSYS one.
+  //
+  // Measured live, and the blast radius was enormous: `god` was denied on
+  //   cat "C:\…\god\memory.md" 2>/dev/null | tail -100
+  //   ls -la /c/Users/Alienware/…/god/inbox/
+  // — i.e. reading its OWN memory and its OWN inbox. The first spells its path
+  // absolutely and still failed, because the word split turns `2>/dev/null` into
+  // `/dev/null`, and that matched. So ANY command using the commonest redirect
+  // idiom on the platform was refused, as was every Git-Bash `/c/...` path the
+  // agent's own shell produces.
+  //
+  // Forward-slash-rooted words stay framable: `resolve()` maps them onto the
+  // current drive, they land nowhere near the hive, and the protected-path walk
+  // then allows them on the merits. Nothing that was genuinely unframable
+  // becomes allowed — `\x\y` and `C:..\x` are both still refused above/here.
+  return /^\\[^\\/]+[\\/]/.test(target);
 }
 
 /** The four protected-path reasons, hoisted so the identity walk and the
  *  un-created-tail rule cannot drift apart in what they say. Their text is
  *  unchanged from the string-comparison version: this plan changed how a
  *  candidate is MATCHED to a branch, not what any branch decides. */
+/** The ONLY <hive>/bin entries an agent is instructed to EXECUTE. `hive-node`
+ *  is the bundled-node launcher every protocol command goes through; `task.cjs`
+ *  is the kanban CLI the prompt mandates for every card mutation; `kg.cjs` is the
+ *  knowledge-graph reader it mandates for company context. Reading or running
+ *  these is the documented floor protocol. WRITING any of them is still denied —
+ *  the carve-out that uses this set also requires the command to carry no write
+ *  marker at all. Lower-cased basenames; `.cmd`/`.sh` are the win32/posix
+ *  spellings of the same launcher. */
+const PROTOCOL_BIN_EXECUTABLES = new Set([
+  'hive-node', 'hive-node.cmd', 'hive-node.sh', 'task.cjs', 'kg.cjs'
+]);
+
 const DENY_BIN = 'Denied: <hive>/bin holds the ONE hook shim every agent on this floor '
   + 'executes. Writing it runs your code inside another agent\'s hook, with that '
   + 'agent\'s environment and token.';
@@ -883,8 +914,38 @@ export class HookServer {
       // 721 ms of blocking main-thread work. Measured on this repo's README:
       // 2612 words in, 102 out.
       const expanded = this.expandHiveVars(agentId, ti.command);
+      // THE PROTOCOL'S OWN COMMANDS ARE NOT ATTACKS. The injected prompt
+      // (hive.ts) instructs every agent, verbatim, to run
+      //   "<hive>/bin/hive-node.cmd" "<hive>/bin/task.cjs" {add|patch|claim|done}
+      // and the same shape for kg.cjs. Those words are paths INTO <hive>/bin, so
+      // before this carve-out the gate denied the floor's own kanban CLI on every
+      // call — measured live: the god reported "adding kanban card assigned to
+      // Jim", the gate answered DENY_BIN, and tasks.json stayed at zero tasks.
+      // The floor's protocol was blocked by the floor's own gate, and the only
+      // visible symptom was a kanban that silently never filled.
+      //
+      // The carve-out is deliberately TWO conditions, not one. (1) the basename
+      // must be one of the three executables the protocol actually names —
+      // a filename allow-list, so `<hive>/bin/anything-else` is untouched; and
+      // (2) the RAW command must carry no write marker. Condition 2 is tested on
+      // the unsplit string on purpose: the split regex consumes `>` and `>>`, so
+      // a redirect is invisible by the time words exist — which is exactly how
+      // `cat >> "$HIVE_ROOT/bin/task.cjs"` would otherwise walk through a
+      // filename allow-list.
+      //
+      // CEILING, stated rather than implied: an obfuscated write that names one
+      // of the three files and uses no write token — `node -e "…writeFileSync…"`
+      // — still passes. That is the same ceiling AGENT_DENY_RULES already
+      // documents for its prefix rules ("stops the confident accident, not a
+      // hostile model"), and it is a strictly smaller hole than the certain,
+      // active failure it replaces: an unusable kanban for every agent on the
+      // floor.
+      const writeMarker = /(?:^|[\s;&|])(?:rm|del|erase|mv|move|cp|copy|tee|touch|truncate|chmod|attrib|ln|install|Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Remove-Item|Rename-Item)(?:\s|$)|\bsed\s+-i|>>?/i
+        .test(expanded);
       for (const word of expanded.split(/[\s;&|<>()"']+/)) {
-        if (word && pathShaped(word)) targets.push(word);
+        if (!word || !pathShaped(word)) continue;
+        if (!writeMarker && PROTOCOL_BIN_EXECUTABLES.has(basename(word).toLowerCase())) continue;
+        targets.push(word);
       }
     }
     if (targets.length === 0) return null;
@@ -1368,6 +1429,25 @@ export class HookServer {
     if (event === 'PreToolUse') {
       const denial = this.protectedPathDenial(agentId, p);
       if (denial) {
+        // A DENY MUST BE DIAGNOSABLE. Before this line the gate refused silently:
+        // the agent saw a reason, the operator saw a banner, and the main log had
+        // NOTHING — so "why was THIS command denied" could not be answered after
+        // the fact, and a false positive was indistinguishable from a true one.
+        // Measured: the god was denied on the floor's own kanban CLI repeatedly,
+        // and a full grep of main.log produced zero deny lines to work from.
+        //
+        // Truncated on purpose — a tool_input can carry a whole heredoc, and the
+        // point is identifying WHICH command, not archiving it.
+        const denyTi = (p.tool_input && typeof p.tool_input === 'object')
+          ? p.tool_input as Record<string, unknown>
+          : {};
+        const denyWhat = typeof denyTi.command === 'string' ? denyTi.command
+          : typeof denyTi.file_path === 'string' ? denyTi.file_path : '';
+        console.warn(
+          '[hive] PreToolUse DENIED agent=' + agentId + ' tool=' + String(p.tool_name)
+          + ': ' + denial.slice(0, 90)
+          + ' | target: ' + String(denyWhat).slice(0, 200)
+        );
         this.emitControl(agentId, p.tool_name, denial);
         this.emit(agentId, event, p, true);
         return {

@@ -1,5 +1,5 @@
 ---
-status: issues_found
+status: resolved
 phase: 02-the-daemon-and-the-protocol
 depth: standard
 reviewed_at: 2026-08-24
@@ -303,3 +303,49 @@ work — but none should be waved through to a follow-up phase without an explic
 
 Recommended: `/gsd:code-review 2 --fix` to apply, or fix CR-01 + MAIN-01 + SEC-01 + CR-02
 directly, each with the regression test its finding names.
+
+
+---
+
+## Resolution — all findings closed
+
+Fixed across two rounds, each fix driven RED first, then adversarially verified by
+three independent skeptics per fix (correctness / regression / test-honesty), each
+instructed to REFUTE and to default to refuted when uncertain.
+
+| Finding | Sev | Commit(s) | Closed by |
+|---|---|---|---|
+| CR-01 | CRITICAL | `16b93eb` | `grantMcpBatch(ids, grant)` extracted to `store/config.ts`, reporting `{granted, error}` — the ids main actually accepted — instead of discarding them. `submitGrant` is now straight-line with no early return: clears keys for exactly the succeeded ids, surfaces the error, republishes unconditionally. |
+| CR-02 | HIGH | `0b9014c` | The defaults write routed through `setMcpGrants`, publishing main's SAVED map (not the sent patch) so D-27's prune cannot desync the mirror. |
+| SEC-01 | HIGH | `cba55d5`, `243dc37` | `malformedSubscription()` non-throwing guard; the ENTIRE `sendPush` body moved inside the try; `vapidKeysMatch()` now enforces the pair check the comment previously only claimed. |
+| MAIN-01 | HIGH | `a17950b` | A worker release always runs teardown, so a failed kill cannot strand a `maxConcurrentWorkers` slot or report false success. |
+| MAIN-02 | MEDIUM | `2f10127`, `7133da5` | Shape guard `isSafeAgentId` on **all three** MCP handlers (round 1 guarded one, with a registry test that broke DAEMON-04 for non-hive agents). |
+| MAIN-03 | MEDIUM | `c47abb8` | AST guard extended to destructuring, non-null assertion and capture-by-value — **which caught a live instance**. |
+| SEC-02 | LOW | — | Unreachable (`sanitizeWebhookTrigger` excludes colons). Left as a documented defense-in-depth note. |
+| SEC-03 | UNCERTAIN | — | Not asserted as exploitable; no exploit constructed. Left recorded. |
+
+### What the adversarial pass caught that the fixers missed
+
+Round 1's fixers all reported "fixed". Three were not:
+
+1. **SEC-01's guard was placed outside the try**, so `sendPush(null, …)` began *rejecting* where it previously resolved `{ok:false}` — the fix for "throws across a boundary" reintroduced a throw across that boundary. Caught by a differential probe against `cba55d5^`.
+2. **`ensureVapidKeys` documented a validation it did not perform.** `createPrivateKey({format:'jwk'})` accepts an empty, truncated, or foreign `d` (proven live on Node v24.13.0), so a mismatched key was trusted and would sign VAPID JWTs that never verify — silent, permanent 401s with nothing to trigger recovery. Now enforced by sign-then-verify against the advertised point; a `createPublicKey` point-compare was tried and rejected because Node echoes back the supplied x/y rather than deriving `d*G`.
+3. **MAIN-02's membership check rejected real agents.** See the table row above.
+
+Two false-greens were also caught and corrected — one by a fixer in its own work (a
+brace-blanking scanner that blanked the exact `if (!res.ok) { return; }` under test
+and passed vacuously), one by the orchestrator (a pin asserting the substring
+`registry().agents[agentId]`, which a bare `?.provider` lookup also satisfied).
+
+### Gates at resolution
+
+`npm run typecheck` exit 0 · `npm run build` exit 0 · `npx eslint --max-warnings 0` exit 0 ·
+`npm test` **824 tests / 817 pass / 0 fail / 7 skipped** (was 805/798/0/7 at review time —
++19 tests, all regression coverage for these findings).
+
+### Coverage gaps from the review that remain open
+
+Unchanged and still worth doing before this is public: `index.ts`'s ~160 IPC handlers were
+pattern-scanned rather than individually traced. MAIN-02 was found *by* that scan, and the
+follow-up then found two MORE ungated handlers on the same input — which is direct evidence
+that a full trace of that surface would find more.

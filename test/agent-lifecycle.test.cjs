@@ -14,13 +14,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync, readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
 const loadTs = require('./load-ts.cjs');
 
 const {
-  teardownPty, finalizeWorkerWorktree, finalizeAgentWorktree, workerScratchDir
+  teardownPty, releaseWorkerPty, finalizeWorkerWorktree, finalizeAgentWorktree, workerScratchDir
 } = loadTs('src/main/floor/lifecycle.ts');
 
 /** A temp dir that cleans itself up, realpath'd for the same reason
@@ -221,4 +221,93 @@ test('teardownPty with a live worktree and a WorkerRec routes through the worker
   assert.equal(deps.liveWorkers.has('pty1'), false, 'liveWorkers still holds the torn-down worker');
   assert.ok(existsSync(wt), 'a dirty worker worktree was removed instead of preserved');
   assert.equal(calls.savePreservedWorktrees, 1, 'the worker path did not run — savePreservedWorktrees never fired');
+});
+
+// ─── MAIN-01: releasing a worker must ALWAYS reach teardown ─────────────────
+//
+// The ephemeral-worker paths (`ephemeralWorkerTick`'s three reap branches and
+// the `workers:stop` handler) set `rec.releasing = true` and then called
+// `ptyManager.kill(workerId)` BARE. Two independent facts, both read off
+// src/main/pty.ts, make that a permanent leak rather than a race:
+//
+//  1. `kill()` deletes the session from `sessions` BEFORE node-pty's `onExit`
+//     ever fires, and `onExit`'s identity guard (`sessions.get(id) !== session`)
+//     then returns early — so the exit handler NEVER runs teardown for an
+//     EXPLICIT kill. `killByOwner`'s own comment states it: "kill()'s callers
+//     all follow it with teardownPty". `pty:kill` and `killAgent` do. The
+//     worker paths did not.
+//  2. `kill()` never throws; a failure comes back as `{ ok:false }`, which
+//     those call sites discarded.
+//
+// Nothing anywhere resets `releasing`, so the record sat in `liveWorkers`
+// forever: `if (rec.releasing) continue` made the reap loop skip it, a repeat
+// `workers:stop` answered `{ ok:true }` for a worker that never died, and it
+// held a `maxConcurrentWorkers` slot until the app restarted.
+
+test('releaseWorkerPty tears the worker down even when the PTY kill FAILS, and reports that failure verbatim', async (t) => {
+  const { wt, repo, base } = repoWithWorktree(t, { dirty: true });
+  const { deps } = fakeDeps();
+  deps.worktreePaths.set('w1', wt);
+  deps.worktreeOrigins.set('w1', repo);
+  deps.worktreeBases.set('w1', base);
+  deps.liveWorkers.set('w1', { workerId: 'w1', reqId: 'r1', baseBranch: base, spawnedAt: Date.now(), releasing: true });
+
+  const res = releaseWorkerPty('w1', {
+    killPty: () => ({ ok: false, error: 'no pty: w1' }), // verbatim PtyManager.kill() failure shape
+    teardownPty: (id) => teardownPty(id, deps),          // the REAL teardown, over the real dep set
+    liveWorkers: deps.liveWorkers
+  });
+
+  assert.equal(res.ok, false,
+    'a failed kill must be reported as a failure — answering ok:true for a worker that never died is the bug');
+  assert.equal(res.error, 'no pty: w1', 'the kill result must cross back verbatim rather than being swallowed');
+  assert.equal(deps.liveWorkers.has('w1'), false,
+    'the stranded record still holds a maxConcurrentWorkers slot, and the reap loop skips it forever');
+
+  // finalizeWorkerWorktree runs un-awaited inside teardownPty — give it a turn.
+  await new Promise((r) => setTimeout(r, 500));
+  assert.ok(existsSync(wt), 'ADR-0003 still governs the failed-kill path: unintegrated work must be PRESERVED');
+});
+
+test('releaseWorkerPty tears the worker down on a SUCCESSFUL kill too — onExit can no longer reach teardown', () => {
+  const { deps } = fakeDeps();
+  deps.liveWorkers.set('w2', { workerId: 'w2', reqId: 'r2', baseBranch: 'main', spawnedAt: Date.now(), releasing: true });
+
+  const res = releaseWorkerPty('w2', {
+    killPty: () => ({ ok: true }),
+    teardownPty: (id) => teardownPty(id, deps),
+    liveWorkers: deps.liveWorkers
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(deps.liveWorkers.has('w2'), false,
+    "kill() deletes the pty session, so onExit's identity guard bails — nothing else would ever free this slot");
+});
+
+test('releaseWorkerPty clears `releasing` when teardown could not drop the record, so a later reap retries', () => {
+  const live = new Map([
+    ['w3', { workerId: 'w3', reqId: 'r3', baseBranch: 'main', spawnedAt: Date.now(), releasing: true }]
+  ]);
+
+  const res = releaseWorkerPty('w3', {
+    killPty: () => ({ ok: false, error: 'no pty: w3' }),
+    teardownPty: () => { /* no floor bound yet: index.ts's `floor?.teardownPty` is a no-op */ },
+    liveWorkers: live
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(live.get('w3').releasing, false,
+    'a latched `releasing` makes ephemeralWorkerTick skip this worker forever (`if (rec.releasing) continue`)');
+});
+
+test('index.ts\'s worker release paths route through the shared helper — no bare ptyManager.kill(workerId) survives', () => {
+  const src = readFileSync(join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
+    .replace(/^[ \t]*\*.*$/gm, '')  // JSDoc continuation lines
+    .replace(/\/\/.*$/gm, '');      // trailing + whole-line // comments
+  assert.deepEqual(
+    src.match(/ptyManager\.kill\(workerId\)/g) || [], [],
+    'a worker kill that does not also run teardownPty strands the record in liveWorkers (MAIN-01)'
+  );
+  assert.ok(/releaseWorker\(workerId\)/.test(src),
+    'the reap branches and workers:stop must both go through the shared release helper');
 });
