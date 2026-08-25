@@ -107,8 +107,10 @@ Module._load = function (request, ...rest) {
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
+let PixelButton;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
+  ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
   ({ BlockedBanner } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
   ({ AgentCard } = loadTs('src/renderer/src/components/AgentCard.tsx'));
   ({ useStore } = loadTs('src/renderer/src/store/store.ts'));
@@ -133,7 +135,7 @@ try {
 // default exports "per convention (implied by React/Vite tooling)"; measured 2026-08-21,
 // `grep -rl "export default" src/renderer/src --include=*.tsx` matches 0 of 63 files, so
 // a harness reaching for `.default` would get `undefined` from every one of them.
-for (const [name, value] of Object.entries({ PixelBadge, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks })) {
+for (const [name, value] of Object.entries({ PixelBadge, PixelButton, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks })) {
   assert.equal(typeof value, 'function',
     `${name} did not come back from loadTs as a function — the component tests below would all render undefined`);
 }
@@ -726,4 +728,56 @@ test('VIGIL-04: an ask with no askedAt falls back to the card clock and SAYS whi
   assert.equal(visibleText(age), '9h', 'the fallback did not read the card clock');
   assert.match(markup, /the ask carries no timestamp/,
     'the tooltip does not name which clock it read, so "asked nine hours ago" cannot be told from "the card is nine hours old and the ask has no timestamp at all"');
+});
+
+// ─── PixelButton — the deny button's contrast (GATE-05 prerequisite) ─────────────────
+
+/**
+ * The `case '<variant>':` arm of PixelButton's palette switch, sliced by SYMBOL rather
+ * than by line window. Every line number in that file moves the moment a variant is
+ * added or a comment grows; the `case` label and the arm's closing `};` do not. Plan
+ * 04-18 depends on this same boundary three waves later.
+ */
+function paletteCase(variant) {
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/PixelButton.tsx'), 'utf8');
+  const start = src.indexOf(`case '${variant}':`);
+  assert.notEqual(start, -1, `PixelButton no longer has a \`case '${variant}':\` arm — this assertion is reading nothing`);
+  const end = src.indexOf('\n        };', start);
+  assert.notEqual(end, -1, `the \`case '${variant}':\` arm has no closing \`};\` at the expected indent — the slice below would run to end-of-file`);
+  return src.slice(start, end);
+}
+
+test('GATE-05: the destructive button paints its label with --cth-on-accent, the token that does NOT invert with the theme', () => {
+  const markup = html(React.createElement(PixelButton, { variant: 'destructive' }, 'deny'));
+
+  // The positive bound comes FIRST (D-33/D-40). Asserting only that `ink-900` is gone
+  // would pass just as happily against a button that renders no colour at all, or no
+  // button at all — which is the failure mode this whole file exists to catch.
+  assert.equal(visibleText(markup), 'deny',
+    'the destructive button rendered no label, so every colour assertion below is vacuous');
+  assert.match(markup, /color:var\(--cth-on-accent\)/,
+    'the deny button no longer carries --cth-on-accent. Re-derived from tokens.css: --cth-ink-900 is #DEDBD6 in dark mode and measures 1.85:1 on --cth-coral #E08C82 — the label is not on the screen. --cth-on-accent is theme-invariant #1A1320 and measures 7.12:1');
+  assert.match(markup, /background:var\(--cth-coral\)/,
+    'the destructive fill is no longer --cth-coral, so the 7.12:1 pairing this test pins is measured against a surface that is not there any more');
+
+  // The negative. `--cth-ink-900` inverts with the theme, and this variant's border
+  // (--cth-ink-500) and shadow (--cth-ink-300) mean it has no legitimate reason to
+  // appear anywhere in this markup.
+  assert.doesNotMatch(markup, /--cth-ink-900/,
+    'the destructive button is painting with --cth-ink-900 again — in dark mode that is #DEDBD6 on #E08C82, 1.85:1, and the word `deny` is invisible');
+});
+
+test('GATE-05: the token lives in the destructive arm itself, bounded by symbol so it survives every line move', () => {
+  const destructive = paletteCase('destructive');
+  assert.equal((destructive.match(/cth-on-accent/g) ?? []).length, 1,
+    'the destructive arm does not carry exactly one --cth-on-accent');
+  assert.doesNotMatch(destructive, /cth-ink-900/,
+    'the destructive arm has --cth-ink-900 back in it');
+
+  // A positive control on the boundary itself: `secondary` is the sibling arm that
+  // legitimately keeps ink-900 (a dark label on a cream fill, which does NOT invert
+  // badly). If the slice above were returning an empty string — a broken symbol
+  // boundary rather than a correct file — this assertion is what fails.
+  assert.match(paletteCase('secondary'), /cth-ink-900/,
+    'the `secondary` arm lost --cth-ink-900, which means paletteCase() is slicing the wrong region and the destructive assertions above are reading nothing');
 });
