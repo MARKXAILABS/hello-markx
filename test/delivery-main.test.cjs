@@ -38,6 +38,12 @@ function harness(overrides = {}) {
     }],
     inbox: { dev1: [{ id: 'm1', from: 'god' }] },
     paused: new Set(),
+    /** VIGIL-03: agents sitting on a prompt waiting for a human. In production
+     *  this is derived per-call from the PTY's own output ring
+     *  (boot.ts wires `matchBlockHint(ptyManager.outputTail(ptyId))`), so it is
+     *  a Set here rather than a fixed flag on the agent literal — a test can
+     *  flip it between ticks exactly like a real prompt appearing and clearing. */
+    blocked: new Set(),
     /** agentId → breaker level; absent = healthy. */
     breaker: {},
     /** The DURABLE half of a quiesce flip (index.ts appends it to the hive log). */
@@ -58,6 +64,7 @@ function harness(overrides = {}) {
       return { ok: true };
     },
     paused: (id) => state.paused.has(id),
+    blocked: (id) => state.blocked.has(id),
     // No durable home by default: `null` disables the main-owned MD queue, so
     // every pre-existing test drives exactly the loop it always drove. The queue
     // tests below pass a real path into a mkdtemp dir and read the bytes back.
@@ -287,6 +294,127 @@ test('the backstop is on the timer start() arms — not a method nobody schedule
   } finally {
     global.setInterval = realSetInterval;
   }
+});
+
+// ─── VIGIL-03: an agent parked on a prompt is not idled, and not mailed more ──
+
+/** Two agents, side by side, identical in every input the loop reads: both quiet
+ *  past QUIESCE_IDLE_MS, both painted, both breaker-healthy, both past boot grace,
+ *  both holding unread mail. The ONLY difference is `deps.blocked`, so every
+ *  assertion below is about that dep and nothing else.
+ *
+ *  The control half is not decoration (D-33/D-40): without it, a `quiesce` that
+ *  returned on its first line and a `tick` that never nudged would satisfy all
+ *  three negatives, and the block would pass against a loop that does nothing. */
+function blockedPair() {
+  const h = harness();
+  h.state.agents = [
+    { agentId: 'blockedAgent', ptyId: 'pty-blocked', provider: 'claude', hasOutput: true,
+      idleMs: 30_000, lastOutputAt: CLOCK0 - 30_000 },
+    { agentId: 'controlAgent', ptyId: 'pty-control', provider: 'claude', hasOutput: true,
+      idleMs: 30_000, lastOutputAt: CLOCK0 - 30_000 }
+  ];
+  h.state.inbox = {
+    blockedAgent: [{ id: 'm-blocked', from: 'god' }],
+    controlAgent: [{ id: 'm-control', from: 'god' }]
+  };
+  h.state.blocked.add('blockedAgent');
+  return h;
+}
+
+/** Asserted as "was THIS exact call made", never as a count of all calls:
+ *  `setStatus` legitimately fires for other agents in the same tick, so a bare
+ *  length assertion would go red or green for reasons unrelated to the guard. */
+const idledCount = (statuses, id) => statuses.filter((s) => s.id === id && s.status === 'idle').length;
+const stopsFor = (emitted, id) => emitted.filter(
+  (e) => e.channel === 'hive:hookEvent' && e.payload.event === 'Stop' && e.payload.agentId === id
+);
+const nudgesTo = (writes, ptyId) => writes.filter(
+  (w) => w.ptyId === ptyId && /new hive inbox message/i.test(w.data)
+);
+
+test('VIGIL-03: a blocked agent is not flipped idle by the quiesce backstop, with NO window attached', async () => {
+  // The harness `emit` collects but nothing consumes it, which is the real
+  // no-window behaviour — index.ts's `liveWebContents()?.send` is a documented
+  // no-op with no webContents. So the only thing that can carry (or wrongly
+  // carry) this flip is the DURABLE half, and that is the whole of VIGIL-03:
+  // `stopArmDecision` (useHive.ts:169) guards only the renderer's reaction to
+  // the synthesized Stop, and on a headless floor there is no renderer to guard
+  // with — the durable status is already wrong before it would ever run.
+  const h = blockedPair();
+
+  await h.svc.tick();
+
+  assert.equal(
+    idledCount(h.state.statuses, 'blockedAgent'), 0,
+    'setStatus(blockedAgent, idle): an agent sitting on a prompt was flipped idle by the durable backstop'
+  );
+  assert.equal(
+    idledCount(h.state.statuses, 'controlAgent'), 1,
+    'setStatus(controlAgent, idle): the control agent was NOT flipped — the backstop is skipping everybody'
+  );
+});
+
+test('VIGIL-03: no synthesized Stop is emitted for a blocked agent, and one IS for the control', async () => {
+  const h = blockedPair();
+
+  await h.svc.tick();
+
+  assert.equal(
+    stopsFor(h.emitted, 'blockedAgent').length, 0,
+    'a synthesized turn-end was announced for an agent that has not finished its turn — it is waiting for a human'
+  );
+  const control = stopsFor(h.emitted, 'controlAgent');
+  assert.equal(control.length, 1, 'the control agent got no synthesized Stop — the backstop is not running at all');
+  assert.equal(control[0].payload.synthesized, true, 'the control Stop was not marked synthesized');
+});
+
+test('VIGIL-03: the wake nudge does not mail a blocked agent more work, and does mail the control', async () => {
+  // The nudge's five filters (switching, paused, vetoed, boot grace, idleMs) are
+  // all about the FLOOR's state and none about the AGENT's, which is why a blocked
+  // agent gets typed into today: it is quiet by definition, so it reads as ready.
+  const h = blockedPair();
+
+  await h.svc.tick();
+
+  assert.equal(
+    nudgesTo(h.writes, 'pty-blocked').length, 0,
+    'WAKE_NUDGE was typed into a terminal parked on a prompt — that text lands in the prompt box, not in a turn'
+  );
+  assert.equal(
+    nudgesTo(h.writes, 'pty-control').length, 1,
+    'WAKE_NUDGE never reached the control agent — the nudge is off entirely, so the negative above proves nothing'
+  );
+});
+
+test('VIGIL-03: a blocked agent LEAVES the quiesced set, so it re-announces when it unblocks', async () => {
+  // Delete-and-continue, not bare continue (T-04-BLK-03). The ordering here is
+  // what lets the test tell the two apart: the agent is announced FIRST, so it is
+  // already a member of `quiesced` when the block arrives. A bare `continue`
+  // leaves that stale membership in place and swallows the real turn-end that
+  // follows. `delivery.ts:733` is the in-file precedent for pruning that set.
+  const h = harness();
+  h.state.inbox.dev1 = [];             // quiesce path only, no mail
+
+  await h.svc.tick();
+  assert.equal(idledCount(h.state.statuses, 'dev1'), 1, 'the quiet agent was not announced at all');
+
+  h.state.blocked.add('dev1');         // a prompt appears; the PTY stays silent
+  await h.svc.tick();
+  assert.equal(idledCount(h.state.statuses, 'dev1'), 1, 'a blocked agent was announced idle');
+
+  h.state.blocked.delete('dev1');      // the human answered; the PTY is still quiet
+  await h.svc.tick();
+  assert.equal(
+    idledCount(h.state.statuses, 'dev1'), 2,
+    'the unblocked agent never re-announced: a stale `quiesced` membership swallowed its real turn-end'
+  );
+
+  await h.svc.tick();
+  assert.equal(
+    idledCount(h.state.statuses, 'dev1'), 2,
+    'the re-announcement is not edge-triggered — it repeats on every tick'
+  );
 });
 
 // ─── failover: the guard that used to die with the window ───────────────────
