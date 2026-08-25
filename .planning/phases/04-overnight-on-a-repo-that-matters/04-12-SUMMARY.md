@@ -230,9 +230,15 @@ None — no external service configuration, no install step, no new dependency (
 - **`TaskCard` is exported** so the renderer suite can measure a card without the board around it; `renderAskBoard()` in the test file is the pattern for any component whose data arrives through the shared poll.
 - **Wave-3 file ownership respected:** `useHive.ts`, `store.ts`, `BlockedBanner.tsx`, `CommandCenterPanel.tsx`, `App.tsx`, `PixelButton.tsx`, `AgentCard.tsx`, `resources/phone/**`, `src/main/index.ts` and `test/repo-claims.test.cjs` are all untouched.
 
-## Self-Check
+## Self-Check: PASSED
 
-Verified after writing this SUMMARY — see the section appended below.
+Every artifact and commit hash claimed above was verified on disk and in `git log --oneline --all` after this SUMMARY was written.
+
+- **Files, all FOUND:** `src/shared/relAge.ts`, `src/renderer/src/components/TasksKanban.tsx`, `src/renderer/src/components/AskMeTab.tsx`, `test/renderer-components.test.cjs`, `.planning/phases/04-overnight-on-a-repo-that-matters/04-12-SUMMARY.md`
+- **Commits, all FOUND:** `97466ef`, `a83f0b4`, `5b21a97`, `498af77`, `e22993f`, `03a385f`
+- **Not modified, as required by the parallel-execution contract:** `.planning/STATE.md`, `.planning/ROADMAP.md` — both absent from every commit in `8caf9eb..HEAD`.
+
+Missing items: none.
 
 ---
 *Phase: 04-overnight-on-a-repo-that-matters*
