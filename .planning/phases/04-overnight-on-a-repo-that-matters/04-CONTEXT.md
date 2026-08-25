@@ -694,5 +694,97 @@ location, the citation here is the corrected one -- see the warning in the domai
 
 ---
 
+## Red-Team Log
+
+> The durable `RED_TEAM_CLEAN` record for Phase 4, written by `/gsd:plan-phase` step 11.5.
+> `execute-phase`, step 15's auto-advance gate, and any resumed session read **this block**.
+
+**Status: `RED_TEAM_CLEAN = false` — NOT auto-advanced. Awaiting explicit operator acceptance of the
+named residuals below.**
+
+Four adversarial rounds ran, dispatched as **parallel direct `Agent` calls** (never the Workflow tool —
+Windows stdio-deadlocks at fan-out, per the operator's standing mandate and their explicit instruction
+this session).
+
+| Round | Date | Lenses | BLOCKER | HIGH | Character of the findings |
+|---|---|---|---|---|---|
+| 1 | 2026-08-25 | 6 — `gsd-plan-checker` + 5 hostile (vacuous-gates · waves/contracts · security-direction · test-quality · honesty) | **11** | 18 | **Architectural** — unowned composition root; nothing produced an `ask`; the gate keyed to one engine's tool name |
+| 2 | 2026-08-25 | 3 consolidated hostile | **9** | 10 | **Structural** — fixes that *moved* defects; Claude's timeout left "unreconciled"; an uncleared 5 s timer; a seam routed nowhere |
+| 3 | 2026-08-25 | 2 hostile (verify-the-fixes · self-check audit) | **5** | 7 | **Textual** — a missing `export ` in an `awk` anchor; a stale ceiling range; a criterion greping the wrong file |
+| 4 | 2026-08-25 | 1 hostile (clean-round check) | **1** | 1 | **Textual** — a measured 3-test regression; a criterion red on every correct implementation |
+
+Round 4's two findings were fixed by the orchestrator directly (they were 1–5 line plan-text edits) and
+re-verified mechanically. **They have not been re-reviewed adversarially**, which is why this record
+says `false` rather than `true`.
+
+### What every round verified rather than trusted
+
+The orchestrator re-ran the load-bearing claims at source instead of accepting reviewer or planner
+reports. Independently confirmed on this machine:
+
+- **The win32 named-pipe round trip works** — a real child process → `\\.\pipe\` → real `HookServer`,
+  exit 0, deny on the child's stdout. Reproduced **three times** (orchestrator + two lenses), one of
+  which also exercised the repeated-connect path the poll loop needs and that no plan had measured.
+  This retired round 1's most-confirmed blocker and restored criterion 2's evidence **locally** rather
+  than deferring it to CI. *(The first orchestrator probe failed with `EPIPE` because it used
+  `c.end(payload)` — a half-close a named pipe does not support. The real shim writes
+  `c.write(payload + '\n')` and keeps the connection open, which is exactly why it works.)*
+- **`hooks.ts:871` is `p.tool_name === 'Bash'`**, a Claude tool name, with **no normalization anywhere**
+  (repo-wide grep: 2 hits, one unrelated). GATE-03 as first planned refused nothing on six engines.
+- **Engine hook timeouts** — grok 5 s (default, no key written), codex 30 s, kimi 30 s, agy `timeout: 0`,
+  Claude no key at all — every one shorter than the planned 120 s ask TTL. A killed hook writes no
+  stdout, and no stdout is **allow**.
+- **`04-16`'s byte-identity guard extracted zero lines** (`^const` vs the source's `export const`), so it
+  hashed empty against empty and passed for any edit to grok's or agy's shim, including deleting them.
+- **`hiddenClaude.ts:148`** is a second unfiltered `pty.spawn` running `--permission-mode
+  bypassPermissions` over — in its own header's words — often-web-scraped text, and appeared in **zero**
+  phase-4 documents.
+- **The final `readConfig()` fix broke three tests**, measured: `memory-hygiene.test.cjs:16` loads
+  `reflect.ts` → `hiddenClaude.ts` → (proposed) `./config` → `./db` → `better-sqlite3`, **36 lines
+  before** the test injects its sqlite fake at `:52-53`. 805 / 795 / 3 against a 0-failure baseline.
+
+### Gates at close (all re-run by the orchestrator after its own edits)
+
+| Gate | Result |
+|---|---|
+| `check.decision-coverage-plan` (**blocking**, §13a) | **`passed: true`, 37/37, 0 uncovered** |
+| Requirements coverage (§13) | **11/11** — confirmed by `gsd-tools gap-analysis` |
+| Every `awk` range executed against live source | **12/12 non-zero** — zero vacuous |
+| `sed -n` line-windows in acceptance criteria | **0** across all 20 plans |
+| Plans / tasks / VALIDATION rows | 20 / 59 / **59 — exact bijection** |
+| `<threat_model>` per plan | **20/20** |
+| Suite baseline | 805 / 798 / 0 / 7 (re-measured independently) |
+
+### Accepted residuals — the operator's call
+
+These are recorded, not closed. None is architectural.
+
+1. **Rounds 4's two fixes are orchestrator-authored and not adversarially re-reviewed** —
+   `04-05`'s reverted `./config` import (now ceiling item (h)) and `04-18`'s `.d.ts` criterion (now an
+   empty-diff assertion). Both were verified mechanically at source; neither has faced a hostile lens.
+2. **Reflection's escape hatch is unreachable this phase.** `hiddenClaude.ts` filters with a permanent
+   `[]` because its only caller is `reflect.ts:344`, which no plan edits. A BYOK operator whose
+   `ANTHROPIC_API_KEY` comes from their own shell loses memory condensation with no way to re-admit it.
+   Owner: hive maintainer. Settled by a later phase owning both `reflect.ts` and
+   `test/memory-hygiene.test.cjs`.
+3. **Round 4's MED/LOW list** (in `04-REDTEAM-R3.md` and the round-4 return): three pre-existing vacuous
+   greps outside the changed set — most notably `04-09:312`'s `grep -c "'restore'"` on
+   `gitCommitter.ts`, whose only hit is the `git restore` **subcommand** at `:256`, not the
+   `UNTRACK_PATHS` entry at `:82` it claims to prove, leaving that half of D-21 with no biting gate.
+4. **Three citations that misdescribe their own plan** while the decision is genuinely acted on
+   elsewhere (`04-12:20`, `04-10:19`, `04-18:28`).
+5. **Suite-budget headroom is thinner than stated** — 42.4 s worst-case baseline measured under
+   concurrency (24.3 s quiet), plus gate05's 15 s and gate03's 10 s, leaves ~23 s for the other nine new
+   files against a 90 s budget. 04-19 re-measures at close and reports it.
+
+### Round documents
+
+`04-REDTEAM.md` (round 1) · `04-REDTEAM-R2.md` (round 2) · `04-REDTEAM-R3.md` (round 3) — each carries
+the full finding list, the cross-confirmation map, and a "what survived the attack" section so later
+rounds did not churn settled work.
+
+---
+
 *Phase: 4-Overnight on a Repo That Matters*
 *Context gathered: 2026-08-24*
+*Planned + red-teamed: 2026-08-25 — 20 plans, 7 waves, 59 tasks*

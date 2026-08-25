@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 (the-daemon-and-the-protocol) COMPLETE -- plan 02-12 (the honesty ledger) landed, all 12 plans done. Phase 4 context gathering already ran concurrently (see 04-CONTEXT.md); the auto-advance hold on 02-12 is now clear.
-last_updated: "2026-08-24T18:15:00.000Z"
+stopped_at: Phase 4 PLANNED -- 20 plans / 7 waves / 59 tasks, after three adversarial red-team rounds (11 -> 9 -> 5 blockers, all closed). D-37's hold is clear (02-12 landed at 8e85748). Ready to execute; NOT auto-advanced -- see 04-CONTEXT.md's Red-Team Log for the gate state.
+last_updated: "2026-08-25T05:01:39.057Z"
 progress:
   total_phases: 6
-  completed_phases: 0
-  total_plans: 43
+  completed_phases: 1
+  total_plans: 63
   completed_plans: 42
-  percent: 0
+  percent: 17
 ---
 
 # Project State
