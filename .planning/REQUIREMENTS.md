@@ -180,8 +180,16 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 - [ ] **STRUCT-01**: `src/main/index.ts` is split along its seams (agent lifecycle, shutdown,
       scheduler, workers, IPC), each extraction landing tests that cannot exist today
-- [x] **STRUCT-02**: `src/main/hive.ts` is split (git committer, messaging, provider
-      provisioning, templates)
+- [x] **STRUCT-02**: `src/main/hive.ts` is split (git committer, provider provisioning,
+      templates) — `gitCommitter.ts`, `hiveProvisioning.ts` and `hiveTemplates.ts` are
+      genuinely extracted, but **messaging was not extracted**: `routeMessage`, `emitMessage`,
+      `terminalHandoff`, `startRouter`, `stopRouter` and `routeOnce` are all still
+      `HiveManager` methods in `hive.ts`, as are the task ledger and the cost ledger.
+      *Phase 3 adopts this overclaim as a named open item (03-09, D-01) rather than silently
+      absorbing it.* The residue is testability debt, not a Phase-3 blocker — SCALE-01's
+      isolation seam is `hive.root()` (`hive.ts:655`), a lazy `join(getHome(), 'hive')` that
+      the unextracted router already calls exactly as the extracted modules do; extracting
+      messaging would move that call, not change it (D-02).
 
 ### GATE — the trust boundary: what an agent may do, and who says yes
 
@@ -286,7 +294,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 - [x] **RECORD-01**: "Who wrote this file, and what did the floor run overnight" is answerable
       after a restart — every agent tool call is persisted with agent, timestamp, tool and
-      target *(today spans are an in-memory ring of 200 per agent, `telemetry.ts:126`, so the
+      target *(today spans are an in-memory ring of 200 per agent, `telemetry.ts:161`, so the
       record is thinnest exactly after a crash)*
       *Complete, ruled at the phase-4 close (plan 04-19).* `tool_calls` is written from the hook
       socket — the one place agent, tool and **target** exist for every bridged engine — with a
@@ -307,7 +315,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       record at, which is an architectural limit named in `SECURITY.md`, not a partial fix.
 - [x] **RECORD-02**: A day that has already happened is still fully readable — a busy day's
       events and cost have not been discarded by an 8 MB rotate-keeping-one-generation window
-      *(`LOG_ROTATE_BYTES`, `hive.ts:267` — this is the storage SCALE-03's replay reads)*
+      *(`LOG_ROTATE_BYTES`, `hive.ts:375` — this is the storage SCALE-03's replay reads)*
       *Complete, ruled at the phase-4 close (plan 04-19).* `events` mirrors every hive event
       verbatim beside the crash-safe JSONL (a mirror failure costs the mirror, never the log), and
       `eventsBetween` is deliberately **unlimited** — a day minus whatever fell past a `LIMIT` is
@@ -623,9 +631,9 @@ goals and success criteria each requirement rolls up into.
 | PARITY-01b | Phase 2 | Complete |
 | PARITY-02 | Phase 2 | Complete |
 | PARITY-03 | Phase 2 | Complete |
-| SCALE-01 | Phase 3 | Pending |
+| SCALE-01 | Phase 6 — Close the forward dependencies | Pending |
 | SCALE-02 | Phase 3 | Pending |
-| SCALE-03 | Phase 3 | Pending |
+| SCALE-03 | Phase 6 — Close the forward dependencies | Pending |
 | SCALE-04 | Phase 3 | Pending |
 | SCALE-05 | Phase 3 | Pending |
 | STRUCT-01 | Phase 2 | Pending |
@@ -654,23 +662,23 @@ goals and success criteria each requirement rolls up into.
 | RECALL-05 | Phase 5 | Pending |
 | STANDING-01 | Phase 5 | Pending |
 | STANDING-02 | Phase 5 | Pending |
-| GSD-01 | Phase 6 | Pending |
-| GSD-02 | Phase 6 | Pending |
-| GSD-03 | Phase 6 | Pending |
-| GSD-04 | Phase 6 | Pending |
-| GSD-05 | Phase 6 | Pending |
+| GSD-01 | Phase 7 | Pending |
+| GSD-02 | Phase 7 | Pending |
+| GSD-03 | Phase 7 | Pending |
+| GSD-04 | Phase 7 | Pending |
+| GSD-05 | Phase 7 | Pending |
 | GSD-06 | Phase 2 | Complete |
-| DESK-01 | Phase 6 | Pending |
-| DESK-02 | Phase 6 | Pending |
-| DESK-03 | Phase 6 | Pending |
-| DESK-04 | Phase 6 | Pending |
-| REACH-01 | Phase 6 | Pending |
-| REACH-02 | Phase 6 | Pending |
-| REACH-03 | Phase 6 | Pending |
+| DESK-01 | Phase 7 | Pending |
+| DESK-02 | Phase 7 | Pending |
+| DESK-03 | Phase 7 | Pending |
+| DESK-04 | Phase 7 | Pending |
+| REACH-01 | Phase 7 | Pending |
+| REACH-02 | Phase 7 | Pending |
+| REACH-03 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: **71 total**
-- Mapped to phases: **71** (Phase 1: 23 · Phase 2: 12 · Phase 3: 5 · Phase 4: 11 · Phase 5: 8 · Phase 6: 12)
+- Mapped to phases: **71** (Phase 1: 23 · Phase 2: 12 · Phase 3: 5 · Phase 4: 11 · Phase 5: 8 · Phase 7: 12)
 - **Unmapped: 0** — verified programmatically against `ROADMAP.md`'s `**Requirements**:` lines:
   71 mapped, no orphans, no duplicates, no ids mapped that are not requirements. Every
   requirement is also cited by at least one success criterion inside its own phase.
@@ -688,7 +696,7 @@ criterion untrue if it lands after, so none is held for a later phase:
 Consequently four categories are **split across phases**, deliberately, and stated in the
 roadmap at both ends: GATE (01 in Phase 1, 02-05 in Phase 4), RECORD (03/04 in Phase 1,
 01/02/05 in Phase 4), VERDICT (02/03 in Phase 1, 01 in Phase 5) and GSD (06 in Phase 2,
-01-05 in Phase 6).
+01-05 in Phase 7).
 
 **Two further forward dependencies were found and are NOT resolved by moving requirements** —
 they are recorded in ROADMAP.md's Phase 3 block instead, because resolving them by pull-forward
@@ -697,7 +705,7 @@ cascades (RECALL-02 cannot be built without RECALL-01's server, which would holl
 | Criterion | Depends forward on | Resolution |
 |---|---|---|
 | SCALE-01 (Phase 3) | RECALL-02 (Phase 5) | isolation is `--wing`-flag deep until RECALL-02; re-verify after Phase 5 rather than close it in Phase 3 - or run Phase 3 after Phases 4-5 |
-| SCALE-03 (Phase 3) | RECORD-02 (Phase 4) | replay reads an 8 MB window, not a day, until RECORD-02; same resolution |
+| SCALE-03 (Phase 3) | RECORD-02 (Phase 4) — **landed** | The 8 MB rotate was never the mechanism: `LOG_ROTATE_BYTES` (`hive.ts:375`) has never fired in measured use. The real cap was the absence of a **time-range query** plus `LOG_TAIL_BYTES = 64 KB` (`hive.ts:383`), a *read* cap 128x tighter than the rotate. RECORD-02 closed both — `PersistStore.eventsBetween` (`db.ts:450`) is the time-range query, and the replay bound is now **retention** (`EVENT_RETENTION_MS`, 30 days, `db.ts:70`), not rotation. Re-verify SCALE-03 in the post-Phase-5 phase; not closed here (D-07, D-21) |
 
 ---
 *Requirements defined: 2026-08-20*
