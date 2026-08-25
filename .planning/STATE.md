@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 4 PLANNED -- 20 plans / 7 waves / 59 tasks, after three adversarial red-team rounds (11 -> 9 -> 5 blockers, all closed). D-37's hold is clear (02-12 landed at 8e85748). Ready to execute; NOT auto-advanced -- see 04-CONTEXT.md's Red-Team Log for the gate state.
-last_updated: "2026-08-25T05:01:39.057Z"
+stopped_at: Phase 4 EXECUTED -- all 20 plans landed across 7 waves. Phase does NOT close: nyquist_compliant stays FALSE (5 of 7 Manual-Only items open, no Dimension 8 confirmation). Suite 1078 tests / 1071 pass / 0 fail / 7 skipped / 24.2s; typecheck, lint and build clean. Awaiting /gsd-verify-work and operator UAT -- see 04-19-SUMMARY.md for the 14 unfixed findings and their owners.
+last_updated: "2026-08-26T00:00:00.000Z"
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 63
-  completed_plans: 42
+  completed_plans: 62
   percent: 17
 ---
 
@@ -20,9 +20,57 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-20)
 
 **Core value:** You can leave it running and trust it.
-**Current focus:** Phase 02 — the-daemon-and-the-protocol
+**Current focus:** Phase 04 — overnight-on-a-repo-that-matters (executed, not closed)
 
 ## Current Position
+
+### Phase 04 (overnight-on-a-repo-that-matters) — ALL 20 PLANS EXECUTED, PHASE NOT CLOSED
+
+Executed 2026-08-25/26 across 7 waves on branch `worktree-gsd-plan-phase-04`.
+Every plan's work was merged wave-by-wave and the full gate re-run on each merged tree,
+not trusted from any SUMMARY.
+
+**Measured at the phase tip (this session, three consecutive runs):**
+`npm test` 1078 tests / 1071 pass / **0 fail** / 7 skipped / 24.2s worst wall.
+`npm run typecheck` 0 errors both projects. `npm run lint` exit 0. `npm run build` exit 0 (Node 22).
+Baseline at phase start was 843/836/0/7 — **+235 tests, zero regressions, zero new skips**.
+
+**`nyquist_compliant` remains FALSE. The phase does NOT close.** 5 of 7 Manual-Only items are
+open and no Dimension 8 confirmation exists in `.planning/`. Phase 2's audit had already moved
+this same flag true -> FALSE for three of the identical blockers; flipping it now would reverse
+that correction with less evidence. Awaiting `/gsd-verify-work` and operator UAT.
+
+**Four defects found that no acceptance criterion would have caught — each a feature that
+existed and did nothing:**
+- GATE-03 was dead on OpenCode: `tool.execute.before` posted no `tool_input`, so main answered
+  ALLOW on every call from an OpenCode agent (04-10).
+- GATE-03's command never reached the renderer: `preload/index.ts` typed the payload without it,
+  so it was unreachable by construction (04-14).
+- GATE-05's desktop half was dead: `emitControl` sent neither `askId` nor `expiresInMs`, and
+  `openApproval` called it without the entry it had opened six lines earlier (04-18).
+- The kanban renderer re-declares its own `HiveTask` and `parseTasks` is a whitelist, so
+  `updatedAt` and `released` would have arrived `undefined` at every card (04-12).
+
+Also: a test that PASSED while taking 240,728 ms (an ask sitting out its 120s TTL) — the suite
+had silently gone 26s -> 257s (04-16); a WCAG failure at 1.85:1 on the deny button in dark mode
+(04-14); titlebar constants ~107px stale from before this phase (04-18); and a genuine ~1-in-9
+flake caught by a 25-run probe (04-15).
+
+**RECORD-02 durability proven live:** real `SIGKILL` against a 160,712-byte uncheckpointed WAL;
+a second process answered both questions from disk.
+
+**Open, with named owners — see `04-19-SUMMARY.md` for all 14:**
+- GATE-04 is BUILT but NOT WIRED — no production caller passes `agentDir`; opt-in ON today gives
+  `-s workspace-write` WITHOUT the folder added. Must be threaded via `sandboxFlagsForProvider`.
+- GATE-04 LIVE-UNVERIFIED and `LIVE GATE-03 REFUSAL: no` — this machine's codex token is revoked
+  (`401 refresh_token_reused`). Absence of evidence, NOT evidence of absence.
+- The push leg is a declared stub in two places with one root cause: `webhook.ts` has no
+  `PushSubscription` intake route, so VIGIL-01 cannot reach a phone by push.
+- `resources/phone/sw.js:33-35` carries a KNOWN FALSE security comment (unowned).
+- `test/hive-durability.test.cjs:197`'s argument slice is inert — `indexOf` returns -1, the slice
+  runs 14,315 chars to EOF (unowned).
+- `hiveProvisioning.ts:230-231`'s comment is over-strong (unowned).
+
 
 Phase: 02 (the-daemon-and-the-protocol) — **COMPLETE, all 12 plans landed**
 Plans complete: **12 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
