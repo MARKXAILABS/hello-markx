@@ -360,3 +360,32 @@ test('the write marker still catches the redirect and mutation shapes that targe
       `the protocol's own command must not read as a write: ${ok}`);
   }
 });
+
+/* ── the frame rule must not refuse ordinary POSIX paths (operator-found) ──
+ *
+ * Measured live 2026-08-25, from the deny log added the same session:
+ *
+ *   PreToolUse DENIED agent=god tool=Bash: … cannot FRAME this target …
+ *     | target: cat "C:\…\hive\agents\god\memory.md" 2>/dev/null | tail -100
+ *     | target: ls -la /c/Users/Alienware/…/hive/agents/god/inbox/
+ *
+ * god was refused on reading its OWN memory and its OWN inbox. The first spells
+ * its path absolutely and STILL failed: the word split turns `2>/dev/null` into
+ * the word `/dev/null`, and the rooted-relative rule's `[\/]` class matched the
+ * forward slash. So every command using the commonest redirect on the platform
+ * was denied, along with every Git-Bash `/c/...` path the agent's shell emits. */
+test('driveRelative refuses only genuinely unframable shapes, not POSIX absolutes', () => {
+  const src = stripComments(
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hooks.ts'), 'utf8'));
+  const fn = src.slice(src.indexOf('function driveRelative'), src.indexOf('function driveRelative') + 400);
+
+  // The rooted-relative rule must be BACKSLASH-only. A `[\/]` class there also
+  // matches every forward-slash-rooted path, which on win32 is not a Windows path
+  // at all -- it is an ordinary POSIX/MSYS one.
+  assert.ok(/return\s+\/\^\\\\/.test(fn) || fn.includes('/^\\[^\\/]+[\\/]/'),
+    'the rooted-relative rule must anchor on a BACKSLASH only. With a [\\/] class it also '
+    + 'refuses /dev/null (from the ubiquitous 2>/dev/null) and every Git-Bash /c/... path, '
+    + "which is how god lost read access to its own memory and inbox.");
+  assert.ok(!/return\s+\/\^\[\\\\\/\]/.test(fn),
+    'the old [\\/] character class must be gone from the rooted-relative rule');
+});

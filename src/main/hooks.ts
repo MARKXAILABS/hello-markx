@@ -241,7 +241,26 @@ function win32Components(p: string): string | null {
 function driveRelative(target: string): boolean {
   if (process.platform !== 'win32') return false;
   if (/^[A-Za-z]:[^\\/]/.test(target) && /[\\/]/.test(target)) return true;
-  return /^[\\/][^\\/]+[\\/]/.test(target);
+  // BACKSLASH-ROOTED ONLY. This rule exists for Windows's rooted-relative form
+  // (`\x\y`), which is measured from a per-drive current directory main cannot
+  // see. The character class used to be `[\\/]`, which also caught every
+  // FORWARD-slash-rooted path — and on win32 that is not a Windows path at all,
+  // it is an ordinary POSIX/MSYS one.
+  //
+  // Measured live, and the blast radius was enormous: `god` was denied on
+  //   cat "C:\…\god\memory.md" 2>/dev/null | tail -100
+  //   ls -la /c/Users/Alienware/…/god/inbox/
+  // — i.e. reading its OWN memory and its OWN inbox. The first spells its path
+  // absolutely and still failed, because the word split turns `2>/dev/null` into
+  // `/dev/null`, and that matched. So ANY command using the commonest redirect
+  // idiom on the platform was refused, as was every Git-Bash `/c/...` path the
+  // agent's own shell produces.
+  //
+  // Forward-slash-rooted words stay framable: `resolve()` maps them onto the
+  // current drive, they land nowhere near the hive, and the protected-path walk
+  // then allows them on the merits. Nothing that was genuinely unframable
+  // becomes allowed — `\x\y` and `C:..\x` are both still refused above/here.
+  return /^\\[^\\/]+[\\/]/.test(target);
 }
 
 /** The four protected-path reasons, hoisted so the identity walk and the

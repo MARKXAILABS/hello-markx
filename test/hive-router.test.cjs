@@ -226,5 +226,44 @@ test('a message that truly cannot be parsed is bounced to its sender, never drop
     .map((f) => JSON.parse(fs.readFileSync(path.join(home, 'hive', 'agents', from, 'inbox', f), 'utf8')));
   assert.equal(bounced.length, 1, 'the sender must receive a bounce for undeliverable mail');
   assert.match(bounced[0].subject, /could not be delivered/i);
-  assert.match(bounced[0].body, /BOM/, 'the bounce must name the actual Windows cause so it is fixable');
+  assert.match(bounced[0].body, /Parser said:/, 'the bounce must carry the real parser error');
+
+  // NOT the BOM advice. A worker agent caught the first version of this bounce
+  // telling it to strip a BOM from a file that had none, while the real fault was
+  // malformed JSON. Since the reader strips a UTF-8 BOM BEFORE parsing, a UTF-8 BOM
+  // can never BE the parse failure — so canned BOM guidance here is wrong 100% of
+  // the time, and sends the reader to chase an already-fixed bug.
+  assert.doesNotMatch(bounced[0].body, /BOM/,
+    'plain malformed JSON must NOT be blamed on a BOM — the BOM is stripped before parsing, '
+    + 'so it cannot be the cause, and canned advice on a diagnostic is worse than none');
+  assert.match(bounced[0].body, /well-formed JSON/,
+    'the hint must describe the actual fault');
+});
+
+test('a UTF-16 message — the one encoding that CAN still break parsing — gets encoding advice', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-utf16-'));
+  const hive = new HiveManager(() => home);
+  hive.ensureHive();
+
+  const from = 'jim-3';
+  fs.mkdirSync(path.join(home, 'hive', 'agents', from, 'outbox', '.sent'), { recursive: true });
+  fs.mkdirSync(path.join(home, 'hive', 'agents', from, 'inbox', '.done'), { recursive: true });
+
+  // Older PowerShell's Out-File default. The bytes are valid JSON text in UTF-16LE,
+  // which is nothing like JSON when read as UTF-8 — so this one IS an encoding fault
+  // and the encoding hint is the correct thing to say.
+  const payload = JSON.stringify({ to: 'god', act: 'inform', subject: 'x', body: 'y' });
+  fs.writeFileSync(path.join(home, 'hive', 'agents', from, 'outbox', 'utf16.json'),
+    Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(payload, 'utf16le')]));
+
+  hive.routeOnce();
+
+  const inbox = path.join(home, 'hive', 'agents', from, 'inbox');
+  const bounced = fs.readdirSync(inbox).filter((f) => f.endsWith('.json'))
+    .map((f) => JSON.parse(fs.readFileSync(path.join(inbox, f), 'utf8')))
+    .filter((m) => /could not be delivered/i.test(String(m.subject || '')));
+  assert.equal(bounced.length, 1, 'a UTF-16 message must still bounce');
+  assert.match(bounced[0].body, /UTF-16/,
+    'when the leading bytes really are a UTF-16 BOM, the bounce SHOULD say so — the hint is '
+    + 'keyed to evidence, not omitted entirely');
 });

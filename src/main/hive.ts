@@ -1830,6 +1830,31 @@ export class HiveManager {
           const why = e instanceof Error ? e.message : String(e);
           console.error(`[hive] DROPPED malformed outbox message ${id}/${f}: ${why}. `
             + `Quarantined as .sent/bad-${f}; the sender was NOT told.`);
+          // KEY THE ADVICE TO THE ACTUAL CAUSE. The first version of this bounce
+          // appended canned "your file has a BOM" guidance to EVERY parse failure.
+          // A worker agent caught it within minutes of it shipping: it had been
+          // told to strip a BOM from a file that demonstrably had none, while the
+          // real fault was malformed JSON. Its point was exact — because the read
+          // above now strips a UTF-8 BOM BEFORE parsing, a UTF-8 BOM can no longer
+          // BE a parse failure, so that advice was not merely unhelpful, it was
+          // guaranteed wrong on every bounce that carried it. Canned advice on a
+          // diagnostic is worse than none: it sends the reader to chase a bug that
+          // is already fixed.
+          //
+          // Encoding is still worth naming for the one shape it CAN still break: a
+          // UTF-16 file (older PowerShell's `Out-File` default), whose bytes are
+          // nothing like JSON. That is detectable from the leading bytes rather
+          // than guessed at, so the hint is offered only when evidence supports it.
+          let hint = 'Check the file is a single well-formed JSON object.';
+          try {
+            const head = readFileSync(full);
+            const utf16 = (head[0] === 0xFF && head[1] === 0xFE) || (head[0] === 0xFE && head[1] === 0xFF);
+            if (utf16 || head.subarray(0, 64).includes(0)) {
+              hint = 'The file looks UTF-16 encoded, which is not valid JSON here. From PowerShell use '
+                + '[System.IO.File]::WriteAllText(path, json, (New-Object System.Text.UTF8Encoding $false)) '
+                + '— Out-File defaults to UTF-16 on older PowerShell. Rewrite the message and send again.';
+            }
+          } catch { /* the generic hint stands */ }
           try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
           // Bounce to the sender so the failure reaches whoever can fix it — the
           // agent that wrote the file. Best-effort by construction: if the bounce
@@ -1840,14 +1865,7 @@ export class HiveManager {
               act: 'inform',
               subject: `Your message ${f} could not be delivered`,
               body: `The hive router could not parse ${f} and has quarantined it as `
-                + `.sent/bad-${f}. It was NOT delivered to anyone.
-
-Parser said: ${why}
-
-`
-                + 'If you wrote it from PowerShell, use '
-                + '[System.IO.File]::WriteAllText(path, json, (New-Object System.Text.UTF8Encoding $false)) '
-                + '— Set-Content and Out-File -Encoding utf8 add a BOM. Rewrite the message and send again.'
+                + `.sent/bad-${f}. It was NOT delivered to anyone.\n\nParser said: ${why}\n\n${hint}`
             }, 'system'));
           } catch { /* the log line above is the record */ }
         }
