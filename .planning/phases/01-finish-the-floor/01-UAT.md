@@ -3,7 +3,7 @@ status: partial
 phase: 01-finish-the-floor
 source: [01-VERIFICATION.md]
 started: 2026-08-25T14:20:00Z
-updated: 2026-08-25T16:35:00Z
+updated: 2026-08-25T17:30:00Z
 build_under_test: dist\win-unpacked\Hello MarkX.exe — rebuilt 2026-08-25 16:24, carrying five operator-found fixes made during this session
 ---
 
@@ -92,8 +92,33 @@ Proven precisely: both quarantined files begin `0xEF 0xBB 0xBF` and parse cleanl
 is stripped — `to: god, act: done, "Hive mail round-trip proven"` and `to: god, act: inform,
 "BLOCKED: … Knowledge Graph is empty (0 docs)"`. Jim wrote valid JSON both times.
 
-NOT YET DONE for this row: the **window-closed** half. The round trip above ran with the window
-open. Closing the window and confirming delivery continues remains outstanding.
+**The window-closed half — RUN 2026-08-25 17:21, and it PASSES.**
+
+First, a correction the source settled: on win32 a NORMALLY-launched floor is *meant* to quit when
+its last window closes (`shouldQuitOnLastWindowClose = platform !== 'darwin' && !headless`), because
+this phase ships no tray icon and "a windowless, iconless process with no way back in would be a
+worse trap than quitting". So closing the X is not the test — it correctly raises a quit dialog.
+**FLOOR-02's window-closed half is only reachable through `--headless`, which is Phase 2's DAEMON-01.
+Phase 1's own requirement was not fully satisfiable until Phase 2 shipped.**
+
+The operator launched `Hello MarkX.exe --headless`: 4 processes, integration broker on
+`127.0.0.1:59149`, telemetry collector on `:59150`, **no renderer at all**. The orchestrator then
+wrote a message into `agents/god/outbox/` and watched the filesystem:
+
+```
+god outbox still holding it : no  — drained
+archived to god outbox/.sent: yes
+IN JIM INBOX                : YES  ← delivered with no window
+```
+
+The whole mail path — pick up, route, deliver, archive — executed in main with zero UI in
+existence. That is the claim 843 unit tests structurally cannot make, because every one of them
+loads `src/main/**` through a stub that never evaluates the real module graph.
+
+**Scoped honestly: this proves "mail moves", NOT all of DAEMON-01.** No agent PTY spawned during
+the headless run (checked: no `node`/`claude` child processes from that session), so "agents spawn"
+and "failover completes" remain untested headless. FLOOR-02 asks only that a delivery path survive
+a closed window, and that is met.
 
 ### 6. Auto-mode chip truthfulness — FLOOR-01
 expected: the chip reflects what the running agent is actually doing, is keyboard-reachable and
