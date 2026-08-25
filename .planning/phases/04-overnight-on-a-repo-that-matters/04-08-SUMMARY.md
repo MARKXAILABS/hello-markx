@@ -264,6 +264,18 @@ compare-and-swap mutator that register names as the mitigation:
   plan's prediction was exactly right: the base extract measured `patchTask 0 / tasks: 0`.
 - **T-04-SC** (package installs) — none; `package.json` and `package-lock.json` untouched (D-36).
 
+## Self-Check: PASSED
+
+Re-verified live after the summary commit, not asserted from memory:
+
+- Files present on disk: `src/main/floor/lifecycle.ts`, `test/agent-lifecycle.test.cjs`,
+  `.planning/phases/04-overnight-on-a-repo-that-matters/04-08-SUMMARY.md`.
+- All four commits present in `git log 99b61fc..HEAD`: `72f327c`, `8c041f9`, `399c8c2`, `97882ab`.
+- `git diff --name-only 99b61fc HEAD` lists exactly those three files — no fourth file, and in
+  particular neither `boot.ts`, `deps.ts`, `STATE.md` nor `ROADMAP.md`.
+- `git diff --diff-filter=D --name-only 99b61fc HEAD` is **empty** — nothing was deleted.
+- Working tree clean; both mutation probes confirmed reverted (`grep -c 'MUTATION PROBE'` → `0`).
+
 ## Residual risk, stated rather than buried
 
 Write 2 reads the ledger, filters, then patches — so there is a sub-millisecond window between the
