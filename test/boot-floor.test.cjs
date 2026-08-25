@@ -67,13 +67,21 @@ const { bootFloor } = loadTs('src/main/floor/boot.ts');
  *
  * T-P02-02-04 — slackEnabled:false and zero webhookTriggers: a unit test must
  * never open a real outbound tunnel.
+ *
+ * `extra` (plan 04-20) merges into the seeded config LAST, so a case can give a
+ * floor its own `hostAllowlist` / `notifications` and read the verdict back. It
+ * is the only way to prove the composition root passes the OPERATOR's config
+ * rather than a default: two floors, two configs, two verdicts.
  */
-function floorEnv(t) {
+function floorEnv(t, extra) {
   userData = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'md-boot-floor-')));
   const harnessHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'md-boot-floor-home-')));
   fs.writeFileSync(
     path.join(userData, 'config.json'),
-    JSON.stringify({ harnessHome, slackEnabled: false, webhookTriggers: [], notifications: false }, null, 2),
+    JSON.stringify(
+      { harnessHome, slackEnabled: false, webhookTriggers: [], notifications: false, ...extra },
+      null, 2
+    ),
     'utf8'
   );
   const thisUserData = userData;
@@ -93,6 +101,10 @@ function floorEnv(t) {
  *  bootFloor never calls its spawn method on this fake's behalf). */
 function fakeDeps(env) {
   const sent = [];
+  // Plan 04-20: the toast sink, recorded rather than dropped. `publishApproval`'s
+  // notification half is only observable here — the data half is the registry
+  // itself, which plan 04-17 PULLS through `floor.hookServer.openApprovals()`.
+  const notified = [];
   const respawnCalls = [];
   let quitCalled = false;
   let workerWatcherStarted = false;
@@ -106,7 +118,7 @@ function fakeDeps(env) {
         encrypt: (s) => `enc:${s}`,
         decrypt: (s) => s.replace(/^enc:/, '')
       },
-      notify: () => { /* noop */ },
+      notify: (a) => { notified.push(a); },
       send: (channel, payload) => { sent.push({ channel, payload }); return true; },
       quit: () => { quitCalled = true; },
       focus: () => { /* noop */ },
@@ -118,6 +130,7 @@ function fakeDeps(env) {
       startWorkerWatcher: () => { workerWatcherStarted = true; }
     },
     sent,
+    notified,
     respawnCalls,
     quitCalled: () => quitCalled,
     workerWatcherStarted: () => workerWatcherStarted
@@ -616,4 +629,307 @@ test('D-40: the sorted ipcMain.handle channel-name list diffs empty against B-ip
   assert.deepEqual(names, B_IPC_NAMES,
     'the sorted ipcMain.handle channel-name list no longer matches B-ipc-names — a channel was '
     + 'renamed, added or removed; update this baseline in the same commit that changes the channel');
+});
+
+// ─── Plan 04-20: THE COMPOSITION ROOT ────────────────────────────────────────
+//
+// Four optional trailing `HookServer` seams were declared in waves 2 and 4 and
+// nothing supplied them. Optional means NOTHING FAILS when they are never wired
+// — `hooks.ts`'s `recordCost` doc block states that house rule in its own words
+// — and that is exactly why the wiring needs a test that goes red when an
+// argument is dropped.
+//
+// EVERY assertion below observes an EFFECT through a really-booted
+// `bootFloor(deps)`: a verdict that changes with the operator's config, a real
+// `hive_ask`, a real row in the floor's own store, a real toast. A grep over
+// `boot.ts`'s argument list proves the TEXT is present; it does not prove the
+// argument reaches the judge, survives boot ordering, or reads the operator's
+// config. That distinction is the whole reason this block exists.
+//
+// WHY NOT `test/gate-harness.cjs` (plan 04-01), which was read before choosing:
+// it builds its OWN `HiveManager` + `HookServer` and spawns the real shim. That
+// proves the LOOP, which `test/gate03-roundtrip.test.cjs` already does. A server
+// this file constructed is precisely the thing that cannot answer the question
+// here, because the defect under test IS a green unit suite driving instances
+// the tests built while the floor an operator runs has none of the seams. So: no
+// child process, no hand-built server — the REAL socket of a floor booted the
+// way the operator boots it, driven over `floor.hive.sockPath()` so
+// `authorized()` genuinely runs and the agent id in a persisted row is DERIVED
+// from a token rather than claimed by a payload.
+//
+// Not POSIX-gated and no `skip:` — this file already connects to that pipe on
+// win32 with no gate (the `net.createConnection(floor.hive.sockPath())` case
+// above), so `test/suite-integrity.test.cjs`'s clause-3 census is untouched.
+
+const { ASK_TTL_MS } = loadTs('src/main/hiveProvisioning.ts');
+const { DEFAULT_HOST_ALLOWLIST } = loadTs('src/main/commandShape.ts');
+
+// A host genuinely OUTSIDE the shipped default, so "the operator's list was
+// read" and "the default happened to answer" produce different verdicts.
+const SYNTHETIC_HOST = 'inside.example';
+// …and one genuinely INSIDE it, for the mirror image: an operator list that
+// EXCLUDES a default host must refuse it. That direction is the one a
+// default-only implementation cannot fake in either direction.
+const DEFAULT_MEMBER_HOST = 'github.com';
+
+/** One PreToolUse payload over the REAL socket of a REALLY BOOTED floor. */
+function hookDriver(floor, agentId) {
+  const token = floor.hookServer.mintToken(agentId);
+  const sock = floor.hive.sockPath();
+  const send = (payload) => new Promise((resolve, reject) => {
+    const c = net.createConnection(sock, () => c.end(JSON.stringify(payload) + '\n'));
+    let resp = '';
+    c.setEncoding('utf8');
+    c.on('data', (d) => { resp += d; });
+    c.on('close', () => { try { resolve(resp ? JSON.parse(resp) : {}); } catch { resolve(resp); } });
+    c.on('error', reject);
+  });
+  return {
+    token,
+    send,
+    pre: (tool_name, tool_input, extra = {}) => send({
+      hook_event_name: 'PreToolUse', tool_name, tool_input, sock_token: token, ...extra
+    }),
+    bash: (command, extra = {}) => send({
+      hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command },
+      sock_token: token, ...extra
+    })
+  };
+}
+
+/**
+ * Boot ONE floor on its own config, drive it, tear it down.
+ *
+ * STRICTLY SEQUENTIAL, and that is not stylistic: `floorEnv` reassigns the
+ * module-level `userData` the electron stub closes over LIVE, and `readConfig()`
+ * resolves `configPath()` through it on EVERY call. Two floors alive at once
+ * would make the first read the second's config at verdict time, which is the
+ * exact thing these cases measure. So a case comparing two configs boots, drives
+ * and shuts down the first before the second `floorEnv` call ever happens.
+ *
+ * `a1` IS REGISTERED IN THE HIVE, and that is load-bearing rather than tidy.
+ * Measured against the tree before this plan's wiring: an UNregistered agent has
+ * `cwdValid: false` in the registry, so GATE-01's protected-path arm refuses
+ * every relative target it cannot locate — `curl https://github.com/x` came back
+ * `permissionDecision: 'deny'` with "main cannot LOCATE this relative target",
+ * from the PATH arm, on a floor where the host arm had allowed it. Two of the
+ * host cases below would then have asserted a deny they were not testing for and
+ * passed VACUOUSLY, pre-wiring, for a reason with nothing to do with the seam
+ * (04-VALIDATION.md § Anti-Vacuous-Pass Rules). With the agent registered the
+ * same payload comes back `{}` and the RED is the real one.
+ */
+async function bootedFloor(t, cfg, fn) {
+  const env = floorEnv(t, cfg);
+  const fake = fakeDeps(env);
+  const floor = await bootFloor(fake.deps);
+  await floor.hive.ensureAgent({ id: 'a1', name: 'a1', cwd: env.harnessHome, capabilities: [] });
+  try {
+    return await fn({
+      floor, env, notified: fake.notified, sent: fake.sent, ...hookDriver(floor, 'a1')
+    });
+  } finally {
+    floor.shutdown();
+  }
+}
+
+/** The wire shape of a refusal, whatever opened it. */
+const decisionOf = (r) => (r && r.hookSpecificOutput && r.hookSpecificOutput.permissionDecision) || null;
+
+test('04-20 composition: the floor is live enough for the negatives below to mean anything', async (t) => {
+  await bootedFloor(t, {}, async ({ floor, bash }) => {
+    // The positive lower bound. Every case below asserts something ABOUT a
+    // seam, and a bootFloor that threw halfway would satisfy several of them
+    // vacuously — so the liveness of the three objects those cases reach
+    // through is asserted first, and separately.
+    assert.equal(floor.hookServer.constructor.name, 'HookServer');
+    assert.equal(typeof floor.hookServer.openApprovals, 'function',
+      'floor.hookServer has no openApprovals() — plans 04-17/04-18 read the ask registry through '
+      + 'exactly this accessor, and every ask assertion below reaches it the same way');
+    assert.equal(typeof floor.watchdog.current, 'function',
+      'floor.watchdog is absent — plan 04-11\'s wave-3 accessor is this phase\'s second worked '
+      + 'example of a named seam, and it is read here as the model the four below follow');
+    assert.equal(floor.persist.isOpen, true,
+      'floor.persist is not open — the recordToolCall case cannot distinguish "no row was written" '
+      + 'from "there was no database to write to"');
+
+    // …and the socket really answers a really-authorized payload, so a later
+    // `{}` reply reads as "allowed" rather than "nothing was listening".
+    const allowed = await bash('ls -la');
+    assert.equal(decisionOf(allowed), null,
+      '`ls -la` came back with a verdict — the driver is not reaching the judge the way these '
+      + 'cases assume, and every "no deny" assertion below would pass for the wrong reason');
+  });
+});
+
+test('04-20 GATE-03: the host allowlist is the OPERATOR\'s — two configs, two verdicts', async (t) => {
+  assert.ok(!DEFAULT_HOST_ALLOWLIST.includes(SYNTHETIC_HOST),
+    `${SYNTHETIC_HOST} is in DEFAULT_HOST_ALLOWLIST — this case would then pass with the getter `
+    + 'unwired, which is precisely the failure it exists to catch');
+
+  // (a) the operator LISTED it: allowed.
+  await bootedFloor(t, { hostAllowlist: [...DEFAULT_HOST_ALLOWLIST, SYNTHETIC_HOST] }, async ({ bash }) => {
+    const r = await bash(`curl https://${SYNTHETIC_HOST}/x`);
+    assert.equal(decisionOf(r), null,
+      `curl at ${SYNTHETIC_HOST} was refused on a floor whose config LISTS it — the production `
+      + 'HookServer is answering from DEFAULT_HOST_ALLOWLIST, i.e. the hostAllowlist getter never '
+      + 'reached the composition root (T-04-NET-02)');
+  });
+
+  // (b) the operator did NOT list it: refused. The verdict CHANGED with the
+  //     config, which is the only shape a default-only implementation cannot
+  //     produce — one deny on its own proves nothing.
+  await bootedFloor(t, { hostAllowlist: [...DEFAULT_HOST_ALLOWLIST] }, async ({ bash }) => {
+    const r = await bash(`curl https://${SYNTHETIC_HOST}/x`);
+    assert.equal(decisionOf(r), 'deny',
+      `curl at ${SYNTHETIC_HOST} was allowed on a floor whose config omits it`);
+  });
+});
+
+test('04-20 GATE-03/GATE-05: an operator list that EXCLUDES a default host refuses it, and ASKS', async (t) => {
+  assert.ok(DEFAULT_HOST_ALLOWLIST.includes(DEFAULT_MEMBER_HOST),
+    `${DEFAULT_MEMBER_HOST} is not in DEFAULT_HOST_ALLOWLIST — this case needs a host the DEFAULT `
+    + 'would allow and the operator\'s list would not, or it cannot discriminate');
+
+  // The mirror image of the case above, and the one an unwired getter cannot
+  // fake in either direction: the default WOULD have allowed this host, so a
+  // refusal here can only have come from the operator's own list.
+  //
+  // It is also T-04-NET-04's re-check. An unlisted host is the most frequent
+  // ask an overnight run produces, so the ask HANDLE is asserted and not merely
+  // the refusal: an ask the operator can never see is a deny with no recourse.
+  await bootedFloor(t, { hostAllowlist: [SYNTHETIC_HOST] }, async ({ floor, bash }) => {
+    const r = await bash(`curl https://${DEFAULT_MEMBER_HOST}/x`);
+    assert.equal(decisionOf(r), 'deny',
+      `${DEFAULT_MEMBER_HOST} was allowed on a floor whose operator list excludes it — the judge `
+      + 'is reading DEFAULT_HOST_ALLOWLIST, not the config');
+    assert.ok(r.hive_ask && typeof r.hive_ask.id === 'string' && r.hive_ask.id.startsWith('ask-'),
+      'the refusal carries no hive_ask — a host outside a NON-EMPTY allowlist is an ASK '
+      + '(T-04-NET-04)');
+
+    const open = floor.hookServer.openApprovals();
+    assert.equal(open.length, 1, 'the production registry does not hold the ask it just handed out');
+    assert.equal(open[0].id, r.hive_ask.id);
+    assert.equal(open[0].agentId, 'a1',
+      'the registry entry is attributed to something other than the token-derived agent id');
+  });
+});
+
+test('04-20 GATE-05: the production registry\'s TTL is the derived ASK_TTL_MS, by effect', async (t) => {
+  // NOT a comparison of two exported constants — that says nothing about what
+  // the production instance was CONSTRUCTED with (T-04-ASK-41). The registry is
+  // built inside `HookServer`, so there is no composition-root argument to grep
+  // and `boot.ts` passes no TTL at all; what IS provable from here is the number
+  // the really-booted server actually enforces.
+  //
+  // Opened through the config-driven host refusal rather than a force-push, so
+  // this case is ALSO red when the hostAllowlist getter is missing: an ask that
+  // exists only because the operator's list was read cannot have its TTL read
+  // off a floor that never read that list.
+  await bootedFloor(t, { hostAllowlist: [SYNTHETIC_HOST] }, async ({ floor, bash }) => {
+    const r = await bash(`curl https://${DEFAULT_MEMBER_HOST}/x`);
+    assert.ok(r.hive_ask, 'no ask was opened, so there is no TTL to read');
+
+    const entry = floor.hookServer.openApprovals().find((e) => e.id === r.hive_ask.id);
+    assert.ok(entry, 'the ask id on the wire names no entry in the production registry');
+    assert.equal(entry.expiresAt - entry.openedAt, ASK_TTL_MS,
+      `the production registry's TTL is ${entry.expiresAt - entry.openedAt}ms, not the derived `
+      + `ASK_TTL_MS (${ASK_TTL_MS}ms) — an option nobody supplies silently takes whatever the `
+      + 'class was written with');
+    assert.equal(r.hive_ask.deadlineMs, entry.expiresAt,
+      'the deadline handed to the shim and the deadline the server enforces are two numbers — the '
+      + 'shim would stop polling before, or keep polling after, the entry it polls for');
+    assert.ok(r.hive_ask.deadlineMs > Date.now(), 'the ask was handed out already expired');
+  });
+});
+
+test('04-20 GATE-05: ask, bare deny and neither — three legs, because two do not discriminate', async (t) => {
+  // Without the deny leg a server that asks about EVERYTHING passes; without
+  // the "neither" leg a server that verdicts everything passes.
+  await bootedFloor(t, {}, async ({ bash }) => {
+    const forced = await bash('git push origin +main');
+    assert.equal(decisionOf(forced), 'deny');
+    assert.ok(forced.hive_ask && typeof forced.hive_ask.id === 'string',
+      'a force-push came back a bare deny — GATE-05\'s third answer is missing from the '
+      + 'production server');
+
+    const plain = await bash('ls -la');
+    assert.equal(decisionOf(plain), null, '`ls -la` was verdicted');
+    assert.equal(plain.hive_ask, undefined, '`ls -la` opened an approval');
+  });
+
+  // An EMPTIED allowlist is the operator saying "no hosts", and after round 3
+  // moved `rm -rf` to ask it is `commandShapeDenial`'s only remaining
+  // `kind: 'deny'`. It is UNREACHABLE from a floor whose getter was never
+  // supplied, because the unwired fallback (DEFAULT_HOST_ALLOWLIST) is
+  // non-empty by construction.
+  await bootedFloor(t, { hostAllowlist: [] }, async ({ bash }) => {
+    const r = await bash(`curl https://${DEFAULT_MEMBER_HOST}/x`);
+    assert.equal(decisionOf(r), 'deny',
+      'an EMPTIED host allowlist allowed an outbound host — the judge is answering from the '
+      + 'shipped default, so the operator\'s "no hosts" was never heard');
+    assert.equal(r.hive_ask, undefined,
+      'an emptied allowlist opened an ASK — the operator answered this question by emptying the '
+      + 'list, and waking them for it is the deny they asked for');
+  });
+});
+
+test('04-20 RECORD-01: a real row in the floor\'s OWN store, with a derived agent id', async (t) => {
+  await bootedFloor(t, {}, async ({ floor, pre }) => {
+    // Outside the hive root, so GATE-01's protected-path arm is not what
+    // answers here — the row under test is an ALLOW's row.
+    const target = path.join(os.tmpdir(), 'md-0420-composition', 'alpha.ts');
+    // The forged-id negative rides the same payload: `authorized()` DERIVES the
+    // sender from its per-agent token and discards this claim. A record that
+    // trusted the body would attribute the write to an id any shell can type.
+    const r = await pre('Write', { file_path: target }, { agent_id: 'not-a1' });
+    assert.equal(decisionOf(r), null, 'the Write was refused, so the row under test is the wrong row');
+
+    const rows = floor.persist.toolCalls({ agentId: 'a1', limit: 100 });
+    assert.equal(rows.length, 1,
+      'no tool_calls row reached floor.persist. `persist` is a module-scope `let` assigned AFTER '
+      + 'the new HookServer(...) call, so an EAGERLY bound `persist.recordToolCall` captures '
+      + 'undefined and every tool call is silently unrecorded (T-04-LOG-11) — the argument has to '
+      + 'be a closure read at CALL time');
+    assert.equal(rows[0].tool, 'Write');
+    assert.notEqual(rows[0].target, null,
+      'the row arrived with a NULL target — the row is not lost, the column the requirement exists '
+      + 'for is empty');
+    assert.equal(rows[0].target, target);
+    assert.equal(rows[0].decision, 'allow');
+    assert.equal(rows[0].agentId, 'a1');
+    assert.equal(floor.persist.toolCalls({ agentId: 'not-a1', limit: 100 }).length, 0,
+      'the payload\'s forged agent_id reached the ledger — GATE-01 derives the sender from its '
+      + 'token and the audit trail must record that id, not a claim (T-04-LOG-09)');
+  });
+});
+
+test('04-20 GATE-05: the publisher fires, and honours the operator\'s notifications setting', async (t) => {
+  // BOTH halves, because a publisher that never fires and a publisher that
+  // ignores the gate each pass a one-sided test.
+  await bootedFloor(t, { notifications: true }, async ({ floor, bash, notified }) => {
+    const r = await bash('git push origin +main');
+    assert.ok(r.hive_ask, 'no ask was opened, so the publisher had nothing to publish');
+    assert.equal(notified.length, 1,
+      'opening an ask raised no toast — publishApproval never reached the production HookServer, '
+      + 'so an overnight floor waits on a question nobody is told about');
+    assert.ok(String(notified[0].title).includes('a1'),
+      `the toast does not name the agent that asked: ${JSON.stringify(notified[0])}`);
+    assert.equal(floor.hookServer.openApprovals().length, 1);
+  });
+
+  // notifications OFF: the toast half is silent, the DATA half is not. Plan
+  // 04-17's `GET /phone/api/asks` is a PULL, and a pull the operator asked for
+  // is not a notification (T-04-ASK-39).
+  await bootedFloor(t, { notifications: false }, async ({ floor, bash, notified }) => {
+    const r = await bash('git push origin +main');
+    assert.ok(r.hive_ask, 'no ask was opened, so neither half of the publisher was exercised');
+    assert.equal(notified.length, 0,
+      'an operator who turned notifications off was toasted anyway — every other toast in boot.ts '
+      + 'honours readConfig().notifications and this one must too');
+    const open = floor.hookServer.openApprovals();
+    assert.equal(open.length, 1,
+      'the notifications gate swallowed the DATA half too — the phone would show no pending '
+      + 'approval and the ask would expire unanswered with nothing to answer it from');
+    assert.equal(open[0].id, r.hive_ask.id);
+  });
 });
