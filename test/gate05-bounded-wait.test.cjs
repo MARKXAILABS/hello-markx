@@ -255,6 +255,12 @@ test('1 — an unanswered ask DENIES at the deadline, on the shim\'s own stdout'
         verdict.permissionDecision, 'deny',
         `the deadline passed and the shim wrote ${JSON.stringify(run.stdout)} instead of a deny`
       );
+      // The shim's OWN sentence about a closed window, not the judge's sentence
+      // echoed back out of the first reply. An un-upgraded shim writes that first
+      // reply verbatim — which is also a deny — so "it said deny" alone cannot
+      // tell the two apart.
+      assert.match(verdict.permissionDecisionReason, /approval window closed/);
+      assert.doesNotMatch(verdict.permissionDecisionReason, /FORCE-pushes/);
 
       // The positive lower bound beside the negative (D-33/D-40), and the whole
       // discriminator: an UN-upgraded shim writes the ask reply verbatim — which
@@ -291,10 +297,13 @@ test('2 — an explicit yes ALLOWS, through the real HookServer', async () => {
       parseVerdict(finished, 'yes').permissionDecision, 'allow',
       `the operator said yes and the shim wrote ${JSON.stringify(finished.stdout)}`
     );
-    assert.ok(
-      finished.elapsedMs >= 500,
-      `the shim answered in ${finished.elapsedMs}ms — it cannot have waited for an answer it got `
-      + 'after the first reply; it wrote the ask reply\'s own deny instead'
+    // Structural proof that these bytes came from a POLL answer rather than from
+    // the first reply, and stronger than any timing heuristic: `status` is a
+    // field only `approvalPoll` writes. The ask reply has none, so a shim that
+    // took the ask reply's own deny and left cannot produce it.
+    assert.equal(
+      JSON.parse(finished.stdout).status, 'allow',
+      `the shim's stdout carries no poll-shaped status: ${JSON.stringify(finished.stdout)}`
     );
   });
 });
@@ -379,17 +388,23 @@ test('5 — a MID-ask dead socket DENIES: killing the floor cannot turn a pendin
 
     const finished = await run;
     assertBounded(finished, 'mid-ask death');
+    const verdict = parseVerdict(finished, 'mid-ask death');
     assert.equal(
-      parseVerdict(finished, 'mid-ask death').permissionDecision, 'deny',
+      verdict.permissionDecision, 'deny',
       `the floor died while an ask was pending and the shim wrote ${JSON.stringify(finished.stdout)}. `
       + 'Agents here run permissions-bypassed by design, so a fail-open on this path makes killing '
       + 'the Electron main process an agent-triggerable way to get a yes.'
     );
-    assert.ok(
-      finished.elapsedMs >= 250,
-      `the shim answered in ${finished.elapsedMs}ms — it never entered the wait, so this deny is `
-      + 'the ask reply\'s own and says nothing about the mid-ask path'
+    // The deny has to be the SHIM's own sentence about an unreachable floor, not
+    // the judge's force-push sentence echoed back from the first reply. That is
+    // what separates "waited, then denied because the floor went away" from "took
+    // the ask reply's deny and left" — and it does not depend on a clock.
+    assert.match(
+      verdict.permissionDecisionReason, /became unreachable/,
+      `the shim denied with ${JSON.stringify(verdict.permissionDecisionReason)} — that is the ask `
+      + 'reply\'s own reason, so it never entered the wait and this case proves nothing'
     );
+    assert.doesNotMatch(verdict.permissionDecisionReason, /FORCE-pushes/);
   });
 });
 
@@ -405,12 +420,15 @@ test('6 (R2-BL2) — an ask outliving the shim\'s 5 s boot timer still DENIES', 
     + 'blind one.'
   );
   assertBounded(run, 'boot timer');
+  const verdict = parseVerdict(run, 'boot timer');
   assert.equal(
-    parseVerdict(run, 'boot timer').permissionDecision, 'deny',
+    verdict.permissionDecision, 'deny',
     `an ask outliving the boot timer produced ${JSON.stringify(run.stdout)}. If stdout is empty the `
     + 'shim exited SILENTLY at t=5s mid-ask — and a silent exit is ALLOW. `.unref()` does not stop '
     + 'that timer firing while the poll loop keeps the process alive; only clearing it does.'
   );
+  assert.match(verdict.permissionDecisionReason, /approval window closed/);
+  assert.doesNotMatch(verdict.permissionDecisionReason, /FORCE-pushes/);
   assert.ok(
     run.elapsedMs > SHIM_TIMER_MS,
     `the shim finished in ${run.elapsedMs}ms, at or under the ${SHIM_TIMER_MS}ms boot timer. Every `
@@ -466,12 +484,18 @@ test('8 (T-04-ASK-47) — a poll that OPENS and is never answered DENIES on the 
 
   assert.ok(polls >= 1, 'the shim never sent the poll this case exists to leave unanswered');
   assertBounded(run, 'silent poll');
+  const verdict = parseVerdict(run, 'silent poll');
   assert.equal(
-    parseVerdict(run, 'silent poll').permissionDecision, 'deny',
+    verdict.permissionDecision, 'deny',
     `a poll the floor accepted and never answered produced ${JSON.stringify(run.stdout)}. This is a `
     + 'different code path from case 5: that one kills the socket (an `error` event), this one '
     + 'keeps it open and silent (a timeout). Both must WRITE.'
   );
+  // The per-poll timer's own sentence — not the deadline's (the TTL here is
+  // 60 s and nowhere near expiry) and not the socket-death one. Case 5 and this
+  // case must not be able to satisfy each other.
+  assert.match(verdict.permissionDecisionReason, /never answered it/);
+  assert.doesNotMatch(verdict.permissionDecisionReason, /approval window closed|became unreachable/);
   assert.ok(
     run.elapsedMs > SHIM_TIMER_MS - 500,
     `the shim gave up after ${run.elapsedMs}ms, under the per-poll ${SHIM_TIMER_MS}ms budget minus `
