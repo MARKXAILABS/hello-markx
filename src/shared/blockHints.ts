@@ -1,13 +1,22 @@
 /**
  * "This agent is waiting for a human" — the one list, and the one matcher.
  *
- * MOVED VERBATIM from `src/renderer/src/hooks/usePtyParser.ts:31-37`. The list
- * lived in the renderer, so it could only ever see the MOUNTED terminal: an
- * agent blocked on a permission prompt in a background tab, in a closed window,
- * or on a headless floor (`src/main/floor/headless.ts`) was invisible to it. It
- * lives here so main can evaluate it too, which is what makes VIGIL-03's guard
- * in `delivery.ts` reachable at all. Electron-free, node-free, DOM-free, so both
- * tsconfig projects can include it and `node --test` can load it directly.
+ * MOVED VERBATIM from `src/renderer/src/hooks/usePtyParser.ts:31-37`, and that
+ * declaration is now DELETED rather than left in place: the hook imports this
+ * module. The list lived in the renderer, so it could only ever see the MOUNTED
+ * terminal: an agent blocked on a permission prompt in a background tab, in a
+ * closed window, or on a headless floor (`src/main/floor/headless.ts`) was
+ * invisible to it. It lives here so main can evaluate it too, which is what
+ * makes VIGIL-03's guard in `delivery.ts` reachable at all. Electron-free,
+ * node-free, DOM-free, so both tsconfig projects can include it and
+ * `node --test` can load it directly.
+ *
+ * TWO READERS, ONE LIST: `src/main/floor/boot.ts:1092` (over
+ * `PtyManager.outputTail`, the reader that works with no window) and
+ * `usePtyParser.ts` (over the mounted terminal's chunks). Both call
+ * `matchBlockHint`, so there is one matcher as well as one list — a second copy
+ * of either drifts, and the copy that drifts is the one nobody is looking at
+ * (T-04-BLK-12).
  *
  * The patterns are copied unchanged. Match only real prompts (the approval menu
  * / a yes-no question) and NOT the bare word "permission": the Claude TUI footer
@@ -24,12 +33,41 @@
  * The recovery path is the reason this is a derived read with no cache and no
  * latch anywhere in the chain. Carried with the code per 04-UI-SPEC rule V-3.
  *
- * KNOWN COVERAGE CEILING: these shapes are Claude-Code-TUI-shaped (`❯ 1. Yes` is
- * that TUI's approval menu). On codex / grok / kimi / agy / pi / OpenCode an
- * agent genuinely blocked on a prompt may match nothing at all, in which case the
- * guard is correct and simply never fires. Widening the list on a guess would be
- * a behaviour change smuggled inside a move; it stays verbatim until somebody has
- * watched a real non-Claude agent sit on a real prompt.
+ * KNOWN COVERAGE CEILING, PER ENGINE — the register, not an implication.
+ *
+ * SEVEN engines run on this floor: Claude Code on its own native `--settings`
+ * path (`agentProvider.ts:229-235`), plus the six hooks-bridged shims
+ * `'agy' | 'codex' | 'pi' | 'opencode' | 'grok' | 'kimi'`
+ * (`BridgeDescriptor`, `agentProvider.ts:71`). The list below was written
+ * against exactly ONE of them.
+ *
+ *   • claude — THE ENGINE THE PATTERNS CAME FROM. `❯ 1. Yes` is Claude Code's
+ *     TUI approval menu, and every shape here arrived from that TUI's parser,
+ *     `src/renderer/src/hooks/usePtyParser.ts:31-37`. Observed in ordinary use
+ *     of this app.
+ *   • codex — the only OTHER engine with a CLI installed on this machine, and
+ *     therefore the only one on which this list can be observed live AT ALL.
+ *     Plan 04-13 task 4 makes that single observation. Until it lands, whether
+ *     a blocked codex agent matches anything here is unmeasured.
+ *   • grok, pi, OpenCode, kimi, agy — NOT OBSERVED LIVE for block detection,
+ *     and not observable here: no CLI for any of them is installed on this
+ *     machine. What would settle it is an installed CLI plus an account for
+ *     that engine, and someone watching a real agent sit on a real prompt.
+ *     Nothing weaker settles it, and no marker in this file claims otherwise.
+ *
+ * WHAT THE CEILING COSTS, PLAINLY (T-04-BLK-11): on any of those six a genuinely
+ * blocked agent may match NOTHING. The guard is then correct and simply never
+ * fires — the agent is idled by the quiesce backstop, mailed more work by the
+ * wake nudge, and the operator sees a green floor with a stalled agent on it.
+ * That is VIGIL-03's own failure mode wearing a passing test. It is written here
+ * so it is read beside the list, rather than discovered by an operator whose
+ * codex agent sat on a prompt all night.
+ *
+ * THE CORRECT RESPONSE TO A MISS IS TO ADD THAT ENGINE'S PROMPT SHAPE TO THIS
+ * LIST — never to widen an existing pattern on a guess. Widening buys unknown
+ * coverage at a known cost: every false positive parks a working agent behind a
+ * "needs you" badge, and `/\(y\/n\)/i` is already loose enough to catch an agent
+ * quoting a prompt back at itself (see the inherited false positive above).
  */
 
 /** The patterns that mean "this agent is waiting for a human". */
