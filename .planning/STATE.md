@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Phase 2 plans all landed (12/12) but its 02-VERIFICATION.md is status: gaps_found (3/6 must-haves; STRUCT-01 the named gap) — NOT closed. Phase 3 planned: 9 plans in 7 waves, red-teamed over 7 full rounds + 4 targeted verifications, all findings closed. RED_TEAM_CLEAN not yet flipped — no full round has run against the final state. Phase 4 context also gathered (04-CONTEXT.md)."
-last_updated: "2026-08-25T01:30:00.000Z"
+stopped_at: "Phase 3 PLANNED and RED-TEAMED CLOSED. RED_TEAM_CLEAN=true, set 2026-08-25 on operator acceptance of 3 named residuals (recorded in 03-CONTEXT.md Red-Team Log) — NOT on a zero-finding round; that distinction is deliberate. 10 review rounds, every finding closed; 4 mechanical auditors pass; suite 830/823/0/7. Ready for /gsd:execute-phase 03 (Wave 0 creates 5 new test files). Phase 2 verification reads gaps_found (STRUCT-01) but does not gate Phase 3."
+last_updated: "2026-08-25T11:03:23.555Z"
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 52
   completed_plans: 42
-  percent: 0
+  percent: 17
 ---
 
 # Project State
@@ -692,8 +692,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-25T01:30:00.000Z
-Stopped at: Phase 3 planned and red-teamed: 7 full rounds + 4 targeted verifications; all findings closed. Last FULL 8-lens round (r7) = 0 BLOCKER/8 HIGH, all 8 closed and re-verified. RED_TEAM_CLEAN not yet flipped — no full round has run against the final state. Merged origin/main (PR #80) into the phase-3 branch, so the plans now sit on the post-Phase-2 tree; file:line anchors re-checked after that merge. Phase 4 context was gathered concurrently (04-CONTEXT.md, 37 decisions) and its plan-phase hold on 02-12 is now clear.
+Last session: 2026-08-25T11:03:23.534Z
+Stopped at: Phase 3 PLANNED and RED-TEAMED CLOSED. RED_TEAM_CLEAN=true, set 2026-08-25 on operator acceptance of 3 named residuals (recorded in 03-CONTEXT.md Red-Team Log) — NOT on a zero-finding round; that distinction is deliberate. 10 review rounds, every finding closed; 4 mechanical auditors pass; suite 830/823/0/7. Ready for /gsd:execute-phase 03 (Wave 0 creates 5 new test files). Phase 2 verification reads gaps_found (STRUCT-01) but does not gate Phase 3.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
@@ -703,4 +703,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: .planning/phases/03-scale-and-observability/03-REDTEAM-04.md
+Resume file: .planning/phases/03-scale-and-observability/03-CONTEXT.md

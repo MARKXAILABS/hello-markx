@@ -661,5 +661,65 @@ ones — each has an owner and a reason it is not closed in Phase 3.
 
 ---
 
+## Red-Team Log
+
+**RED_TEAM_CLEAN — 2026-08-25 — set TRUE on operator acceptance of the three named residuals below,
+not on a zero-finding round.** Recording the distinction because this project's core value is that an
+honest checklist beats a green one that overstates reality.
+
+**What was actually run.** Ten review rounds: seven full 8-lens adversarial passes (each finding put
+to an independent skeptic prompted to REFUTE it, so only findings surviving that pass were fixed) plus
+three targeted verification passes. Confirmed-finding trend, BLOCKER/HIGH:
+
+| Round | 1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | targeted ×3 |
+|---|---|---|---|---|---|---|---|---|---|
+| BLOCKER | 3 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| HIGH | 19 | 20 | 11 | 4 | 1 | 8 | 6 | 10 | 5 |
+
+**Every finding from every round is closed.** Two rounds reported `clean` and were REJECTED: their
+lens agents had died on a session limit and raised nothing, so "clean" meant *nothing was checked* —
+the D-40 defect class, caught by disbelieving the verdict.
+
+**Why the gate is set on acceptance rather than a clean round.** The HIGH count oscillated rather than
+converged (19→20→11→4→1→8→6→10), and the diagnosis is that the dominant class was never a code defect:
+it was **line numbers in plan PROSE going stale**, re-found in a different file each round. Further
+adversarial rounds were re-discovering one class at ~85 agents and ~7M tokens apiece. The class is now
+closed structurally instead:
+
+- **Four mechanical auditors**, deterministic and re-runnable for free after any edit:
+  *anchor audit* (645 citations resolved against their real files), *vacuous-criteria detector* (runs
+  every grep-shaped criterion and flags any already green), *structural verifier* (disjoint ownership,
+  coverage, forbidden paths, NUL bytes), and *task-sequencing auditor* (see below).
+- **The ANCHOR RULE in all nine plans**: quoted content is authoritative, a line number is a hint,
+  never edit a line because its number matched.
+- **21 genuinely broken citations re-measured and corrected** against the post-merge tree.
+
+**The single highest-value catch came last, and not from adversarial hunting.** An executor dry-run —
+reading the plans as the agent who must run them — found that `execute-plan.md:177-181` hard-blocks a
+task until its own acceptance criteria pass, so criteria in Task 1 naming files only Task 3 writes
+**deadlock forever**. Two such deadlocks existed, both introduced by an earlier round's own fix, and
+one was live (`02-12-SUMMARY.md` now exists, so the gate-open branch executes). Nine adversarial
+rounds missed it. A `seqaudit` tool now proves the class empty across all 23 tasks.
+
+**State at the flip** — every number from a command run in this session:
+`npm test` → **830 / 823 pass / 0 fail / 7 skipped**. Sequencing deadlocks **0/23 tasks**. Criteria
+**224**, of which 18 are green today and all 18 are deliberate invariant guards. Same-wave file
+ownership disjoint. All five SCALE ids covered. No plan touches `package.json`/`package-lock.json`.
+
+**The three accepted residuals** (each recorded in full under §Accepted Residuals above):
+1. Transcript-tier spend does not reach `cost-ledger.jsonl` — descoped, owned by PARITY-02.
+2. Only `provider === 'codex'` is cost-attributable; every other engine renders a declared gap.
+3. SCALE-01 and SCALE-03 are NOT closed by this phase (D-07); they are re-verified in the inserted
+   post-Phase-5 phase.
+
+**What this gate does NOT claim:** that a full 8-lens round returned zero findings against this exact
+tree. It did not, and no such round was run after the final fixes. What is claimed is narrower and
+true: every finding raised across ten rounds is closed, four mechanical auditors pass, and the last
+independent check answered *"is there anything that would produce a wrong result which the plans' own
+acceptance criteria would not catch?"* — its one YES (the ROADMAP 8 MB row lacking a negative pin) was
+fixed and is now red-until-done.
+
+---
+
 *Phase: 03-scale-and-observability*
-*Context gathered: 2026-08-24*
+*Context gathered: 2026-08-24 · Red-team closed: 2026-08-25*
