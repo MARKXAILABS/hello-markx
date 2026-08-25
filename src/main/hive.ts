@@ -151,6 +151,25 @@ export interface HiveTask {
    *  so spend against ONE card is attributable — see taskSpend(), which is the
    *  read side breaker.ts enforces against. */
   budgetTokens?: number;
+  /** ISO 8601. Stamped by EVERY ledger mutation, in bin/task.cjs AND in main's
+   *  HiveManager mutators. Absent on every card written before this phase —
+   *  consumers fall back to createdAt and must SAY they did (04-UI-SPEC S5 rule A-3).
+   *
+   *  NOT the same field as `TaskLedger.updatedAt` below, which is "when tasks.json
+   *  was last written". This one is "when THIS card last changed". Two different
+   *  facts wearing one name at two nesting levels — neither simplifies away. */
+  updatedAt?: string;
+  /** Written when the owning agent's PTY exits with the card still in flight.
+   *  Two writes: {by, at} synchronously in floor/lifecycle.ts teardownPty,
+   *  then {branch, detail} from finalizeAgentWorktree's continuation. Absence of
+   *  branch is the CORRECT rendering of "not known yet" — never a placeholder
+   *  (04-UI-SPEC S6b rule R-1). */
+  released?: {
+    by: string;
+    at: string;
+    branch?: string;
+    detail?: string;
+  };
 }
 
 /** The task ledger exactly as it is persisted to `tasks.json`.
