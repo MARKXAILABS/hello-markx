@@ -48,9 +48,6 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 new Database(':memory:').close(); // throws here if the native module is unusable — intended
 
-const loadTs = require('./load-ts.cjs');
-const { PersistStore } = loadTs('src/main/db.ts');
-
 // ── real temp dirs, self-cleaning ────────────────────────────────────────────
 
 const made = [];
@@ -70,6 +67,26 @@ after(() => {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 });
+
+/** electron's `app.getPath('userData')` is the only electron surface db.ts
+ *  touches, and SCALE-01 demoted it to the LAST resort behind an injected
+ *  harnessHome getter. Asserting on that fallback needs a real, writable
+ *  directory: load-ts's stub returns a path it never creates, so an open() there
+ *  fails as SQLITE_CANTOPEN for a reason that has nothing to do with the code
+ *  under test. Reassignable, so a test that cares takes a FRESH one and its
+ *  existsSync assertion cannot be pre-satisfied by an earlier test in this file.
+ *
+ *  This injects electron ONLY. better-sqlite3 above stays the real driver — that
+ *  is this file's whole reason to exist and nothing here weakens it. */
+let userData = tempDir();
+const electronId = require.resolve('electron');
+require.cache[electronId] = {
+  id: electronId, filename: electronId, loaded: true,
+  exports: { app: { getPath: () => userData } }
+};
+
+const loadTs = require('./load-ts.cjs');
+const { PersistStore } = loadTs('src/main/db.ts');
 
 /** An opened store on its own throwaway file. `dbPath` is a real constructor
  *  parameter ("Override the DB location (tests)"), so no `app.getPath` fake is
@@ -305,5 +322,119 @@ test('the index survives a close and a re-open of the same file', () => {
     );
   } finally {
     second.close();
+  }
+});
+
+// ── SCALE-01: harness.db follows harnessHome ─────────────────────────────────
+/**
+ * `harness.db` used to default under `app.getPath('userData')` — ONE file for
+ * every project on the machine, so "an agent in project X cannot see project Y's
+ * data" was false for the kv store, the command history and this FTS index.
+ * The fix is an injected `getHome` closure (db.ts must never import config.ts —
+ * config.ts imports PersistStore FROM here) plus `repoint()`, for the one
+ * non-relaunching `harnessHome: null -> set` transition in `config:update`.
+ */
+
+test('the injected harnessHome getter, not userData, decides the default DB path', () => {
+  userData = tempDir();
+  const home = tempDir();
+  const store = new PersistStore(undefined, () => home);
+  try {
+    store.open();
+    assert.ok(
+      fs.existsSync(path.join(home, 'harness.db')),
+      'the DB did not land under the harnessHome the getter returned — the kv store, command '
+      + 'history and FTS index are still shared across every project on the machine, which is '
+      + 'the entire escape SCALE-01 exists to close'
+    );
+    assert.ok(
+      !fs.existsSync(path.join(userData, 'harness.db')),
+      'the DB ALSO opened under userData: the getter is being ignored in favour of the old '
+      + 'shared path'
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('a null harnessHome still falls back to userData — a fresh install before onboarding is unchanged', () => {
+  userData = tempDir();
+  const store = new PersistStore(undefined, () => null);
+  try {
+    store.open();
+    assert.ok(
+      fs.existsSync(path.join(userData, 'harness.db')),
+      'a store whose getHome() returns null (harnessHome not configured yet) no longer falls '
+      + 'back to userData — a fresh install would have nowhere to persist before onboarding'
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('an explicit dbPath still wins over the getHome getter', () => {
+  userData = tempDir();
+  const home = tempDir();
+  const explicit = path.join(tempDir(), 'explicit.db');
+  const store = new PersistStore(explicit, () => home);
+  try {
+    store.open();
+    assert.ok(fs.existsSync(explicit), 'the explicit dbPath override no longer opens where it was told to');
+    assert.ok(
+      !fs.existsSync(path.join(home, 'harness.db')),
+      'the getHome getter overrode an explicit dbPath — every test in this file passes dbPath, '
+      + 'so that inversion would silently relocate all of them'
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('repoint() moves a LIVE handle from the pre-onboarding path to the new home', () => {
+  userData = tempDir();
+  const home = tempDir();
+  let harnessHome = null;                       // fresh install: not configured yet
+  const store = new PersistStore(undefined, () => harnessHome);
+  try {
+    store.open();
+    store.setKv('scale01', 'pre-onboarding');
+    assert.equal(store.getKv('scale01'), 'pre-onboarding');
+    assert.ok(fs.existsSync(path.join(userData, 'harness.db')));
+
+    harnessHome = home;                         // onboarding writes harnessHome
+    store.repoint();
+
+    assert.equal(
+      store.isOpen, true,
+      'repoint() left the handle CLOSED. Every kv/history call guards on `this.db`, so the app '
+      + 'would look healthy while persisting nothing for the rest of the session'
+    );
+    assert.ok(
+      fs.existsSync(path.join(home, 'harness.db')),
+      'repoint() did not reopen under the new home — the handle is stranded at the '
+      + 'pre-onboarding path, which is the exact stranding this method exists to prevent'
+    );
+    assert.equal(
+      store.getKv('scale01'), undefined,
+      'the repointed handle is still READING the pre-onboarding file: close-then-reopen did not '
+      + 're-evaluate the default-path branch'
+    );
+    store.setKv('scale01', 'post-onboarding');
+    assert.equal(store.getKv('scale01'), 'post-onboarding');
+  } finally {
+    store.close();
+  }
+
+  // Read the post-repoint write back through an INDEPENDENT handle on the file
+  // itself: proves repoint() moved the file, not just the isOpen flag.
+  const verify = new PersistStore(path.join(home, 'harness.db'));
+  verify.open();
+  try {
+    assert.equal(
+      verify.getKv('scale01'), 'post-onboarding',
+      'the value written after repoint() is not in the new home\'s file on disk'
+    );
+  } finally {
+    verify.close();
   }
 });
