@@ -517,9 +517,45 @@ test('deriveCost: costUnattributed is its OWN gap, and it outranks the measured 
   assert.equal(deriveCost({ costUnattributed: true }, 'none', 'Grok', 'Grace').reasonKind, 'no-meter');
 });
 
+test("deriveCost's no-meter sentence is BYTE-IDENTICAL to the shipped capabilityGaps one", () => {
+  // agentView.ts is `@shared`-only by design (it must load with no DOM), and
+  // store/config.ts is not `@shared` — so the sentence is reproduced there rather
+  // than imported. That copy is exactly the shape FLOOR-13 measured drifting, so
+  // it is pinned instead of trusted: reword either side and this reddens.
+  const { capabilityGaps, providerPreset } = loadTs('src/renderer/src/store/config.ts');
+  const { AGENT_PROVIDER_PRESETS: presets } = loadTs('src/shared/agentProvider.ts');
+  const noMeter = presets.filter((p) => p.costTracking === 'none');
+  assert.ok(noMeter.length > 0,
+    'no preset carries costTracking:\'none\' any more — this case would assert nothing');
+  for (const preset of noMeter) {
+    const shipped = capabilityGaps(preset.id, 'darwin', 'Ada').find((g) => g.key === 'spend');
+    assert.ok(shipped, `${preset.id} reports no cost but raises no 'spend' capability gap`);
+    assert.equal(
+      deriveCost({}, preset.costTracking, providerPreset(preset.id).label, 'Ada').reason,
+      shipped.sentence,
+      `${preset.id}'s cost-gap wording has drifted between agentView.ts and store/config.ts — `
+      + 'two sentences for one fact is how the app comes to describe the same gap two ways');
+  }
+});
+
 test('deriveCost: a metered engine that has genuinely spent nothing still reports $0', () => {
   assert.deepEqual(deriveCost({ usd: 0 }, 'otel', 'Claude', 'Ada'),
     { kind: 'measured', usd: 0, lifetime: false });
+});
+
+test('deriveCost: no directory row is `unresolved`, NOT a measured $0.00', () => {
+  // The branch the plan did not name, and it is not transient: `hive:agentDirectory`
+  // returns REGISTRY agents, so a store agent that never reached the registry has no
+  // row for the life of the process. Falling through to `usd: 0` would print a
+  // measured $0.00 for it forever — the faked zero D-35 exists to forbid.
+  for (const view of [undefined, {}, { costLifetime: true }]) {
+    const v = deriveCost(view, 'otel', 'Claude', 'Ada');
+    assert.equal(v.kind, 'unmeasured', `a view of ${JSON.stringify(view)} produced a measured cost`);
+    assert.equal(v.reasonKind, 'unresolved');
+    assert.ok(!JSON.stringify(v).includes('$'));
+  }
+  // ...and it does not swallow a real reading of zero.
+  assert.equal(deriveCost({ usd: 0 }, 'otel', 'Claude', 'Ada').kind, 'measured');
 });
 
 test('deriveCost: an all-time transcript total is flagged, never passed off as this session', () => {
@@ -605,9 +641,10 @@ test('agentView publishes a NEW snapshot object and notifies every subscriber on
   // poll write different fields for the same agent and must not erase each other.
   mergeAgentViews({ a1: { breaker: { level: 'stopped', reason: 'budget' } } });
   assert.deepEqual(getAgentViews().a1, { usd: 0.5, breaker: { level: 'stopped', reason: 'budget' } });
+  assert.equal(seen.length, 2, 'the second merge did not notify');
   off();
   mergeAgentViews({ a1: { usd: 9 } });
-  assert.equal(seen.length, 1, 'unsubscribing did not stop the notifications');
+  assert.equal(seen.length, 2, 'unsubscribing did not stop the notifications');
 });
 
 test('the first subscriber pulls control:breakerSnapshot AND hive:agentDirectory', async (t) => {
