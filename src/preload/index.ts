@@ -1075,9 +1075,22 @@ const api = {
    *  links, links that arrived during load). Resolves the queued list. */
   drainPendingHires: (): Promise<HireManifest[]> =>
     ipcRenderer.invoke('hire:drainPending'),
-  /** Open a file picker and validate the chosen hire-manifest JSON. */
-  importHireFile: (): Promise<{ ok: boolean; manifest?: HireManifest; error?: string }> =>
-    ipcRenderer.invoke('hire:openFile'),
+  /** Open a file picker and validate the chosen JSON. The file may be a single
+   *  `hire@1` manifest (`manifest`) or a `hello-markx/team@1` wrapper (`team`) —
+   *  `readHireManifestFile` branches on the parsed spec tag, so importing a team
+   *  needs no channel of its own. */
+  importHireFile: (): Promise<{
+    ok: boolean;
+    manifest?: HireManifest;
+    team?: { members: HireManifest[] };
+    error?: string;
+  }> => ipcRenderer.invoke('hire:openFile'),
+  /** Write the current roster out as a `team@1` file the operator names.
+   *  `members` is how many were written; `skipped` is how many could not be
+   *  re-imported and were therefore left out — both must be shown, since a file
+   *  that quietly loses agents is worse than one that refuses. */
+  exportTeam: (): Promise<{ ok: boolean; members?: number; skipped?: number; error?: string }> =>
+    ipcRenderer.invoke('team:export'),
 
   // ─── Quit confirmation ───────────────────────────────────────────────────
   onCloseRequested: (cb: (info: { ptyCount: number }) => void): (() => void) => {

@@ -81,8 +81,8 @@ import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, IN
 import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { RosterStore } from './roster';
 import { ControlRegistry } from './control';
-import { fetchHireManifest, readHireManifestFile } from './hire';
-import { parseHireDeepLink, type HireManifest } from '../shared/hire';
+import { buildTeamExport, fetchHireManifest, readHireManifestFile } from './hire';
+import { HIRE_TEAM_SPEC_V1, parseHireDeepLink, type HireManifest } from '../shared/hire';
 import { ClosingTimeController } from './closingTime';
 import {
   inferAgentProvider,
@@ -1656,6 +1656,34 @@ ipcMain.handle('hire:openFile', async () => {
   });
   if (res.canceled || res.filePaths.length === 0) return { ok: false, error: 'cancelled' };
   return readHireManifestFile(res.filePaths[0]);
+});
+
+// IPC: "export team…" in the Add-Agent modal — SCALE-02's only new channel.
+//
+// Thin on purpose. The strip, the validate-before-write self-check and the skipped
+// count are `buildTeamExport` in main/hire.ts, which the test harness can load;
+// index.ts cannot be loaded, so anything decided in here is unprovable.
+ipcMain.handle('team:export', async () => {
+  const snap = roster.read();
+  // `read()` returns null for BOTH "no roster file" and "roster unreadable", and
+  // neither is an empty floor. Turning either into an ok:true, skipped:0 empty
+  // export would tell an operator their floor exported fine when nothing was read.
+  if (!snap) return { ok: false, error: 'no roster to export' };
+
+  const { members, skipped } = buildTeamExport(snap.agents ?? []);
+
+  const res = await dialog.showSaveDialog({
+    title: 'Export team',
+    defaultPath: 'team.json',
+    filters: [{ name: 'Team file', extensions: ['json'] }]
+  });
+  if (res.canceled || !res.filePath) return { ok: false, error: 'cancelled' };
+  try {
+    writeFileSync(res.filePath, JSON.stringify({ spec: HIRE_TEAM_SPEC_V1, members }, null, 2), 'utf8');
+    return { ok: true, members: members.length, skipped };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 });
 
 /**
