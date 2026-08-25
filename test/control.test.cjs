@@ -223,3 +223,380 @@ test('GATE-05: approvals.ts imports nothing from electron, and says why an ask i
     'the module header must state WHY a tool approval is not a card (D-10), or the next reader '
     + '"improves" it into tasks.json where it blocks a real card and outlives its own timeout');
 });
+
+// ─── GATE-05: the four numbers that move together (plan 04-15 task 2) ────────
+//
+// D-08: *"a plan that changes one number without the other ships a gate that
+// times out on the wrong side."* Every value below is read out of
+// src/main/hiveProvisioning.ts — never re-typed here, because a literal in a
+// test is a second copy of the number the derivation exists to prevent.
+
+const provisioning = loadTs('src/main/hiveProvisioning.ts');
+const {
+  PRETOOLUSE_HOOK_TIMEOUT_SEC, CLAUDE_PRETOOLUSE_TIMEOUT_SEC, MIN_PRETOOLUSE_SEC, ASK_TTL_MS
+} = provisioning;
+
+test('GATE-05: MIN_PRETOOLUSE_SEC is the minimum of two REAL numbers, not of an undefined', () => {
+  // Math.min over an undefined is NaN, and `NaN <= anything` is false — which
+  // would surface below as a confusing failure rather than as this one. Assert
+  // it directly, and assert both inputs, so the diagnosis arrives with the red.
+  assert.equal(typeof PRETOOLUSE_HOOK_TIMEOUT_SEC, 'number', 'PRETOOLUSE_HOOK_TIMEOUT_SEC is not exported');
+  assert.equal(typeof CLAUDE_PRETOOLUSE_TIMEOUT_SEC, 'number', 'CLAUDE_PRETOOLUSE_TIMEOUT_SEC is not exported');
+  assert.ok(Number.isFinite(PRETOOLUSE_HOOK_TIMEOUT_SEC) && Number.isFinite(CLAUDE_PRETOOLUSE_TIMEOUT_SEC));
+  assert.equal(
+    MIN_PRETOOLUSE_SEC,
+    Math.min(PRETOOLUSE_HOOK_TIMEOUT_SEC, CLAUDE_PRETOOLUSE_TIMEOUT_SEC),
+    'MIN_PRETOOLUSE_SEC is not the minimum of the two budgets it is supposed to be derived from'
+  );
+});
+
+test('GATE-05: the ask TTL fits inside the shortest polling engine budget — all THREE bounds', () => {
+  // THE UPPER BOUND ALONE CANNOT FAIL, and that is the point of the two below
+  // it. ASK_TTL_MS is DERIVED from MIN_PRETOOLUSE_SEC, so the inequality holds
+  // for every value: SEC = 31 gives a ONE-SECOND window to answer on a phone,
+  // and SEC = 5 gives TTL = -25000 — every ask expired at birth — and
+  // -25000 <= 5000 passes. Both degenerate values are named here so nobody
+  // re-weakens this to the one-sided form.
+  assert.ok(
+    MIN_PRETOOLUSE_SEC >= 60,
+    `MIN_PRETOOLUSE_SEC is ${MIN_PRETOOLUSE_SEC}s — an engine in this minimum runs a PreToolUse `
+    + 'budget shorter than a minute, and a shim killed at that bound writes no stdout, which is ALLOW'
+  );
+  assert.ok(
+    ASK_TTL_MS >= 30_000,
+    `ASK_TTL_MS is ${ASK_TTL_MS}ms — a Web Push has to arrive and a human has to tap it, and that `
+    + 'is not thirty seconds of headroom. This is the bound SEC = 31 fails'
+  );
+  assert.ok(
+    ASK_TTL_MS <= MIN_PRETOOLUSE_SEC * 1000,
+    `ASK_TTL_MS (${ASK_TTL_MS}ms) is longer than the shortest polling engine's own PreToolUse `
+    + `budget (${MIN_PRETOOLUSE_SEC}s) — the shim is KILLED before it can answer, writes no stdout, `
+    + 'and no stdout is ALLOW'
+  );
+});
+
+test('GATE-05: Claude gets the PreToolUse timeout and NO other event does (path A)', () => {
+  const settings = provisioning.hookSettings('/tmp/shim.cjs', undefined, (s) => `"node" "${s}"`);
+  const hooks = settings.hooks;
+
+  const pre = hooks.PreToolUse[0].hooks[0];
+  assert.equal(
+    pre.timeout, PRETOOLUSE_HOOK_TIMEOUT_SEC,
+    'Claude\'s PreToolUse entry carries no timeout, or the wrong one. Claude is the ONE engine that '
+    + 'certainly runs on this machine, and without this key its budget is whatever the release '
+    + 'decides — a killed hook writes no stdout, and no stdout is ALLOW'
+  );
+
+  const withTimeout = Object.entries(hooks)
+    .filter(([, groups]) => groups.some((g) => g.hooks.some((h) => 'timeout' in h)))
+    .map(([event]) => event);
+  assert.deepEqual(
+    withTimeout, ['PreToolUse'],
+    `these events carry a timeout: ${JSON.stringify(withTimeout)}. Only PreToolUse has a verdict to `
+    + 'wait for; widening the others costs latency on paths with nothing to wait for and changes '
+    + 'JSON that was byte-identical to HEAD'
+  );
+});
+
+test('GATE-05: codex writes 150 for PreToolUse and 30 for the other seven — from the generated file', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-gate05-codex-'));
+  try {
+    const home = provisioning.installCodexHooks(dir, '/tmp/shim.cjs', (s) => `"node" "${s}"`, dir);
+    const config = fs.readFileSync(path.join(home, 'config.toml'), 'utf8');
+
+    // The GENERATED file is what codex reads, so it is what this asserts — a
+    // `grep -c 'timeout = 30'` over the SOURCE measures a template string and
+    // would push an executor toward keeping a literal branch where an
+    // interpolation belongs.
+    const groups = [...config.matchAll(/\[\[hooks\.(\w+)\]\][\s\S]*?timeout = (\d+)/g)]
+      .map((m) => [m[1], Number(m[2])]);
+    const byEvent = Object.fromEntries(groups);
+
+    assert.equal(groups.length, 8, `expected eight hook groups, found ${groups.length}`);
+    assert.equal(byEvent.PreToolUse, PRETOOLUSE_HOOK_TIMEOUT_SEC,
+      `codex's PreToolUse group carries timeout = ${byEvent.PreToolUse}`);
+    const others = groups.filter(([ev]) => ev !== 'PreToolUse');
+    assert.equal(others.length, 7, 'the other seven events went missing');
+    for (const [ev, t] of others) {
+      assert.equal(t, 30,
+        `codex's ${ev} group moved to ${t}s. Only PreToolUse has a verdict to wait for; a longer `
+        + 'budget elsewhere only slows the detection of a wedged shim');
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GATE-05: kimi writes 150 for PreToolUse and 30 for the other seven — from the generated file', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-gate05-kimi-'));
+  const userHome = fs.mkdtempSync(path.join(os.tmpdir(), 'md-gate05-kimihome-'));
+  try {
+    const file = provisioning.installKimiConfig({
+      dir, shim: '/tmp/shim.cjs', nodeRun: (s) => `"node" "${s}"`, userHome
+    });
+    const config = fs.readFileSync(file, 'utf8');
+    const groups = [...config.matchAll(/\[\[hooks\]\]\s*\nevent = "(\w+)"[\s\S]*?timeout = (\d+)/g)]
+      .map((m) => [m[1], Number(m[2])]);
+    const byEvent = Object.fromEntries(groups);
+
+    assert.equal(groups.length, 8, `expected eight flat [[hooks]] tables, found ${groups.length}`);
+    assert.equal(byEvent.PreToolUse, PRETOOLUSE_HOOK_TIMEOUT_SEC);
+    for (const [ev, t] of groups.filter(([ev]) => ev !== 'PreToolUse')) {
+      assert.equal(t, 30, `kimi's ${ev} table moved to ${t}s`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(userHome, { recursive: true, force: true });
+  }
+});
+
+test('GATE-05: grok and agy are UNCHANGED — this gate guesses at no unverified unit', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').resolve(__dirname, '..', 'src/main/hiveProvisioning.ts'), 'utf8'
+  );
+  // By SYMBOL BOUNDARY, never by a line window: this plan inserts constants
+  // above both functions and moves every line number in the file.
+  const block = (startRe) => {
+    const lines = src.split('\n');
+    const i = lines.findIndex((l) => startRe.test(l));
+    assert.ok(i >= 0, `no line matched ${startRe} — the symbol was renamed and this gate went blind`);
+    const end = lines.findIndex((l, k) => k > i && l === '}');
+    assert.ok(end > i, 'the function has no closing brace at column 0');
+    return lines.slice(i, end + 1).join('\n');
+  };
+
+  const agy = block(/^export function installAgyHooks\(/);
+  assert.equal(
+    (agy.match(/timeout: 0/g) || []).length, 2,
+    'installAgyHooks no longer writes `timeout: 0` twice. agy is not installed here, the semantics '
+    + 'of its 0 are unknown, and hiveProvisioning\'s own note records the same 0 sentinel meaning '
+    + 'ONE SECOND on codex rather than "no timeout"'
+  );
+
+  const grok = block(/^export function installGrokHooks\(/);
+  assert.equal(
+    (grok.match(/timeout/g) || []).length, 0,
+    'installGrokHooks now writes a timeout key. grok is not installed here and the UNIT of that key '
+    + 'is unverified: if it reads milliseconds, 150 means 150ms, every grok PreToolUse hook dies '
+    + 'before the shim can answer, and that is worse than today and undetectable'
+  );
+});
+
+test('GATE-05: the word `unreconciled` appears nowhere in src/main', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.resolve(__dirname, '..', 'src/main');
+  const hits = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!/\.(ts|tsx|cjs)$/.test(e.name)) continue;
+      if (/unreconciled/i.test(fs.readFileSync(full, 'utf8'))) hits.push(full);
+    }
+  };
+  walk(dir);
+  assert.deepEqual(hits, [],
+    'a shipped decision table still says `unreconciled`. Every engine budget in this gate is a '
+    + 'NUMBER or an explicitly named ceiling item — never a shrug');
+});
+
+// ─── GATE-05: the reply, and the poll (plan 04-15 task 2) ────────────────────
+
+const { HookServer } = loadTs('src/main/hooks.ts');
+
+/** A HookServer over a fake hive, the shape test/net-binding.test.cjs already
+ *  uses. No socket and no child process: these cases are about what `handle`
+ *  RETURNS, and the socket join is proved by test/gate03-roundtrip.test.cjs and
+ *  (for the poll) by test/record-persist.test.cjs. */
+function hookServer(opts = {}) {
+  const sent = [];
+  const hive = {
+    root: () => null,
+    sockPath: () => null,
+    recordSession: () => {},
+    isGod: () => false,
+    rosterContext: () => null,
+    registry: () => ({ godId: null, agents: {} })
+  };
+  const server = new HookServer(
+    hive,
+    () => ({ send: (channel, payload) => sent.push({ channel, payload }) }),
+    () => ({}),
+    undefined, undefined, undefined, undefined, undefined,
+    opts.hostAllowlist,
+    undefined,
+    opts.recordToolCall,
+    opts.publishApproval
+  );
+  const fire = (tool_name, tool_input, extra = {}) =>
+    server.handle({ hook_event_name: 'PreToolUse', tool_name, tool_input, ...extra }, opts.agentId || 'a1');
+  return { server, sent, fire };
+}
+
+test('GATE-05: the ask reply is a valid deny AND a poll handle, in one object', () => {
+  const { server, fire } = hookServer();
+  const reply = fire('Bash', { command: 'git push origin +main' });
+
+  // An un-upgraded shim reads only this half, and refuses. No version
+  // negotiation, no wave in which a mixed floor is unsafe.
+  assert.equal(reply.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.equal(reply.hookSpecificOutput.permissionDecision, 'deny',
+    'an un-upgraded shim would read this reply as an ALLOW');
+  assert.ok(reply.hookSpecificOutput.permissionDecisionReason.length > 0);
+
+  // An upgraded shim reads this half instead, and polls.
+  assert.match(reply.hive_ask.id, /^ask-[0-9a-f]{16,}$/);
+  assert.equal(typeof reply.hive_ask.deadlineMs, 'number');
+  assert.equal(reply.hive_ask.pollMs, 1000);
+
+  const open = server.openApprovals();
+  assert.equal(open.length, 1, 'the reply carried an ask id that no registry entry backs');
+  assert.equal(reply.hive_ask.deadlineMs, open[0].expiresAt,
+    'deadlineMs and expiresAt are two independently-computed numbers. That is exactly the "times '
+    + 'out on the wrong side" failure D-08 names: an operator\'s late yes answering a question '
+    + 'whose asker already denied and moved on');
+  assert.equal(open[0].id, reply.hive_ask.id);
+});
+
+test('GATE-05: deadlineMs is READ OFF the entry — under a stepping clock, a recompute diverges', () => {
+  // WHY THIS CASE EXISTS SEPARATELY. The equality above is true by coincidence
+  // when the deadline is recomputed as `Date.now() + ASK_TTL_MS`: `openedAt` and
+  // the recompute land in the same millisecond, so the assertion passes and the
+  // defect it exists to catch walks straight through it. Measured — that exact
+  // mutation was applied to hooks.ts and the whole file stayed green.
+  //
+  // A clock that STEPS ten seconds per read discriminates them: read once for
+  // `openedAt` and once for a recompute and the two answers are ten seconds
+  // apart, so only a deadline read OFF THE ENTRY can still equal `expiresAt`.
+  const realNow = Date.now;
+  let t = 1_770_000_000_000;
+  Date.now = () => { t += 10_000; return t; };
+  try {
+    const { server, fire } = hookServer();
+    const reply = fire('Bash', { command: 'git push origin +main' });
+    const [entry] = server.openApprovals();
+    assert.equal(
+      reply.hive_ask.deadlineMs, entry.expiresAt,
+      `deadlineMs (${reply.hive_ask.deadlineMs}) and expiresAt (${entry.expiresAt}) are ` +
+      `${Math.abs(reply.hive_ask.deadlineMs - entry.expiresAt)}ms apart — the shim was handed a `
+      + 'deadline the registry does not honour'
+    );
+    assert.ok(reply.hive_ask.deadlineMs <= entry.expiresAt,
+      'the shim\'s deadline is LATER than the server-side expiry, so an operator can answer a '
+      + 'question whose asker already denied and moved on (T-04-ASK-04)');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('GATE-05: the production registry really got ASK_TTL_MS, measured as an EFFECT', () => {
+  const { server, fire } = hookServer();
+  fire('Bash', { command: 'git push origin +main' });
+  const [entry] = server.openApprovals();
+  assert.equal(
+    entry.expiresAt - entry.openedAt, ASK_TTL_MS,
+    'the registry HookServer constructed did not get the derived TTL. A ttlMs option nobody passes '
+    + 'silently takes whatever the class was written with, and a constants-only comparison says '
+    + 'nothing at all about what production was constructed with'
+  );
+});
+
+test('GATE-05: a bare deny carries NO hive_ask, and an ordinary command carries neither', () => {
+  // The emptied allowlist is the one producer of kind:'deny' — an operator who
+  // cleared the list said "no hosts". Without this leg, "a force-push asks" is
+  // satisfied by a judge with exactly one answer.
+  const denied = hookServer({ hostAllowlist: () => [] })
+    .fire('Bash', { command: 'curl https://evil.example/x' });
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(denied.hive_ask, undefined,
+    'a hard deny handed out a poll handle — the operator can now "approve" a decision that is final');
+
+  const benign = hookServer().fire('Bash', { command: 'ls -la' });
+  assert.deepEqual(benign, {},
+    `an ordinary command was judged: ${JSON.stringify(benign)}. Without this leg a judge that `
+    + 'verdicts everything passes both cases above');
+});
+
+test('GATE-05: an ApprovalPoll answers pending, then the operator\'s verdict, and denies the unknown', () => {
+  const { server, fire } = hookServer();
+  const { hive_ask: ask } = fire('Bash', { command: 'git push origin +main' });
+  const poll = (ask_id, agentId = 'a1') =>
+    server.handle({ hook_event_name: 'ApprovalPoll', ask_id }, agentId);
+
+  assert.deepEqual(poll(ask.id), { status: 'pending' }, 'a live ask must tell the shim to loop again');
+
+  const unknown = poll('ask-deadbeef');
+  assert.equal(unknown.status, 'deny');
+  assert.equal(unknown.hookSpecificOutput.permissionDecision, 'deny',
+    'an unknown ask id is either expired or forged, and both must fail closed');
+
+  assert.equal(server.answerApproval(ask.id, true), true);
+  const allowed = poll(ask.id);
+  assert.equal(allowed.status, 'allow');
+  assert.equal(allowed.hookSpecificOutput.permissionDecision, 'allow',
+    'the operator approved and the shim was still refused');
+});
+
+test('GATE-05: agent B cannot poll agent A\'s ask with B\'s own VALID token', () => {
+  const { server, fire } = hookServer();
+  const { hive_ask: ask } = fire('Bash', { command: 'git push origin +main' });
+  const poll = (agentId) => server.handle({ hook_event_name: 'ApprovalPoll', ask_id: ask.id }, agentId);
+
+  // `authorized()` maps a valid token to the identity it was minted for, so it
+  // has no reason to object to B holding B's own token. GATE-01 bound a token to
+  // an identity; it never bound an ask to an owner.
+  const foreign = poll('b2');
+  assert.equal(foreign.status, 'deny');
+  assert.equal(foreign.hookSpecificOutput.permissionDecision, 'deny',
+    'agent B read — and could settle — agent A\'s approval');
+  // The positive control, because "it rejected everything" is also what a broken
+  // registry returns.
+  assert.deepEqual(poll('a1'), { status: 'pending' },
+    'the owner\'s own poll was refused too, so the deny above proves nothing');
+});
+
+test('GATE-05: an ApprovalPoll with NO token never reaches the branch — authorized() drops it first', async () => {
+  // A DIFFERENT mechanism from the owner check above, asserted separately so the
+  // two are not confused for one another: this one is the socket's, it runs
+  // before `handle` at all, and it answers the same `{}` a real unauthenticated
+  // hook gets. Driven over the REAL socket, because that is the only place
+  // `authorized()` is applied.
+  const net = require('node:net');
+  const { withHookServer } = require('./gate-harness.cjs');
+
+  await withHookServer({ agentId: 'a1' }, async (ctx) => {
+    const send = (payload) => new Promise((resolve, reject) => {
+      const c = net.createConnection(ctx.sock, () => c.end(JSON.stringify(payload) + '\n'));
+      let resp = '';
+      c.setEncoding('utf8');
+      c.on('data', (d) => { resp += d; });
+      c.on('close', () => resolve(resp));
+      c.on('error', reject);
+    });
+
+    const ask = JSON.parse(await send({
+      hook_event_name: 'PreToolUse', tool_name: 'Bash',
+      tool_input: { command: 'git push origin +main' }, sock_token: ctx.token
+    })).hive_ask;
+    assert.ok(ask && ask.id, 'the positive control never opened an ask, so the negative proves nothing');
+
+    const tokenless = await send({ hook_event_name: 'ApprovalPoll', ask_id: ask.id });
+    assert.equal(tokenless, '{}',
+      `a tokenless ApprovalPoll got ${tokenless} — it reached the branch instead of being dropped `
+      + 'at the socket, which is where the trust boundary lives');
+
+    const owned = JSON.parse(await send({
+      hook_event_name: 'ApprovalPoll', ask_id: ask.id, sock_token: ctx.token
+    }));
+    assert.deepEqual(owned, { status: 'pending' },
+      'the same poll WITH the token was also dropped, so the assertion above is about the branch '
+      + 'never existing rather than about the token');
+  });
+});
