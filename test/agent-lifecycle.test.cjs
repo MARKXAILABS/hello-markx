@@ -33,6 +33,21 @@ function tempDir(t, prefix) {
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf8' });
 
+/** Wait for `cond()` to go true, or give up after `timeoutMs`. Returns whether
+ *  it did, so the caller's own assertion — not this helper — is what reports the
+ *  failure and why. Prefer this over a flat sleep whenever the thing being
+ *  waited on has an observable completion signal: a fixed sleep passes on an
+ *  idle machine and fails on a busy one, which is a race wearing a wait's
+ *  clothes. */
+async function waitFor(cond, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cond()) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return cond();
+}
+
 /** A real git repo plus one worktree off it, base branch returned too. */
 function repoWithWorktree(t, { dirty } = {}) {
   const root = tempDir(t, 'al-repo-');
@@ -214,9 +229,16 @@ test('teardownPty with a live worktree and a WorkerRec routes through the worker
   deps.liveWorkers.set('pty1', { workerId: 'w1', reqId: 'r1', baseBranch: base, spawnedAt: Date.now() });
 
   teardownPty('pty1', deps);
-  // finalizeWorkerWorktree runs un-awaited inside teardownPty (`void finalizeWorkerWorktree(...)`)
-  // — give its microtasks/async git calls a turn before asserting on its effects.
-  await new Promise((r) => setTimeout(r, 500));
+  // finalizeWorkerWorktree runs un-awaited inside teardownPty
+  // (`void finalizeWorkerWorktree(...)`), so its effects land whenever its real
+  // git children finish. This used to be a flat `setTimeout(r, 500)` and that is
+  // a race, not a wait: `npm test` runs the test FILES in parallel, so 500 ms is
+  // however long git takes on the busiest moment of the busiest file, and this
+  // case failed on `savePreservedWorktrees === 1` under exactly that load.
+  // Poll for the completion signal instead — fast when the machine is idle,
+  // correct when it is not, and still bounded so a genuinely broken path fails
+  // rather than hangs.
+  await waitFor(() => calls.savePreservedWorktrees === 1);
 
   assert.equal(deps.liveWorkers.has('pty1'), false, 'liveWorkers still holds the torn-down worker');
   assert.ok(existsSync(wt), 'a dirty worker worktree was removed instead of preserved');
