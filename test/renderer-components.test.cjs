@@ -1731,3 +1731,24 @@ test('the production mount calls BOTH timeline channels — the IPC 03-03 landed
       `${call}…) is never called — the day band would render only what a test injects, and 03-03's IPC would be dead code`);
   }
 });
+
+test('the day tab is reachable, appended LAST, and mounted with no injected props', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/CommandCenterPanel.tsx'), 'utf8');
+
+  assert.match(panel, /\{ key: 'timeline', label: 'day', icon: 'clock' \}\s*\n\];/,
+    'the timeline entry is not the LAST element of TABS — S1a\'s order is append-only precisely so no tab the operator has muscle memory for moves under them');
+  assert.match(panel, /\| 'timeline';/,
+    'CCTab was not widened, so the tab key exists in the array and nowhere in the type');
+  assert.match(panel, /tab === 'timeline' && <DayBandTab \/>/,
+    'the tab body either does not mount DayBandTab or mounts it with injected props — production must take the live-fetch path, and the seam must be additive rather than the only way data ever arrives');
+
+  // The one CSS addition, in the file main.tsx actually imports. A same-named file
+  // anywhere else would style nothing and fail silently.
+  const bundled = fs.readFileSync(path.join(ROOT, 'src/renderer/src/design/global.css'), 'utf8');
+  assert.match(bundled, /\.cth-scrub::-webkit-slider-thumb/,
+    'the scrubber thumb rule is missing from the bundled stylesheet — the native thumb is ~10px, well under WCAG 2.2 SC 2.5.8\'s 24px target');
+  assert.match(fs.readFileSync(path.join(ROOT, 'src/renderer/src/main.tsx'), 'utf8'), /import '\.\/design\/global\.css';/,
+    'main.tsx no longer imports design/global.css — re-derive which stylesheet the app bundles before adding a rule to it');
+  assert.ok(!fs.existsSync(path.join(ROOT, 'src/renderer/src/global.css')),
+    'a second, top-level global.css appeared. Nothing imports it, so every rule in it is dead and the scrubber would ship unstyled');
+});

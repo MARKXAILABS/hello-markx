@@ -10,6 +10,7 @@ import { AskMeTab } from './AskMeTab';
 import { TriggersTab } from './triggers/TriggersTab';
 import { TriggerHistoryTab } from './triggers/TriggerHistoryTab';
 import { WorkersTab } from './WorkersTab';
+import { DayBandTab } from './DayBandTab';
 import { SkillsTab } from './SkillsTab';
 import { BlockedBanner } from './BlockedBanner';
 import { acquireTerminal, disposeTerminal, resetTerminal } from './terminalPool';
@@ -59,7 +60,7 @@ import { isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store
 // the old Schedules tab: schedules are now one of four trigger types, and the
 // whole surface lives in ./triggers (see src/shared/triggers.ts for the contract).
 type CCTab = 'terminal' | 'floor' | 'tasks' | 'human' | 'triggers' | 'trigger-history'
-  | 'memory' | 'graph' | 'activity' | 'skills' | 'workers';
+  | 'memory' | 'graph' | 'activity' | 'skills' | 'workers' | 'timeline';
 
 /** Fallback denominator for the per-agent token meter when no floor token budget
  *  is configured — so the bar reads as a budget estimate (filled + remaining)
@@ -112,7 +113,13 @@ const TABS: { key: CCTab; label: string; icon: Parameters<typeof Icon>[0]['name'
   { key: 'graph', label: 'graph', icon: 'web' },
   { key: 'activity', label: 'activity', icon: 'bell' },
   { key: 'skills', label: 'skills', icon: 'sparkle' },
-  { key: 'workers', label: 'workers', icon: 'gear' }
+  { key: 'workers', label: 'workers', icon: 'gear' },
+  // Appended LAST, per S1a: the canonical order is append-only, and appending is
+  // the only change that cannot reorder a tab the operator has muscle memory for.
+  // `clock` is reused from 'triggers' exactly as `bell` and `sparkle` already serve
+  // two tabs each — the text label carries the distinction, and no new 16x16 path
+  // is added to Icon.tsx.
+  { key: 'timeline', label: 'day', icon: 'clock' }
 ];
 
 /** @param fullscreen this instance IS the fullscreen overlay, so it owns the pty
@@ -381,6 +388,7 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
         {tab === 'activity' && <ActivityTab />}
         {tab === 'skills' && <SkillsTab agentCwd={agent.cwd} />}
         {tab === 'workers' && <WorkersTab />}
+        {tab === 'timeline' && <DayBandTab />}
       </div>
     </PixelPanel>
   );
