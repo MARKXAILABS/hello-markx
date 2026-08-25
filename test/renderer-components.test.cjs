@@ -107,7 +107,7 @@ Module._load = function (request, ...rest) {
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
-let PixelButton, blockReasonFromApproval;
+let PixelButton, blockReasonFromApproval, rosterBadgeStatus;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
@@ -127,6 +127,12 @@ try {
   // harness has no effect phase at all (see the ceiling at :23-38), so the only way to
   // assert the SHIPPED assembly rather than a copy of it is to call it directly.
   ({ blockReasonFromApproval } = loadTs('src/renderer/src/hooks/useHive.ts'));
+  // The roster badge's precedence rule. Exported for a MEASURED reason, not a stylistic
+  // one: `armed` is derived from `breakers`, which is `useState({})` inside
+  // `useFleetTelemetry` (`useTelemetry.ts:96`) and is filled only by an effect. This
+  // harness never runs effects, so a rendered CommandCenterPanel has `armed === false`
+  // for every row and the two armed cases below are unreachable through the panel.
+  ({ rosterBadgeStatus } = loadTs('src/renderer/src/components/CommandCenterPanel.tsx'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -848,6 +854,55 @@ test('GATE-03 rule D-1: with no reason from main, the fallback is bare — the r
 test('GATE-03 rule D-1: the invented sentence is gone from the source, not merely unreachable', () => {
   assert.doesNotMatch(useHiveSource(), /Denied by operator policy/,
     'the old renderer-authored denial reason is still in useHive.ts');
+});
+
+// ─── VIGIL-03 — a blocked agent is visibly blocked, even under a tripped breaker ──────
+
+const ccpSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/CommandCenterPanel.tsx'), 'utf8');
+
+/** One roster row's badge, rendered exactly as the Command Center renders it. */
+const rosterBadge = (status, armed) =>
+  visibleText(html(React.createElement(PixelBadge, { status: rosterBadgeStatus(status, armed) })));
+
+test('VIGIL-03: a blocked agent reads `needs you` on the roster even while the circuit breaker is armed', () => {
+  // All FOUR cases, because two of them would pass just as well against an expression
+  // that ignores `armed` entirely — and the armed pair is the whole point.
+  assert.equal(rosterBadge('blocked', true), 'needs you',
+    'a blocked agent reads `looping` under a tripped breaker. That badge is the row\'s only blocked signal, and VIGIL-03\'s criterion is that an agent blocked on a prompt is VISIBLY blocked — at 3am the operator can act on `needs you` and cannot act on `looping`');
+  assert.equal(rosterBadge('working', true), 'looping',
+    'the armed state was weakened in general — a working agent under a tripped breaker must still read `looping`');
+  assert.equal(rosterBadge('blocked', false), 'needs you',
+    'the unarmed blocked row regressed');
+  assert.equal(rosterBadge('working', false), 'working',
+    'the unarmed working row regressed');
+});
+
+test('VIGIL-03: the roster badge site calls the shipped rule, so the four cases above are not asserting a copy', () => {
+  assert.match(ccpSource(), /<PixelBadge status=\{rosterBadgeStatus\(a\.status, armed\)\} \/>/,
+    'the Command Center roster no longer routes its badge through rosterBadgeStatus, so the four cases above are testing a function nothing renders');
+});
+
+test("VIGIL-03: the armed row keeps its other two channels, so `blocked` winning is a strict improvement and not a trade", () => {
+  const src = ccpSource();
+  // Channel 2 — the row fill. Channel 3 — the ⚠ glyph (asserted verbatim below).
+  // DESIGN.md:707: "colour + icon + position … never colour alone".
+  assert.match(src, /background: armed \? 'var\(--cth-coral-light\)' : 'var\(--cth-paper-100\)'/,
+    'the armed row lost its --cth-coral-light fill — with the badge now able to say `needs you`, that fill is one of the two channels left saying the breaker is armed');
+  assert.equal((src.match(/'paused'/g) ?? []).length, 1,
+    'the `paused` count moved. PixelBadge has no `paused` StatusKind (PixelBadge.tsx:3-12) and none was to be invented; the one legitimate occurrence is the floor-delivery label at :213');
+});
+
+test("VIGIL-03: the breaker's ⚠ span is byte-identical — its a11y swap is plan 04-18's, in wave 6", () => {
+  // `test/repo-claims.test.cjs:717` pins this line VERBATIM with `count: 1`, clause 2
+  // (`:782`) is an exact-text multiset in BOTH directions, and clause 3 (`:815-838`)
+  // walks back to the owning open tag and requires a LITERAL `aria-hidden=("true"|{true})`
+  // — a conditional expression does not match it. Changing this line therefore requires
+  // editing repo-claims.test.cjs in the same commit, and that file belongs to plan 04-13
+  // in this wave. Plan 04-18 owns CommandCenterPanel.tsx in wave 6, where the pin file is
+  // free, and lands the `role="img"` + `aria-label` swap there.
+  const PINNED = '{armed && <span aria-hidden="true" title={breaker?.reason} style={{ color: \'var(--cth-coral)\', fontSize: 12 }}>⚠</span>}';
+  assert.equal(ccpSource().split(PINNED).length - 1, 1,
+    'the ⚠ span is no longer byte-identical to the line repo-claims.test.cjs:717 pins. Two FLOOR-12 clauses redden on this, and the fix is NOT to widen that allowlist (repo-claims.test.cjs:800-802 says so explicitly) — it is to leave the line to plan 04-18');
 });
 
 test('GATE-03 rule D-2: the terminal feed line survives — it is the audit trail, not a duplicate', () => {
