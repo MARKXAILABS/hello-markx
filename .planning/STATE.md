@@ -461,7 +461,7 @@ Recent decisions affecting current work:
   and parity work opens exactly those seams anyway, and the extraction is what makes headless
   boot testable at all. Not Phase 1, so small localised fixes do not land in moving code.
 
-- [Roadmap]: GSD is Phase 6, deliberately last. Every trust property that makes a GSD phase on
+- [Roadmap]: GSD is Phase 7, deliberately last. Every trust property that makes a GSD phase on
   the floor better than a GSD phase in one terminal comes from earlier phases: wave gating needs
   VERDICT, unattended running needs VIGIL and GATE, resume-after-crash needs RECORD.
 
@@ -622,9 +622,12 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- **Operator decision, Phase 3 ordering.** Either run `1 → 2 → 4 → 5 → 3 → 6`, or run numeric
-  order and re-verify SCALE-01 and SCALE-03 after Phase 5 instead of closing them in Phase 3.
-  Default recorded in ROADMAP.md is numeric order with re-verification. See "Blockers" below.
+- **Operator decision, Phase 3 ordering — RESOLVED at the Phase 3 close (plan 03-09, D-05).**
+  Numeric order was kept, and the re-verification is no longer a prose line: **the post-Phase-5
+  re-verification phase now exists in ROADMAP.md with a real id**, carrying the two skeptic
+  tests verbatim, and the GSD phase was renumbered one later in the same edit across
+  ROADMAP.md, REQUIREMENTS.md and this file. SCALE-01 and SCALE-03 stay Pending in
+  REQUIREMENTS.md with that new phase named as their owner. See "Blockers" below.
 
 ### Blockers/Concerns
 
@@ -642,13 +645,22 @@ Recent decisions affecting current work:
 - **Phase 3 has two forward dependencies** (found while extending the roadmap; not resolved by
   moving requirements, because the pull-forward cascades):
 
-  - SCALE-03's replayable timeline reads storage that RECORD-02 (Phase 4) fixes — until then,
-    `LOG_ROTATE_BYTES` at `hive.ts:267` rotates at 8 MB keeping one generation, so a busy day
-    replays as a window rather than a day.
+  - **SCALE-03 — blocker LANDED, and the original diagnosis was wrong.** The claim that
+    `LOG_ROTATE_BYTES` "rotates at 8 MB keeping one generation, so a busy day replays as a
+    window" is refuted: that rotate (`hive.ts:375`, not the long-cited `:267`) has **never
+    fired** in measured use. The real wall was `LOG_TAIL_BYTES = 64 KB` (`hive.ts:383`), a
+    *read* cap 128x tighter — at 137,099 bytes `logTail()` had already lost the morning while
+    the rotate stayed dormant. RECORD-02 (Phase 4) has since landed the durable store
+    (`PersistStore.eventsBetween`, `db.ts:450`; `EVENT_RETENTION_MS` = 30 days, `db.ts:70`),
+    so **the replay bound is now retention, not rotation**. The skeptic test as written ("pick
+    a day whose log passed 8 MB") can never fire and is restated in the new phase.
 
-  - SCALE-01's isolation is enforced by a `--wing` flag the agent supplies and could omit until
-    RECALL-02 (Phase 5) makes the server enforce it. REQUIREMENTS.md says as much itself.
-  Neither may be checked off in Phase 3 without re-verification after Phase 5.
+  - **SCALE-01 — blocker NOT landed.** Isolation is still enforced by a `--wing` flag the agent
+    supplies and could simply omit; RECALL-02 (Phase 5) is unrun, so isolation remains
+    cooperative rather than enforced. RECALL-02 alone is also **not sufficient** — it is
+    memory-only, so this criterion's task-ledger half is net-new work for the re-verification
+    phase under either ordering.
+  Neither was checked off in Phase 3. Both are owned by the post-Phase-5 re-verification phase.
 
 - **Phase 2 is the largest single-phase risk.** Mitigated by making STRUCT-01/02 the phase's
   internal gate, but the mitigation only works if it is honoured at plan time.
@@ -661,7 +673,7 @@ Recent decisions affecting current work:
 - **DAEMON-02 (Phase 2)** needs a real Android device on the network for its last mile;
   otherwise a localhost-verified auth path, recorded as such.
 
-- **REACH-02 (Phase 6)** needs an AWS account with Bedrock model access; **REACH-03 (Phase 6)**
+- **REACH-02 (Phase 7)** needs an AWS account with Bedrock model access; **REACH-03 (Phase 7)**
   needs a real WSL2 install. Without them, both ship with the limitation stated in source, docs
   and UI — never claimed.
 

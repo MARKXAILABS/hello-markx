@@ -18,7 +18,7 @@ Phase 4 is what "leave it running overnight on a repo that matters" actually cos
 blast radius, a record that survives a crash, and — the shape PROJECT.md names verbatim and
 which nothing in Phases 1-3 covers — a floor that notices what is *not* happening. Phase 5 is
 the floor getting better at its own job: reviews with evidence, memory that is fast, scoped,
-current and human-readable, and decisions that outlive a context window. Phase 6 runs GSD on
+current and human-readable, and decisions that outlive a context window. Phase 7 runs GSD on
 the floor, fixes the operator's hands, and fits the floor to the operator's actual machine.
 
 **GSD is deliberately last, not first.** It is the operator's own thesis and the instinct is to
@@ -27,7 +27,9 @@ running it in one terminal comes from the earlier phases: wave gating needs VERD
 running needs VIGIL and GATE, resume-after-crash needs RECORD. Put GSD first and it is a
 wrapper around an orchestrator that cannot yet be trusted unattended.
 
-Six phases, coarse granularity. Phases 1-3 keep the shape of GitHub issue #73.
+Seven phases, coarse granularity — Phase 6 was inserted at the Phase 3 close (plan 03-09,
+D-05) to give the two forward-dependent Phase 3 criteria a real owner instead of a prose
+line, renumbering GSD from 6 to 7. Phases 1-3 keep the shape of GitHub issue #73.
 
 ## Phases
 
@@ -43,7 +45,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 3: Scale and Observability** - Many isolated floors, bulk hiring, a replayable timeline, and a digest that reaches the operator without the app
 - [ ] **Phase 4: Overnight on a Repo That Matters** - Blast radius bounded in main on every engine, a record that survives the crash, and a floor that reports absence as an event
 - [ ] **Phase 5: The Floor Gets Better at Its Own Job** - Reviews that look at the diff and the check, memory that is fast, server-scoped, dated and hand-editable, and decisions that survive a restart
-- [ ] **Phase 6: The Office Runs the Process** - A GSD phase runs on the floor unattended and gated by code; the operator's hands work; the floor fits this machine and these accounts
+- [ ] **Phase 6: Close the forward dependencies** - Re-verify SCALE-01 and SCALE-03, the two Phase 3 criteria deliberately left Pending on forward dependencies, against the skeptic tests Phase 3 wrote for them
+- [ ] **Phase 7: The Office Runs the Process** - A GSD phase runs on the floor unattended and gated by code; the operator's hands work; the floor fits this machine and these accounts
 
 ## Phase Details
 
@@ -348,13 +351,17 @@ named in REQUIREMENTS.md's own text, and both are recorded here rather than quie
 
 | Criterion | Depends forward on | What a skeptic finds if Phase 3 runs first |
 |---|---|---|
-| SCALE-03 (replayable timeline) | **RECORD-02** (Phase 4) | The timeline is real, but on a busy day it has holes — `LOG_ROTATE_BYTES` at `hive.ts:267` rotates at 8 MB keeping one generation, so replay reads a window, not the day |
+| SCALE-03 (replayable timeline) | **RECORD-02** (Phase 4) — **landed** | *Original diagnosis refuted, and the blocker has since shipped.* `LOG_ROTATE_BYTES` (`hive.ts:375`) has never fired in measured use, so rotation was never what holed a day. The real wall was the absence of any **time-range query** plus `LOG_TAIL_BYTES = 64 KB` (`hive.ts:383`), a *read* cap 128x tighter than the rotate: at 137,099 bytes `logTail()` had already lost the morning while the rotate stayed dormant. RECORD-02 closed both — `PersistStore.eventsBetween` (`db.ts:450`) is the range scan, and the replay bound is now **retention** (`EVENT_RETENTION_MS`, 30 days, `db.ts:70`). Re-verified in Phase 6, not closed in Phase 3 (D-07) |
 | SCALE-01 (floors do not leak) | **RECALL-02** (Phase 5) | Isolation is enforced by a `--wing` flag the agent supplies and could simply omit. Cooperative, not enforced |
 
 Two ways to resolve, operator's call — the roadmap does not hide the choice:
 
-1. **Run Phase 3 after Phases 4 and 5** (execution order `1 → 2 → 4 → 5 → 3 → 6`). Both
-   criteria then hold under a skeptic's test on the day they are marked green.
+1. **Run Phase 3 after Phases 4 and 5** (execution order `1 → 2 → 4 → 5 → 3 → 6`). This is
+   **not** the symmetric choice it looks like: re-ordering does NOT make SCALE-01 hold,
+   because RECALL-02 is memory-only — it scopes recall, memory and the hook socket, and
+   gives `HiveTask` no project field. SCALE-01's task-ledger half is Phase 3's own net-new
+   work under *either* ordering. Re-ordering does resolve SCALE-03 (RECORD-02 is genuine
+   storage), but that dependency has since landed anyway.
 
 2. **Run in numeric order and mark the residual gap.** Phase 3 ships the timeline UI and the
    per-project split; SCALE-03 and SCALE-01 stay open concerns until Phase 4's RECORD-02 and
@@ -362,8 +369,12 @@ Two ways to resolve, operator's call — the roadmap does not hide the choice:
    Phase 3. Under this project's standing rule — a partially-landed fix is an open concern —
    they may not be checked off before that re-verification.
 
-**Depends on**: Phase 2 — SCALE-01's per-project isolation needs the registry/router split
-from STRUCT-02, and SCALE-05's single card needs PARITY-02's all-engine cost. **Forward:**
+**Depends on**: Phase 2 — SCALE-05's single card needs PARITY-02's all-engine cost.
+SCALE-01's per-project isolation does **not** depend on STRUCT-02: the isolation seam is
+`hive.root()` (`hive.ts:655`), already a lazy `join(getHome(), 'hive')` that the
+*unextracted* router calls exactly as the extracted modules do, so splitting messaging
+would move that call, not change it. STRUCT-02's residue is testability debt (D-02).
+**Forward:**
 SCALE-03 on RECORD-02 (Phase 4), SCALE-01 on RECALL-02 (Phase 5), per the table above.
 **Requirements**: SCALE-01, SCALE-02, SCALE-03, SCALE-04, SCALE-05
 **Success Criteria** (what must be TRUE):
@@ -616,7 +627,55 @@ outcome and a memory's provenance are durably written; on an in-memory ring, REC
 **Plans**: TBD
 **UI hint**: yes
 
-### Phase 6: The Office Runs the Process
+### Phase 6: Close the forward dependencies
+
+**Goal**: Re-verify the two Phase 3 criteria that were deliberately left Pending because they
+depended forward on work Phase 3 could not do. This phase exists so the residual is *owned*
+rather than prose — this repo's own evidence is that unowned prose residuals rot (D-05).
+
+**Depends on**: Phase 4 (RECORD-02) and Phase 5 (RECALL-02)
+**Requirements**: SCALE-01, SCALE-03 — re-verification only; no net-new requirements
+**Success Criteria** (what must be TRUE) — the two skeptic tests carried verbatim from Phase 3,
+deliberately excluding SCALE-02's criterion, which has no skeptic clause and no forward
+dependency:
+
+  1. **Two floors do not leak.** With two projects running side by side, an agent in project
+     X cannot recall anything an agent in project Y wrote to memory, and neither project's
+     task ledger is visible from the other. *Skeptic's check, and the reason for the forward
+     dependency above: the agent must be made to ask for everything with no scope flag. If it
+     still gets project Y's notes, this criterion is not met — RECALL-02 is what makes it
+     enforced rather than cooperative.* — SCALE-01
+
+     **Status at the Phase 3 close (2026-08-26): NOT met, blocker NOT landed.** Isolation is
+     still enforced by a `--wing` flag the agent supplies and could simply omit — cooperative,
+     not enforced. RECALL-02 (Phase 5) is unrun. Under this project's standing rule (a
+     partially-landed fix is an open concern) SCALE-01 may not be ticked before this phase.
+     Note also that RECALL-02 alone is **not** sufficient: it is memory-only, so the
+     task-ledger half of this criterion is net-new work owned here.
+
+  2. **Yesterday is replayable.** For a day that has already happened, every hive event,
+     envelope and cost appears on one scrubbable timeline. *Skeptic's check: pick a day whose
+     log passed 8 MB. If the early hours are missing, this criterion is not met — RECORD-02 is
+     the storage this replay reads.* — SCALE-03
+
+     **Status at the Phase 3 close (2026-08-26): blocker HAS landed; the skeptic test above is
+     itself refuted and must be re-run in corrected form.** "Pick a day whose log passed 8 MB"
+     can never fire: `LOG_ROTATE_BYTES` (`hive.ts:375`) has never rotated in measured use. The
+     wall was `LOG_TAIL_BYTES = 64 KB` (`hive.ts:383`), a *read* cap 128x tighter — at 137,099
+     bytes `logTail()` had already lost the morning while the rotate stayed dormant. RECORD-02
+     shipped the durable store (`MIGRATIONS[2]`, `PersistStore.eventsBetween` at `db.ts:450`,
+     `EVENT_RETENTION_MS` = 30 days at `db.ts:70`, pruned in `boot.ts:628`), and its durability
+     was proven live by a SIGKILL against a 160,712-byte uncheckpointed WAL with a second
+     process answering from disk. **The replay bound is now retention (30 days), not rotation.**
+     *Corrected skeptic test for this phase:* pick a day older than the UI's reach but inside
+     `EVENT_RETENTION_MS`, and confirm every hive event, envelope and cost for it appears on
+     the timeline — then pick a day older than `EVENT_RETENTION_MS` and confirm the UI says so
+     rather than showing a silently empty day.
+
+**Plans**: TBD
+**UI hint**: no
+
+### Phase 7: The Office Runs the Process
 
 **Goal**: A GSD phase runs on this floor, unattended, and is genuinely better than running it in
 one terminal. Plus the two things that make that liveable: the operator's hands work, and the
@@ -631,7 +690,7 @@ is a wrapper around an orchestrator that cannot yet be trusted unattended — wh
 the failure it exists to fix.
 
 **GSD is split, deliberately.** GSD-06 landed in Phase 2, because DAEMON-02's "answer from
-anywhere" has nowhere to land while `AskMeTab.tsx:93` is hardcoded `to: 'god'`. Phase 6 carries
+anywhere" has nowhere to land while `AskMeTab.tsx:93` is hardcoded `to: 'god'`. Phase 7 carries
 GSD-01..05.
 
 **Architecture, already decided:** the office **imports** from `.planning/` one-way with a
