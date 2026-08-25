@@ -1801,15 +1801,55 @@ export class HiveManager {
         if (!f.endsWith('.json')) continue;
         const full = join(outbox, f);
         try {
-          const partial = JSON.parse(readFileSync(full, 'utf8')) as Partial<HiveMessage>;
+          // STRIP THE BOM BEFORE PARSING. Windows agents write their outbox with
+          // PowerShell, and `Set-Content` / `Out-File -Encoding utf8` emit a UTF-8
+          // BOM (U+FEFF) by default there. JSON.parse rejects a leading BOM, so
+          // every message a Windows worker sent the obvious way landed in the
+          // catch below and was thrown away. Measured live: TWO of Jim's reports
+          // — the round-trip completion and a blocked-task finding — were both
+          // quarantined, and god's inbox simply stayed empty.
+          //
+          // The BOM is not corruption and carries no meaning in JSON: stripping it
+          // is what every tolerant reader does. Fixing it here fixes it for every
+          // engine on every platform, rather than asking eleven CLIs to remember
+          // an encoding flag.
+          const raw = readFileSync(full, 'utf8').replace(/^﻿/, '');
+          const partial = JSON.parse(raw) as Partial<HiveMessage>;
           const msg = this.normalize(partial, id);
           msg.from = id; // sender is authoritative — the owning directory
           this.routeMessage(msg);
           renameSync(full, join(outbox, '.sent', f)); // archive, don't reprocess
           routed++;
-        } catch {
-          // malformed file — quarantine so we don't spin on it
+        } catch (e) {
+          // Malformed file — quarantine so we don't spin on it. But NEVER silently:
+          // this is a mail system, and a message that vanishes with no log and no
+          // bounce is worse than one that fails loudly. The sender believed it sent;
+          // the recipient never knew to expect it; and the only evidence was a
+          // `bad-*.json` nobody reads. That is exactly how Jim's two reports were
+          // lost before the BOM strip above existed.
+          const why = e instanceof Error ? e.message : String(e);
+          console.error(`[hive] DROPPED malformed outbox message ${id}/${f}: ${why}. `
+            + `Quarantined as .sent/bad-${f}; the sender was NOT told.`);
           try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
+          // Bounce to the sender so the failure reaches whoever can fix it — the
+          // agent that wrote the file. Best-effort by construction: if the bounce
+          // itself cannot be delivered the log line above is still the record.
+          try {
+            this.routeMessage(this.normalize({
+              to: id,
+              act: 'inform',
+              subject: `Your message ${f} could not be delivered`,
+              body: `The hive router could not parse ${f} and has quarantined it as `
+                + `.sent/bad-${f}. It was NOT delivered to anyone.
+
+Parser said: ${why}
+
+`
+                + 'If you wrote it from PowerShell, use '
+                + '[System.IO.File]::WriteAllText(path, json, (New-Object System.Text.UTF8Encoding $false)) '
+                + '— Set-Content and Out-File -Encoding utf8 add a BOM. Rewrite the message and send again.'
+            }, 'system'));
+          } catch { /* the log line above is the record */ }
         }
       }
     }

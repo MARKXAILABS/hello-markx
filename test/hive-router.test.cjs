@@ -158,3 +158,73 @@ test('D-11: a hookless agent\'s mail bounces to god, with a true cause, when han
     'the bounce subject still blames "renderer unavailable" — that stopped being the true cause '
     + 'once main, not the renderer, is the thing refusing the handoff');
 });
+
+/* ── a Windows agent's mail must not be silently thrown away (operator-found) ──
+ *
+ * Measured live 2026-08-25: Jim sent TWO reports — the mail round-trip completion and a
+ * blocked-task finding — and BOTH were quarantined as outbox/.sent/bad-*.json. God's
+ * inbox stayed empty; he only learned the work was done by inspecting the file himself.
+ *
+ * Cause: PowerShell's Set-Content / Out-File -Encoding utf8 write a UTF-8 BOM (U+FEFF)
+ * by default on Windows, and JSON.parse rejects a leading BOM. So the obvious way for a
+ * Windows worker to write its outbox produced mail the router could not read.
+ *
+ * Two separate defects, two separate fixes: the router now strips the BOM (the message
+ * gets through), and a message it still cannot parse is logged AND bounced to its sender
+ * (a failure is never silent). */
+test('a BOM-prefixed outbox message is routed, not quarantined', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-bom-'));
+  const hive = new HiveManager(() => home);
+  hive.ensureHive();
+
+  const from = 'jim-1', to = 'god';
+  for (const id of [from, to]) {
+    fs.mkdirSync(path.join(home, 'hive', 'agents', id, 'outbox', '.sent'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'hive', 'agents', id, 'inbox', '.done'), { recursive: true });
+  }
+
+  const msg = { to, act: 'inform', subject: 'round-trip done', body: 'notes.md written' };
+  const out = path.join(home, 'hive', 'agents', from, 'outbox', 'report.json');
+  // Exactly what Set-Content / Out-File -Encoding utf8 produce on Windows.
+  fs.writeFileSync(out, '﻿' + JSON.stringify(msg), 'utf8');
+
+  const routed = hive.routeOnce();
+  assert.equal(routed, 1, 'a BOM is not corruption — the message must route, not be dropped');
+
+  const quarantined = fs.readdirSync(path.join(home, 'hive', 'agents', from, 'outbox', '.sent'))
+    .filter((f) => f.startsWith('bad-'));
+  assert.deepEqual(quarantined, [],
+    'nothing may be quarantined: this is the exact shape that silently lost two real reports');
+
+  const delivered = fs.readdirSync(path.join(home, 'hive', 'agents', to, 'inbox'))
+    .filter((f) => f.endsWith('.json'));
+  assert.equal(delivered.length, 1, "the recipient's inbox must actually have it");
+});
+
+test('a message that truly cannot be parsed is bounced to its sender, never dropped in silence', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-bounce-'));
+  const hive = new HiveManager(() => home);
+  hive.ensureHive();
+
+  const from = 'jim-2';
+  fs.mkdirSync(path.join(home, 'hive', 'agents', from, 'outbox', '.sent'), { recursive: true });
+  fs.mkdirSync(path.join(home, 'hive', 'agents', from, 'inbox', '.done'), { recursive: true });
+
+  const out = path.join(home, 'hive', 'agents', from, 'outbox', 'broken.json');
+  fs.writeFileSync(out, '{ this is not json at all', 'utf8');
+
+  hive.routeOnce();
+
+  const quarantined = fs.readdirSync(path.join(home, 'hive', 'agents', from, 'outbox', '.sent'))
+    .filter((f) => f.startsWith('bad-'));
+  assert.equal(quarantined.length, 1, 'genuinely unparseable mail is still quarantined');
+
+  // The decisive property: the SENDER is told. Without this the agent believes it sent,
+  // the recipient never knows to expect anything, and the only trace is a file nobody reads.
+  const bounced = fs.readdirSync(path.join(home, 'hive', 'agents', from, 'inbox'))
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => JSON.parse(fs.readFileSync(path.join(home, 'hive', 'agents', from, 'inbox', f), 'utf8')));
+  assert.equal(bounced.length, 1, 'the sender must receive a bounce for undeliverable mail');
+  assert.match(bounced[0].subject, /could not be delivered/i);
+  assert.match(bounced[0].body, /BOM/, 'the bounce must name the actual Windows cause so it is fixable');
+});
