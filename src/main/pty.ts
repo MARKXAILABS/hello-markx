@@ -5,7 +5,7 @@ import { delimiter, join, win32 } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ensureKilled } from './procKill';
 import { expandTilde } from './fs';
-import { captureFromLoginShell, userShellPath } from './shellEnv';
+import { allowFromEnv, captureFromLoginShell, userShellPath } from './shellEnv';
 
 /** APPEND the hive's bundled-node dir (`<HIVE_ROOT>/bin/runtime`, which holds a
  *  shim literally named `node`) to a child's PATH.
@@ -85,6 +85,12 @@ export interface SpawnOptions {
   rows?: number;
   /** Extra environment for the child (merged over the resolved shell env). */
   env?: Record<string, string>;
+  /** GATE-02 — additional `process.env` NAMES (not values) this spawn may inherit
+   *  past the `allowFromEnv` allowlist. The operator's own escape hatch, read from
+   *  `envPassThrough` in userData/config.json by `spawnAgentCore` and handed down
+   *  here. It rides on opts rather than being imported because `pty.ts` never reads
+   *  config: injected over imported, the same way `env` already arrives. */
+  envPassThrough?: readonly string[];
   /** When set, run this string as a VISIBLE shell script instead of resolving/
    *  spawning `command`. Used by the missing-CLI auto-install path: the script
    *  (a banner + an install command) streams to the same Terminal tab. Routed
@@ -748,7 +754,13 @@ export class PtyManager {
         rows: opts.rows ?? 30,
         cwd: opts.cwd,
         env: {
-          ...process.env,
+          // GATE-02 — the BASE spread is an ALLOWLIST, not the whole parent env.
+          // Agents run with tool permissions bypassed by design, so every name
+          // that crosses here is readable by a prompt-injected model. Only this
+          // one line is filtered: every layer below it is applied AFTER, which is
+          // both why they are unaffected and why none of them can serve as
+          // evidence that the filter ran (T-04-ENV-07).
+          ...allowFromEnv(process.env, opts.envPassThrough ?? []),
           PATH: userPath,
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor',
