@@ -3680,6 +3680,40 @@ ipcMain.handle('control:halt', (_evt, agentId: unknown) => {
 ipcMain.handle('control:snapshot', (_evt, agentId: unknown) =>
   typeof agentId === 'string' ? control.snapshot(agentId) : null);
 
+// ─── IPC: GATE-05 — the desktop's answer to an open tool approval ────────────
+// The ONE renderer→main route for an answer. `control:approvalRequest` is the
+// other direction and is reused unchanged; this needs a name of its own because
+// an ipcMain.handle must have one.
+//
+// The settle goes through `HookServer.answerApproval`, plan 04-15's named
+// accessor — the SAME entry point the phone's `POST /phone/api/answer` uses
+// (`answerToolAsk` above). Never a second registry: two registries means an ask
+// answered on the desktop stays open on the phone and the shim polls whichever
+// one it happened to be opened in. There is no agent id to compare against on an
+// operator surface and none is asked for — the unguessable single-use ask id IS
+// the capability here, which is GATE-05 ceiling item (f).
+//
+// The verdict rides the hook return from there. Nothing on this path types into
+// a live PTY (ADR-0001).
+ipcMain.handle('control:answerApproval', (_evt, askId: unknown, approved: unknown) => {
+  // `approved` is checked for `boolean` rather than coerced: a truthy string
+  // from a mangled call must not become a yes on the channel whose whole point
+  // is an explicit yes for an unrecoverable command (T-04-ASK-34's shape).
+  if (typeof askId !== 'string' || typeof approved !== 'boolean' || !floor) return null;
+  if (floor.hookServer.answerApproval(askId, approved)) return { settled: true };
+  // It did not settle, so it is gone. Rule G-2: WHICH way matters — expired
+  // means the command was denied, settled means it may already have run.
+  //
+  // CEILING, stated rather than hidden: `toolAskExpiry` is filled by
+  // `openPhoneAsks()`, so this reads `expired: false` for an ask no phone GET
+  // ever saw. The renderer does NOT rely on it — it holds `receivedAt +
+  // expiresInMs` from the push and derives expiry from its own anchor (rule
+  // G-3), which is skew-immune by construction. This flag confirms that reading
+  // on a floor whose phone is also live; it is never the only source.
+  const expiresAt = toolAskExpiry.get(askId);
+  return { settled: false, expired: expiresAt !== undefined && Date.now() >= expiresAt };
+});
+
 // ─── IPC: scheduled missions (recurring auto-dispatch) ──────────────────────
 ipcMain.handle('missions:list', () => readConfig().missions ?? []);
 ipcMain.handle('missions:save', (_evt, missions) => {

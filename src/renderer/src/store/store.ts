@@ -26,6 +26,29 @@ export interface BlockReason {
     /** what we'd send to the tmux pane on click */
     send?: string;
   }>;
+  /** GATE-05. PRESENT means this is an open tool approval the floor is still
+   *  blocking on — answerable, expiring, and settled through the approval IPC.
+   *  ABSENT means a GATE-03 notice: the call was already denied and the agent
+   *  kept running, so there is nothing to answer. One field, and it is the whole
+   *  discriminator; every ask-shaped behaviour in BlockedBanner branches on it. */
+  askId?: string;
+  /** The ask's remaining life as a DURATION, measured by main at emit time
+   *  (`hooks.ts`'s `emitControl`). NEVER a deadline: the renderer's clock is not
+   *  main's, and a deadline is optimistic by exactly the skew — which tells the
+   *  operator they have time to answer a question that already auto-denied
+   *  (04-UI-SPEC rule G-3, the same contract the phone reads). */
+  expiresInMs?: number;
+  /** When THIS renderer received the ask. The countdown is re-derived from
+   *  `receivedAt + expiresInMs - Date.now()` on every tick and never decremented:
+   *  a backgrounded window throttles intervals, and a decremented counter drifts
+   *  arbitrarily far in the optimistic direction. */
+  receivedAt?: number;
+  /** Set when the ask resolves — answered here, answered on the phone, or
+   *  expired. The banner does NOT vanish: `actions` is emptied and this one line
+   *  replaces the action row beside `dismiss`, because a banner that silently
+   *  disappears leaves the operator unable to tell whether they approved
+   *  something (T-04-ASK-24). */
+  outcome?: string;
 }
 
 export interface Agent {

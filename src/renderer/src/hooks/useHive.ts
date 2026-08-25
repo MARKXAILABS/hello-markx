@@ -360,10 +360,44 @@ function passesContextPressure(a: Agent, rule: ContextRule): boolean {
  * assembly that SHIPS gets asserted instead of a copy of it.
  */
 export function blockReasonFromApproval(
-  e: { tool?: string; reason?: string; command?: string },
-  agentName: string | undefined
+  e: { tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number },
+  agentName: string | undefined,
+  now: number = Date.now()
 ): BlockReason {
   const tool = e.tool ?? 'tool';
+  const who = agentName ?? 'An agent';
+  if (e.askId !== undefined) {
+    // GATE-05 — an OPEN question, not a refusal. `askId` present is the whole
+    // discriminator (store.ts's BlockReason says so beside the field).
+    return {
+      // Rule D-1 governs the DETAIL — main's sentence, byte for byte, below.
+      // The headline is the renderer's, and it must not read `was refused`: this
+      // call has not been refused, it is waiting on the operator and auto-denies
+      // in about two minutes if they read "refused" and move on.
+      summary: `${who} wants to run a ${tool} command`,
+      detail: e.reason ?? 'The floor is waiting on your answer.',
+      command: e.command,
+      // TWO answerable actions and NO keystrokes. `send` is what BlockedBanner's
+      // callers forward to `writePty`; leaving it undefined makes the PTY path
+      // structurally unreachable for an ask rather than merely unused (ADR-0001:
+      // exactly one place types into a live PTY, and this is not it).
+      //
+      // The labels are the SAME two literals `answerToolAsk` allowlists in main
+      // (index.ts) — one vocabulary across the phone and the desktop, so an
+      // unrecognised label can never become an accidental yes on the channel
+      // whose whole point is an explicit yes for an unrecoverable command.
+      actions: [
+        { label: 'approve', kind: 'approve' },
+        { label: 'deny', kind: 'deny' }
+      ],
+      askId: e.askId,
+      expiresInMs: e.expiresInMs,
+      // The countdown's anchor, stamped at the moment the event landed HERE. Main
+      // sent a duration, not a deadline (rule G-3), so the renderer supplies its
+      // own zero and the two clocks never have to agree.
+      receivedAt: now
+    };
+  }
   return {
     summary: agentName ? `${agentName}'s ${tool} call was refused` : `A ${tool} call was refused`,
     detail: e.reason ?? 'Refused by the floor.',
@@ -645,11 +679,16 @@ export function useHive(config: HarnessConfig | null): void {
   //      instant and the agent keeps running, and the PreToolUse hook event that
   //      follows this on the same boundary would overwrite it anyway.
   useEffect(() => {
-    return window.cth.onApprovalRequest(({ agentId, tool, reason, command }) => {
+    return window.cth.onApprovalRequest(({ agentId, tool, reason, command, askId, expiresInMs }) => {
       const { updateAgent, agents, pushFeed } = useStore.getState();
       const self = agents.find((a) => a.id === agentId);
       if (!self) return;
-      updateAgent(agentId, { blockReason: blockReasonFromApproval({ tool, reason, command }, self.name) });
+      // `askId`/`expiresInMs` are present only on a GATE-05 ask (hooks.ts's
+      // `openApproval` is their one publisher); a GATE-03 refusal carries
+      // neither and keeps today's notice shape exactly.
+      updateAgent(agentId, {
+        blockReason: blockReasonFromApproval({ tool, reason, command, askId, expiresInMs }, self.name)
+      });
       // D-2: the feed line stays. The requirement is that the operator does not HAVE to
       // read a terminal to see a refusal, not that the audit trail is deleted.
       pushFeed(agentId, `\x1b[31m⛔ ${tool ?? 'tool'} blocked\x1b[0m ${reason ?? ''}`);

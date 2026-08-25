@@ -1838,3 +1838,75 @@ test('FLOOR-04: the bypass register does not claim a bypass that is now closed',
     + 'a bypass which no longer exists is the same defect class as one that documents a '
     + 'mitigation it does not enforce — the next reader trusts it either way.');
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// GATE-05 (plan 04-18, wave 6) — the desktop approval route, asserted at every
+// hop it has to cross.
+//
+// D-45's reason for these living here rather than in a SUMMARY: a grep that
+// lives in a report rots, and every one of these is a security property. The
+// counts are MEASURED, per file and per direction — a bare `grep -c` over two
+// files prints `file:count` per file and compares against nothing, which is how
+// the round-3 draft of this criterion managed to assert nothing at all.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Occurrences (not lines) of a literal in a comment-stripped source file. */
+const strippedHits = (rel, needle) => readStripped(rel).split(needle).length - 1;
+
+test('GATE-05: the approval EVENT channel is reused — no second main→renderer name', () => {
+  // `control:approvalRequest` already existed and is already named for this.
+  // One send in main, one on + one removeListener in the preload. Unchanged by
+  // plan 04-18: the answer needs a name of its own, the event does not.
+  assert.equal(strippedHits('src/main/hooks.ts', "'control:approvalRequest'"), 1,
+    'the ask event has more than one publisher in main, or none');
+  assert.equal(strippedHits('src/preload/index.ts', "'control:approvalRequest'"), 2,
+    'the preload subscription no longer pairs `on` with `removeListener` — a 1 means the unsubscribe leaks, a 3 means a second channel was added for an event that already had one');
+});
+
+test('GATE-05: the ANSWER is exactly one new renderer→main invoke channel', () => {
+  // The other direction, which DOES need a name: an ipcMain.handle must have
+  // one. Exactly one, and the same spelling on both sides of the bridge.
+  assert.equal(strippedHits('src/main/index.ts', "'control:answerApproval'"), 1,
+    'the answer handler is missing, or registered twice');
+  assert.equal(strippedHits('src/preload/index.ts', "'control:answerApproval'"), 1,
+    'the preload no longer invokes the answer channel, or invokes it from two places');
+
+  const main = readStripped('src/main/index.ts');
+  assert.equal(main.split("ipcMain.handle('control:").length - 1, 9,
+    'the `control:` handler count moved off 9 (measured 8 before plan 04-18 added the answer) — exactly one handler was added and no other was dropped');
+
+  // The settle routes through HookServer's NAMED accessor, never a second
+  // registry: two registries means an ask answered on the desktop stays open on
+  // the phone, and the shim polls whichever one it was opened in.
+  assert.match(main, /hookServer\.answerApproval\(/,
+    'the desktop settle does not reach ApprovalRegistry through HookServer.answerApproval — a second registry would let the same ask be answered twice, with opposite verdicts');
+});
+
+test('GATE-05: the renderer names NEITHER channel literal — contextIsolation makes the preload the only place they can live', () => {
+  // `contextIsolation: true` and the `cth` bridge mean every channel literal
+  // stays in the preload. Comment-stripped, so the JSDoc at useHive.ts:345 that
+  // legitimately MENTIONS `control:approvalRequest` cannot redden a security
+  // gate and push an executor into deleting a comment to make it pass.
+  assert.equal(strippedHits('src/renderer/src/hooks/useHive.ts', 'control:'), 0,
+    'a channel literal crossed the bridge into the renderer');
+
+  // D-33/D-40's positive lower bound over the SAME stripped text, so an emptied
+  // or unparsed file cannot satisfy the negative above.
+  assert.ok(strippedHits('src/renderer/src/hooks/useHive.ts', 'window.cth') >= 30,
+    'useHive subscribes through fewer than the 30 measured `window.cth` hops — the negative above is now passing on a file that lost its subscriptions');
+});
+
+test('ADR-0001: the approval answer is not a second PTY typer', () => {
+  // The whole of T-04-ASK-21. `writePty` must be exactly where it already was:
+  // the PTY-parser-derived reasons BlockedBanner's callers were written for.
+  // Plan 04-18 branches AROUND that path on `askId` and adds no new call site.
+  assert.equal(strippedHits('src/renderer/src/hooks/useHive.ts', 'writePty'), 2,
+    'the writePty count in useHive moved — an ask must reach ApprovalRegistry.answer through the IPC and the hook return, never a live PTY (ADR-0001)');
+  for (const rel of [
+    'src/renderer/src/components/AgentDetailPanel.tsx',
+    'src/renderer/src/components/CommandCenterPanel.tsx'
+  ]) {
+    assert.equal(strippedHits(rel, 'writePty'), 1,
+      `${rel} gained or lost a writePty call. The existing path survives unchanged for non-ask reasons; the ask path must not acquire one`);
+  }
+});

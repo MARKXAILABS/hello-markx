@@ -856,6 +856,78 @@ test('GATE-03 rule D-1: the invented sentence is gone from the source, not merel
     'the old renderer-authored denial reason is still in useHive.ts');
 });
 
+// ─── GATE-05 — an ASK is not a notice, and the difference is one field ────────────────
+//
+// `blockReasonFromApproval` is the SHIPPED assembly (it runs inside a useEffect, and this
+// harness has no effect phase — see the ceiling at :23-38), so these call it directly for
+// the same reason the GATE-03 cases above do.
+
+/** A GATE-05 ask payload as `control:approvalRequest` now delivers it. */
+const askPayload = (extra = {}) => ({
+  agentId: 'a1', tool: 'Bash', command: 'git push origin +main --force',
+  reason: 'Refused: this command FORCE-pushes to a git remote.',
+  askId: 'ask-0123456789abcdef0123456789abcdef', expiresInMs: 120_000, ...extra
+});
+
+test('GATE-05: an ask carries its id, its DURATION and the anchor the countdown is derived from', () => {
+  const built = blockReasonFromApproval(askPayload(), 'Ada', 1_700_000_000_000);
+
+  assert.equal(built.askId, 'ask-0123456789abcdef0123456789abcdef',
+    '`askId` did not survive the assembly — it is the discriminator AND the capability, and without it the answer has nothing to name');
+  assert.equal(built.expiresInMs, 120_000, 'the server-measured duration was dropped');
+  assert.equal(built.receivedAt, 1_700_000_000_000,
+    'the renderer did not stamp WHEN it received the ask. The countdown is `receivedAt + expiresInMs - now`; without the anchor it has nothing to re-derive from and the only alternative is a decremented counter, which drifts optimistically in a backgrounded window');
+});
+
+test('GATE-05: an ask renders TWO answerable actions and NO keystrokes — ADR-0001 is structural here', () => {
+  const built = blockReasonFromApproval(askPayload(), 'Ada');
+
+  assert.deepEqual(built.actions.map((a) => [a.label, a.kind]), [['approve', 'approve'], ['deny', 'deny']],
+    'an ask rendered the notice shape (`actions: []` plus `dismiss`) — the operator is shown a question they cannot answer while the shim sits on its poll loop until the TTL denies it');
+
+  // ADR-0001: exactly one place types into a live PTY, and this is not it. `send` is what
+  // BlockedBanner's two callers forward to `writePty`; leaving it undefined makes the PTY
+  // path UNREACHABLE for an ask rather than merely unused, so a future edit to either
+  // caller cannot resurrect a second typer by accident.
+  for (const a of built.actions) {
+    assert.equal(a.send, undefined,
+      `the ${a.label} action carries keystrokes. The answer rides the approval IPC to ApprovalRegistry.answer and the hook return — never a second PTY typer (ADR-0001)`);
+  }
+
+  // The two labels are the SAME two literals `answerToolAsk` allowlists in main
+  // (index.ts:1323) — `approve` → true, `deny` → false, anything else → no answer at all.
+  // One vocabulary across the phone and the desktop, so an unrecognised label can never
+  // become an accidental yes on the channel whose whole point is an explicit yes.
+  assert.deepEqual(built.actions.map((a) => a.label), ['approve', 'deny']);
+});
+
+test('GATE-05: a notice is untouched — no id, no duration, no actions, and it still dismisses', () => {
+  // The paired negative. Two of the three assertions above would pass just as well
+  // against an assembly that made EVERY refusal answerable, which is the worse failure:
+  // approve/deny buttons on a call the floor already denied settle nothing at all.
+  const built = blockReasonFromApproval(refusal({ command: 'rm -rf build' }), 'Ada');
+
+  assert.equal(built.askId, undefined, 'a GATE-03 notice was given an ask id');
+  assert.equal(built.expiresInMs, undefined, 'a GATE-03 notice was given a countdown');
+  assert.deepEqual(built.actions, [], 'a GATE-03 notice grew answer buttons that can settle nothing');
+
+  const markup = html(React.createElement(BlockedBanner, { reason: built, onAction: () => {} }));
+  assert.match(visibleText(markup), /dismiss/, 'the notice lost the only control that closes it');
+});
+
+test('GATE-05: the summary says the ask is WAITING, not that it was refused', () => {
+  const built = blockReasonFromApproval(askPayload(), 'Ada');
+
+  assert.match(built.summary, /Ada/, 'the summary does not name the agent');
+  assert.doesNotMatch(built.summary, /refused/i,
+    'an OPEN question is headlined as a refusal. It has not been refused — it is waiting on the operator, and it auto-denies in two minutes if they read that headline and move on');
+
+  // Rule D-1 still binds on the DETAIL: main's sentence, byte for byte. Only the
+  // renderer-authored sentence SHAPE differs between the two kinds.
+  assert.equal(built.detail, 'Refused: this command FORCE-pushes to a git remote.',
+    "main's own sentence was rewritten — rule D-1 does not stop applying because the reason arrived on an ask");
+});
+
 // ─── VIGIL-03 — a blocked agent is visibly blocked, even under a tripped breaker ──────
 
 const ccpSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/CommandCenterPanel.tsx'), 'utf8');

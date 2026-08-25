@@ -1145,12 +1145,27 @@ const api = {
   /** Read an agent's current control snapshot. */
   controlSnapshot: (agentId: string): Promise<AgentControlSnapshot | null> =>
     ipcRenderer.invoke('control:snapshot', agentId),
-  /** Subscribe to gate/deny events (a tool was blocked); returns unsubscribe fn. */
-  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string; command?: string }) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string; command?: string }) => cb(payload);
+  /** Subscribe to gate/deny events (a tool was blocked); returns unsubscribe fn.
+   *
+   *  `askId`/`expiresInMs` are present only on a GATE-05 ask — an OPEN question
+   *  the floor is still blocking on, answerable through `answerApproval` below.
+   *  A GATE-03 refusal carries neither: it was already denied. `expiresInMs` is
+   *  a DURATION measured by main at emit time, never a deadline (rule G-3). */
+  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number }) => cb(payload);
     ipcRenderer.on('control:approvalRequest', listener);
     return () => ipcRenderer.removeListener('control:approvalRequest', listener);
   },
+  /** GATE-05 — settle one tool approval from the desktop. The ONE renderer→main
+   *  route for an answer; the event above is the other direction and is reused
+   *  unchanged. The answer reaches `ApprovalRegistry.answer` and rides the hook
+   *  return — it is never typed into a live PTY (ADR-0001).
+   *
+   *  `{ settled: false }` means the ask is gone. `expired` tells the two apart
+   *  the way rule G-2 requires: expired means the command was DENIED, settled
+   *  means it may already have run — opposite outcomes at 3am. */
+  answerApproval: (askId: string, approved: boolean): Promise<{ settled: boolean; expired?: boolean } | null> =>
+    ipcRenderer.invoke('control:answerApproval', askId, approved),
 
   // ─── Task kanban (hive/tasks.json) ───────────────────────────────────────
   /** Atomically append one card against the latest main-process ledger. */
