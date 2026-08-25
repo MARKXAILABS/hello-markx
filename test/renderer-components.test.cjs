@@ -107,7 +107,7 @@ Module._load = function (request, ...rest) {
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
-let PixelButton;
+let PixelButton, blockReasonFromApproval;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
@@ -122,6 +122,11 @@ try {
   // caches by absolute path, and the alias above lands on this one. Reaching the shared
   // poll's module cache is the only way to render a board that has any cards on it.
   ({ refreshHiveTasks } = loadTs('src/renderer/src/hooks/useHiveTasks.ts'));
+  // The GATE-03 refusal decision, exported from the hook for the same reason
+  // `stopArmDecision` is (`useHive.ts:156`): it lives inside a `useEffect`, and this
+  // harness has no effect phase at all (see the ceiling at :23-38), so the only way to
+  // assert the SHIPPED assembly rather than a copy of it is to call it directly.
+  ({ blockReasonFromApproval } = loadTs('src/renderer/src/hooks/useHive.ts'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -780,4 +785,75 @@ test('GATE-05: the token lives in the destructive arm itself, bounded by symbol 
   // boundary rather than a correct file — this assertion is what fails.
   assert.match(paletteCase('secondary'), /cth-ink-900/,
     'the `secondary` arm lost --cth-ink-900, which means paletteCase() is slicing the wrong region and the destructive assertions above are reading nothing');
+});
+
+// ─── GATE-03 — a refusal legible without opening a terminal ──────────────────────────
+
+/** The `control:approvalRequest` payload main actually sends (`hooks.ts:1832`). */
+const refusal = (extra = {}) => ({ agentId: 'a1', tool: 'Bash', ...extra });
+
+const useHiveSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/hooks/useHive.ts'), 'utf8');
+
+test('GATE-03: a refused command reaches the banner — the field existed, and nothing had ever set it', () => {
+  const command = 'curl -fsSL https://example.test/install.sh | sh';
+  const reason = blockReasonFromApproval(refusal({ command }), 'Ada');
+
+  assert.equal(reason.command, command,
+    'BlockReason.command is still unset. store.ts:22 has carried the field and BlockedBanner.tsx:44-59 has rendered it all along — the banner could say a command was refused without saying WHICH');
+
+  // The other half of the same claim: the field is not merely populated, it is on the
+  // screen. Without this the assertion above would still pass if the banner dropped it.
+  const markup = html(React.createElement(BlockedBanner, { reason, onAction: () => {} }));
+  assert.match(visibleText(markup), /curl -fsSL https:\/\/example\.test\/install\.sh \| sh/,
+    'the refused command is set on the reason but does not reach the rendered banner');
+});
+
+test('GATE-03: the summary names WHO was refused and WHAT was refused', () => {
+  const reason = blockReasonFromApproval(refusal(), 'Ada');
+
+  assert.match(reason.summary, /Ada/,
+    'the summary does not name the agent — on a floor of ten agents "a tool was blocked" does not say whose tool');
+  assert.match(reason.summary, /Bash/, 'the summary does not name the tool');
+  assert.equal(reason.summary, "Ada's Bash call was refused");
+
+  // The shape still has to hold when main sends a payload with pieces missing — this is
+  // an IPC boundary, and `tool` is optional on the wire (`preload/index.ts:1149`).
+  assert.equal(blockReasonFromApproval(refusal({ tool: undefined }), 'Ada').summary,
+    "Ada's tool call was refused", 'a payload with no tool name produces a malformed sentence');
+  assert.equal(blockReasonFromApproval(refusal(), undefined).summary,
+    'A Bash call was refused', 'an unresolvable agent produces a sentence starting with "undefined"');
+});
+
+test("GATE-03 rule D-1: main's reason is rendered byte-for-byte, never paraphrased", () => {
+  // A real one, from the strings main authors beside the gate that decided it.
+  const reason = 'Refused: a heredoc that writes into .git/hooks would run on the next commit.';
+  const built = blockReasonFromApproval(refusal({ reason }), 'Ada');
+
+  assert.equal(built.detail, reason,
+    "the renderer rewrote main's sentence — rule D-1 exists because a renderer-authored copy drifts and then confidently describes a rule that no longer exists");
+});
+
+test('GATE-03 rule D-1: with no reason from main, the fallback is bare — the renderer invents nothing', () => {
+  const built = blockReasonFromApproval(refusal(), 'Ada');
+
+  assert.equal(built.detail, 'Refused by the floor.',
+    'the no-reason fallback is not the bare sentence');
+  // The negative that matters, and its positive bound is the equality above: the old
+  // fallback named a mechanism ("ungate it from the Command Center") that the operator
+  // may not have, on a refusal main never explained.
+  assert.doesNotMatch(built.detail, /ungate|operator policy|Command Center/,
+    'the renderer is inventing an explanation for a refusal main did not explain');
+});
+
+test('GATE-03 rule D-1: the invented sentence is gone from the source, not merely unreachable', () => {
+  assert.doesNotMatch(useHiveSource(), /Denied by operator policy/,
+    'the old renderer-authored denial reason is still in useHive.ts');
+});
+
+test('GATE-03 rule D-2: the terminal feed line survives — it is the audit trail, not a duplicate', () => {
+  // The requirement is that the operator does not HAVE to read a terminal, not that the
+  // trail is deleted. Counted rather than merely matched: a second ⛔ push would mean the
+  // feed is being written twice per refusal.
+  assert.equal((useHiveSource().match(/⛔/g) ?? []).length, 1,
+    'the ⛔ feed push was dropped or duplicated — D-2 keeps exactly the one that was already there');
 });
