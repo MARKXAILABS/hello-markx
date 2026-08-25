@@ -106,12 +106,14 @@ Module._load = function (request, ...rest) {
 };
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
+let relAge;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ BlockedBanner } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
   ({ AgentCard } = loadTs('src/renderer/src/components/AgentCard.tsx'));
   ({ useStore } = loadTs('src/renderer/src/store/store.ts'));
   ({ autoModeFlagForProvider, AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts'));
+  ({ relAge } = loadTs('src/shared/relAge.ts'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -125,7 +127,7 @@ try {
 // default exports "per convention (implied by React/Vite tooling)"; measured 2026-08-21,
 // `grep -rl "export default" src/renderer/src --include=*.tsx` matches 0 of 63 files, so
 // a harness reaching for `.default` would get `undefined` from every one of them.
-for (const [name, value] of Object.entries({ PixelBadge, BlockedBanner, AgentCard, useStore })) {
+for (const [name, value] of Object.entries({ PixelBadge, BlockedBanner, AgentCard, useStore, relAge })) {
   assert.equal(typeof value, 'function',
     `${name} did not come back from loadTs as a function — the component tests below would all render undefined`);
 }
@@ -343,4 +345,76 @@ test('FLOOR-13: the model chip is bounded, so it cannot drop the card\'s project
   // `renderToStaticMarkup` is a server render with NO LAYOUT. This proves the
   // guards are PRESENT. Whether the row actually composes without clipping at
   // 322px is an operator observation and is not claimed here.
+});
+
+// ─── relAge — VIGIL-04's one shared formatter (04-UI-SPEC § S5 rule A-1) ──────────────
+
+/**
+ * `WorkersTab.tsx:20`'s shipped `relAge`, lifted OUT OF ITS SOURCE and evaluated.
+ *
+ * Rule A-1 keeps the four existing relative-time implementations exactly where they are, so
+ * `src/shared/relAge.ts` is a COPY of one of them — and a copy is only worth anything if
+ * something notices when the two drift. Transcribing the body into this file would assert
+ * that the transcription matches itself. Reading the real source means the parity test below
+ * fails the day somebody edits `WorkersTab.tsx`, which is precisely when it should.
+ *
+ * The function is module-private in `WorkersTab.tsx` (not exported, and the component around
+ * it cannot be server-rendered), so there is no import that reaches it.
+ */
+function shippedRelAge() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/WorkersTab.tsx'), 'utf8');
+  const m = /function relAge\(ms: number\): string \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(m, 'WorkersTab.tsx no longer declares `function relAge(ms: number): string` — re-derive this anchor by content, not by line');
+  // ONLY the two type annotations in the signature are stripped; the BODY is untouched.
+  return new Function(`${m[0].replace('(ms: number): string', '(ms)')}; return relAge;`)();
+}
+
+test('relAge renders the five terse shapes, and names the unit alongside each', () => {
+  assert.deepEqual(relAge(0), { text: '0s', unit: 's' });
+  assert.deepEqual(relAge(47_000), { text: '47s', unit: 's' });
+  assert.deepEqual(relAge(4 * 60_000), { text: '4m', unit: 'm' });
+  assert.deepEqual(relAge(9 * 3_600_000), { text: '9h', unit: 'h' });
+  assert.deepEqual(relAge(3 * 86_400_000), { text: '3d', unit: 'd' });
+
+  // The unit is the whole reason this returns an object. 04-UI-SPEC rule A-2 defines stale as
+  // "the age stopped being minutes" — the caller reads the unit letter instead of comparing
+  // against a threshold constant nobody will remember, so the emphasis and the letter can
+  // never disagree on screen.
+  assert.equal(relAge(89 * 60_000).unit, 'm', 'the m/h boundary moved — rule A-2 ties the stale treatment to it');
+  assert.equal(relAge(91 * 60_000).unit, 'h', 'the m/h boundary moved — rule A-2 ties the stale treatment to it');
+});
+
+test('relAge is byte-compatible with the shipped WorkersTab formatter on every finite input', () => {
+  const shipped = shippedRelAge();
+  // The four cuts first (<1000ms, <90s, <90m, <48h), then ordinary values around them.
+  const inputs = [
+    -10_000, -1, 0, 999, 1000, 1499, 1500, 47_000, 89_000, 89_499, 89_500, 90_000,
+    4 * 60_000, 89 * 60_000, 90 * 60_000, 9 * 3_600_000, 47 * 3_600_000, 48 * 3_600_000,
+    3 * 86_400_000, 400 * 86_400_000
+  ];
+  for (const ms of inputs) {
+    assert.equal(relAge(ms).text, shipped(ms),
+      `relAge(${ms}) diverged from the shipped WorkersTab formatter — rule A-1 extracts that shape verbatim, so a boundary that differs is a regression nobody asked for`);
+  }
+});
+
+test('relAge corrects exactly ONE thing: the shipped formatter renders `NaNd` for a non-finite input', () => {
+  const shipped = shippedRelAge();
+
+  // The positive control (D-33/D-40): the defect being corrected is MEASURED here rather than
+  // asserted from memory. `NaN < 1000` is false, so the shipped guard falls through to
+  // Math.round(NaN / 1000) and the NaN reaches the last branch intact.
+  assert.equal(shipped(NaN), 'NaNd',
+    'WorkersTab no longer renders `NaNd` for NaN — the one divergence src/shared/relAge.ts deliberately carries has been fixed upstream, so re-read rule A-1 before keeping it');
+  assert.equal(shipped(Infinity), 'Infinityd',
+    'WorkersTab no longer renders `Infinityd` for Infinity — same as above');
+
+  // T-04-AGE-06: a malformed `updatedAt` reaches this as NaN through Date.parse, and a card
+  // reading `NaNd` is worse than one reading `0s` — it looks like a crash on the board.
+  assert.deepEqual(relAge(NaN), { text: '0s', unit: 's' },
+    'relAge renders NaN as something other than 0s — a card whose updatedAt does not parse now shows a broken age');
+  assert.deepEqual(relAge(Infinity), { text: '0s', unit: 's' });
+  assert.deepEqual(relAge(-Infinity), { text: '0s', unit: 's' });
+  assert.deepEqual(relAge(-1), { text: '0s', unit: 's' });
+  assert.doesNotThrow(() => relAge(undefined), 'relAge threw on a missing input instead of degrading to 0s');
 });
