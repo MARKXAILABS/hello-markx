@@ -40,8 +40,8 @@ revised: 2026-08-25
 | **Loader** | `test/load-ts.cjs` — TypeScript transpile, electron stub (`:46-64`), `@shared/` alias resolution (`:66-68`) |
 | **Quick run command** | `node --test test/<one>.test.cjs` |
 | **Full suite command** | `npm test` (→ `node --test test/*.test.cjs`) |
-| **Estimated runtime** | quick ~0.5–4 s · full **~35 s measured**, see the row below |
-| **Measured baseline @ `1faabe2`** | **805 tests / 798 pass / 0 fail / 7 skipped** — `duration_ms 34151.8`, `real 0m35.161s`, measured **quiet** in this worktree during the round-3 revision. The earlier `23.7 s` figure was never reproducible and is retired. |
+| **Estimated runtime** | quick ~0.5–4 s · full **24–42 s measured, plan against 42 s**, see the row below |
+| **Measured baseline** | **805 tests / 798 pass / 0 fail / 7 skipped** — identical across every measurement, at `ad3d2f7`, `1faabe2` and `939e16a`. **Wall time is not**: three quiet runs of the same suite in this worktree measured `duration_ms` **24 270.4** (`939e16a`, round-3 revision), **34 151.8** (`1faabe2`) and **42 377** (`1faabe2`, re-measure) — a **1.75x spread on machine load alone**. So there is no single baseline figure: **plan against the worst, 42.4 s**, and treat any single run as a sample. The earlier `23.7 s` point figure is retired for the same reason it was wrong — it was one sample presented as a constant. |
 | **Typecheck** | `npm run typecheck` (both projects) — 0 errors |
 | **Lint** | `npm run lint` → `eslint . --max-warnings 0` |
 | **CI gates** | `ci.yml:62` matrix `[ubuntu, windows, macos]`, no `continue-on-error` on the test job |
@@ -77,15 +77,18 @@ file.** It is 4 cases and under a second, and it is the tripwire that catches a 
   Full suite, not a subset — this phase edits `hooks.ts`, `delivery.ts`, `pty.ts` and `boot.ts`, the four
   widest-blast-radius files in the repo.
 - **Before `/gsd:verify-work`:** full suite green locally, plus the operator-owned checks below.
-- **Max feedback latency, measured rather than asserted (M6):** the full suite is **35 s** today
-  (`duration_ms 34151.8` / `real 0m35.161s`, quiet, `1faabe2`). This phase adds **eleven** test
-  files, two of which spawn child processes against a real `HookServer` with real timers. The
-  budget for the phase is therefore **90 s**, and plan 04-19 **re-measures at close and states the
-  delta**. A full suite that passes 90 s is a finding to report, not a number to round up — the
-  sampling rate above is what makes RED-first discipline usable, and it stops being usable when a
-  wave gate costs two minutes. The two integration files each carry their own sub-budget
-  (`test/gate05-bounded-wait.test.cjs` under 10 s, `test/gate03-roundtrip.test.cjs` under 10 s) as
-  acceptance criteria in their owning plans, so a runaway is attributable.
+- **Max feedback latency, measured rather than asserted (M6) — and it is a RANGE.** Three quiet runs
+  of the same 805-test suite measured **24.3 s / 34.2 s / 42.4 s**. **Plan against the worst: 42.4 s.**
+  This phase adds **eleven** test files, two of which spawn child processes against a real `HookServer`
+  with real timers. The budget for the phase stays **90 s**, so real headroom is **~48 s, not ~55 s**,
+  and plan 04-19 **re-measures at close and states the delta from 42.4 s**. A full suite that passes 90 s
+  is a finding to report, not a number to round up — the sampling rate above is what makes RED-first
+  discipline usable, and it stops being usable when a wave gate costs two minutes. The two integration
+  files each carry their own sub-budget as acceptance criteria in their owning plans, so a runaway is
+  attributable: `test/gate05-bounded-wait.test.cjs` under **15 s** (raised from 10 s in round 3 — its
+  cases 6 and 8 sit deliberately above the two 5 s thresholds no faster case can observe, and deleting
+  them to hit 10 s would delete the only cases that can see a fail-open) and
+  `test/gate03-roundtrip.test.cjs` under **10 s**.
 
 ### The pin map — which files redden `test/repo-claims.test.cjs`
 
@@ -122,7 +125,7 @@ task, not at the wave gate.
 | 04-04-T1 | 04-04 | 1 | VIGIL-04, VIGIL-02 | T-04-AGE-03 | `updatedAt?` and `released?` declared; a legacy `createdAt`-only card round-trips unchanged | unit | `npm run typecheck` | pending |
 | 04-04-T2 | 04-04 | 1 | VIGIL-04 | T-04-AGE-09, T-04-AGE-10 | The stamp is in `writeTasks` (`hive.ts:2112-2126`), diff-driven, so the five direct callers are covered and an unchanged card keeps its value | unit | `node --test test/hive-task-mutation.test.cjs` | pending |
 | 04-04-T3 | 04-04 | 1 | VIGIL-04 | T-04-AGE-01 | `add`/`patch`/`claim`/`done` **each** stamp ISO `updatedAt` ≥ `createdAt`; `writeTasks` driven directly with an unchanged-sibling assertion | unit | `node --test test/hive-task-mutation.test.cjs && npm test` | pending |
-| 04-05-T1 | 04-05 | 1 | GATE-02 | T-04-ENV-01, T-04-ENV-02 | Allowlist keeps `PATH`/`HOME` and drops `AWS_SECRET_ACCESS_KEY`/`GH_TOKEN`/`ANTHROPIC_API_KEY`; mixed-case `Path` survives (L-13); seven-item ceiling | unit | `node --test test/pty-env-allowlist.test.cjs` | pending |
+| 04-05-T1 | 04-05 | 1 | GATE-02 | T-04-ENV-01, T-04-ENV-02 | Allowlist keeps `PATH`/`HOME` and drops `AWS_SECRET_ACCESS_KEY`/`GH_TOKEN`/`ANTHROPIC_API_KEY`; mixed-case `Path` survives (L-13); `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` survive (corporate egress); nine-item ceiling | unit | `node --test test/pty-env-allowlist.test.cjs` | pending |
 | 04-05-T2 | 04-05 | 1 | GATE-02 | T-04-ENV-07, T-04-ENV-08 | The spawn env carries `HOME`/`USERPROFILE`, `TMP` and a planted `HIVE_CANARY_KEEP` **through the filter**, and no planted `CANARY_DROP` | integration (stubbed `nodePty.spawn`) | `node --test test/pty-spawn-env.test.cjs test/pty-env-allowlist.test.cjs && npm test` | pending |
 | 04-05-T3 | 04-05 | 1 | GATE-02 | T-04-ENV-03 | **Manual-Only.** One live non-Claude agent authenticates and completes a card; `env` shows the canaries both ways | checkpoint | `npm test && npm run typecheck && npm run lint` + operator | pending |
 | 04-06-T1 | 04-06 | 2 | GATE-03, T-04-NET | T-04-CMD-01, T-04-NET-01, T-04-CMD-18, T-04-CMD-28 | Four shapes judged on tokens with the right verdict `kind` (**all four `ask`**, including `rm` + **any** recursive flag); benign forms null; **scheme-less hosts judged**; an **emptied** allowlist **denies**, naming the key (D-05); `tool_input.command` accepted as a **string or an argv array** | unit | `node --test test/command-shape.test.cjs` | pending |
@@ -130,7 +133,7 @@ task, not at the wave gate.
 | 04-06-T3 | 04-06 | 2 | GATE-03 | T-04-CMD-01 | A deny reaches a real engine over the real socket, including `curl \| sh` which the path gate alone would allow — **on win32, zero skipped** | integration | `node --test test/gate03-roundtrip.test.cjs && node --test test/suite-integrity.test.cjs && npm test` | pending |
 | 04-07-T1 | 04-07 | 2 | VIGIL-03 | T-04-BLK-11, T-04-BLK-12 | `BLOCK_HINTS` exists once; the renderer's local declaration is **deleted**; the six engines it was never observed on are named beside it | unit | `npm run typecheck && node --test test/repo-claims.test.cjs` | pending |
 | 04-07-T2 | 04-07 | 2 | VIGIL-03 | T-04-BLK-08 | Detection works with **no renderer module loaded** (`require.cache` scan); positive control; A8 bound; recovery via the window | unit | `node --test test/block-detect.test.cjs && node --test test/suite-integrity.test.cjs && npm test` | pending |
-| 04-08-T1 | 04-08 | 2 | VIGIL-02 | T-04-CARD-01, T-04-CARD-02 | Card released in the teardown tick, naming the dropping agent, **synchronously**, through `deps.hive` | unit | `npm run typecheck` | pending |
+| 04-08-T1 | 04-08 | 2 | VIGIL-02 | T-04-CARD-01, T-04-CARD-02, T-04-CARD-11 | Card released in the teardown tick, naming the dropping agent, **synchronously**, through `deps.hive` — **with `AgentTeardownDeps.hive`'s TYPE widened in the same file** to name `patchTask` and the `tasks()` reader the runtime object already supplies, asserted by symbol boundary, `boot.ts`/`deps.ts` diffs still empty | unit | `npm run typecheck` | pending |
 | 04-08-T2 | 04-08 | 2 | VIGIL-02 | T-04-CARD-03, T-04-CARD-07 | Follow-up patch carries `worktreeHasUnintegratedWork`'s branch/detail; `finalizeAgentWorktree` widened to take `deps`, its one caller in the same file | unit | `node --test test/agent-lifecycle.test.cjs` | pending |
 | 04-08-T3 | 04-08 | 2 | VIGIL-02 | T-04-CARD-03, T-04-CARD-05 | A git failure loses the branch and never the release; `released.branch === undefined` strictly; no-card writes nothing | unit | `node --test test/agent-lifecycle.test.cjs && npm test` | pending |
 | 04-09-T1 | 04-09 | 2 | RECORD-05 | T-04-SNAP-01..04, T-04-SNAP-09 | Restore 1 of 3; other 2 byte-identical; operator `status --porcelain` + `rev-parse HEAD` + branches unchanged; gitignored dir 0 entries; nested repo survives; `realpathSync.native` keying | integration | `node --test test/restore-points.test.cjs` | pending |
@@ -142,7 +145,7 @@ task, not at the wave gate.
 | 04-11-T1 | 04-11 | 3 | VIGIL-01 | T-04-ABS-01, T-04-ABS-03, T-04-ABS-07 | Silence past threshold alarms **once** (1, then 0 across 5 ticks, then 1); fires when the **god** is the dead one, addressed to the operator, never `to:'god'`; payload names transition-time `doing` cards | unit | `node --test test/absence-watchdog.test.cjs` | pending |
 | 04-11-T2 | 04-11 | 3 | VIGIL-01 | T-04-ABS-02, T-04-ABS-05, T-04-ABS-10 | The timer is torn down by `floor.shutdown()` and pinned by name; the push title is self-sufficient; `floor/watchdog.ts` passes the `:1196` module-scope sweep; **`QuietSnapshot` gets its two NAMED accessors -- `Floor.watchdog` and the `floor:quiet` IPC channel -- each asserted on a really-booted floor** | unit + repo-fact | `node --test test/boot-floor.test.cjs test/repo-claims.test.cjs && npm run typecheck` | pending |
 | 04-11-T3 | 04-11 | 3 | VIGIL-01 | — | Whole-suite blast radius, with `index.ts`/`config.ts`/`sw.js` untouched | full-suite | `npm test && npm run typecheck && npm run lint` | pending |
-| 04-12-T1 | 04-12 | 3 | VIGIL-04 | T-04-AGE-06 | `relAge` matches `WorkersTab.tsx:20` at all five boundaries; negative and NaN degrade to `0s`; the four existing copies untouched | unit | `node --test test/renderer-components.test.cjs && npm run typecheck` | pending |
+| 04-12-T1 | 04-12 | 3 | VIGIL-04 | T-04-AGE-06 | `relAge` matches `WorkersTab.tsx:20` at all five boundaries; negative and NaN degrade to `0s` — **NaN is the ONE deliberate divergence from the copied source, which returns `'NaNd'`** (`ms < 1000` is false for NaN); the four existing copies untouched | unit | `node --test test/renderer-components.test.cjs && npm run typecheck` | pending |
 | 04-12-T2 | 04-12 | 3 | VIGIL-04, VIGIL-02 | T-04-AGE-07, T-04-CARD-06, T-04-AGE-08 | Age renders on cards with **four channels** at 9 h and none at 4 min; `done` takes no emphasis; `DROPPED BY` in the vacated slot; **no branch placeholder**; geometry unchanged | unit + repo-fact | `node --test test/renderer-components.test.cjs test/repo-claims.test.cjs` | pending |
 | 04-12-T3 | 04-12 | 3 | VIGIL-04 | T-04-AGE-05 | Age renders on unanswered asks (4 min); the four-channel distinction asserted as ONE test for both surfaces | unit | `node --test test/renderer-components.test.cjs && npm test` | pending |
 | 04-13-T1 | 04-13 | 4 | GATE-04 | T-04-SBX-03 | The codex preset yields `-s workspace-write --add-dir <agentDir>` on, and the bypass flag byte-identical off | unit | `npm run typecheck` | pending |
@@ -156,19 +159,19 @@ task, not at the wave gate.
 | 04-15-T2 | 04-15 | 4 | GATE-05 | T-04-ASK-03, T-04-ASK-28, T-04-ASK-29 | The ask reply is simultaneously a valid deny and a `hive_ask`; `deadlineMs === expiresAt`; **a cross-agent poll is denied with a positive control**; the engine PreToolUse timeout is raised so the shim is not killed before it answers; `control.ts` untouched | unit | `node --test test/control.test.cjs && npm test` | pending |
 | 04-15-T3 | 04-15 | 4 | RECORD-01, GATE-05 | T-04-LOG-09, T-04-ASK-30, T-04-ASK-31 | The writer fires from a real `PreToolUse` through the real `HookServer` with `target` non-null and a **token-derived** `agent_id`; an expired ask's row reads `deny` after a sweep; **the three-way contrast: a real `git push origin +main` yields `hive_ask`; a host fetch under an EMPTIED allowlist yields a bare deny with no `hive_ask`; `ls -la` yields neither** | integration | `node --test test/record-persist.test.cjs test/control.test.cjs && node --test test/suite-integrity.test.cjs && npm test` | pending |
 | 04-16-T1 | 04-16 | 5 | GATE-05 | T-04-ASK-09, T-04-ASK-11, T-04-ASK-32, T-04-ASK-40 | The poll loop lands in **`HOOK_SHIM` only**; a fresh short connection per poll (never a held one); **the boot 5 s timer's handle is captured and `clearTimeout`d on entering the loop**; the non-ask budget unchanged; the first-connection fail-open verbatim; a poll-scoped error handler that denies; grok and agy left **byte-identical**, so their existing decoders read the ask reply as the deny it also is; two `LIVE-UNVERIFIED` markers | unit | `npm run typecheck && npm test` | pending |
-| 04-16-T2 | 04-16 | 5 | GATE-05 | T-04-ASK-10, T-04-ASK-12, T-04-ASK-32, T-04-ASK-33, T-04-ASK-40 | Unanswered denies · explicit yes allows · **pre-ask** dead socket allows (empty stdout) · **mid-ask** dead socket denies (non-empty) · cross-agent poll rejected · **a TTL deliberately longer than 5 s still denies** (the only case that can observe the boot timer) · **the unchanged `GROK_HOOK_SHIM` denies on an ask reply** — all on the real shim's real stdout, **on win32, zero skipped** | integration | `node --test test/gate05-bounded-wait.test.cjs && node --test test/suite-integrity.test.cjs && npm test` | pending |
+| 04-16-T2 | 04-16 | 5 | GATE-05 | T-04-ASK-10, T-04-ASK-12, T-04-ASK-32, T-04-ASK-33, T-04-ASK-40, T-04-ASK-47 | **Eight** cases, `pass 8 / skipped 0`, under 15 s: unanswered denies · explicit yes allows · **pre-ask** dead socket allows (empty stdout) · **mid-ask** dead socket denies (non-empty) · cross-agent poll rejected · **a TTL deliberately longer than 5 s still denies** (the only case that can observe the boot timer) · **a poll that opens and never replies denies on its own per-poll 5 s timer**, elapsed > 4 500 ms (the only case that can observe the timeout path) · **the unchanged `GROK_HOOK_SHIM` denies on an ask reply** — all on the real shim's real stdout, **on win32, zero skipped** | integration | `node --test test/gate05-bounded-wait.test.cjs && node --test test/suite-integrity.test.cjs && npm test` | pending |
 | 04-16-T3 | 04-16 | 5 | GATE-05 | T-04-CMD-22 | All four ledger pins reconciled from a live grep in the same commit as the two markers | repo-fact | `node --test test/repo-claims.test.cjs && npm test` | pending |
 | 04-17-T1 | 04-17 | 5 | GATE-05, VIGIL-01 | T-04-ASK-15, T-04-ASK-17, T-04-ASK-34, T-04-ABS-08 | A tool ask appears on `GET /phone/api/asks` with `kind:'tool'`, a regex-valid id and a **computed** `expiresInMs`; `POST /phone/api/answer` resolves it; **a malformed `answer` is a 400 and leaves the ask pending**; `floorQuiet` is a sibling and `asks.length` is unchanged; the auth block has **no diff** | unit | `node --test test/webhook-endpoints.test.cjs` | pending |
 | 04-17-T2 | 04-17 | 5 | GATE-05, VIGIL-01 | T-04-ASK-16, T-04-ASK-35, T-04-ASK-36, T-04-ASK-37 | The countdown is a re-derived duration with **positive** greps on `receivedAt`/`expiresInMs`/the four literals; the command is **escaped**; the quiet strip is non-interactive; CSP hashes regenerated in the same commit | unit | `node --test test/build-assets.test.cjs && npm test` | pending |
 | 04-17-T3 | 04-17 | 5 | GATE-05, VIGIL-01 | T-04-ASK-18, T-04-ASK-19 | `sw.js` changes by exactly one line; the push body carries no command, path or `?`, with a positive control; the title is not generic | unit | `node --test test/webhook-endpoints.test.cjs && npm test` | pending |
 | **04-20-T1** | 04-20 | 5 | GATE-03, GATE-05, RECORD-01 | T-04-CMD-26, T-04-LOG-11, T-04-CMD-27 | The four seams are supplied at the **sole production** `new HookServer(...)`; `recordToolCall` is a closure (boot ordering); the toast half honours `readConfig().notifications`; the four declaring files are untouched | unit | `npm run typecheck && node --test test/hive-durability.test.cjs` | pending |
 | **04-20-T2** | 04-20 | 5 | GATE-03, GATE-05, RECORD-01 | T-04-CMD-26, T-04-NET-02, T-04-ASK-39, T-04-ASK-41 | On a really-booted floor: the host verdict **changes with the config**; the three-way ask/deny/neither contrast; **a denied host now yields `hive_ask` where in waves 2-4 it yielded a bare deny -- the post-wiring re-check of the pre-wave-5 behaviour**; **the production entry's `expiresAt - openedAt === ASK_TTL_MS`, read from `hiveProvisioning.ts`**; a real row in `floor.persist` with a non-null target and a token-derived id; the notification gate both ways. Every case seen RED first | integration | `node --test test/boot-floor.test.cjs && node --test test/suite-integrity.test.cjs && npm test && npm run lint` | pending |
-| 04-18-T1 | 04-18 | 6 | GATE-05 | T-04-ASK-21 | `(askId, approved)` reaches `answerApproval` through the **existing** `control:approvalRequest` channel; no new channel; `writePty` count unchanged | unit | `node --test test/renderer-components.test.cjs && npm run typecheck` | pending |
+| 04-18-T1 | 04-18 | 6 | GATE-05 | T-04-ASK-21 | `(askId, approved)` reaches `answerApproval`. **Two directions, each with a number:** the main→renderer EVENT channel `control:approvalRequest` is reused unchanged (`hooks.ts` 1, preload 2), and exactly ONE new renderer→main INVOKE channel `control:answerApproval` is added (`index.ts` 1, preload 1, `ipcMain.handle('control:` 8 → 9); `useHive.ts` names neither literal (0, unchanged); `writePty` count unchanged | unit | `node --test test/renderer-components.test.cjs && npm run typecheck` | pending |
 | **04-18-T2** | 04-18 | 6 | GATE-05, VIGIL-03 | T-04-ASK-22, T-04-ASK-23, T-04-ASK-38, T-04-BLK-10 | `formatRemaining`'s five bands unit-tested; the ink-ramp escalation and both command-rendering directions asserted in static markup; the post-resolution **shape** asserted from props; the `⚠` aria swap with `:717`'s verbatim pin moved in the same commit | unit + repo-fact | `node --test test/renderer-components.test.cjs test/repo-claims.test.cjs` | pending |
-| 04-18-T3 | 04-18 | 6 | VIGIL-01 | T-04-ABS-09, T-04-ABS-10 | The `QUIET` chip copies the `PUBLIC` geometry and **reads the `floor:quiet` channel plan 04-11 declared**, through a store field; `TUNNEL_CHIP_W1`/`W2` **re-measured with both chips**, base vs head, at three widths, never by arithmetic. The chip's **click** is task 4's -- `renderToStaticMarkup` fires no events | unit + probe | `node --test test/renderer-components.test.cjs && npm test` | pending |
+| 04-18-T3 | 04-18 | 6 | VIGIL-01 | T-04-ABS-09, T-04-ABS-10 | The `QUIET` chip copies the `PUBLIC` geometry and **reads the `floor:quiet` channel plan 04-11 declared, across all three hops it must cross** — `deps.send('floor:quiet'` 1 in `boot.ts`, the literal 2 in the preload's new `onFloorQuiet`, `onFloorQuiet` 1 and the literal **0** in `useHive.ts` (contextIsolation is on) — into a store field; `TUNNEL_CHIP_W1`/`W2` **re-measured with both chips**, base vs head, at three widths, never by arithmetic. The chip's **click** is task 4's -- `renderToStaticMarkup` fires no events | unit + probe | `node --test test/renderer-components.test.cjs && npm test` | pending |
 | **04-18-T4** | 04-18 | 6 | GATE-05, VIGIL-01 | T-04-ASK-25, T-04-ASK-27, T-04-ASK-38 | **Manual-Only.** A real ask answered at three widths in both themes; the four countdown states live; a wrapped command; **A9 focus retention demonstrated by tabbing after a click**; an expiry auto-denying; the chip's three degradation steps | checkpoint | `node --test test/renderer-components.test.cjs && npm test` + operator | pending |
 | 04-19-T1 | 04-19 | 7 | all eleven | T-04-DOC-01..03 | SECURITY.md names all four fail-opens with dispositions and owners and carries the honest claim verbatim; TELEMETRY.md states the ring is unchanged and `synchronous = NORMAL` | doc + full-suite | `npm test && npm run typecheck && npm run lint && npm run build` | pending |
-| 04-19-T2 | 04-19 | 7 | all eleven | T-04-DOC-04..08 | The ledger matches a live grep; four both-directions closing clauses; **all 59 map rows filled**; REQUIREMENTS.md and ROADMAP.md updated; the three frontmatter flags flipped or explained | repo-fact | `node --test test/repo-claims.test.cjs && npm test` | pending |
+| 04-19-T2 | 04-19 | 7 | all eleven | T-04-DOC-04..08 | The ledger matches a live grep; four both-directions closing clauses; **all 59 map rows moved off the draft `Status`** (their ids/plans/waves are already filled, no placeholder coordinates); REQUIREMENTS.md and ROADMAP.md updated; the three frontmatter flags **flipped**, no explained-exemption | repo-fact | `node --test test/repo-claims.test.cjs && npm test` | pending |
 | 04-19-T3 | 04-19 | 7 | all eleven | T-04-DOC-03 | **Manual-Only.** The physical-device attempt with its honest outcome; the kill-and-restart crash test; the eleven checkbox rulings | checkpoint | `npm test && npm run typecheck && npm run lint && npm run build` + operator | pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
@@ -203,6 +206,7 @@ six were added by red-team round 1, each after a plan was found to have written 
 | every grep gate | **`grep -c` counts lines, not occurrences.** `resources/phone/index.html` holds 21 `taskId` occurrences on 15 lines and `sw.js` holds 10 on 5. A `grep -c … ≥ 21` gate cannot pass on correct code. Use `grep -o … \| wc -l`. The repo documents this trap at `test/repo-claims.test.cjs:1325-1329`. |
 | every absence gate | **An absence grep that measures 0 today passes against code that was never written.** Pair every negative with a positive lower bound over the same surface. |
 | **every criterion, R3 rule 1** | **No acceptance criterion may use a bare line-number window.** `sed -n 'A,Bp' file \| grep ...` is forbidden anywhere in an `<acceptance_criteria>` block. Round 2 found five such criteria sitting downstream of edits that move them: two provably wrong by arithmetic, one that turns into a **silent vacuous pass** (a window that has drifted onto unrelated code and greps `0` there), and one already off by one at HEAD before any wave ran. Use a **symbol boundary** (`awk '/hookServer = new HookServer\(/,/^  \);$/'`, `awk '/^  private mutateTasks\(/,/^  }$/'`), or a whole-file `grep -o ... \| wc -l`, or an explicit *"re-measure this range at wave start and state the measured line in the SUMMARY"* instruction. A window that silently passes is worse than one that fails. |
+| **every criterion, R3 rule 1b** | **A symbol boundary is not a fix until it has been RUN.** Round 3 found two `awk` ranges whose start pattern matched nothing — `awk '/^const AGY_HOOK_SHIM = /,…'` against a source that declares `export const` — so the extraction was **0 lines**, both sides of a sha1 comparison hashed the empty string, and the criterion passed for any edit to the guarded code **including deleting it**. That is the same silent-vacuous-pass defect rule 1 exists to end, moved one level down. So: **every `awk` range in an `<acceptance_criteria>` block must be executed against live source before the plan is committed, and must return a non-zero line count.** State the measured count beside the criterion where the number is load-bearing. All **19** ranges across the 20 plans were executed at `939e16a`; the two broken ones are fixed and the sweep is one short shell loop and must be re-run whenever a range is added or edited. A range that finds nothing is worse than one that fails. |
 | **every seam, R3 rule 2** | **A declared seam is not planned until a named accessor exists and a consumer criterion reads it.** "Wired to a no-op or a simple store in this plan; plan NN connects it" is the defect that produced round 1's BL-1 and round 2's BL7 and BL9. For every interface member, thunk or constructor option one plan declares and another consumes: the **producing** plan names the concrete accessor (an export, a `Floor` member, an IPC channel -- say which) and the **consuming** plan carries a criterion that reads it *through that accessor*, with its own `git diff` boundary widened to permit the read. **If a consumer's diff criterion forbids the edit its task requires, that is the bug.** |
 | **every "prove X", R3 rule 3** | **Every criterion must state the degenerate implementation it excludes.** Before writing one, ask: *what is the simplest wrong implementation that still passes this?* If you can name one, the criterion is not finished. Round 2 found: "codex-shaped" defined as *whatever satisfies the condition under test*; a TTL inequality that holds for **every** value because the TTL is derived from the bound (`SEC = 5` gives `TTL = -25000`, and `-25000 <= 5000` passes); and an OpenCode grep satisfied by a `// we now send tool_input` comment. Every bound needs its opposite bound; every text gate needs a comment filter or a structural parse. |
 
@@ -315,10 +319,16 @@ saying "six / two"; the table has always had seven rows and three were added. Co
 ## Validation Sign-Off
 
 - [ ] All 59 tasks have an `<automated>` verify or a named Wave 0 dependency, and a row in the map above
+- [ ] All **59** map rows carry an outcome glyph in `Status` — one of ✅ / ❌ / ⚠️ — and none is still the
+      draft word. Measured before the phase runs: 59 rows, all 59 in the draft state, and **0** rows with a
+      placeholder coordinate. `⬜` occurs **only in the legend line**, never in a cell, so "not ⬜" is not a
+      check; plan 04-19 asserts two ROW-SCOPED counts instead (both anchored on `^| 04-NN-TN`, because
+      every prose mention of a token in this file would otherwise satisfy a whole-file gate — the
+      self-invalidating-prose trap this section's own rules name)
 - [ ] Sampling continuity: no 3 consecutive tasks without automated verify
 - [ ] Wave 0 covers all ❌ references above
 - [ ] No watch-mode flags in any command
-- [ ] Feedback latency re-measured at close and inside the 90 s phase budget, with the delta from the 35 s baseline stated
+- [ ] Feedback latency re-measured at close and inside the 90 s phase budget, with the delta from the **42.4 s worst-case** baseline stated (range 24.3–42.4 s over three quiet runs — a single figure is a sample, not a baseline)
 - [ ] **Skipped count is unchanged at 7** — the delta is stated in the SUMMARY and it is zero
 - [ ] `node --test test/suite-integrity.test.cjs` green, with `DECLARED_SKIPS` and `FROZEN` untouched
 - [ ] `wave_0_complete: true` set (plan 04-19 task 2, against plan 04-01's two deliverables)
@@ -337,13 +347,18 @@ no task count, so the map's arithmetic is unchanged and deliberately unchurned. 
 flags stay at their draft values until plan 04-19 task 2 flips them, and only against evidence.
 
 **Round-3 changes to this file, itemized so the next reviewer can check them cheaply:**
-1. § Test Infrastructure — the runtime row and the baseline row now carry a figure measured in this
-   session (`duration_ms 34151.8`, `real 0m35.161s`, 805/798/0/7, quiet, `1faabe2`). The `23.7 s` /
-   `24 s` figures were never reproducible and are retired (M6).
-2. § Sampling Rate — the latency budget is 90 s for the phase, with plan 04-19 re-measuring at close.
-3. § Anti-Vacuous-Pass Rules — four new rows: the three recurring **shapes** round 2 named (bare
-   line-number windows, unowned seams, criteria satisfied by their own degenerate implementation) plus
-   the poll-only-on-a-bounded-engine rule that closes the grok/agy fail-open.
+1. § Test Infrastructure — the runtime and baseline rows now carry a **range, not a point**: 805/798/0/7
+   is exact and reproduced at `ad3d2f7`, `1faabe2` and `939e16a`, but wall time measured
+   **24 270 / 34 152 / 42 377 ms** across three quiet runs of the same suite. Plan against **42.4 s**.
+   The `23.7 s` and the single `35 s` figures are both retired — each was one sample presented as a
+   constant (M6, and round 3's optimistic-baseline LOW).
+2. § Sampling Rate — the 90 s phase budget stands, but headroom against the worst-case baseline is
+   **~48 s, not ~55 s**, and `gate05-bounded-wait`'s sub-budget rises 10 s → **15 s** to keep its two
+   above-5 s cases (the boot timer and the per-poll timeout) rather than deleting them to hit a number.
+3. § Anti-Vacuous-Pass Rules — **five** new rows: the three recurring **shapes** round 2 named (bare
+   line-number windows, unowned seams, criteria satisfied by their own degenerate implementation), the
+   poll-only-on-a-bounded-engine rule that closes the grok/agy fail-open, and **R3 rule 1b** — an `awk`
+   symbol boundary must be EXECUTED and return non-zero lines before it counts as a fix.
 4. § Manual-Only Verifications — the header now says **seven rows, three added**, which is what the
    table has always held (M1).
 5. § The eleven RED-first files — the heading and the surrounding prose now say eleven, which is what
@@ -351,3 +366,21 @@ flags stay at their draft values until plan 04-19 task 2 flips them, and only ag
 6. § Validation Sign-Off — the `nyquist_compliant` explained-exemption is deleted (M7).
 7. Ten Per-Task rows had their `Secure Behavior` cell rewritten to match a round-3 plan change. **No
    row was added, deleted or renumbered** — the count is still 59.
+
+**Round-3 REVISION changes (the pass after round 3's review), itemized the same way:**
+8. § Test Infrastructure and § Sampling Rate — items 1 and 2 above, replacing the point baseline.
+9. § Anti-Vacuous-Pass Rules — R3 rule 1b added (item 3 above). All 19 `awk` ranges in the 20 plans were
+   executed against live source at `939e16a`; **two returned zero lines and are fixed** (04-16's two
+   shim anchors, `^const` → `^export const`). The other 17 return 47 / 13 / 62 / 15 / 9 / 15 / 19 / 69 /
+   11 / 25 / 7 / 35 / 34 / 4 / 181 / 52 / 6 lines respectively.
+10. § Validation Sign-Off — a row for the 59 `Status` cells, because the map's ids, plans and waves are
+    **already filled, with no placeholder coordinates**, and only `Status` is outstanding; plan 04-19's
+    read_first and action said 29 rows plus a marker row with placeholder coordinates, which is false
+    against this file in four separate ways and would have left 29 of 59 rows untouched at close
+    (round 3, H-4). Both replacement counts are **row-scoped** (`^| 04-NN-TN…`), because this log
+    discusses the tokens in prose and a whole-file gate would read its own commentary.
+11. **Seven** Per-Task rows had their `Secure Behavior` cell rewritten for this revision's plan changes:
+    04-05-T1 (proxy names, nine-item ceiling), 04-08-T1 (the `AgentTeardownDeps` type widening),
+    04-12-T1 (the NaN divergence), 04-16-T2 (eight cases, 15 s), 04-18-T1 (both channel directions with
+    numbers), 04-18-T3 (the preload hop), 04-19-T2 (`pending` → outcome, flags flipped). **No row was
+    added, deleted or renumbered** — the count is still 59, in exact bijection with 59 tasks.
