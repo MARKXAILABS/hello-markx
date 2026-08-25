@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore, type ToolKind, type StationKind } from '@/store/store';
+import { matchBlockHint } from '@shared/blockHints';
 
 // ANSI escape sequence stripper — Claude colors its tool tags with these.
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -23,18 +24,18 @@ const TOOLKIND_BY_NAME: Record<string, ToolKind> = {
   TodoWrite: 'TodoWrite'
 };
 
-// "Blocked" = Claude is genuinely waiting on the user. Match only real prompts
-// (the approval menu / a yes-no question). Do NOT match the bare word
-// "permission": the TUI footer always shows "bypass permissions on (shift+tab
-// to cycle)", which would otherwise flag a busy agent as blocked on every
-// repaint — making it flip-flop between working and blocked.
-const BLOCK_HINTS = [
-  /Do you want to proceed/i,
-  /❯\s*\d+\.\s*Yes/i,            // numbered approval menu, cursor on "1. Yes"
-  /Yes, and don't ask again/i,
-  /\(y\/n\)/i,
-  /\[y\/n\]/i,
-];
+// "Blocked" = the agent is genuinely waiting on a human. The list and the
+// matcher live in `@shared/blockHints` — this hook is a READER of them, not
+// their owner. It used to declare its own copy, which made it the only reader
+// there was, and this hook sees only the MOUNTED terminal (`terminalPool.ts:59`
+// has a single `onData` slot "set by whichever view is mounted"). An agent
+// blocked in a background tab was therefore never marked blocked, and on a
+// headless floor (`src/main/floor/headless.ts`) this hook does not exist at all
+// (D-28/D-29). Main now evaluates the same list from its own tail ring.
+//
+// One list, two readers, and the second copy is DELETED rather than kept in
+// sync: two copies of a regex list drift, and the copy that drifts is the one
+// nobody is looking at (T-04-BLK-12).
 
 // The /context output prints "235.3k/1m tokens (24%)" — sniff the DENOMINATOR
 // to learn the session's true context-window size. This is the only reliable
@@ -155,7 +156,12 @@ export function usePtyParser(agentId: string) {
 
     // Not running → a genuine approval/question prompt is on screen.
     const recent = text.slice(-400);
-    if (BLOCK_HINTS.some(re => re.test(recent))) {
+    // `!== null` and not the line itself: this hook's own output shape is
+    // unchanged by the move, and the matched prompt line belongs to the row main
+    // owns (04-UI-SPEC rule V-2), not to the fixed `blockReason` written below.
+    // The 400-char slice is this hook's per-chunk window and stays its own;
+    // `matchBlockHint`'s 4 KiB bound is the wider ceiling behind it.
+    if (matchBlockHint(recent) !== null) {
       // A prompt on screen is a full stop for whoever is sitting at it, so BOTH
       // branches are 'blocked'. A sub-agent used to be downgraded to 'waiting',
       // which is also the status for "parked with nothing to do" — so a worker

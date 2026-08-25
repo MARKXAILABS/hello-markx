@@ -849,6 +849,11 @@ export class HiveManager {
       // reflect.ts copies EVERY agent's memory.md in here on every condense
       // attempt, successful or not.
       'backups/',
+      // RECORD-05's shadow stores (restorePoints.ts): a bare git repo per
+      // operator project, holding compressed copies of that project's source.
+      // Named `restore` and not `backups` because the line above already owns
+      // that name and prunes it on reflect.ts's schedule (D-21).
+      'restore/',
       // atomicWriteJson's staging files. Transient, but a crash mid-write leaves
       // one behind and `git add -A` would commit the corpse.
       '*.tmp-*'
@@ -2678,11 +2683,57 @@ export class HiveManager {
    *  on every append (a dozen writers hit this path). -1 = not seeded yet. */
   private logBytes = -1;
 
+  /**
+   * RECORD-02's mirror sink — a PersistStore, arriving INJECTED (floor/boot.ts
+   * wires the real one after `persist.open()`).
+   *
+   * Structurally typed rather than imported: `hive.ts` must stay loadable, and
+   * testable, without a database, and a `./db` import here would make every
+   * HiveManager in every test drag SQLite in behind it. null before onboarding,
+   * in headless boots, and in every test that does not care.
+   */
+  private eventStore: { appendEvent(kind: string, json: string, ts?: number): void } | null = null;
+
+  /** Point the event mirror at a store, or at nothing. Same shape as
+   *  setOtelEndpoint: a setter, not a constructor parameter, because `persist`
+   *  is built AFTER `hive` at the composition root — the dependency runs the
+   *  other way at construction time. */
+  setEventStore(store: { appendEvent(kind: string, json: string, ts?: number): void } | null): void {
+    this.eventStore = store;
+  }
+
+  /**
+   * Append one event to the hive's durable log.
+   *
+   * TWO sinks, deliberately (RECORD-02, RESEARCH § Pattern 5 — *mirror, do not
+   * move*):
+   *
+   * 1. `log.jsonl`, unchanged, including its one-generation 8 MiB rotate. It is
+   *    durable before this call could return, it is what `logTail` reads, and
+   *    keeping it makes the mirror additive and therefore reversible — a wrong
+   *    schema guess must not also have destroyed the event log.
+   * 2. A best-effort row in the `events` table, which is what makes a day that
+   *    crossed 16 MiB still readable: the rotate above has by then overwritten
+   *    the morning, and a range scan over `events` has not.
+   *
+   * The mirror is swallowed and runs AFTER the JSONL write, so a store that is
+   * closed, locked or absent costs the mirror and never the log. The event log's
+   * crash-safety must not become contingent on the database being open.
+   *
+   * 🔒 PII: the mirror carries exactly what this method already writes to disk
+   * today, verbatim and no wider. It is not a route around the rule on
+   * `appendCostLedger` below — nothing may start passing a raw OTel record to
+   * `appendLog` on the grounds that it now also lands in SQLite.
+   */
   appendLog(event: Record<string, unknown>): void {
     const root = this.root();
     if (!root) return;
     const path = join(root, 'log.jsonl');
-    const line = JSON.stringify({ ts: Date.now(), ...event }) + '\n';
+    // Typed as the record it is, not narrowed to `{ ts: number }`: an event may
+    // carry its own `ts` and `kind`, and the mirror below reads both back off it.
+    const row: Record<string, unknown> = { ts: Date.now(), ...event };
+    const payload = JSON.stringify(row);
+    const line = payload + '\n';
     try {
       if (this.logBytes < 0) {
         try { this.logBytes = statSync(path).size; } catch { this.logBytes = 0; }
@@ -2702,6 +2753,13 @@ export class HiveManager {
       appendFileSync(path, line, 'utf8');
       this.logBytes += Buffer.byteLength(line);
     } catch { /* noop */ }
+    // Outside the try above, and last: the JSONL is already durable by here, so
+    // nothing the store does can reach it. Its own catch, because a SQLite
+    // failure is a mirror outage and not an event-log outage.
+    try {
+      const ts = typeof row.ts === 'number' ? row.ts : Date.now();
+      this.eventStore?.appendEvent(typeof row.kind === 'string' ? row.kind : 'event', payload, ts);
+    } catch { /* the mirror is best-effort by design — see the doc block above */ }
   }
 
   /**

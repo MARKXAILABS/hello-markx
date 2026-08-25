@@ -273,6 +273,35 @@ test('every subsystem bootFloor started appears in the shutdown list (#34 covera
     'breakerBeatTimer is armed by armAlwaysOnBeats but never cleared — same hang class');
 });
 
+test('RECORD-05: restorePointTimer is declared in the boot module and cleared by SHUTDOWN_STEPS', async (t) => {
+  const env = floorEnv(t);
+  const { deps } = fakeDeps(env);
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  const { SHUTDOWN_STEPS } = loadTs('src/main/floor/boot.ts');
+  const shutdownSource = SHUTDOWN_STEPS.map((s) => s.stop.toString()).join('\n');
+  const bootSource = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'main', 'floor', 'boot.ts'), 'utf8'
+  );
+
+  // Both directions, because either half alone is a false pass. The snapshot
+  // timer is a module-level `let`, NOT a Floor field, so the offender loop in
+  // the case above walks Object.keys(floor) and cannot see it: without this
+  // named pin its teardown has no automated assertion at all and the "it is in
+  // SHUTDOWN_STEPS" criterion reduces to "someone read the file".
+  assert.match(bootSource, /^let restorePointTimer: ReturnType<typeof setInterval> \| null = null;$/m,
+    'restorePointTimer is not declared in boot.ts\'s module `let` block — RECORD-05\'s snapshot '
+    + 'beat has nowhere to live that shutdown can reach');
+  assert.match(shutdownSource, /clearInterval\(restorePointTimer\)/,
+    'restorePointTimer is armed by bootFloor but never cleared. boot.ts documents shutdown as '
+    + '"the exact inverse of construction. #34 — ONE list": a timer outside that list is a leak, '
+    + 'and an un-unref\'d one keeps node --test alive forever after shutdown');
+  assert.match(shutdownSource, /restorePoints\?\.stop\(\)/,
+    'the interval is cleared but RestorePoints\' own trailing debounce timers are not — a snapshot '
+    + 'scheduled seconds before shutdown still fires against a store the floor has finished with');
+});
+
 test('no outbound tunnel: the boot sequence never starts Slack/webhook servers', async (t) => {
   const env = floorEnv(t);
   const { deps } = fakeDeps(env);
