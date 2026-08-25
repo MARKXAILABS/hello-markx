@@ -93,7 +93,18 @@ if (cmd === 'add') {
   if (f.desc) card.description = f.desc;
   if (f.assignee) card.assignee = f.assignee;
   if (num(f['budget-tokens']) !== undefined) card.budgetTokens = num(f['budget-tokens']);
-  mutate(function (tasks) { return { tasks: tasks.concat([card]), card: card }; });
+  mutate(function (tasks) {
+    // VIGIL-04 — the card's own clock, stamped INSIDE the compare-and-swap so a
+    // lost attempt never leaves a timestamp for a mutation that did not happen.
+    // Both clocks come off the same read: a brand-new card must read 0s old, not
+    // a millisecond of jitter. The main-side twin of this stamp is in
+    // HiveManager.writeTasks (src/main/hive.ts) — the kanban, webhooks, Slack and
+    // the voice layer write through there, not through this CLI.
+    const now = new Date().toISOString();
+    card.createdAt = now;
+    card.updatedAt = now;
+    return { tasks: tasks.concat([card]), card: card };
+  });
   return ok({ task: card });
 }
 
@@ -128,6 +139,12 @@ if (cmd === 'patch' || cmd === 'claim' || cmd === 'done') {
       merged.humanQA = (Array.isArray(tasks[i].humanQA) ? tasks[i].humanQA : []).concat([{ q: patch.__q, askedAt: new Date().toISOString(), askedBy: process.env.AGENT_ID || 'god' }]);
       merged.status = 'blocked';
     }
+    // VIGIL-04 — same stamp as the add branch above, inside the same CAS. One site
+    // covers patch, claim and done because all three share this merged-card path;
+    // four separate test cases (test/hive-task-mutation.test.cjs) prove each verb
+    // rather than three copies of this line proving nothing. Main-side twin:
+    // HiveManager.writeTasks in src/main/hive.ts.
+    merged.updatedAt = new Date().toISOString();
     const next = tasks.slice();
     next[i] = merged;
     return { tasks: next, card: merged };
@@ -339,12 +356,153 @@ process.stdin.on('end', () => {
   if (!sock) { process.exit(0); }
   let resp = '';
   const done = (code) => { if (resp) process.stdout.write(resp); process.exit(code); };
+
+  // GATE-05 — A SILENT EXIT IS ALLOW. That is the single most important line in
+  // this shim: an engine reads "no stdout" as "the hook had no opinion", so every
+  // outcome the wait below can reach that is not an allow has to be a WRITTEN
+  // one, in this shim's own contract (a PreToolUse deny on stdout, exit 0).
+  const denyAndExit = (why) => {
+    try {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: why
+        }
+      }));
+    } catch (_) {}
+    process.exit(0);
+  };
+  const POLL_WAIT_MS = 5000;
+
+  // LIVE-UNVERIFIED (kimi): the poll loop below is genuinely new code and kimi is
+  // one of the three engines that runs this shim. It is exercised end to end by
+  // test/gate05-bounded-wait.test.cjs as a real child process — but against
+  // Claude's and codex's PreToolUse contract, not kimi's, and no kimi CLI is
+  // installed here. The open question is the same one recorded above this
+  // constant: Moonshot documents a hook BLOCK as exit code 2, where this shim
+  // expresses deny through stdout JSON at exit 0, so a kimi engine may read the
+  // written deny below as no opinion at all. What would settle it: an installed
+  // kimi plus one hook fire.
+  const poll = (ask) => {
+    if (Date.now() > ask.deadlineMs) {
+      denyAndExit('Denied: this tool call needed an operator\\'s approval and the approval window closed before an answer arrived. Re-run it if it is still the right thing to do — a fresh call opens a fresh question.');
+      return;
+    }
+    // A FRESH SHORT CONNECTION PER POLL, NEVER A HELD-OPEN ONE, and that is
+    // measured rather than stylistic (04-RESEARCH L-02).
+    //
+    // LIVE-UNVERIFIED (grok, agy): neither engine polls, deliberately — a shim
+    // may enter this loop only where this app itself writes the PreToolUse
+    // timeout and can therefore bound it, and grok applies its own ~5 s
+    // event-aware default whose unit is unverified while agy runs timeout: 0 with
+    // unknown semantics. Both take the ask reply's own permissionDecision:'deny'
+    // instead, which their shipped decoders already translate; that translation
+    // is exercised on this machine as a real child process (gate05 case 7), so
+    // what is unverified is the ENGINE honouring the deny, not the shim writing
+    // it. Which is also why this must not become a stream: both decode with
+    // JSON.parse over the WHOLE accumulated buffer, so a "pending" preamble
+    // followed by a verdict on one connection makes both throw, exit 0 with no
+    // stdout — and no stdout is ALLOW, a fail-open built inside the feature that
+    // exists to fail closed. What would settle it: an installed CLI plus one
+    // hook fire.
+    let body = '';
+    let settled = false;
+    // DERIVED from the original payload, never rebuilt longhand, and that is not
+    // style. A second \`sock_token:\` literal in this shim satisfies
+    // test/hook-auth-roundtrip.test.cjs's assignment pin ALL BY ITSELF, so
+    // commenting out the real assignment above would leave that pin green while
+    // every hook this shim fires got dropped by authorized() — measured: writing
+    // this object out longhand turned that file's mutation case green. Reusing
+    // the object also means a poll authenticates with the exact bytes the first
+    // payload carried, with no second derivation to drift. tool_input is dropped
+    // because it is the one field that can approach HOOK_LINE_MAX, and a poll is
+    // the same payload plus an ask id.
+    const pollPayload = Object.assign({}, payload, {
+      hook_event_name: 'ApprovalPoll',
+      ask_id: ask.id
+    });
+    delete pollPayload.tool_input;
+    const pc = net.createConnection(sock, () => pc.write(JSON.stringify(pollPayload) + '\\n'));
+    // The per-poll timer: one per connection, so a floor that accepts a poll and
+    // then answers nothing cannot wedge this shim until the engine kills it —
+    // and an engine kill writes no stdout, which is allow.
+    const stall = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { pc.destroy(); } catch (_) {}
+      denyAndExit('Denied: the floor accepted this approval poll and never answered it.');
+    }, POLL_WAIT_MS);
+    stall.unref();
+    pc.setEncoding('utf8');
+    pc.on('data', (d) => { body += d; });
+    pc.on('end', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(stall);
+      let r = null;
+      try { r = JSON.parse(body || ''); } catch (_) { r = null; }
+      if (!r || typeof r !== 'object') {
+        denyAndExit('Denied: the floor answered this approval poll with something this shim could not read.');
+        return;
+      }
+      // Pending → wait and ask again. The sleep is deliberately NOT unref'd: the
+      // poll socket has closed by now, so an unref'd timer would let this process
+      // exit between polls with nothing written — allow.
+      if (r.status === 'pending') { setTimeout(() => poll(ask), ask.pollMs > 0 ? ask.pollMs : 1000); return; }
+      // A final verdict. Written verbatim, exactly as the non-ask path writes its
+      // reply: it is already this shim's own contract.
+      process.stdout.write(body);
+      process.exit(0);
+    });
+    // D-08 CLAUSE 3 HAS TWO HALVES AND THEY ARE NOT THE SAME FACT. The FIRST
+    // connection's handler below is clause 3 itself — an error there fires before
+    // any hive_ask can exist, so "the floor is not running" ALLOWS, and every
+    // agent keeps working while the app is legitimately down. This handler is the
+    // other half: a hive_ask HAS been received, so this shim knows an ask is open
+    // and knows main opened it. A floor that dies, restarts, or loses its socket
+    // while that ask is pending is "the floor asked and the operator did not
+    // answer" — a DENY. Fail-open here would make killing the Electron main
+    // process an agent-triggerable way to turn a pending deny into an allow, and
+    // agents here run permissions-bypassed by design.
+    pc.on('error', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(stall);
+      denyAndExit('Denied: this tool call needed an operator\\'s approval and the floor became unreachable before an answer arrived.');
+    });
+  };
+
+  const bootTimer = setTimeout(() => process.exit(0), 5000);
+  bootTimer.unref();
   const c = net.createConnection(sock, () => c.write(JSON.stringify(payload) + '\\n'));
   c.setEncoding('utf8');
   c.on('data', (d) => { resp += d; });
-  c.on('end', () => done(0));
+  c.on('end', () => {
+    // main answers an \`ask\` with ONE object that is two things at once: a valid
+    // PreToolUse deny for a shim that has never heard of hive_ask, and a handle
+    // for one that has. No handle → today's behaviour, byte for byte.
+    let ask = null;
+    try {
+      const r = JSON.parse(resp || '{}');
+      if (r && r.hive_ask && r.hive_ask.id) ask = r.hive_ask;
+    } catch (_) { ask = null; }
+    if (!ask) { done(0); return; }
+    // THREE timers live in this shim now and they are three different facts:
+    //  - bootTimer, 5 s from boot. UNCHANGED on the non-ask path: flipping it to
+    //    a deny would make every socket outage, every app restart and every
+    //    legitimately-not-running floor deny every tool call on every agent.
+    //    Cleared HERE and only here, because .unref() stops it holding the event
+    //    loop OPEN, not firing while the poll loop keeps this process alive — so
+    //    an ask outliving 5 s would exit SILENTLY mid-question, and a silent exit
+    //    is ALLOW;
+    //  - the per-poll timer, one per connection, bounding a single hung poll;
+    //  - ask.deadlineMs, bounding the whole wait and expiring to a WRITTEN deny.
+    clearTimeout(bootTimer);
+    resp = '';
+    poll(ask);
+  });
   c.on('error', () => process.exit(0));
-  setTimeout(() => process.exit(0), 5000).unref();
 });
 `;
 
@@ -422,28 +580,102 @@ process.stdin.on('end', () => {
 // agent_end→Stop keeps the harness status in step (→ idle) so the renderer idle
 // inbox-wake nudge can deliver mail. Fully wrapped so a wrong API guess can never
 // break the spawn. LIVE-UNVERIFIED (Pi's exact extension surface needs BYOK keys).
+//
+// GATE-03 (04-10). `post()` is now request/response for PreToolUse ONLY, so a
+// deny authored in main can reach pi's own `ev.approve()` contract; every other
+// event keeps the fire-and-forget shape, because waiting costs latency on a path
+// with no verdict to wait for. The `HIVE_AUTO_APPROVE === '1'` branch is now
+// reachable only on an ALLOW — before this it ran unconditionally and approved
+// calls main had refused (T-04-CMD-07).
+//
+// LIVE-UNVERIFIED — pi, and this is an UNVERIFIABLE MECHANISM, not a defect that
+// was fixed. Assumption A6: pi's documented `tool_call` contract honours the
+// handler's RETURN value, but whether it awaits an ASYNC return is not settleable
+// without an installed `pi` plus a BYOK key, and `pi` is not on this machine
+// (`command -v pi` → absent). If pi does not await, the handler returns a Promise
+// where pi expects an object and the auto-approve simply stops firing — the
+// fail-safe direction, never an approval of something denied. What would settle
+// it: `npm i -g @earendil-works/pi-coding-agent`, a provider key, and one tool
+// call under HIVE_AUTO_APPROVE=1 against a hive that denies it.
+//
+// WHAT *IS* VERIFIED, so the marker is not read as wider than it is: this
+// constant is EXECUTED in `test/engine-parity.test.cjs` — written out,
+// `require()`d, registered against a stub `pi`, and driven against a REAL
+// HookServer over a real socket. A deny comes back as `{approve:false}` with
+// main's own reason, WITH `HIVE_AUTO_APPROVE=1` set, and a benign command still
+// auto-approves. The bridge logic is unit-verified; only pi's runtime is not.
+//
+// NEW BEHAVIOUR THIS TURNS ON, named rather than left as a category: with a
+// verdict now honoured, `commandShapeDenial` reaches pi for the first time, and
+// FOUR of its five shapes return `{kind:'ask'}` — which on a shim that cannot
+// poll for an answer is answered as a DENY. So every recursive `rm`, every
+// forced `git push`, every `curl … | sh` and every fetch to a host outside the
+// 30-entry `[ASSUMED]` allowlist becomes an unconditional refusal with no path
+// through, on an engine nobody here can run. Safe direction, substantial change.
 export const PI_EXTENSION = `'use strict';
 var net = require('node:net');
 var SOCK = process.env.HIVE_SOCK;
 var AGENT = process.env.AGENT_ID || null;
 var AUTO = process.env.HIVE_AUTO_APPROVE === '1';
+function stamp(payload) {
+  payload.agent_id = payload.agent_id || AGENT;
+  // See HOOK_SHIM: without this the socket rejects every payload.
+  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
+  return payload;
+}
 function post(payload) {
   try {
     if (!SOCK) return;
-    payload.agent_id = payload.agent_id || AGENT;
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
+    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) {} });
     c.on('error', function () {});
   } catch (e) {}
+}
+// Request/response. Resolves main's deny REASON, or null for allow.
+// FAIL-OPEN, deliberately and identically to HOOK_SHIM's
+// c.on('error', function () { process.exit(0); }): a missing socket, a connect
+// error, a 5 s timeout and an unparseable reply ALL resolve null = allow.
+// hooks.ts:44-53 records why — an agent PTY outlives a quit, so a bridge that
+// failed closed would stop every agent whenever the app is legitimately not
+// running. Never "fix" this to fail closed here.
+function ask(payload) {
+  return new Promise(function (resolve) {
+    var settled = false;
+    var finish = function (v) { if (!settled) { settled = true; resolve(v); } };
+    try {
+      if (!SOCK) return finish(null);
+      var resp = '';
+      var c = net.createConnection(SOCK, function () {
+        try { c.write(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) { finish(null); }
+      });
+      c.setEncoding('utf8');
+      c.on('data', function (d) { resp += d; });
+      c.on('end', function () {
+        try {
+          var r = JSON.parse(resp || '{}');
+          var h = r.hookSpecificOutput;
+          if (h && h.permissionDecision === 'deny') { return finish(h.permissionDecisionReason || 'denied by the hive'); }
+          if (r.decision === 'deny' || r.decision === 'block') { return finish(r.reason || 'denied by the hive'); }
+        } catch (e) {}
+        finish(null);
+      });
+      c.on('error', function () { finish(null); });
+      setTimeout(function () { finish(null); }, 5000).unref();
+    } catch (e) { finish(null); }
+  });
 }
 function register(pi) {
   if (!pi || typeof pi.on !== 'function') return false;
   try {
     pi.on('tool_call', function (ev) {
-      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });
-      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }
-      return undefined;
+      return ask({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) }).then(function (deny) {
+        if (deny) {
+          try { if (ev && typeof ev.deny === 'function') ev.deny(deny); } catch (e) {}
+          return { approve: false, reason: deny };
+        }
+        // AUTO is reachable only past the verdict. That order IS the gate.
+        if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }
+        return undefined;
+      });
     });
     pi.on('tool_result', function (ev) { post({ hook_event_name: 'PostToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)) }); });
     pi.on('agent_end', function () { post({ hook_event_name: 'Stop' }); });
@@ -463,26 +695,110 @@ module.exports.default = module.exports;
 // after + session.idle. The session.idle→Stop keeps status in step (→ idle) so the
 // renderer idle inbox-wake nudge delivers mail. ESM (OpenCode runs on Bun). Fully
 // wrapped. LIVE-UNVERIFIED (plugin auto-load + session.idle firing need BYOK keys).
+//
+// GATE-03 (04-10), and the two halves below are DIFFERENT KINDS of statement.
+// Conflating them would let a marker read as an excuse for a bug.
+//
+// HALF 1 — A DEFECT, FIXED HERE, not an unverifiable. `tool.execute.before` used
+// to post `tool_name` and NO `tool_input`. On the server `protectedPathDenial`
+// builds `ti` from `p.tool_input`, finds no file_path/path/notebook_path and no
+// command, and returns null before resolving anything; `commandShapeDenial` needs
+// a command string to enter at all. So OpenCode's gate was not merely unverified
+// — it was provably INERT, answering allow on every call, and that is provable on
+// this machine without OpenCode installed. It now sends `output.args`, which is
+// where OpenCode's documented plugin API puts a tool's arguments.
+//
+// HALF 2 — LIVE-UNVERIFIED, opencode: an UNVERIFIABLE MECHANISM. The veto form
+// used here (throw from `tool.execute.before`) is the one OpenCode's own docs
+// demonstrate — their `.env` protection example throws to abort a `read`. What
+// cannot be settled here is whether the plugin AUTO-LOADS from the per-agent
+// `.opencode/plugin/` directory, and whether OpenCode HONOURS a throw as a veto
+// at runtime: `opencode` is not installed on this machine and needs a BYOK key.
+// It also runs plugins under BUN, not Node.
+//
+// WHAT *IS* VERIFIED, stated so the marker is not read as wider than it is: this
+// constant is EXECUTED in `test/engine-parity.test.cjs` — written out, imported
+// as real ESM, and its `tool.execute.before` driven against a REAL HookServer
+// over a real socket. It throws `hive: <main's own reason>` on a denied command
+// and returns silently on a benign one. `runShim` genuinely cannot drive it (it
+// spawns a `.cjs` under `process.execPath`), but a dynamic `import()` can, so
+// the bridge LOGIC is unit-verified and only OpenCode's runtime is not. What
+// would settle the rest: an installed OpenCode, a key, one tool call.
+//
+// AND A MEASURED RESIDUAL, stated rather than left for a reader to discover:
+// OpenCode's `read` tool names its target `output.args.filePath`, while
+// `protectedPathDenial` collects `file_path` / `path` / `notebook_path`. So the
+// PATH arm still does not see an OpenCode file read; the command arm does, since
+// its `bash` tool uses `output.args.command`. That gap is plan 04-06's ceiling
+// item (s) — an engine that uses a different KEY — measured here for opencode.
+//
+// NEW BEHAVIOUR THIS TURNS ON: `commandShapeDenial` now reaches OpenCode for the
+// first time, and FOUR of its five shapes return `{kind:'ask'}` — which on a shim
+// that cannot poll for an answer is answered as a DENY. Every recursive `rm`,
+// every forced `git push`, every `curl … | sh` and every fetch to a host outside
+// the 30-entry `[ASSUMED]` allowlist becomes an unconditional refusal with no
+// path through. Safe direction, substantial change, on an engine nobody here can
+// run to see it.
 export const OPENCODE_PLUGIN = `import { createConnection } from 'node:net';
 const SOCK = process.env.HIVE_SOCK;
 const AGENT = process.env.AGENT_ID || null;
+function stamp(payload) {
+  payload.agent_id = payload.agent_id || AGENT;
+  // See HOOK_SHIM: without this the socket rejects every payload.
+  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
+  return payload;
+}
 function post(payload) {
   try {
     if (!SOCK) return;
-    payload.agent_id = payload.agent_id || AGENT;
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
+    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) {} });
     c.on('error', () => {});
   } catch (e) {}
+}
+// Request/response. Resolves main's deny REASON, or null for allow.
+// FAIL-OPEN, deliberately and identically to HOOK_SHIM's connect-error exit(0):
+// no socket, a connect error, a 5 s timeout and an unparseable reply ALL resolve
+// null = allow (hooks.ts:44-53). Never "fix" this to fail closed.
+function ask(payload) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    try {
+      if (!SOCK) return finish(null);
+      let resp = '';
+      const c = createConnection(SOCK, () => {
+        try { c.write(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) { finish(null); }
+      });
+      c.setEncoding('utf8');
+      c.on('data', (d) => { resp += d; });
+      c.on('end', () => {
+        try {
+          const r = JSON.parse(resp || '{}');
+          const h = r.hookSpecificOutput;
+          if (h && h.permissionDecision === 'deny') { return finish(h.permissionDecisionReason || 'denied by the hive'); }
+          if (r.decision === 'deny' || r.decision === 'block') { return finish(r.reason || 'denied by the hive'); }
+        } catch (e) {}
+        finish(null);
+      });
+      c.on('error', () => { finish(null); });
+      setTimeout(() => { finish(null); }, 5000).unref();
+    } catch (e) { finish(null); }
+  });
 }
 export const HiveBridge = async () => {
   return {
     event: async (input) => {
       try { if (input && input.event && input.event.type === 'session.idle') post({ hook_event_name: 'Stop' }); } catch (e) {}
     },
-    'tool.execute.before': async (input) => {
-      try { post({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}
+    'tool.execute.before': async (input, output) => {
+      // The wrap stays: a wrong API guess must never break the spawn, and must
+      // never fail closed either. Only a real deny escapes it.
+      let deny = null;
+      try {
+        deny = await ask({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name), tool_input: (output && output.args) || (input && (input.args || input.input)) || {} });
+      } catch (e) { deny = null; }
+      // OpenCode's documented veto: throw from tool.execute.before.
+      if (deny) { throw new Error('hive: ' + deny); }
     },
     'tool.execute.after': async (input) => {
       try { post({ hook_event_name: 'PostToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}

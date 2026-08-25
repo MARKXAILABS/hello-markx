@@ -40,7 +40,8 @@ import { CircuitBreaker, type BreakerInput } from '../breaker';
 import { TelemetryCollector } from '../telemetry';
 import { MemoryManager } from '../memory';
 import { MemoryReflector, type ReflectSettings } from '../reflect';
-import { PersistStore } from '../db';
+import { PersistStore, EVENT_RETENTION_MS } from '../db';
+import { RestorePoints, SNAPSHOT_CADENCE_MS } from '../restorePoints';
 import { SPAWN_SAFE_SESSION_ID } from '../transcript';
 import {
   appendTriggerHistory, listTriggerHistory
@@ -53,8 +54,11 @@ import {
   inferAgentProvider, isClaudeProvider, type AgentProvider
 } from '../../shared/agentProvider';
 import { claudeAccountSecretRef } from '../../shared/claudeAccounts';
+import { matchBlockHint } from '../../shared/blockHints';
 import { DEFAULT_CONTEXT_TRIGGER, type ContextRule } from '../../shared/triggers';
 import type { FloorDeps } from './deps';
+import { AbsenceWatchdog, type QuietSnapshot } from './watchdog';
+import { floorQuietPushPayload } from '../push';
 import {
   teardownPty as lifecycleTeardownPty,
   workerScratchDir as lifecycleWorkerScratchDir,
@@ -98,6 +102,14 @@ export interface Floor {
   hive: HiveManager;
   delivery: DeliveryService;
   hookServer: HookServer;
+  /** VIGIL-01's absence watchdog — a member for the same reason `hookServer`
+   *  is one: it is how a caller in main reaches state `bootFloor` owns without
+   *  `bootFloor` having to know who is asking. `floor.watchdog.current()`
+   *  returns the quiet snapshot, or `null` while the floor is moving, and that
+   *  is the synchronous read the phone's `floorQuiet` field is composed from
+   *  (plan 04-17, in index.ts, which needs no line in THIS file). The renderer
+   *  half arrives by push instead, on the `'floor:quiet'` channel below. */
+  watchdog: AbsenceWatchdog;
   telemetry: TelemetryCollector;
   persist: PersistStore;
   ptyManager: PtyManager;
@@ -155,12 +167,38 @@ export let telemetry: TelemetryCollector;
 export let breaker: CircuitBreaker;
 let fleetTimer: ReturnType<typeof setInterval> | null = null;
 let breakerBeatTimer: ReturnType<typeof setInterval> | null = null;
+/** RECORD-05's snapshot beat. Boot-internal like the two above — NOT a Floor
+ *  field — which is exactly why test/boot-floor.test.cjs has to pin it BY NAME:
+ *  that file's offender loop walks `Object.keys(floor)` and cannot see a
+ *  module-level `let`, so without the named pin this timer's teardown would have
+ *  no automated assertion at all. */
+let restorePointTimer: ReturnType<typeof setInterval> | null = null;
+/** VIGIL-01's absence beat. Boot-internal for the same reason as the two
+ *  above, and pinned BY NAME in test/boot-floor.test.cjs for the same reason:
+ *  the offender loop there walks `Object.keys(floor)` and a module-level `let`
+ *  is invisible to it. The WATCHDOG itself is a Floor field (plan 04-17 reads
+ *  `floor.watchdog.current()`); only its timer lives here. */
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+/** How often the absence beat asks. A sixth of the 300 000 ms quiet threshold,
+ *  and the same cadence the breaker beat already runs at — the alarm lands
+ *  within one tick of the threshold and the reads are four cheap ones. */
+const WATCHDOG_CADENCE_MS = 30_000;
 export let accountPool: AccountPoolManager;
 export let delivery: DeliveryService;
 export let hookServer: HookServer;
 export let memory: MemoryManager;
 export let reflector: MemoryReflector;
 export let persist: PersistStore;
+/** RECORD-05's snapshot runner. Boot-internal, like the timer that drives it:
+ *  every collaborator it has arrives injected here at the composition root, in
+ *  the same style as `persist` below, and this is the only place it is built. */
+let restorePoints: RestorePoints;
+/** VIGIL-01's watchdog. Assigned in `bootFloor` and returned as a `Floor`
+ *  member, because a snapshot with no named accessor is a seam nobody can
+ *  reach: plan 04-17 composes the phone's `floorQuiet` field from
+ *  `floor.watchdog.current()` in index.ts, exactly as it reaches approvals
+ *  through `floor.hookServer`. */
+let watchdog: AbsenceWatchdog;
 export let integrationBroker: IntegrationBroker;
 export let roster: RosterStore;
 
@@ -515,6 +553,66 @@ export function armAlwaysOnBeats(): void {
     try { accountPool.tick(); } catch (e) { console.error('[account-pool beat]', e); }
     try { condenseBoardIfOversized(); } catch (e) { console.error('[board beat]', e); }
   }, 30_000);
+}
+
+/**
+ * RECORD-05's beat: one restore point per operator repo, then a prune.
+ *
+ * Every live agent's `cwd` is a candidate operator repo, so this resolves each
+ * to its repo TOP LEVEL (an agent cwd is very often a subdirectory, and
+ * snapshotting the subdirectory would make git read the wrong `.gitignore`) and
+ * de-duplicates: three agents in one repo cost ONE snapshot, not three.
+ *
+ * Sequential on purpose. Two snapshots of DIFFERENT repos are two different
+ * stores and would be safe to overlap, but they are also two `add -A` passes
+ * over real trees, and a beat that fans them out would put the whole floor's IO
+ * on one tick. There is nothing to be gained by finishing the beat sooner.
+ *
+ * Best-effort end to end: a repo that cannot be snapshotted is logged by
+ * RestorePoints itself and must never take the beat — or the floor — down.
+ */
+/** When the events table was last pruned, so the beat above can run the prune
+ *  once a DAY off a 15-minute slot rather than 96 times. 0 = not yet this boot. */
+let lastEventPruneAt = 0;
+const EVENT_PRUNE_EVERY_MS = 24 * 60 * 60_000;
+
+/**
+ * RECORD-02's retention, run once at boot and once a day.
+ *
+ * `EVENT_RETENTION_MS` is imported from db.ts, where it is exported and pinned
+ * by a test, rather than re-declared here: a second copy of the number is how
+ * "the window is 30 days" becomes true in one file and false in the other. The
+ * value itself is `[ASSUMED]` — nothing measured how far back an operator
+ * actually asks what the floor ran — and D-18 makes the whole policy one
+ * `DELETE FROM events WHERE ts < ?`, so changing it is a one-line act.
+ */
+function pruneEventsIfDue(): void {
+  if (Date.now() - lastEventPruneAt < EVENT_PRUNE_EVERY_MS) return;
+  lastEventPruneAt = Date.now();
+  try {
+    const gone = persist.pruneEvents(Date.now() - EVENT_RETENTION_MS);
+    if (gone) console.warn('[db] pruned', gone, 'event(s) past the retention window');
+  } catch (e) { console.error('[db] event prune failed:', e); }
+}
+
+async function restorePointBeat(): Promise<void> {
+  // Off the same scheduler slot, and BEFORE the early return below: retention
+  // must keep running on a floor that has no agents in a git repo.
+  pruneEventsIfDue();
+  if (!hive.enabled()) return;
+  const cwds = new Set<string>();
+  for (const a of Object.values(hive.registry().agents)) {
+    if (!a.archived && a.cwd) cwds.add(a.cwd);
+  }
+  const roots = new Set<string>();
+  for (const cwd of cwds) {
+    const root = await restorePoints.repoRootOf(cwd);
+    if (root) roots.add(root);
+  }
+  for (const root of roots) {
+    await restorePoints.snapshot(root);
+    await restorePoints.prune(root);
+  }
 }
 
 /** Count of UNREAD actionable messages in god's inbox. */
@@ -942,6 +1040,28 @@ const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
       breakerBeatTimer = null;
     }
   },
+  // RECORD-05. Same class as the two above and the same reason it is here:
+  // an un-cleared setInterval keeps the process alive past shutdown, and this
+  // one also holds RestorePoints' own trailing debounce timers, which is why
+  // both halves are stopped rather than just the interval.
+  {
+    name: 'clearRestorePointTimer',
+    stop: () => {
+      if (restorePointTimer) clearInterval(restorePointTimer);
+      restorePointTimer = null;
+      restorePoints?.stop();
+    }
+  },
+  // VIGIL-01. Same class as the three above and here for the same reason: an
+  // un-cleared setInterval keeps the process alive past shutdown, and the boot
+  // test fails that by HANGING rather than by a red assertion.
+  {
+    name: 'clearWatchdogTimer',
+    stop: () => {
+      if (watchdogTimer) clearInterval(watchdogTimer);
+      watchdogTimer = null;
+    }
+  },
   { name: 'stopWebhookDoneObserver', stop: () => stopWebhookDoneObserver() },
   { name: 'broker.stop', stop: () => integrationBroker.stop() },
   { name: 'stopRouter', stop: () => hive.stopRouter() },
@@ -1051,6 +1171,8 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   contextLastRun = null;
   fleetTimer = null;
   breakerBeatTimer = null;
+  restorePointTimer = null;
+  watchdogTimer = null;
   webhookDoneTimer = null;
   webhookOutboundRecorded = null;
 
@@ -1078,6 +1200,18 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     inbox: (agentId) => (hive.enabled() ? hive.inbox(agentId).map((m) => ({ id: m.id, from: m.from })) : []),
     write: (ptyId, data) => ptyManager.write(ptyId, data),
     paused: (agentId) => control.isAutoDeliveryPaused(agentId),
+    // VIGIL-03. A DERIVED read of the PTY's own output ring, not a cached flag on
+    // PtyManager, for the two reasons that decide the whole requirement: the ring
+    // fills whether or not a renderer is listening (`pty.ts:64-71`), so this is
+    // the same answer on a windowed floor and on `floor/headless.ts`; and a
+    // derived read has no invalidation to get wrong, so the agent unblocks by
+    // itself the moment it prints past the prompt and the prompt leaves the
+    // matcher's bounded window. That is the inherited recovery path, preserved
+    // for free (`useHive.ts:140-144`).
+    blocked: (agentId) => {
+      const ptyId = ptyForAgent(agentId);
+      return !!ptyId && matchBlockHint(ptyManager.outputTail(ptyId)) !== null;
+    },
     drain: (agentId) => {
       if (!hive.enabled()) return { block: false };
       const before = readDeliveryCursor(agentId);
@@ -1117,11 +1251,88 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     emit: (channel, payload) => { deps.send(channel, payload); }
   });
 
+  // THE COMPOSITION ROOT for every gate this phase added. The last four
+  // arguments are the seams plans 04-06 (GATE-03's host allowlist) and 04-15
+  // (RECORD-01's writer, GATE-05's publisher) declared, and nothing supplied
+  // until now. They are OPTIONAL and TRAILING by the house rule `hooks.ts`
+  // states on `recordCost` — "so the server still runs without it… and LAST, so
+  // no existing call site or test has to move an argument", with eight
+  // construction sites across src/ and test/ that a dep object would move.
+  // Optional also means NOTHING FAILS when they are never wired, which is the
+  // whole reason a gate can ship green and unreachable: the unit suites drive
+  // servers they constructed themselves, and the floor an operator runs has
+  // none of them. `test/boot-floor.test.cjs`'s composition block is what goes
+  // red when one is dropped, and it asserts each seam's EFFECT on a really
+  // booted floor rather than the text of this argument list.
+  //
+  // TWO SEAMS ARE DELIBERATELY NOT HERE, so the next reader counting this list
+  // against 04-15-PLAN.md does not conclude one was dropped:
+  //  - `openAsk` is passed `undefined`. `HookServer` now OWNS an ApprovalRegistry
+  //    and answers an ask itself; the parameter survives as an override and as a
+  //    test hook, and an override supplied here would replace the registry entry,
+  //    the poll handle and the operator page in one argument — GATE-05 switched
+  //    off by a constructor argument. It is positional, so `undefined` is how the
+  //    two seams after it are reached.
+  //  - the ask TTL is not passed either, and there is nowhere here to pass it:
+  //    plan 04-15 gives it at the `new ApprovalRegistry(...)` site inside
+  //    `HookServer`, in the same commit that declares the constant. A second
+  //    place to set it would be a second thing to forget.
   hookServer = new HookServer(
     hive, () => fakeWebContents(), () => readConfig(), control, breaker,
     (agentId) => delivery.drainAtStop(agentId),
     (agentId) => deps.focus?.(agentId),
-    (s) => telemetry.recordCostSample(s)
+    (s) => telemetry.recordCostSample(s),
+    // GATE-03 (04-06) — read through `readConfig()` at CALL time, exactly as the
+    // third argument above already reads config, so an operator's Settings edit
+    // takes effect without a restart. The `?? []` is not a policy: `readConfig`
+    // merges DEFAULTS, so a DELETED key already arrives as the shipped default
+    // list and this branch is reachable only by a malformed non-array value —
+    // which `commandShapeDenial` denies anyway ("absent, empty or not an array
+    // of strings all DENY"), so `[]` is the same verdict as passing it through.
+    () => readConfig().hostAllowlist ?? [],
+    // openAsk — see above. Production passes nothing, deliberately.
+    undefined,
+    // RECORD-01 (04-15) — A CLOSURE, NOT A METHOD REFERENCE BOUND EAGERLY.
+    // `persist` is a module-scope `let` assigned ~28 lines BELOW this call
+    // (`persist = new PersistStore()`), so a reference captured here would
+    // capture `undefined` forever and every tool call would go silently
+    // unrecorded on a floor whose tests are green (T-04-LOG-11). This file
+    // already reasons about that exact hazard in the `handoff` closure's own
+    // comment — cited by SYMBOL, because a line number does not survive the next
+    // edit — and the same reasoning holds here: the closure only ever RUNS while
+    // a hook is being judged, well after boot completes, so it always sees the
+    // real store. Do not "simplify" it to a method reference.
+    // Swallowed and logged: 04-15's contract is that a recording failure costs a
+    // row and never a verdict, and this is the outermost place that can break.
+    (row) => {
+      try { persist.recordToolCall(row); } catch (e) { console.error('[db] recordToolCall failed:', e); }
+    },
+    // GATE-05 (04-15) — publishApproval. The DATA half needs no line here: the
+    // registry is the source, and plan 04-17 PULLS it through
+    // `floor.hookServer.openApprovals()` for `GET /phone/api/asks`. What only
+    // this file can add is the operator's attention, gated on the notifications
+    // setting below — the same expression `breakerToast` and the
+    // watchdog's `notify` use, because an operator who turned notifications off
+    // did not ask for this one either (T-04-ASK-39). The pull stays ungated: a
+    // pull the operator asked for is not a notification.
+    // `paged` is why this is a closure over state rather than a bare arrow: the
+    // registry publishes the WHOLE open list on every change — an open, an
+    // answer, a sweep — so answering one of two open asks would re-toast the
+    // other one the operator has already seen.
+    (() => {
+      const paged = new Set<string>();
+      return (open) => {
+        for (const id of [...paged]) if (!open.some((a) => a.id === id)) paged.delete(id);
+        if (!readConfig().notifications) return;
+        for (const a of open) {
+          if (paged.has(a.id)) continue;
+          paged.add(a.id);
+          // The REASON, never the command: `command` is agent-authored untrusted
+          // text (ASVS V7) and `reason` is main's own sentence.
+          deps.notify({ title: `${a.agentId} needs approval`, body: a.reason });
+        }
+      };
+    })()
   );
   ptyManager.setHookTokenSource(
     (agentId) => hookServer.mintToken(agentId),
@@ -1146,6 +1357,13 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     (event) => { try { hive.appendLog(event); } catch { /* best-effort */ } }
   );
   persist = new PersistStore();
+  restorePoints = new RestorePoints({
+    // `<harnessHome>/hive/restore` — beside `backups/` and deliberately NOT in
+    // it (D-21): reflect.ts owns `hive/backups/` and prunes it on its own
+    // KEEP_BACKUPS schedule, which was never written to see restore points.
+    storeRoot: () => { const r = hive.root(); return r ? join(r, 'restore') : null; },
+    log: (event) => { try { hive.appendLog(event); } catch { /* best-effort */ } }
+  });
   integrationBroker = new IntegrationBroker({
     getRecord: integrations.getRecord,
     getSecret: integrations.getSecret
@@ -1153,12 +1371,130 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   roster = new RosterStore(() => readConfig().harnessHome);
 
   try { persist.open(); } catch (e) { console.error('[db] open failed:', e); }
+  // RECORD-02's mirror, wired AFTER open() — appendLog's sink, injected so
+  // hive.ts never imports db.ts. Best-effort inside appendLog: a closed or
+  // locked store costs the mirror and never the JSONL line.
+  hive.setEventStore(persist);
+  lastEventPruneAt = 0;
+  pruneEventsIfDue();  // once at boot, then once a day off the restore-point beat
   try { accountPool.load(); } catch (e) { console.error('[account-pool] load failed:', e); }
+
+  // RECORD-05's snapshot beat. Guarded (clear-then-set) like armAlwaysOnBeats,
+  // so a re-bootstrap cannot stack two of these against the same store — which
+  // is L-07's index.lock fatal arriving by a different route. Unref'd: a pending
+  // restore point must never be the reason the process stays alive.
+  if (restorePointTimer) clearInterval(restorePointTimer);
+  restorePointTimer = setInterval(() => {
+    void restorePointBeat().catch((e) => console.error('[restore beat]', e));
+  }, SNAPSHOT_CADENCE_MS);
+  restorePointTimer.unref?.();
+
+  // ─── VIGIL-01 — the absence watchdog. ────────────────────────────────────
+  //
+  // Deliberately NOT the built-in heartbeat (`config.ts`): that one is
+  // `to: 'god'` and types into god's PTY, so it cannot report that the god is
+  // the dead one — the case VIGIL-01 names explicitly. This alarm is addressed
+  // to the OPERATOR and writes into no PTY (ADR-0001).
+  //
+  // Every dep below is a READ of something this seam already has in scope. It
+  // is constructed HERE and never at module scope, so importing this file has
+  // no side effect (T-P02-02-01, pinned by test/repo-claims.test.cjs).
+  watchdog = new AbsenceWatchdog({
+    now: () => Date.now(),
+    // The floor's PTY silence: time since the most recent output by ANY live
+    // PTY — `isFloorQuiet`'s own `Date.now() - Math.max(...lastOutputAt)`,
+    // written as a duration. `Infinity` with no live PTY at all, which is the
+    // god-death shape and must read as silence rather than as "no data".
+    //
+    // ponytail: `delivery.ts`'s `painted` guard (a never-printed TUI reads as
+    // "idle for ages" because `pty.ts` SEEDS `lastOutputAt` to the spawn
+    // instant) is deliberately absent, and the MINIMUM is why. An unpainted PTY
+    // can only ever make the floor look busier than it is, which suppresses a
+    // false alarm; it can never manufacture one. Add the guard the day this
+    // becomes a max.
+    ptyIdleMs: () => {
+      const now = Date.now();
+      let idle = Infinity;
+      for (const t of ptyManager.list()) idle = Math.min(idle, now - t.lastOutputAt);
+      return idle;
+    },
+    // "No card advances", as one integer that already exists. Bumped by every
+    // ledger mutation under the CAS, so it needs neither the RECORD track's
+    // tool_calls table nor a per-card updatedAt.
+    ledgerRev: () => (hive.tasks() as { rev?: number }).rev ?? 0,
+    // "No mail routes" — every `appendLog` write of any kind lands in this one
+    // file, so its mtime is "did anything at all happen in the hive": mail
+    // routed, a card moved, an agent spawned. `isFloorQuiet` reads it too.
+    lastEventAt: () => {
+      const root = hive.root();
+      if (!root) return 0;
+      try { return statSync(join(root, 'log.jsonl')).mtimeMs; } catch { return 0; }
+    },
+    // "No spend lands" — the newest cost sample across every live session.
+    lastSpendAt: () => {
+      let ts = 0;
+      for (const u of telemetry.snapshot().usage) ts = Math.max(ts, u.ts);
+      return ts;
+    },
+    doingCards: () => {
+      const ledger = hive.tasks() as { tasks?: HiveTask[] };
+      return (ledger.tasks ?? [])
+        .filter((t) => t.status === 'doing')
+        .map((t) => ({ id: t.id, title: t.title, assignee: t.assignee }));
+    },
+    // "The god died" — the registry names a god and no PTY is bound to it. A
+    // floor whose registry names NO god reports alive: it never had an
+    // orchestrator to lose, and "the orchestrator is gone" would be a lie on a
+    // floor that never had one.
+    godAlive: () => {
+      const godId = hive.registry().godId;
+      return !godId || ptyForAgent(godId) !== undefined;
+    },
+    // D-25 ① — the same notifications gate every other toast in this file
+    // honours. An operator who turned notifications off did not ask for this
+    // one either.
+    notify: (a) => { if (readConfig().notifications) deps.notify(a); },
+    // D-25 ② — the already-wired renderer channel; no second signal is added.
+    // The channel NAME is fixed HERE, in the plan that produces the snapshot:
+    // plan 04-18's desktop chip listens to this exact literal and declares no
+    // channel of its own. `null` on the clearing edge, so the chip mirrors the
+    // latch instead of running a second state machine.
+    publishQuiet: (s: QuietSnapshot | null) => { deps.send('floor:quiet', s); },
+    // D-25 ③ — composed here so rule Q-4's contract (`agent` IS the title an
+    // installed old service worker renders) runs on every real alarm and not
+    // only in a test. There is nothing to send it to yet, and that is measured,
+    // not assumed: `push.ts` persists the VAPID keypair and nothing else, and
+    // `webhook.ts` has no subscription-intake route, so no `PushSubscription`
+    // has ever been captured in this process. Adding that route is index.ts's,
+    // which D-35 puts outside this plan. One line per quiet EDGE — the latch
+    // guarantees that — and the TITLE only, never the body.
+    push: (a) => {
+      const payload = floorQuietPushPayload(a);
+      console.warn('[watchdog] no push subscription intake exists yet; this alarm reached the desktop only:', payload.agent);
+    }
+  });
+  // Guarded (clear-then-set) like armAlwaysOnBeats, so a re-bootstrap cannot
+  // stack two beats against one latch. Unref'd: a pending absence check must
+  // never be the reason the process stays alive.
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = setInterval(() => {
+    try {
+      // Nothing to watch on a floor with no home, or on one where no agent has
+      // ever existed — "nothing is happening" is only an event where something
+      // was supposed to. Archived agents STAY in the registry, so this skips a
+      // never-used hive and nothing else: a floor whose whole roster died still
+      // ticks, which is exactly the case VIGIL-01 exists for.
+      if (!hive.enabled()) return;
+      if (Object.keys(hive.registry().agents).length === 0) return;
+      watchdog.tick();
+    } catch (e) { console.error('[watchdog beat]', e); }
+  }, WATCHDOG_CADENCE_MS);
+  watchdogTimer.unref?.();
 
   startHiveServices();
 
   return {
-    hive, delivery, hookServer, telemetry, persist, ptyManager, control, breaker,
+    hive, delivery, hookServer, watchdog, telemetry, persist, ptyManager, control, breaker,
     memory, reflector, accountPool, integrationBroker, roster,
     ptyToAgent, worktreePaths, worktreeOrigins, worktreeBases, preservedWorktrees,
     spawnRecipes, missionTimers, contextTimers, liveWorkers,

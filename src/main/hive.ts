@@ -151,6 +151,25 @@ export interface HiveTask {
    *  so spend against ONE card is attributable — see taskSpend(), which is the
    *  read side breaker.ts enforces against. */
   budgetTokens?: number;
+  /** ISO 8601. Stamped by EVERY ledger mutation, in bin/task.cjs AND in main's
+   *  HiveManager mutators. Absent on every card written before this phase —
+   *  consumers fall back to createdAt and must SAY they did (04-UI-SPEC S5 rule A-3).
+   *
+   *  NOT the same field as `TaskLedger.updatedAt` below, which is "when tasks.json
+   *  was last written". This one is "when THIS card last changed". Two different
+   *  facts wearing one name at two nesting levels — neither simplifies away. */
+  updatedAt?: string;
+  /** Written when the owning agent's PTY exits with the card still in flight.
+   *  Two writes: {by, at} synchronously in floor/lifecycle.ts teardownPty,
+   *  then {branch, detail} from finalizeAgentWorktree's continuation. Absence of
+   *  branch is the CORRECT rendering of "not known yet" — never a placeholder
+   *  (04-UI-SPEC S6b rule R-1). */
+  released?: {
+    by: string;
+    at: string;
+    branch?: string;
+    detail?: string;
+  };
 }
 
 /** The task ledger exactly as it is persisted to `tasks.json`.
@@ -353,6 +372,32 @@ function shortRand(): string {
  *  server's API key, in `env`), not mere churn — same fail-closed reasoning,
  *  same append-only migration for existing agents for free. */
 const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/', 'kimi-config.toml', 'mcp.json'];
+
+/** Whether the INSTALLED codex accepts `--dangerously-bypass-hook-trust`.
+ *
+ *  It is not a constant of the world. Older codex builds took the flag; `codex-cli
+ *  0.128.0` removed it, and codex refuses an unknown argument rather than ignoring
+ *  it — `error: unexpected argument … found` / `process exited (code 2)` — so
+ *  passing it blind killed every codex hive agent at spawn, before a single token.
+ *
+ *  Probed once per process and cached. `shell: true` on win32 because the binary is
+ *  `codex.cmd` there and Node cannot exec a .cmd directly — the same lesson
+ *  `scripts/mcp-live-probe.cjs` and `pty.ts`'s `where` probe already encode.
+ *
+ *  Fails CLOSED to "not supported": if the probe cannot run at all, spawning
+ *  without the flag still produces a working agent (hooks may not fire), whereas
+ *  spawning with an unsupported flag produces no agent at all. */
+let codexHookTrust: boolean | null = null;
+function codexAcceptsHookTrust(bin: string): boolean {
+  if (codexHookTrust !== null) return codexHookTrust;
+  try {
+    const res = spawnSync(bin, ['--help'], {
+      encoding: 'utf8', timeout: 10_000, shell: process.platform === 'win32'
+    });
+    codexHookTrust = /--dangerously-bypass-hook-trust/.test(`${res.stdout ?? ''}${res.stderr ?? ''}`);
+  } catch { codexHookTrust = false; }
+  return codexHookTrust;
+}
 
 /** Idempotently ensure `<agentDir>/.gitignore` excludes the non-memory files.
  *  Append-only: writes only the missing lines, leaving any existing entries. */
@@ -804,6 +849,11 @@ export class HiveManager {
       // reflect.ts copies EVERY agent's memory.md in here on every condense
       // attempt, successful or not.
       'backups/',
+      // RECORD-05's shadow stores (restorePoints.ts): a bare git repo per
+      // operator project, holding compressed copies of that project's source.
+      // Named `restore` and not `backups` because the line above already owns
+      // that name and prunes it on reflect.ts's schedule (D-21).
+      'restore/',
       // atomicWriteJson's staging files. Transient, but a crash mid-write leaves
       // one behind and `git add -A` would commit the corpse.
       '*.tmp-*'
@@ -1032,14 +1082,29 @@ export class HiveManager {
           if (desc.kind === 'hooks') {
             if (desc.shim === 'agy') installAgyHooks(root, this.nodeRunUnquoted.bind(this));
             else if (desc.shim === 'codex') {
-              env.CODEX_HOME = installCodexHooks(dir, this.shimPath(), this.nodeRunUnquoted.bind(this));
+              env.CODEX_HOME = installCodexHooks(dir, this.shimPath(), this.nodeRunUnquoted.bind(this), meta.cwd);
               // Codex refuses to run hooks from a config dir without persisted
               // "hook trust" (normally an interactive gate). Our hooks.json is
               // hive-authored inside an isolated CODEX_HOME, so we bypass that gate
               // for this automated spawn — the flag's documented use ("automation
               // that already vets hook sources"). Without it the hooks silently
               // never fire. Must precede the positional prompt.
-              preArgs.push('--dangerously-bypass-hook-trust');
+              //
+              // GATED ON SUPPORT, because passing it blind is worse than not
+              // passing it. `codex-cli 0.128.0` REMOVED this flag, and codex
+              // rejects an unknown argument outright:
+              //   error: unexpected argument '--dangerously-bypass-hook-trust' found
+              //   – process exited (code 2) –
+              // i.e. EVERY codex hive agent died at spawn, before printing a
+              // single token. Observed live on 0.128.0 by the operator. A silent
+              // hook degradation is recoverable; an engine that cannot start is
+              // not, and PARITY says codex is a first-class citizen.
+              if (codexAcceptsHookTrust(preset.defaultCommand)) preArgs.push('--dangerously-bypass-hook-trust');
+              else console.warn(
+                `[hive] codex does not accept --dangerously-bypass-hook-trust (${preset.defaultCommand}); `
+                + 'spawning without it. Lifecycle hooks may not fire for this agent, so mail may not '
+                + 'wake it — but the agent starts. Older codex builds took the flag; 0.128.0 removed it.'
+              );
             }
             else if (desc.shim === 'kimi') {
               // Kimi Code (Moonshot) — the CODEX case (installKimiConfig,
@@ -1760,15 +1825,73 @@ export class HiveManager {
         if (!f.endsWith('.json')) continue;
         const full = join(outbox, f);
         try {
-          const partial = JSON.parse(readFileSync(full, 'utf8')) as Partial<HiveMessage>;
+          // STRIP THE BOM BEFORE PARSING. Windows agents write their outbox with
+          // PowerShell, and `Set-Content` / `Out-File -Encoding utf8` emit a UTF-8
+          // BOM (U+FEFF) by default there. JSON.parse rejects a leading BOM, so
+          // every message a Windows worker sent the obvious way landed in the
+          // catch below and was thrown away. Measured live: TWO of Jim's reports
+          // — the round-trip completion and a blocked-task finding — were both
+          // quarantined, and god's inbox simply stayed empty.
+          //
+          // The BOM is not corruption and carries no meaning in JSON: stripping it
+          // is what every tolerant reader does. Fixing it here fixes it for every
+          // engine on every platform, rather than asking eleven CLIs to remember
+          // an encoding flag.
+          const raw = readFileSync(full, 'utf8').replace(/^﻿/, '');
+          const partial = JSON.parse(raw) as Partial<HiveMessage>;
           const msg = this.normalize(partial, id);
           msg.from = id; // sender is authoritative — the owning directory
           this.routeMessage(msg);
           renameSync(full, join(outbox, '.sent', f)); // archive, don't reprocess
           routed++;
-        } catch {
-          // malformed file — quarantine so we don't spin on it
+        } catch (e) {
+          // Malformed file — quarantine so we don't spin on it. But NEVER silently:
+          // this is a mail system, and a message that vanishes with no log and no
+          // bounce is worse than one that fails loudly. The sender believed it sent;
+          // the recipient never knew to expect it; and the only evidence was a
+          // `bad-*.json` nobody reads. That is exactly how Jim's two reports were
+          // lost before the BOM strip above existed.
+          const why = e instanceof Error ? e.message : String(e);
+          console.error(`[hive] DROPPED malformed outbox message ${id}/${f}: ${why}. `
+            + `Quarantined as .sent/bad-${f}; the sender was NOT told.`);
+          // KEY THE ADVICE TO THE ACTUAL CAUSE. The first version of this bounce
+          // appended canned "your file has a BOM" guidance to EVERY parse failure.
+          // A worker agent caught it within minutes of it shipping: it had been
+          // told to strip a BOM from a file that demonstrably had none, while the
+          // real fault was malformed JSON. Its point was exact — because the read
+          // above now strips a UTF-8 BOM BEFORE parsing, a UTF-8 BOM can no longer
+          // BE a parse failure, so that advice was not merely unhelpful, it was
+          // guaranteed wrong on every bounce that carried it. Canned advice on a
+          // diagnostic is worse than none: it sends the reader to chase a bug that
+          // is already fixed.
+          //
+          // Encoding is still worth naming for the one shape it CAN still break: a
+          // UTF-16 file (older PowerShell's `Out-File` default), whose bytes are
+          // nothing like JSON. That is detectable from the leading bytes rather
+          // than guessed at, so the hint is offered only when evidence supports it.
+          let hint = 'Check the file is a single well-formed JSON object.';
+          try {
+            const head = readFileSync(full);
+            const utf16 = (head[0] === 0xFF && head[1] === 0xFE) || (head[0] === 0xFE && head[1] === 0xFF);
+            if (utf16 || head.subarray(0, 64).includes(0)) {
+              hint = 'The file looks UTF-16 encoded, which is not valid JSON here. From PowerShell use '
+                + '[System.IO.File]::WriteAllText(path, json, (New-Object System.Text.UTF8Encoding $false)) '
+                + '— Out-File defaults to UTF-16 on older PowerShell. Rewrite the message and send again.';
+            }
+          } catch { /* the generic hint stands */ }
           try { renameSync(full, join(outbox, '.sent', `bad-${f}`)); } catch { /* noop */ }
+          // Bounce to the sender so the failure reaches whoever can fix it — the
+          // agent that wrote the file. Best-effort by construction: if the bounce
+          // itself cannot be delivered the log line above is still the record.
+          try {
+            this.routeMessage(this.normalize({
+              to: id,
+              act: 'inform',
+              subject: `Your message ${f} could not be delivered`,
+              body: `The hive router could not parse ${f} and has quarantined it as `
+                + `.sent/bad-${f}. It was NOT delivered to anyone.\n\nParser said: ${why}\n\n${hint}`
+            }, 'system'));
+          } catch { /* the log line above is the record */ }
         }
       }
     }
@@ -2145,7 +2268,41 @@ export class HiveManager {
       this.appendLog({ kind: 'tasks-conflict', expectedRev, rev: current.rev });
       return false;
     }
-    const next: TaskLedger = { tasks: tasks.map(stripDerivedTaskFields), rev: current.rev + 1, updatedAt: new Date().toISOString() };
+    // VIGIL-04 — the CARD-level `updatedAt`, the twin of the stamp in TASK_CLI
+    // (src/main/hiveTemplates.ts). Agents mutate through bin/task.cjs; the kanban
+    // UI, inbound webhooks, Slack and the voice read-layer all come through HERE.
+    // Stamp only one of the two and a card's age is measured from the wrong clock
+    // in exactly the case a human touched it.
+    //
+    // Here and NOT in mutateTasks: mutateTasks is one of five callers. The webhook
+    // card-creation path (src/main/index.ts:1061) and every voice task action
+    // (index.ts's `hiveWriteTasks` → src/main/realtimeActions.ts) call writeTasks
+    // directly, and a stamp one level down would miss all of them.
+    //
+    // NAME COLLISION, deliberate: `next.updatedAt` on the line below is the
+    // LEDGER's — "when tasks.json was last written". `card.updatedAt` is the
+    // CARD's — "when THIS card last changed". Two different facts, one name, two
+    // nesting levels. Stamping every card unconditionally would collapse the
+    // second into the first and no card could ever look stale, which is the whole
+    // measurement VIGIL-04 exists for — so the stamp is diff-driven against
+    // `current`, the ledger this call has already read.
+    //
+    // The fingerprint excludes the card's own `updatedAt`: include it and every
+    // card differs from its predecessor on the write after its first stamp, and
+    // the diff degenerates back into stamping everything.
+    const taskFingerprint = (card: HiveTask): string => {
+      const rest: HiveTask = { ...card };
+      delete rest.updatedAt;
+      return JSON.stringify(rest);
+    };
+    const now = new Date().toISOString();
+    const before = new Map<string, string>();
+    for (const card of current.tasks) {
+      if (card?.id) before.set(card.id, taskFingerprint(stripDerivedTaskFields(card)));
+    }
+    const stamped = tasks.map(stripDerivedTaskFields).map((card) =>
+      !card?.id || before.get(card.id) === taskFingerprint(card) ? card : { ...card, updatedAt: now });
+    const next: TaskLedger = { tasks: stamped, rev: current.rev + 1, updatedAt: now };
     this.writeJson(join(root, 'tasks.json'), next);
     this.appendLog({ kind: 'tasks', count: tasks.length, rev: next.rev });
     this.commit(`hive: tasks (${tasks.length})`);
@@ -2526,11 +2683,57 @@ export class HiveManager {
    *  on every append (a dozen writers hit this path). -1 = not seeded yet. */
   private logBytes = -1;
 
+  /**
+   * RECORD-02's mirror sink — a PersistStore, arriving INJECTED (floor/boot.ts
+   * wires the real one after `persist.open()`).
+   *
+   * Structurally typed rather than imported: `hive.ts` must stay loadable, and
+   * testable, without a database, and a `./db` import here would make every
+   * HiveManager in every test drag SQLite in behind it. null before onboarding,
+   * in headless boots, and in every test that does not care.
+   */
+  private eventStore: { appendEvent(kind: string, json: string, ts?: number): void } | null = null;
+
+  /** Point the event mirror at a store, or at nothing. Same shape as
+   *  setOtelEndpoint: a setter, not a constructor parameter, because `persist`
+   *  is built AFTER `hive` at the composition root — the dependency runs the
+   *  other way at construction time. */
+  setEventStore(store: { appendEvent(kind: string, json: string, ts?: number): void } | null): void {
+    this.eventStore = store;
+  }
+
+  /**
+   * Append one event to the hive's durable log.
+   *
+   * TWO sinks, deliberately (RECORD-02, RESEARCH § Pattern 5 — *mirror, do not
+   * move*):
+   *
+   * 1. `log.jsonl`, unchanged, including its one-generation 8 MiB rotate. It is
+   *    durable before this call could return, it is what `logTail` reads, and
+   *    keeping it makes the mirror additive and therefore reversible — a wrong
+   *    schema guess must not also have destroyed the event log.
+   * 2. A best-effort row in the `events` table, which is what makes a day that
+   *    crossed 16 MiB still readable: the rotate above has by then overwritten
+   *    the morning, and a range scan over `events` has not.
+   *
+   * The mirror is swallowed and runs AFTER the JSONL write, so a store that is
+   * closed, locked or absent costs the mirror and never the log. The event log's
+   * crash-safety must not become contingent on the database being open.
+   *
+   * 🔒 PII: the mirror carries exactly what this method already writes to disk
+   * today, verbatim and no wider. It is not a route around the rule on
+   * `appendCostLedger` below — nothing may start passing a raw OTel record to
+   * `appendLog` on the grounds that it now also lands in SQLite.
+   */
   appendLog(event: Record<string, unknown>): void {
     const root = this.root();
     if (!root) return;
     const path = join(root, 'log.jsonl');
-    const line = JSON.stringify({ ts: Date.now(), ...event }) + '\n';
+    // Typed as the record it is, not narrowed to `{ ts: number }`: an event may
+    // carry its own `ts` and `kind`, and the mirror below reads both back off it.
+    const row: Record<string, unknown> = { ts: Date.now(), ...event };
+    const payload = JSON.stringify(row);
+    const line = payload + '\n';
     try {
       if (this.logBytes < 0) {
         try { this.logBytes = statSync(path).size; } catch { this.logBytes = 0; }
@@ -2550,6 +2753,13 @@ export class HiveManager {
       appendFileSync(path, line, 'utf8');
       this.logBytes += Buffer.byteLength(line);
     } catch { /* noop */ }
+    // Outside the try above, and last: the JSONL is already durable by here, so
+    // nothing the store does can reach it. Its own catch, because a SQLite
+    // failure is a mirror outage and not an event-log outage.
+    try {
+      const ts = typeof row.ts === 'number' ? row.ts : Date.now();
+      this.eventStore?.appendEvent(typeof row.kind === 'string' ? row.kind : 'event', payload, ts);
+    } catch { /* the mirror is best-effort by design — see the doc block above */ }
   }
 
   /**

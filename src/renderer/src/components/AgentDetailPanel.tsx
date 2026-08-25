@@ -17,6 +17,7 @@ import { GitTab } from './GitTab';
 import { Icon } from './Icon';
 import { McpConsentModal } from './McpConsentModal';
 import { useStore, type Agent } from '@/store/store';
+import { answerAskFromBanner } from '@/hooks/useHive';
 import { usePtyParser } from '@/hooks/usePtyParser';
 import {
   inferAgentProvider,
@@ -220,7 +221,11 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
       {agent.blockReason && (
         <BlockedBanner
           reason={agent.blockReason}
-          onAction={(_label, send) => {
+          onAction={(label, send) => {
+            // GATE-05 — an ask goes to the approval IPC and NEVER to a PTY (ADR-0001).
+            // The shipped decision, shared with CommandCenterPanel so a security branch
+            // cannot drift into two versions; it returns true when it took the click.
+            if (answerAskFromBanner(agent, label)) return;
             // `send` is the literal keystrokes for the prompt on screen ('y\r').
             // No pty, or a purely informational action, means nothing to type —
             // clear the banner either way so a stale prompt does not sit here

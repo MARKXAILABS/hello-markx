@@ -1,7 +1,7 @@
 import * as pty from 'node-pty';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { resolveCommand, userShellPath } from './shellEnv';
+import { allowFromEnv, resolveCommand, userShellPath } from './shellEnv';
 import { expandTilde } from './fs';
 import { projectDir } from './transcript';
 import { ensureKilled } from './procKill';
@@ -55,6 +55,16 @@ export interface HiddenClaudeOptions {
   timeoutMs?: number;
   /** Extra env merged over the resolved shell env (e.g. the shared MemPalace). */
   env?: Record<string, string>;
+  /** GATE-02 — extra `process.env` NAMES this session may inherit past the
+   *  `allowFromEnv` allowlist. Currently UNPOPULATED: `runHiddenClaude`'s only
+   *  caller is `reflect.ts`, and reaching `readConfig()` from here would import
+   *  `./config` → `./db` → `better-sqlite3` into a module graph that
+   *  `test/memory-hygiene.test.cjs` loads BEFORE it injects its sqlite fake
+   *  (measured: three tests fail). Recorded as ceiling item (h) in shellEnv.ts —
+   *  an operator whose BYOK key comes from their own shell loses reflection with
+   *  no way to re-admit it, and the fix is to thread the config value at
+   *  `reflect.ts`'s call site in a phase that also owns that test file. */
+  envPassThrough?: readonly string[];
 }
 
 export interface HiddenClaudeResult {
@@ -151,7 +161,11 @@ export function runHiddenClaude(prompt: string, opts: HiddenClaudeOptions): Prom
         rows: 50,
         cwd: opts.cwd,
         env: {
-          ...process.env,
+          // GATE-02 — this spawn runs `--permission-mode bypassPermissions` over
+          // agent-authored, often web-scraped text (see the NEVER_ALLOWED_TOOLS
+          // note above), which makes it the most injection-exposed process in the
+          // app. It inherited the operator's whole environment until this line.
+          ...allowFromEnv(process.env, opts.envPassThrough ?? []),
           PATH: userShellPath(),
           ...(opts.env ?? {}),
         } as Record<string, string>,

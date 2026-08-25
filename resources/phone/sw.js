@@ -33,7 +33,7 @@ self.addEventListener('push', function (event) {
       // The body is the fixed phrase, unconditionally — the question text is
       // NEVER in the notification. It renders on a locked screen, and the
       // floor's questions quote source, paths and occasionally secrets.
-      body: 'is waiting on you',
+      body: (typeof data.body === 'string' && data.body) ? data.body : 'is waiting on you',
       // Re-poll replaces rather than stacks a notification for the same ask.
       tag: 'ask:' + taskId,
       data: { taskId: taskId }

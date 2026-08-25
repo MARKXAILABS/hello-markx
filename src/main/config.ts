@@ -7,10 +7,12 @@ import {
   defaultCommandForProvider,
   inferAgentProvider,
   providerPreset,
+  sandboxFlagsForProvider,
   type AgentProvider
 } from '../shared/agentProvider';
 import { defaultMcpDefaults, MCP_CATALOG, MCP_GRANT_PREFIX } from '../shared/mcpCatalog';
 import { expandTilde, normalizeHiveHome } from './fs';
+import { DEFAULT_HOST_ALLOWLIST } from './commandShape';
 import { PersistStore } from './db';
 import { deleteSecret, deleteSecretsWithPrefix, getSecret, setSecret } from './integrations';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
@@ -355,6 +357,11 @@ export interface HarnessConfig {
   providerBaseUrls?: Partial<Record<AgentProvider, string>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** GATE-04 / D-15. Per-CLI-provider sandbox opt-in. ABSENT === OFF, which is the
+   *  behaviour that shipped and therefore the verified fallback — no migration, no
+   *  explicit write. Only engines whose preset declares `sandboxFlags` can act on it
+   *  (codex alone today); it is inert for the rest. Mirrors the renderer store. */
+  providerSandbox?: Partial<Record<AgentProvider, boolean>>;
   /** Master toggle for the Slack → Michael's-queue integration. */
   slackEnabled?: boolean;
   /** Slack app signing secret (Basic Information → Signing Secret). Never logged. */
@@ -454,6 +461,30 @@ export interface HarnessConfig {
   /** Never condense a file smaller than this; also the section-trigger byte floor.
    *  DECIDED: 16 KB. */
   reflectMinBytes?: number;
+
+  // ─── GATE-02: the operator's env escape hatch ──────────────────────────────
+  /** Additional `process.env` NAMES (never values) that agent spawns may inherit
+   *  past the `allowFromEnv` allowlist in shellEnv.ts — e.g. `['CODEX_API_KEY']`
+   *  for a BYOK engine whose key the operator exported in their own shell rather
+   *  than configuring in the app. Config-file only, by design: it WIDENS a
+   *  security boundary, so it should cost more than a checkbox. Default [].
+   *  Reaches the child through `SpawnOptions.envPassThrough` at both of
+   *  `spawnAgentCore`'s `ptyManager.spawn(` sites; `hiddenClaude.ts` and
+   *  `memory.ts` cannot read it (shellEnv.ts ceiling item (h)). */
+  envPassThrough?: string[];
+
+  // ─── GATE-03: the outbound host allowlist ──────────────────────────────────
+  /** The hosts an agent's commands may reach without the operator being asked —
+   *  matched EXACTLY, after normalization, so `evil.github.com` does not inherit
+   *  `github.com`. Defaults to `DEFAULT_HOST_ALLOWLIST` (commandShape.ts), which
+   *  is marked `[ASSUMED]` and known incomplete: extend it here when a refusal
+   *  names a host this floor legitimately needs.
+   *
+   *  EMPTYING IT IS A DECISION, not a reset. An operator who clears this list has
+   *  said "no outbound hosts", and the judge denies every one of them rather than
+   *  asking once per host at 3am. Deleting the KEY is a different fact — that is
+   *  "not configured", and it takes the default above. */
+  hostAllowlist?: string[];
 }
 
 const DEFAULTS: HarnessConfig = {
@@ -461,6 +492,11 @@ const DEFAULTS: HarnessConfig = {
   harnessHome: null,
   recentHives: [],
   registeredRepos: [],
+  // GATE-02: no name is re-admitted unless the operator names it themselves.
+  envPassThrough: [],
+  // GATE-03: the shipped default, so the judge's fail-closed branch is only ever
+  // reached by an operator who emptied this list themselves.
+  hostAllowlist: [...DEFAULT_HOST_ALLOWLIST],
   autoMode: true,
   defaultCommand: 'claude',
   godProvider: 'claude',
@@ -1054,17 +1090,35 @@ export function modelForRole(
  *  flag here removes the interactive tool-approval prompt entirely (#4). Nothing
  *  in this function can put a human back in the loop — the enforcement that
  *  survives a bypass is the `permissions.deny` list in the per-agent settings the
- *  hive writes, plus `control.toolDecision` at PreToolUse. */
+ *  hive writes, plus `control.toolDecision` at PreToolUse.
+ *
+ *  …UNLESS the operator turned this engine's sandbox opt-in on (GATE-04/D-14), in
+ *  which case the bypass is REPLACED by `-s workspace-write --add-dir <agentDir>`:
+ *  the sandbox stays up and the agent's own folder is added as a writable root, so
+ *  hive housekeeping still works. Default is off and is byte-identical to what
+ *  shipped (D-15's verified fallback).
+ *
+ *  L-08 — THIS IS ONE OF TWO INDEPENDENT ASSEMBLERS. `buildSpawnCommand`
+ *  (src/renderer/src/store/config.ts) does the same job for the renderer, and the two
+ *  live in DIFFERENT tsconfig projects, so `npm run typecheck` cannot see a drift
+ *  between them. Any edit here must be mirrored there in the same commit;
+ *  test/spawn-command-parity.test.cjs calls BOTH and asserts they agree, and it is
+ *  the only thing that will catch you. */
 export function commandForAutoMode(
   config: HarnessConfig,
-  provider?: AgentProvider
+  provider?: AgentProvider,
+  agentDir?: string
 ): string {
   const p = provider ?? inferAgentProvider(config.defaultCommand);
   const base = p === 'claude' || p === 'custom'
     ? config.defaultCommand
     : defaultCommandForProvider(p, config.defaultCommand);
   if (!config.autoMode) return base;
-  const flag = autoModeFlagForProvider(p);
+  // Absent === off, so no existing config on disk changes behaviour and no migration
+  // is needed. `sandboxFlagsForProvider` is '' for every engine with no sandbox the
+  // floor can turn on, so an opt-in set for such an engine falls through to the flag.
+  const sandbox = config.providerSandbox?.[p] ? sandboxFlagsForProvider(p, agentDir) : '';
+  const flag = sandbox || autoModeFlagForProvider(p);
   return flag ? `${base} ${flag}` : base;
 }
 

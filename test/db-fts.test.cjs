@@ -82,7 +82,7 @@ function openStore(dbPath = path.join(tempDir(), 'harness.db')) {
 
 // ── the migration ────────────────────────────────────────────────────────────
 
-test('open() creates memory_fts as a real FTS5 table and lands on user_version 2', () => {
+test('open() creates memory_fts as a real FTS5 table, at or past user_version 2', () => {
   const dbPath = path.join(tempDir(), 'harness.db');
   const store = openStore(dbPath);
   store.close(); // checkpoints the WAL, so the schema is readable from the file
@@ -114,10 +114,24 @@ test('open() creates memory_fts as a real FTS5 table and lands on user_version 2
       + "that happens to equal an agent id matches that agent's rows — the cross-agent leak the "
       + 'WHERE predicate exists to close, reopened through the index instead.'
     );
-    assert.equal(
-      raw.pragma('user_version', { simple: true }),
-      2,
-      'user_version is not 2. Migration index 1 takes the DB from 1 to 2, so either the entry '
+    // AT LEAST 2, not exactly 2. Migration index 1 is what takes the DB from 1
+    // to 2, so this still catches the failure the clause was written for — the
+    // entry not appended, or a shipped one edited, either of which means every
+    // install that already ran it never gets this schema.
+    //
+    // The exact pin was retired when RECORD-01/02 appended index 2
+    // (user_version 3). It could not survive: db.ts's own header declares the
+    // rail APPEND-ONLY and reserves further migrations by name, so an equality
+    // here makes the FTS5 file go red for every future schema addition — a
+    // failure with nothing to do with FTS5, in the one file whose whole purpose
+    // is proving the index is real. What actually guards the FTS5 half is the
+    // three sqlite_master assertions above (the table exists, it is fts5,
+    // agent_id is UNINDEXED) plus repo-claims' MIGRATIONS entry-count claim;
+    // none of them is weakened by this line.
+    const version = raw.pragma('user_version', { simple: true });
+    assert.ok(
+      version >= 2,
+      `user_version is ${version}, below the 2 that migration index 1 produces. Either the entry `
       + 'was not appended or an existing one was edited — and editing a shipped migration means '
       + 'installs that already ran it never get this schema at all.'
     );

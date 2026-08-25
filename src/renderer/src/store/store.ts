@@ -26,6 +26,29 @@ export interface BlockReason {
     /** what we'd send to the tmux pane on click */
     send?: string;
   }>;
+  /** GATE-05. PRESENT means this is an open tool approval the floor is still
+   *  blocking on — answerable, expiring, and settled through the approval IPC.
+   *  ABSENT means a GATE-03 notice: the call was already denied and the agent
+   *  kept running, so there is nothing to answer. One field, and it is the whole
+   *  discriminator; every ask-shaped behaviour in BlockedBanner branches on it. */
+  askId?: string;
+  /** The ask's remaining life as a DURATION, measured by main at emit time
+   *  (`hooks.ts`'s `emitControl`). NEVER a deadline: the renderer's clock is not
+   *  main's, and a deadline is optimistic by exactly the skew — which tells the
+   *  operator they have time to answer a question that already auto-denied
+   *  (04-UI-SPEC rule G-3, the same contract the phone reads). */
+  expiresInMs?: number;
+  /** When THIS renderer received the ask. The countdown is re-derived from
+   *  `receivedAt + expiresInMs - Date.now()` on every tick and never decremented:
+   *  a backgrounded window throttles intervals, and a decremented counter drifts
+   *  arbitrarily far in the optimistic direction. */
+  receivedAt?: number;
+  /** Set when the ask resolves — answered here, answered on the phone, or
+   *  expired. The banner does NOT vanish: `actions` is emptied and this one line
+   *  replaces the action row beside `dismiss`, because a banner that silently
+   *  disappears leaves the operator unable to tell whether they approved
+   *  something (T-04-ASK-24). */
+  outcome?: string;
 }
 
 export interface Agent {
@@ -195,6 +218,27 @@ interface State {
    *  The empty-floor UI shows it so an uninstalled CLI reads as its real cause
    *  instead of a bare "EMPTY FLOOR". */
   godError?: string;
+  /** VIGIL-01 — a MIRROR of main's absence latch, never a second state machine.
+   *
+   *  `AbsenceWatchdog` (plan 04-11) publishes a `QuietSnapshot` on the setting
+   *  edge and `null` on the clearing edge, over the `'floor:quiet'` IPC channel
+   *  and through the preload's one `onFloorQuiet` hop. The titlebar chip renders
+   *  iff this is non-null: presence IS the signal, exactly as the PUBLIC chip's
+   *  is, so there is nothing to invent locally and nothing to poll.
+   *
+   *  `sinceMs` is a DURATION at the moment of that one publish, not a timestamp
+   *  — main's clock is not this window's. `receivedAt` is the renderer's own
+   *  anchor, stamped on arrival, and the chip renders `sinceMs + (now -
+   *  receivedAt)`: a duration plus a local zero, which is what lets the label
+   *  keep counting off a single push without either clock trusting the other.
+   *
+   *  `inFlight` is the board AT THE MOMENT OF THE TRANSITION — re-reading it
+   *  when the operator finally looks would report a different, possibly empty,
+   *  set, and the requirement is "with what was in flight when it stopped". */
+  floorQuiet:
+    | { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean; receivedAt: number }
+    | null;
+  setFloorQuiet: (s: { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean } | null) => void;
   /** Per-agent outgoing message queue (agent id → messages awaiting delivery).
    *  Lets the user keep "talking" to a busy agent: messages park here and are
    *  drained to the terminal one-by-one once the agent is free. */
@@ -719,6 +763,11 @@ export const useStore = create<State>((set) => ({
   sidebarWidth: initialSidebarWidth,
   sidebarTab: initialSidebarTab,
   godStatus: 'booting',
+  // Null until main's watchdog latches. Never seeded from localStorage: a stale
+  // "the floor stopped" chip on a floor that is moving is the one failure this
+  // mirror must not be capable of.
+  floorQuiet: null,
+  setFloorQuiet: (s) => set({ floorQuiet: s === null ? null : { ...s, receivedAt: Date.now() } }),
   // A VIEW of main's queue, filled by `setQueues` from main's push and from the
   // one-shot pull in useHive effect #4. Deliberately NOT seeded from
   // localStorage: main is the owner, and a stale local copy would render

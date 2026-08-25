@@ -38,6 +38,12 @@ function harness(overrides = {}) {
     }],
     inbox: { dev1: [{ id: 'm1', from: 'god' }] },
     paused: new Set(),
+    /** VIGIL-03: agents sitting on a prompt waiting for a human. In production
+     *  this is derived per-call from the PTY's own output ring
+     *  (boot.ts wires `matchBlockHint(ptyManager.outputTail(ptyId))`), so it is
+     *  a Set here rather than a fixed flag on the agent literal — a test can
+     *  flip it between ticks exactly like a real prompt appearing and clearing. */
+    blocked: new Set(),
     /** agentId → breaker level; absent = healthy. */
     breaker: {},
     /** The DURABLE half of a quiesce flip (index.ts appends it to the hive log). */
@@ -58,6 +64,7 @@ function harness(overrides = {}) {
       return { ok: true };
     },
     paused: (id) => state.paused.has(id),
+    blocked: (id) => state.blocked.has(id),
     // No durable home by default: `null` disables the main-owned MD queue, so
     // every pre-existing test drives exactly the loop it always drove. The queue
     // tests below pass a real path into a mkdtemp dir and read the bytes back.
@@ -287,6 +294,187 @@ test('the backstop is on the timer start() arms — not a method nobody schedule
   } finally {
     global.setInterval = realSetInterval;
   }
+});
+
+// ─── VIGIL-03: an agent parked on a prompt is not idled, and not mailed more ──
+
+/** Two agents, side by side, identical in every input the loop reads: both quiet
+ *  past QUIESCE_IDLE_MS, both painted, both breaker-healthy, both past boot grace,
+ *  both holding unread mail. The ONLY difference is `deps.blocked`, so every
+ *  assertion below is about that dep and nothing else.
+ *
+ *  The control half is not decoration (D-33/D-40): without it, a `quiesce` that
+ *  returned on its first line and a `tick` that never nudged would satisfy all
+ *  three negatives, and the block would pass against a loop that does nothing. */
+function blockedPair() {
+  const h = harness();
+  h.state.agents = [
+    { agentId: 'blockedAgent', ptyId: 'pty-blocked', provider: 'claude', hasOutput: true,
+      idleMs: 30_000, lastOutputAt: CLOCK0 - 30_000 },
+    { agentId: 'controlAgent', ptyId: 'pty-control', provider: 'claude', hasOutput: true,
+      idleMs: 30_000, lastOutputAt: CLOCK0 - 30_000 }
+  ];
+  h.state.inbox = {
+    blockedAgent: [{ id: 'm-blocked', from: 'god' }],
+    controlAgent: [{ id: 'm-control', from: 'god' }]
+  };
+  h.state.blocked.add('blockedAgent');
+  return h;
+}
+
+/** Asserted as "was THIS exact call made", never as a count of all calls:
+ *  `setStatus` legitimately fires for other agents in the same tick, so a bare
+ *  length assertion would go red or green for reasons unrelated to the guard. */
+const idledCount = (statuses, id) => statuses.filter((s) => s.id === id && s.status === 'idle').length;
+const stopsFor = (emitted, id) => emitted.filter(
+  (e) => e.channel === 'hive:hookEvent' && e.payload.event === 'Stop' && e.payload.agentId === id
+);
+const nudgesTo = (writes, ptyId) => writes.filter(
+  (w) => w.ptyId === ptyId && /new hive inbox message/i.test(w.data)
+);
+
+test('VIGIL-03: a blocked agent is not flipped idle by the quiesce backstop, with NO window attached', async () => {
+  // The harness `emit` collects but nothing consumes it, which is the real
+  // no-window behaviour — index.ts's `liveWebContents()?.send` is a documented
+  // no-op with no webContents. So the only thing that can carry (or wrongly
+  // carry) this flip is the DURABLE half, and that is the whole of VIGIL-03:
+  // `stopArmDecision` (useHive.ts:169) guards only the renderer's reaction to
+  // the synthesized Stop, and on a headless floor there is no renderer to guard
+  // with — the durable status is already wrong before it would ever run.
+  const h = blockedPair();
+
+  await h.svc.tick();
+
+  assert.equal(
+    idledCount(h.state.statuses, 'blockedAgent'), 0,
+    'setStatus(blockedAgent, idle): an agent sitting on a prompt was flipped idle by the durable backstop'
+  );
+  assert.equal(
+    idledCount(h.state.statuses, 'controlAgent'), 1,
+    'setStatus(controlAgent, idle): the control agent was NOT flipped — the backstop is skipping everybody'
+  );
+});
+
+test('VIGIL-03: no synthesized Stop is emitted for a blocked agent, and one IS for the control', async () => {
+  const h = blockedPair();
+
+  await h.svc.tick();
+
+  assert.equal(
+    stopsFor(h.emitted, 'blockedAgent').length, 0,
+    'a synthesized turn-end was announced for an agent that has not finished its turn — it is waiting for a human'
+  );
+  const control = stopsFor(h.emitted, 'controlAgent');
+  assert.equal(control.length, 1, 'the control agent got no synthesized Stop — the backstop is not running at all');
+  assert.equal(control[0].payload.synthesized, true, 'the control Stop was not marked synthesized');
+});
+
+test('VIGIL-03: the wake nudge does not mail a blocked agent more work, and does mail the control', async () => {
+  // The nudge's five filters (switching, paused, vetoed, boot grace, idleMs) are
+  // all about the FLOOR's state and none about the AGENT's, which is why a blocked
+  // agent gets typed into today: it is quiet by definition, so it reads as ready.
+  const h = blockedPair();
+
+  await h.svc.tick();
+
+  assert.equal(
+    nudgesTo(h.writes, 'pty-blocked').length, 0,
+    'WAKE_NUDGE was typed into a terminal parked on a prompt — that text lands in the prompt box, not in a turn'
+  );
+  assert.equal(
+    nudgesTo(h.writes, 'pty-control').length, 1,
+    'WAKE_NUDGE never reached the control agent — the nudge is off entirely, so the negative above proves nothing'
+  );
+});
+
+test('VIGIL-03: a blocked agent LEAVES the quiesced set, so it re-announces when it unblocks', async () => {
+  // Delete-and-continue, not bare continue (T-04-BLK-03). The ordering here is
+  // what lets the test tell the two apart: the agent is announced FIRST, so it is
+  // already a member of `quiesced` when the block arrives. A bare `continue`
+  // leaves that stale membership in place and swallows the real turn-end that
+  // follows. `delivery.ts:733` is the in-file precedent for pruning that set.
+  const h = harness();
+  h.state.inbox.dev1 = [];             // quiesce path only, no mail
+
+  await h.svc.tick();
+  assert.equal(idledCount(h.state.statuses, 'dev1'), 1, 'the quiet agent was not announced at all');
+
+  h.state.blocked.add('dev1');         // a prompt appears; the PTY stays silent
+  await h.svc.tick();
+  assert.equal(idledCount(h.state.statuses, 'dev1'), 1, 'a blocked agent was announced idle');
+
+  h.state.blocked.delete('dev1');      // the human answered; the PTY is still quiet
+  await h.svc.tick();
+  assert.equal(
+    idledCount(h.state.statuses, 'dev1'), 2,
+    'the unblocked agent never re-announced: a stale `quiesced` membership swallowed its real turn-end'
+  );
+
+  await h.svc.tick();
+  assert.equal(
+    idledCount(h.state.statuses, 'dev1'), 2,
+    'the re-announcement is not edge-triggered — it repeats on every tick'
+  );
+});
+
+// ─── VIGIL-03: the producer the guard above reads in production ──────────────
+
+// Loaded on its own, from src/shared, with no renderer module and no electron in
+// sight — which is the property that makes the guard reachable on a headless
+// floor. `test/block-detect.test.cjs` (plan 04-07) asserts that isolation with a
+// require.cache scan; these cases assert the three bounds the value carries.
+const { BLOCK_HINTS, matchBlockHint } = loadTs('src/shared/blockHints.ts');
+
+test('VIGIL-03: matchBlockHint returns the matched prompt LINE, and null for ordinary output', async () => {
+  // The card paints the return value (04-UI-SPEC V-2), so a boolean would not do.
+  assert.equal(
+    matchBlockHint('running tests…\nDo you want to proceed? (y/n)\n'),
+    'Do you want to proceed? (y/n)',
+    'the prompt line the agent is sitting on was not returned'
+  );
+  // The positive control for the negatives below: without it every one of them
+  // is satisfied by a matcher that returns null unconditionally.
+  assert.equal(
+    matchBlockHint('nothing interesting here'), null,
+    'ordinary output was read as a human prompt — the matcher matches everything'
+  );
+  assert.ok(BLOCK_HINTS.length >= 5, 'the hint list is shorter than the one it was moved from');
+});
+
+test('VIGIL-03: the newest matching line wins — a TUI repaints its whole frame', async () => {
+  const tail = 'Do you want to proceed?\n…\n❯ 1. Yes\n';
+  assert.equal(matchBlockHint(tail), '❯ 1. Yes', 'an older paint of the frame won over the live one');
+});
+
+test('VIGIL-03: control bytes are stripped and the line is capped at 120 chars, in that order', async () => {
+  // T-04-BLK-05: model-controlled text bound for a fixed-width row. Capping
+  // first would leave a truncated escape sequence in a string React inserts
+  // into the DOM as text, so the order is asserted, not just the two bounds.
+  const noisy = '\x1b[2J\x1b]0;title\x07\x1b[1;32mDo you want to proceed\x1b[0m? ' + 'x'.repeat(500) + ' (y/n)';
+  const got = matchBlockHint(noisy);
+  assert.ok(got, 'a prompt buried in ANSI never matched at all');
+  assert.ok(got.length <= 120, `the returned line is ${got.length} chars — an unbounded model string reached the row`);
+  assert.ok(!got.includes('\x1b'), 'an escape byte survived into the string a renderer paints');
+  assert.match(got, /^Do you want to proceed\? x+$/, 'stripping ran after the cap, or ate more than the controls');
+});
+
+test('VIGIL-03: only the recent window is examined — a prompt 300 KiB back is not a live prompt', async () => {
+  // T-04-BLK-06 (cost: this runs per live agent per 4 s tick over a 256 KiB ring)
+  // AND the recovery path: the agent printed past the prompt, so it is no longer
+  // sitting on it. Asserted rather than intended.
+  const stale = 'Do you want to proceed? (y/n)\n' + 'still working…\n'.repeat(20_000);
+  assert.ok(stale.length > 300_000, 'the fixture is smaller than the ring it stands in for');
+  assert.equal(
+    matchBlockHint(stale), null,
+    'a prompt that scrolled 300 KiB out of view still read as blocked — the window bound is missing'
+  );
+  // Same string, prompt at the END: the window bound must not be a matcher that
+  // never matches long inputs.
+  assert.equal(
+    matchBlockHint(stale + 'Do you want to proceed? (y/n)\n'),
+    'Do you want to proceed? (y/n)',
+    'a live prompt at the end of a 300 KiB ring was missed'
+  );
 });
 
 // ─── failover: the guard that used to die with the window ───────────────────

@@ -32,6 +32,7 @@ Six phases, coarse granularity. Phases 1-3 keep the shape of GitHub issue #73.
 ## Phases
 
 **Phase Numbering:**
+
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
@@ -47,6 +48,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Phase Details
 
 ### Phase 1: Finish the Floor
+
 **Goal**: Every claim the project makes about itself is true — all 20 open floor-inspection
 issues are closed, and each closure was checked against source and a live test run, not
 against an agent's report. This comes first regardless of what is more interesting, because
@@ -62,11 +64,13 @@ mean marking Phase 1 green against code that does not do what the criterion says
   a 1 MB tail (`COST_TAIL_BYTES`) so a long card's early spend falls out of the window and
   `over` reads false when it is true. Enforcing a cap against that number is worse than having
   no cap.
+
 - **VERDICT-02 + VERDICT-03 ship with FLOOR-08.** As written, FLOOR-08 is satisfiable by
   `sweepTaskReviews` as it stands today: it fires only on the transition to done and
   `continue`s when `leastLoadedIdle` returns nothing, so a card finishing while every other
   agent is busy is never reviewed again, silently — and a reviewer that cannot receive mail
   can still be selected, routing the review into a black hole.
+
 - **GATE-01 is new to this phase.** `hooks.ts:11-18` calls the socket the app's one local
   trust boundary. PR #76 fixed the half that was simply broken (no shim set `payload.sock_token`,
   so `authorized()` rejected every hook). What remains is the security half: one floor-wide
@@ -77,6 +81,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
 **Depends on**: Nothing (first phase)
 **Requirements**: FLOOR-01, FLOOR-02, FLOOR-03, FLOOR-04, FLOOR-05, FLOOR-06, FLOOR-07, FLOOR-08, FLOOR-09, FLOOR-10, FLOOR-11, FLOOR-12, FLOOR-13, FLOOR-14, FLOOR-15, FLOOR-16, FLOOR-17, FLOOR-18, GATE-01, RECORD-03, RECORD-04, VERDICT-02, VERDICT-03
 **Success Criteria** (what must be TRUE):
+
   1. **Autonomy survives the window.** With the app window closed, a message composed in the
      UI still reaches its recipient's inbox and is typed into that agent's terminal, and an
      agent that goes idle mid-queue is still woken. The Stop-drain is either live under
@@ -85,6 +90,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
      four passing tests, so this branch is already satisfied; what remains is the queue-drain, the
      idle-quiesce backstop, and HIVE.md's four stale denials** — `grep` finds no doc
      promising a code path that does not run. — FLOOR-02
+
   2. **What ships is on a supported runtime and its provenance is checkable.** The app runs on
      Electron 43.x — **restated 2026-08-20 (D-02): "38+" is stale, because Electron 38 is itself
      end-of-life and a literal reading would let this phase ship the exact unsupported-runtime defect
@@ -95,6 +101,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
      intention. The docs say plainly that this does **not** suppress SmartScreen — paid signing
      is out on the zero-recurring-cost constraint, and the roadmap does not pretend otherwise.
      — FLOOR-03, FLOOR-06
+
   3. **Spend, secrets and agent identity are contained, not merely observed.** A secret written
      into an agent's file does not appear in `git log -p` of the hive. A task whose
      `budget-tokens` cap is exceeded is actually stopped or escalated — something consumes
@@ -107,6 +114,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
      `echo $HIVE_SOCK_TOKEN` inside agent A's terminal yields nothing that authenticates as
      agent B, because tokens are per-agent and bound to `agent_id` server-side.
      — FLOOR-04, FLOOR-09, FLOOR-10, RECORD-03, RECORD-04, GATE-01
+
   4. **The floor is legible to the operator watching it.** An agent card shows at a glance
      that the agent runs with permissions bypassed; the four renderings of an agent agree on
      what they show, cost included; the sidebar collapses responsively; every icon button
@@ -115,6 +123,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
      clicking it focuses that agent; the log folder opens from Settings. A PTY byte does not
      re-render the roster, and the terminal pool is bounded and disposes on every drop path.
      — FLOOR-01, FLOOR-05, FLOOR-11, FLOOR-12, FLOOR-13, FLOOR-14
+
   5. **The protocol closes its own loops and the issue list is honest.** An unanswered
      `requires_reply` is chased rather than forgotten. A task marked done is confirmed by an
      agent other than the one that claimed it — **and** a card that flips to done while every
@@ -131,6 +140,7 @@ mean marking Phase 1 green against code that does not do what the criterion says
 **Plans**: 31 plans — the original 23 across 9 waves, plus 8 gap-closure plans (`/gsd:plan-phase 1 --gaps`) numbered in their own waves 1-4, run with `/gsd:execute-phase 1 --gaps-only`
 
 Plans:
+
 - [ ] 01-01-PLAN.md — Electron 32 → 43.x runtime bump (gates every other plan) + the load-ts.cjs wave-0 loader fixes
 - [x] 01-02-PLAN.md — GATE-01 — per-agent hook tokens bound to agent_id server-side; the floor-wide secret deleted
 - [x] 01-03-PLAN.md — FLOOR-08 / VERDICT-02 / VERDICT-03 — the review obligation set; the refuse→redo hole; canReceiveInbox pinned
@@ -162,9 +172,11 @@ Plans:
 - [x] 01-29-PLAN.md — GAP: the AUTO chip reads a bypass the operator typed on a custom agent, through one tokenized matcher shared by every arm (both sides of an `=`, explicit empty-flag guard) — measured 6 of 12 rows failing before, 0 of 12 after, with the enshrining assertion INVERTED and the over-report pinned as a decision; the model chip bounded behind a named MODEL_CHIP_MAX_W with its gate on the chip’s OWN title, because the card emits four other elements already carrying all three guards; the MIN_WIN / SIDEBAR_COLLAPSE_WIDTH / DESIGN.md pin SEEN failing against an inline fixture of the pre-fix declaration (not a `git show` — every checkout in ci.yml is a depth-1 clone), with src/main/index.ts and DESIGN.md provably untouched; and splitterReachableMax taking the 1024–1279 band from 236 persisting writes to 0 while keeping #38’s rescue and the 664 drag bound
 - [x] 01-30-PLAN.md — GAP: two win32 non-runs become CONDITIONAL runner skips (one converted, one SPLIT — the mirror polarity — each proven conditional by poisoning its own assertion); the shim sock_token pin is comment-stripped and assignment-shaped, red for all six templates against the real hive.ts; `npm test` pinned byte-exact and red under four disarm shapes; the electron-updater feed and blockmaps brought inside the attestation with the built-nothing tripwire re-split so a feed with no installers fails the job. proc-kill's five invisible cases and engine-parity's byte-level drive handed to 01-31's register by name
 - [x] 01-31-PLAN.md — GAP: all THIRTEEN doc anchors re-derived at wave-4 HEAD and thirteen found stale — including the four an earlier sweep certified correct, because 01-24/01-25/01-26 each insert above them — so they are now written as `<file>.ts <symbol>()` and frozen by a `STALE_ANCHORS` denial table run RED 6/6 against the pre-fix blobs; the last six "Enterprise Knowledge Graph" sites renamed over a **shipped-surface** walker (explicit roots + extension allow-list, 315 files, `dist`/`out`/`.planning` outside by construction) PROVED to contain `SKILL.md`/`README.md`/`DESIGN.md` and demonstrated RED against `SKILL.md` specifically — not the `.ts`-only renderer walker, which would have missed it; a cross-file pin that no shipped doc states a 1280 minimum, confirming 01-25's `DESIGN.md` hand-off is discharged; the requirement rows restated at source with **GATE-01 adjudicated DOWN** against 01-25's `requirements-completed` (clause 2 is still false via `/proc/<pid>/environ`, and 01-24 declined it for the same reason) and **no box ticked** — 10/61 before and after; the win32 skip ceiling DERIVED from the TAP at **7**, all members named by title, re-frozen at `≤` with the move justified as relabelled non-runs (`pass = 531 − 2 + N_run`); and one register with **48 rows** (35 code, 5 recorded behaviour changes, 8 operator-blocked), derived by sweeping all seven landed SUMMARYs, nine owners re-homed off already-landed plans, three rows the seed did not carry
+
 **UI hint**: yes
 
 ### Phase 2: The Daemon and the Protocol
+
 **Goal**: The office stops depending on a window and stops depending on one engine. Agents
 spawn, mail moves and failover completes entirely in main; the operator reaches the floor
 from an Android phone; all eleven engines have an inbox, cost accounting and an honest
@@ -193,6 +205,7 @@ baseline — so the roadmap's original figure was stale before this phase's firs
   per-provider installers and template literals at `hive.ts:679-820` and `:3074-3562` — which
   is the seam list STRUCT-02 names. Doing the extraction as a separate phase means opening
   the same files twice.
+
 - **Without the extraction, DAEMON-01 is unverifiable.** `index.ts` imports `electron`, so it
   cannot be loaded under `node --test`; a headless boot path added in place would be
   untestable by construction — **corrected 2026-08-24 (D-02): the mechanism was always wrong,
@@ -203,6 +216,7 @@ baseline — so the roadmap's original figure was stale before this phase's firs
   `test/boot-floor.test.cjs` — never a line count**. The extraction is what turns "runs
   headless" from a claim into a test — which is the whole point of the project's
   verification-honesty rule.
+
 - **It must not go in Phase 1.** Phase 1 is small, localised fixes. Landing a 5,620-line
   refactor underneath them would put every fix into moving code and put the "finish the
   floor" goal at risk — **corrected 2026-08-24 (D-02): 5,620 is the same stale pre-split
@@ -222,6 +236,7 @@ twice against two Electron majors), and GATE-01 (the tunnel and the phone put an
 authenticated door in front of a floor whose internal identity must already be real).
 **Requirements**: DAEMON-01, DAEMON-02, DAEMON-03, DAEMON-04, DAEMON-05, GSD-06, PARITY-01a, PARITY-01b, PARITY-02, PARITY-03, STRUCT-01, STRUCT-02
 **Success Criteria** (what must be TRUE):
+
   1. **[INTERNAL GATE — must be green before DAEMON-01 work starts] The god-files no longer
      block tests.** `src/main/index.ts` and `src/main/hive.ts` are split along the seams their
      own file headers name (agent lifecycle, shutdown, scheduler, ephemeral workers, IPC
@@ -238,11 +253,13 @@ authenticated door in front of a floor whose internal identity must already be r
      this criterion is verified green — the extraction is the schedule risk, and running it
      underneath the daemon work is how four requirements slip together.
      — STRUCT-01, STRUCT-02
+
   2. **The floor runs with no window.** Started headless — or with the window quit — agents
      still spawn, mail still routes between them, and an account failover still completes end
      to end. Verifiable two ways: a live run with no window, and a `node --test` case that
      drives the boot path without an Electron binary (which criterion 1 is what makes
      possible). — DAEMON-01
+
   3. **The operator reaches the floor from a phone, and the answer reaches the right agent.**
      From an Android phone, using the PWA served by the daemon and added to the home screen,
      over an authenticated connection, the operator sees what needs a human and answers it —
@@ -258,6 +275,7 @@ authenticated door in front of a floor whose internal identity must already be r
      intended agent. If no real device is available at plan time, the honest outcome is a
      localhost-verified auth path recorded as such — never a claim of completion.
      — DAEMON-02, DAEMON-03, GSD-06
+
   4. **What is exposed is exposed on purpose.** Installing an MCP server for an agent requires
      an explicit consent step, and that agent's card afterwards shows which servers it has.
      The public tunnel is off by default and is never enabled as a side effect of anything
@@ -271,6 +289,7 @@ authenticated door in front of a floor whose internal identity must already be r
      criterion's wording is not widened to match — the degradation is recorded, not hidden**;
      and `stop()` genuinely closes it — verified by a request to the public URL failing after stop,
      not by the absence of an error. — DAEMON-04, DAEMON-05
+
   5. **Every engine is a first-class citizen, or the UI says so before it matters.** Every
      engine that can have a routed inbox has one — mail addressed to it arrives in its inbox
      and is delivered, not bounced to the god. For any engine that genuinely cannot receive
@@ -294,7 +313,9 @@ authenticated door in front of a floor whose internal identity must already be r
      — PARITY-01a, PARITY-01b, PARITY-02, PARITY-03
 **Plans**: 12 plans across 9 waves. **Waves 1-2 are criterion 1's internal gate and nothing else may
 start until they are green**: 02-01 (STRUCT-02, splits `hive.ts`) → 02-02 (STRUCT-01, `src/main/floor/`
+
 + `bootFloor()`, gate proof = a passing `test/boot-floor.test.cjs`). Then 02-03 (DAEMON-01, headless) →
+
 02-04 (DAEMON-05, the killable tunnel) ‖ 02-07 (PARITY-01a/02/03, the engine ledger) → 02-11 (DAEMON-04,
 per-agent MCP) → 02-05 (DAEMON-02/03, the door) ‖ 02-06 (PARITY-01b, what the card admits) ‖ 02-08
 (GSD-06) → 02-09 (DAEMON-02, the phone bundle) → 02-10 (DAEMON-05, the PUBLIC chip) → 02-12 (PARITY-03,
@@ -318,6 +339,7 @@ corrected all six in wave 9, in place above, each marked with its own date and D
 **UI hint**: yes
 
 ### Phase 3: Scale and Observability
+
 **Goal**: One operator runs more than one floor without the floors leaking into each other,
 and can see what happened yesterday without having been watching.
 
@@ -330,8 +352,10 @@ named in REQUIREMENTS.md's own text, and both are recorded here rather than quie
 | SCALE-01 (floors do not leak) | **RECALL-02** (Phase 5) | Isolation is enforced by a `--wing` flag the agent supplies and could simply omit. Cooperative, not enforced |
 
 Two ways to resolve, operator's call — the roadmap does not hide the choice:
+
 1. **Run Phase 3 after Phases 4 and 5** (execution order `1 → 2 → 4 → 5 → 3 → 6`). Both
    criteria then hold under a skeptic's test on the day they are marked green.
+
 2. **Run in numeric order and mark the residual gap.** Phase 3 ships the timeline UI and the
    per-project split; SCALE-03 and SCALE-01 stay open concerns until Phase 4's RECORD-02 and
    Phase 5's RECALL-02 land, and are **re-verified after Phase 5** rather than closed in
@@ -343,18 +367,22 @@ from STRUCT-02, and SCALE-05's single card needs PARITY-02's all-engine cost. **
 SCALE-03 on RECORD-02 (Phase 4), SCALE-01 on RECALL-02 (Phase 5), per the table above.
 **Requirements**: SCALE-01, SCALE-02, SCALE-03, SCALE-04, SCALE-05
 **Success Criteria** (what must be TRUE):
+
   1. **Two floors do not leak.** With two projects running side by side, an agent in project
      X cannot recall anything an agent in project Y wrote to memory, and neither project's
      task ledger is visible from the other. *Skeptic's check, and the reason for the forward
      dependency above: the agent must be made to ask for everything with no scope flag. If it
      still gets project Y's notes, this criterion is not met — RECALL-02 is what makes it
      enforced rather than cooperative.* — SCALE-01
+
   2. **A floor comes up in one action.** A team template or bulk import creates a populated
      floor without hiring agents one at a time. — SCALE-02
+
   3. **Yesterday is replayable.** For a day that has already happened, every hive event,
      envelope and cost appears on one scrubbable timeline. *Skeptic's check: pick a day whose
      log passed 8 MB. If the early hours are missing, this criterion is not met — RECORD-02 is
      the storage this replay reads.* — SCALE-03
+
   4. **The operator learns what happened without opening the app.** A daily digest reaches
      the operator through an existing channel, and a single agent card shows cost, duration,
      context, account and block state together. — SCALE-04, SCALE-05
@@ -373,6 +401,7 @@ Plans:
 **UI hint**: yes
 
 ### Phase 4: Overnight on a Repo That Matters
+
 **Goal**: The floor can be left running unattended on a repository whose contents matter. That
 costs three things it does not have: an agent's blast radius bounded in main rather than in one
 engine's settings file, a record of what happened that is still on disk after a crash, and a
@@ -398,6 +427,7 @@ must be addressable to the blocked worker), and STRUCT-01 (the scheduler/heartbe
 phase's watchdog lives in).
 **Requirements**: GATE-02, GATE-03, GATE-04, GATE-05, RECORD-01, RECORD-02, RECORD-05, VIGIL-01, VIGIL-02, VIGIL-03, VIGIL-04
 **Success Criteria** (what must be TRUE):
+
   1. **Blast radius is bounded in main, on every engine — not in one engine's settings file.**
      Running `env` inside any agent's terminal shows the hive's own variables and none of the
      operator's cloud, git or API credentials. And `sh -c "rm -rf …"`, `git push origin +main`,
@@ -405,6 +435,25 @@ phase's watchdog lives in).
      Codex, a Grok, a pi and an OpenCode agent — judged in main against the actual command
      string, not by prefix matching in a settings file that only Claude Code reads.
      — GATE-02, GATE-03
+
+     > **ANNOTATED AT THE PHASE-4 CLOSE (plan 04-19, 2026-08-26), beside the original wording
+     > rather than replacing it, so the diff shows what the phase learned.** What this criterion
+     > names as four engines was **live-verified on none of them**. Judged in main: yes, and the
+     > judge reaches **seven** engines, refused **through the real `HookServer`** for
+     > Claude-shaped and Codex-shaped payloads in both command shapes, driven by the real shim as
+     > a child process. But **no live agent has ever been observed refused** — plan 04-13 task 4
+     > owned that measurement and recorded `LIVE GATE-03 REFUSAL: no`, meaning the experiment
+     > never ran (this machine's codex token is revoked), not that an agent sailed through. Of
+     > the four engines named above, **only Codex is installed here**; Grok, pi and OpenCode ship
+     > `LIVE-UNVERIFIED` because none of their CLIs is installed and an xAI key is a recurring
+     > cost `PROJECT.md` forbids. Two further limits are structural, not pending: the host arm is
+     > scoped to a **downloader's own argument**, so `git clone` against an unlisted host is
+     > **not** reached, and an **emptied** allowlist denies while an **unlisted** host asks.
+     > GATE-02's own live half ran on a real `claude` agent in both directions; its non-Claude
+     > clause is blocked with proven attribution. **Do not read this criterion as met for four
+     > engines in a later phase** — `SECURITY.md` § the honest cross-engine claim is the wording
+     > that is true, and `test/repo-claims.test.cjs` fails if it is ever inflated.
+
   2. **There is a third answer between allow and deny, and sandboxes are opt-in per engine.**
      An agent about to run something unrecoverable stops; the operator is asked wherever they
      are, including on the phone; the call proceeds only on an explicit yes; and the wait is
@@ -414,18 +463,21 @@ phase's watchdog lives in).
      and opt-in with a verified fallback to today's behaviour, never as a floor-wide flip whose
      failure mode is "the floor silently stops working at 3am".
      — GATE-04, GATE-05
+
   3. **The record survives the crash, and yesterday reads back whole.** Kill the app mid-run
      and restart it: "who wrote this file, and what did the floor run overnight" is answerable
      from disk, with agent, timestamp, tool and target for every tool call — not from an
      in-memory ring of 200 per agent that is thinnest exactly after a crash. And on a day whose
      hive log passed 8 MB, that day's events and cost are all still readable, so replay reads a
      day rather than a window. — RECORD-01, RECORD-02
+
   4. **One file can go back to 02:00 without taking three agents' work with it.** The floor
      writes periodic restore points; restoring one file to its 02:00 state leaves the
      operator's index, working tree, branches, `git status` and `git log` untouched, and the
      other agents' work in place. The restore points honour the hive repo's existing
      `UNTRACK_PATHS` discipline, so a fat untracked build directory never lands inside one.
      — RECORD-05
+
   5. **Nothing happening is itself an event, and waiting is visible.** With every agent quiet
      past the threshold — **including the case where the god itself died** — the operator is
      told **once**, with what was in flight when it stopped. A card whose owner died is back on
@@ -435,10 +487,68 @@ phase's watchdog lives in).
      more work. Every card and every unanswered ASK ME question renders its age, so a card nine
      hours in `doing` is distinguishable at a glance from one four minutes in.
      — VIGIL-01, VIGIL-02, VIGIL-03, VIGIL-04
-**Plans**: TBD
+**Plans**: **20 plans in 7 waves, 59 tasks** (planned 2026-08-25; revised the same day after red-team
+round 1). Sliced on `04-RESEARCH.md`'s four-track proposal (A = the gate, B = env + sandbox, C = the
+record, D = absence), with **one owner per file per wave** per D-35 and `04-PATTERNS.md`'s measured
+Collision Map. Two collisions were dissolved rather than serialized: VIGIL-01's timer lives in
+`floor/watchdog.ts` and reuses the already-wired `deps.notify`, so `index.ts` needs no VIGIL-01 edit at
+all; and the watchdog reads the ledger `rev` + `appendLog` rather than `tool_calls` or a per-card
+`updatedAt`, which dissolves S-3 and S-5 and buys the VIGIL and RECORD tracks full independence.
+
+**The revision's one structural change**, from `04-REDTEAM.md`'s systemic finding — `files_modified` had
+been checked for collisions but never for **completeness against what each plan's own prose said it must
+change**, leaving `src/main/floor/boot.ts` (the composition root) in no plan's scope for any of the five
+seams this phase adds there. `boot.ts` now has a named owner in every wave that needs it — 04-03 (w1, the
+`blocked` dep), 04-09 (w2, the restore timer), 04-11 (w3, the watchdog timer) and the new **04-20** (w5,
+the four `HookServer` seams) — and 04-20's whole job is a test that boots a real floor and observes each
+seam's effect, so a gate cannot ship green in a unit test and dead in production.
+
+Plans:
+**Wave 1**
+
+- [ ] 04-01-PLAN.md — wave 1 — Wave 0: the codex `--add-dir` spike (with a negative control) and the shared real-shim to real-HookServer harness — GATE-04, GATE-03, GATE-05
+- [ ] 04-02-PLAN.md — wave 1 — RECORD-01 + RECORD-02 storage: ONE migration, two tables, five `PersistStore` methods (S-4: `db.ts` has one owner for the whole phase)
+- [ ] 04-03-PLAN.md — wave 1 — VIGIL-03's durable guard at `delivery.ts:740` **plus its real producer wired at the composition root**, with a test that MUST be red against today's source
+- [ ] 04-04-PLAN.md — wave 1 — VIGIL-04 + VIGIL-02 ledger schema: `updatedAt` and `released` on `HiveTask`, stamped in BOTH writers
+- [ ] 04-05-PLAN.md — wave 1 — GATE-02's env allowlist at the one `pty.spawn` choke point, with its ceiling list and a live codex smoke (S-7: first in the GATE track, never mid-wave)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 04-06-PLAN.md — wave 2 — GATE-03's command-shape judge in main, before `protectedPathDenial` (L-01), fail-closed host allowlist, extended ceiling
+- [ ] 04-07-PLAN.md — wave 2 — VIGIL-03: one shared `BLOCK_HINTS` with the renderer's copy deleted, detection proven with no renderer module loaded, and the six engines it was never observed on named beside it
+- [ ] 04-08-PLAN.md — wave 2 — VIGIL-02's released card: same-tick release, branch enriched from the git call that already ran (L-09 option a)
+- [ ] 04-09-PLAN.md — wave 2 — RECORD-05's restore points over a shadow `GIT_DIR`, plus RECORD-02's `appendLog` mirror
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 04-10-PLAN.md — wave 3 — GATE-03's cross-engine reach (pi, OpenCode) and the honest claim, with the marker ledger reconciled
+- [ ] 04-11-PLAN.md — wave 3 — VIGIL-01's absence watchdog in the boot seam: one alarm per quiet edge, and it fires when the god is the dead one
+- [ ] 04-12-PLAN.md — wave 3 — VIGIL-04 + VIGIL-02 board surfaces: age on every card and ask, `DROPPED BY` on the row the assignee vacated
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 04-13-PLAN.md — wave 4 — GATE-04's per-engine codex sandbox opt-in, both splice sites (L-08), and a live run
+- [ ] 04-14-PLAN.md — wave 4 — GATE-03 denial legibility + VIGIL-03's swallowed badge, plus the measured 1.85:1 `PixelButton` fix
+- [ ] 04-15-PLAN.md — wave 4 — GATE-05's third answer, its registry and TTL, plus RECORD-01's writer on the hook socket
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 04-16-PLAN.md — wave 5 — GATE-05's shim poll loops (a poll, not a stream — L-02 measured a silent fail-open on grok and agy)
+- [ ] 04-17-PLAN.md — wave 5 — GATE-05 + VIGIL-01 on the phone, publishing into Phase 2's finished trust boundary
+- [ ] 04-20-PLAN.md — wave 5 — the composition root: the four `HookServer` seams supplied at the sole production `new HookServer(...)`, proven on a really-booted floor
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 04-18-PLAN.md — wave 6 — GATE-05's desktop banner and VIGIL-01's `QUIET` chip, with the titlebar constants re-measured
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 04-19-PLAN.md — wave 7 — phase close: SECURITY.md, TELEMETRY.md, REQUIREMENTS.md, the final ledger, and the honest open concerns
+
 **UI hint**: yes
 
 ### Phase 5: The Floor Gets Better at Its Own Job
+
 **Goal**: The floor stops depending on the operator to be its memory and its judgement. A
 review looks at what actually changed and records the check outcome; memory answers in
 milliseconds, is scoped by the server, says how old it is and whether it is still true, and is
@@ -466,18 +576,21 @@ outcome and a memory's provenance are durably written; on an in-memory ring, REC
 "agent, date, still-true" is gone after the restart that most needs it.
 **Requirements**: VERDICT-01, RECALL-01, RECALL-02, RECALL-03, RECALL-04, RECALL-05, STANDING-01, STANDING-02
 **Success Criteria** (what must be TRUE):
+
   1. **A review looks at what changed, and the card records the check, not just an opinion.**
      The reviewer receives the diff between base and the claimant's branch **and** the result of
      the repo's own check command; the card afterwards carries the check outcome. A card whose
      branch fails the repo's checks cannot be approved on prose alone, and reading the card
      afterwards distinguishes "the checks failed" from "the reviewer disliked the approach".
      — VERDICT-01
+
   2. **One recall command, milliseconds, all eleven engines, no optional CLI.** The same
      retrieval command issued from a Claude, a Codex, a Grok and a qwen terminal returns the
      same shape and answers in milliseconds, from a real FTS index in the already-open SQLite
      store, served **to** the agent over the already-authenticated hook socket. It is never a
      silent no-op because an optional CLI is absent, and never a cold model load behind a 120 s
      timeout when one is present. — RECALL-01
+
   3. **Scope is the server's judgement, and every hit is dated and current-or-not.** An agent in
      project X that asks for everything, omitting every scope flag it could omit, gets nothing
      from project Y — this is what makes FLOOR-07's and SCALE-01's isolation claims checkable
@@ -486,11 +599,13 @@ outcome and a memory's provenance are durably written; on an in-memory ring, REC
      decision still current?" is answered from that flag and "what depends on this card?" from
      `HiveTask.dependsOn` — with no second store built.
      — RECALL-02, RECALL-03, RECALL-04
+
   4. **The team's knowledge is a folder a human can read and edit.** `<harnessHome>` opens in
      Obsidian, Logseq, VS Code or plain `grep` as ordinary markdown with `[[wikilinks]]` the
      office parses itself; nothing is installed and nothing is paid for to read it. The
      operator hand-edits a wrong memory in a text editor and the floor picks up the change.
      — RECALL-05
+
   5. **Decisions survive the context window that heard them.** After a restart wipes the god's
      transcript, the god still knows what the week is for: one ledger card is marked the
      standing objective and its live state rides the roster line the god receives every turn.
@@ -502,6 +617,7 @@ outcome and a memory's provenance are durably written; on an in-memory ring, REC
 **UI hint**: yes
 
 ### Phase 6: The Office Runs the Process
+
 **Goal**: A GSD phase runs on this floor, unattended, and is genuinely better than running it in
 one terminal. Plus the two things that make that liveable: the operator's hands work, and the
 floor fits the operator's actual machine and accounts.
@@ -530,6 +646,7 @@ GSD-04's checkpoint needs GSD-06 and the phone (Phase 2) and GATE-05's approval 
 (Phase 4); GSD-05's card-state-aware reaper needs VIGIL-03 (Phase 4).
 **Requirements**: GSD-01, GSD-02, GSD-03, GSD-04, GSD-05, DESK-01, DESK-02, DESK-03, DESK-04, REACH-01, REACH-02, REACH-03
 **Success Criteria** (what must be TRUE):
+
   1. **A GSD phase runs on the floor and survives both the window and the app.** The operator
      mails the god "run phase 2" and the phase runs: each plan in the current wave becomes a
      card and an isolated worker with its own cost line, token cap, breaker and inbox. Closing
@@ -539,6 +656,7 @@ GSD-04's checkpoint needs GSD-06 and the phone (Phase 2) and GATE-05's approval 
      named error; it never degrades silently to a one-plan wave. `.planning/` is read one-way
      with a back-reference and is not written to — `git status` in `.planning/` is clean after
      a full wave. — GSD-01
+
   2. **The wave gate is code, not the orchestrator's care.** A wave whose plans declare
      overlapping `files_modified` **refuses to start**, naming the plans and the colliding
      files — the disjoint-ownership discipline that ran three multi-agent runs here with zero
@@ -546,12 +664,14 @@ GSD-04's checkpoint needs GSD-06 and the phone (Phase 2) and GATE-05's approval 
      only after a reviewer other than the executor has checked each plan against that plan's
      own written acceptance criteria, and a refusal returns the card to `doing` without
      involving the operator. — GSD-02, GSD-03
+
   3. **A gate reaches a human, and waiting for one is not fatal.** A plan that hits a
      checkpoint blocks its card, with the question on the ASK ME board showing what is stuck
      behind it; the operator answers from the desk or the phone and the answer types into that
      worker's terminal. A worker blocked on a question is still alive well past the idle-reap
      window, because the reaper reads card state rather than PTY silence. Running a GSD phase
      unattended no longer requires turning the gates off. — GSD-04, GSD-05
+
   4. **The operator's hands work.** "Kill all & quit" lists, per agent, dirty file count,
      commits ahead of base, queued-undelivered messages and unanswered questions — and still
      paints within a frame when git is slow. Up/Down and a fuzzy search recall a past prompt
@@ -561,6 +681,7 @@ GSD-04's checkpoint needs GSD-06 and the phone (Phase 2) and GATE-05's approval 
      renamed after hiring receives mail at its new name, shows the old name nowhere in the UI,
      and keeps its existing memory and ledger rows attributed to the same agent.
      — DESK-01, DESK-02, DESK-03, DESK-04
+
   5. **The floor fits this machine and these accounts, or says plainly that it does not.** Two
      Claude Code agents on one floor run under different Claude Code profiles — settings, MCP
      servers, permissions — and neither inherits the other's. A Claude agent pointed at Amazon
@@ -601,11 +722,14 @@ Carried from PROJECT.md; every phase inherits them:
   certificate, no paid notarization, no hosted embeddings, no metered tunnel. A capability that
   cannot be built under this rule ships with its limitation stated out loud — never quietly
   reinterpreted into something cheaper.
+
 - **Local-only personal tool, not a published product.** One operator, one machine, no
   distribution. Android-only for mobile — the phone surface is a PWA served by the daemon; iOS
   is out of scope entirely.
+
 - Node 22 for anything native — Node 24 has no `better-sqlite3` prebuild and breaks
   `node-pty`'s winpty gyp.
+
 - `package-lock.json` is written by npm 10, never npm 11.
 - All three CI platforms are hard gates. No `continue-on-error` may be added to the matrix.
 - **A partially-landed fix is an open concern, not a closed one.** "Fixed" is a claim until
@@ -613,8 +737,10 @@ Carried from PROJECT.md; every phase inherits them:
   reopened, and a Critical (#75) shipped because a three-file contract had no owner for its
   third file. Every success criterion above is written so a skeptic can check it by running or
   clicking something.
+
 - The repo stays public — GitHub Actions is unmetered on public repositories and CI is
   load-bearing here.
+
 - Accessibility stays in scope regardless of the personal-tool constraint: the sub-14px text and
   unlabelled icon buttons are a daily annoyance for the one person using this.
 

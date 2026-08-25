@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { ensureKilled } from './procKill';
+import { allowFromEnv } from './shellEnv';
 import type { PersistStore } from './db';
 
 /** Non-memory files `mempalace mine` must not ingest: the Claude Code hooks
@@ -282,7 +283,16 @@ export class MemoryManager {
 
   private childEnv(agentId?: string): NodeJS.ProcessEnv {
     return {
-      ...process.env,
+      // GATE-02 — filtered with an EMPTY pass-through list, deliberately.
+      // `mempalace` runs heuristics-only (`--no-llm`) and reads no BYOK key, and
+      // everything it does need — PATH, HOME/USERPROFILE, LOCALAPPDATA, TMP, and
+      // the proxy/CA names — is on ENV_ALLOW. Reaching the operator's list from
+      // here would need a MemoryManager constructor thunk (a `floor/boot.ts`
+      // line another plan owns this wave), and importing `./config` would give
+      // the one deliberately electron-free spawn site an electron dependency.
+      // Recorded as ceiling item (h) in shellEnv.ts, which is where the fix
+      // starts if a future MemPalace release grows an API-key path.
+      ...allowFromEnv(process.env, []),
       MEMPALACE_PALACE_PATH: this.palacePath(agentId) ?? '',
       MEMPALACE_EMBEDDING_MODEL: this.model()
     };

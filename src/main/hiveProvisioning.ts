@@ -17,7 +17,7 @@
  */
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
-  symlinkSync, copyFileSync, rmSync, chmodSync
+  symlinkSync, linkSync, copyFileSync, rmSync, chmodSync
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -29,6 +29,84 @@ import { MCP_CATALOG } from '../shared/mcpCatalog';
  *  local there too) so this module never imports the foundation-owned
  *  config type. */
 type McpDefaultsMap = { [id: string]: { enabled: boolean } } | undefined;
+
+// ─── GATE-05: the four numbers that have to move together ────────────────────
+//
+// D-08 in its own words: *"a plan that changes one number without the other
+// ships a gate that times out on the wrong side."* There are FOUR of them and
+// the outermost one is the engine's own PreToolUse hook timeout, which lives in
+// this file because this file is what writes it.
+//
+// WHY THE OUTERMOST ONE MATTERS MORE THAN IT LOOKS. The note at :210-223 below
+// records what exceeding it does, in this repo's own measured words: the hook is
+// KILLED and logged as *failed*, not denied. A killed shim writes no stdout, and
+// no stdout is ALLOW. So an ask TTL longer than the engine's budget turns
+// GATE-05's "times out to deny" into "times out to allow", silently, on the
+// ordinary path, with every test green. Every value in this repo before this
+// change was shorter than a two-minute ask: codex and kimi 30 s, grok ~5 s, and
+// Claude no key at all.
+//
+// The TTL is therefore DERIVED from the MINIMUM budget rather than written as a
+// literal — the shortest bound is the one that kills the shim first, and two
+// independently-authored numbers are exactly the drift D-08 forbids.
+
+/** PreToolUse ONLY. Every other event keeps its existing budget: widening them
+ *  costs latency on paths that have no verdict to wait for.
+ *
+ *  `[ASSUMED]` — no measurement in this session supports 150 specifically; it is
+ *  the smallest round number that leaves `ASK_TTL_MS` a workable phone-approval
+ *  window with margin. Verified IN BOUNDS for codex with no model spend, via the
+ *  no-spend check the note at :222-223 already names (`codex app-server` →
+ *  `initialize` → `hooks/list` reports the normalized `timeoutSec` per event);
+ *  codex's own resolver defaults to 600 when the key is omitted, so 150 is well
+ *  inside its range. See GATE-05 ceiling item (h) in hooks.ts for why five times
+ *  codex's previous 30 s is not a five-fold latency regression. */
+export const PRETOOLUSE_HOOK_TIMEOUT_SEC = 150;
+
+/** Claude Code's PreToolUse budget — a NUMBER, never a shrug.
+ *
+ *  PATH A TAKEN (plan 04-15). `hookSettings` below writes
+ *  `timeout: PRETOOLUSE_HOOK_TIMEOUT_SEC` on the PreToolUse entry and on no
+ *  other, so this app owns the value and the row closes by construction.
+ *
+ *  THE UNIT WAS CONFIRMED AGAINST THE INSTALLED BINARY, not assumed:
+ *  `claude --version` → **2.1.236 (Claude Code)**, and every hook runner inside
+ *  `@anthropic-ai/claude-code/bin/claude.exe` computes its budget as
+ *  `e.timeout ? e.timeout * 1000 : <default ms>` — so the key is SECONDS. The
+ *  command-hook runner (the branch that builds `CLAUDE_PROJECT_DIR` and honours
+ *  `CLAUDE_CODE_SHELL_PREFIX`) defaults to `600000` ms when the key is absent.
+ *  Reproduce with:
+ *    grep -a -o -E "timeout\?e\.timeout\*1000:[a-z_0-9]+" claude.exe
+ *  That measured default is 600 s, NOT the 60 s the plan assumed — which only
+ *  makes the pre-change position safer than believed, and changes nothing about
+ *  the direction: writing the value is still better than inheriting one that a
+ *  release can move without telling us. */
+export const CLAUDE_PRETOOLUSE_TIMEOUT_SEC = PRETOOLUSE_HOOK_TIMEOUT_SEC;
+
+/** The smallest PreToolUse budget any POLLING engine runs under.
+ *
+ *  grok and agy are absent from this minimum ON PURPOSE, and it is not because
+ *  their budgets are comfortable: their shims do not poll (GATE-05 ceiling item
+ *  (e) in hooks.ts), so their budgets cannot kill a waiting shim. Their configs
+ *  are left byte-identical because neither CLI is installed here and neither
+ *  `timeout` key's UNIT can be verified — writing `150` into a key that turns
+ *  out to read milliseconds would kill every grok PreToolUse hook before the
+ *  shim could answer, which is worse than today and undetectable. */
+export const MIN_PRETOOLUSE_SEC = Math.min(
+  PRETOOLUSE_HOOK_TIMEOUT_SEC, CLAUDE_PRETOOLUSE_TIMEOUT_SEC
+);
+
+/** The server-side ask TTL, DERIVED so it and the engine budget cannot drift.
+ *
+ *  The 30 s margin covers shim cold-start (the note at :216-218 measured
+ *  0.6-0.7 s under 8 concurrent spawns) plus the final poll round trip.
+ *
+ *  ASSERTED THREE WAYS in test/control.test.cjs, because the obvious one-sided
+ *  assertion `ASK_TTL_MS <= MIN_PRETOOLUSE_SEC * 1000` cannot fail: the TTL is
+ *  DERIVED from that bound, so `SEC = 31` (a one-second window to answer on a
+ *  phone) and `SEC = 5` (`TTL = -25000` — every ask expired at birth, and
+ *  `-25000 <= 5000` passes) both satisfy it. The lower bounds are what bite. */
+export const ASK_TTL_MS = (MIN_PRETOOLUSE_SEC - 30) * 1000;
 
 /**
  * The standing `permissions.deny` list written into every hive-authored
@@ -170,7 +248,7 @@ export function installAgyHooks(root: string | null, nodeRunUnquoted: NodeRunFn)
  *  untouched. The user's ~/.codex/auth.json is linked in and their config.toml is
  *  copied + extended (login + model/provider/trust settings still apply).
  *  Returns the CODEX_HOME path for the caller to put in the worker's env. */
-export function installCodexHooks(dir: string, shimPath: string | null, nodeRunUnquoted: NodeRunFn): string {
+export function installCodexHooks(dir: string, shimPath: string | null, nodeRunUnquoted: NodeRunFn, cwd: string): string {
   const home = join(dir, '.codex');
   try {
     mkdirSync(home, { recursive: true });
@@ -179,11 +257,34 @@ export function installCodexHooks(dir: string, shimPath: string | null, nodeRunU
     // (config.toml is NOT symlinked — we write our own below, seeded from theirs,
     // because it must carry our [hooks] tables.) Fall back to copy where symlinks
     // need privilege (Windows). Idempotent — skip if already linked.
+    // SHARE the credential — never duplicate it. codex's auth.json holds an OAuth
+    // refresh token, and refresh tokens are SINGLE-USE and ROTATING: the moment any
+    // holder refreshes, the server invalidates that token and issues a new one, which
+    // is written only to the file that did the refresh. Every other copy is instantly
+    // dead, and codex says so:
+    //
+    //   Your access token could not be refreshed because your refresh token was
+    //   already used. Please log out and sign in again.
+    //
+    // Observed live on win32 with three identical 4566-byte COPIES — the operator's
+    // and two agents' — because `symlinkSync` needs elevation on Windows and the old
+    // fallback went straight to `copyFileSync`. So every codex agent was a stale
+    // credential waiting to happen, and the failure surfaces long after spawn, as an
+    // auth error that looks like the operator's fault.
+    //
+    // linkSync (a HARD link) sits between them: same inode, so a refresh by anyone is
+    // seen by everyone, and unlike a symlink it needs no privilege on NTFS. It does
+    // require the same volume, which is why copy remains the last resort — a harness
+    // home on a different drive from the user profile still gets a working agent, it
+    // just inherits the rotation problem, and that beats no credential at all.
     const authSrc = join(userHome, 'auth.json');
     const authDest = join(home, 'auth.json');
     if (existsSync(authSrc) && !existsSync(authDest)) {
       try { symlinkSync(authSrc, authDest); }
-      catch { try { copyFileSync(authSrc, authDest); } catch { /* best-effort */ } }
+      catch {
+        try { linkSync(authSrc, authDest); }
+        catch { try { copyFileSync(authSrc, authDest); } catch { /* best-effort */ } }
+      }
     }
     // The managed app-server daemon used by Codex Remote Control is launched
     // from the standalone install rooted at $CODEX_HOME/packages. Share the
@@ -221,6 +322,12 @@ export function installCodexHooks(dir: string, shimPath: string | null, nodeRunU
     // freeze. Verify any change with codex's own resolver, no model spend:
     // `codex app-server` → initialize → `hooks/list` reports the normalized
     // timeoutSec per event.
+    //
+    // GATE-05: PreToolUse, and PreToolUse ONLY, takes PRETOOLUSE_HOOK_TIMEOUT_SEC
+    // instead of 30. It is the one event with a verdict to wait for, and 30 s is
+    // four times shorter than the ask TTL — under it the shim is killed before it
+    // can answer, writes no stdout, and no stdout is ALLOW. The other seven keep
+    // 30 s: a longer budget there only slows the detection of a wedged shim.
     const shim = shimPath;
     let config = existsSync(join(userHome, 'config.toml'))
       ? readFileSync(join(userHome, 'config.toml'), 'utf8') : '';
@@ -229,8 +336,37 @@ export function installCodexHooks(dir: string, shimPath: string | null, nodeRunU
         'SessionStart', 'UserPromptSubmit', 'PreCompact', 'PostCompact'];
       config += '\n# --- hellomarkx-hive lifecycle hooks (auto-generated; do not edit) ---\n';
       for (const ev of events) {
-        config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = '${nodeRunUnquoted(shim)}'\ntimeout = 30\n`;
+        const timeout = ev === 'PreToolUse' ? PRETOOLUSE_HOOK_TIMEOUT_SEC : 30;
+        config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = '${nodeRunUnquoted(shim)}'\ntimeout = ${timeout}\n`;
       }
+    }
+    // DIRECTORY TRUST — where `--dangerously-bypass-hook-trust` went.
+    //
+    // codex-cli 0.128.0 removed that flag and replaced it with an INTERACTIVE
+    // gate, observed live on a real spawn:
+    //
+    //   Do you trust the contents of this directory? … Trusting the directory
+    //   allows project-local config, hooks, and exec policies to load.
+    //     1. Yes, continue   2. No, quit
+    //
+    // An automated hive worker has nobody to press 1, so it sits on that prompt
+    // forever — idle, never reading its inbox. Worse than the old failure, which
+    // at least died loudly: this one looks like a healthy agent doing nothing.
+    //
+    // The supported non-interactive answer is the same one codex writes when the
+    // operator picks "Yes": a `[projects.'<path>']` table with
+    // `trust_level = "trusted"`. The seed carries the operator's own trusted
+    // paths, but never the agent cwd we just created, so we add it here.
+    //
+    // Single-quoted TOML literal: no escape processing, so a Windows path's
+    // backslashes survive verbatim. Lower-cased to match how codex itself writes
+    // these keys. Skipped when the seed already trusts this path — TOML rejects a
+    // duplicate table, and a config codex cannot parse is a worse outcome than a
+    // trust prompt.
+    const trustKey = cwd.toLowerCase();
+    if (!config.toLowerCase().includes(`[projects.'${trustKey}']`)) {
+      config += '\n# --- hellomarkx-hive: trust this agent\'s own workspace (auto-generated) ---\n'
+        + `[projects.'${trustKey}']\ntrust_level = "trusted"\n`;
     }
     writeFileSync(join(home, 'config.toml'), config, 'utf8');
   } catch (e) { console.error('[hive] installCodexHooks failed:', e); }
@@ -290,7 +426,13 @@ export function installKimiConfig(
         'SessionStart', 'UserPromptSubmit', 'PreCompact', 'PostCompact'];
       config += '\n# --- hellomarkx-hive lifecycle hooks (auto-generated; do not edit) ---\n';
       for (const ev of events) {
-        config += `\n[[hooks]]\nevent = "${ev}"\ncommand = '${nodeRun(shim)}'\ntimeout = 30\n`;
+        // GATE-05, same change and same reason as codex's loop above: the one
+        // event with a verdict to wait for gets the longer budget, the other
+        // seven keep kimi's documented default of 30. Same key, same unit
+        // (seconds) — and kimi's is the only one of the two that could not be
+        // probed, because no Moonshot account exists on this machine.
+        const timeout = ev === 'PreToolUse' ? PRETOOLUSE_HOOK_TIMEOUT_SEC : 30;
+        config += `\n[[hooks]]\nevent = "${ev}"\ncommand = '${nodeRun(shim)}'\ntimeout = ${timeout}\n`;
       }
     }
     writeFileSync(configPath, config, 'utf8');
@@ -453,9 +595,15 @@ export function hookSettings(shim: string, theme: 'light' | 'dark' | undefined, 
   // Bundled node, NOT bare `node` — see nodeLauncherPath(). Claude runs each of
   // these through `sh -c` with a stripped PATH, where `node` is often absent.
   const cmd = nodeRun(shim);
-  const entry = (matcher?: string) => ({
+  // `timeoutSec` is GATE-05's, and it is written for PreToolUse and nothing else
+  // — every other event's emitted JSON is byte-identical to what this function
+  // produced before, because the spread contributes no key when the argument is
+  // omitted. The UNIT is SECONDS, confirmed against the installed claude 2.1.236
+  // rather than assumed — see CLAUDE_PRETOOLUSE_TIMEOUT_SEC above for the exact
+  // measurement and how to reproduce it.
+  const entry = (matcher?: string, timeoutSec?: number) => ({
     ...(matcher ? { matcher } : {}),
-    hooks: [{ type: 'command', command: cmd }]
+    hooks: [{ type: 'command', command: cmd, ...(timeoutSec ? { timeout: timeoutSec } : {}) }]
   });
   return {
     // The standing HITL backstop — see AGENT_DENY_RULES. `deny` is the one
@@ -483,7 +631,9 @@ export function hookSettings(shim: string, theme: 'light' | 'dark' | undefined, 
     hooks: {
       Stop: [entry()],
       SubagentStop: [entry()],
-      PreToolUse: [entry('*')],
+      // The ONLY entry that carries a timeout — GATE-05's bounded wait lives
+      // behind this one event, and every other hook keeps Claude's own default.
+      PreToolUse: [entry('*', PRETOOLUSE_HOOK_TIMEOUT_SEC)],
       PostToolUse: [entry('*')],
       UserPromptSubmit: [entry()],
       Notification: [entry()],
