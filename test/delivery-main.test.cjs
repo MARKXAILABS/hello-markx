@@ -417,6 +417,66 @@ test('VIGIL-03: a blocked agent LEAVES the quiesced set, so it re-announces when
   );
 });
 
+// ─── VIGIL-03: the producer the guard above reads in production ──────────────
+
+// Loaded on its own, from src/shared, with no renderer module and no electron in
+// sight — which is the property that makes the guard reachable on a headless
+// floor. `test/block-detect.test.cjs` (plan 04-07) asserts that isolation with a
+// require.cache scan; these cases assert the three bounds the value carries.
+const { BLOCK_HINTS, matchBlockHint } = loadTs('src/shared/blockHints.ts');
+
+test('VIGIL-03: matchBlockHint returns the matched prompt LINE, and null for ordinary output', async () => {
+  // The card paints the return value (04-UI-SPEC V-2), so a boolean would not do.
+  assert.equal(
+    matchBlockHint('running tests…\nDo you want to proceed? (y/n)\n'),
+    'Do you want to proceed? (y/n)',
+    'the prompt line the agent is sitting on was not returned'
+  );
+  // The positive control for the negatives below: without it every one of them
+  // is satisfied by a matcher that returns null unconditionally.
+  assert.equal(
+    matchBlockHint('nothing interesting here'), null,
+    'ordinary output was read as a human prompt — the matcher matches everything'
+  );
+  assert.ok(BLOCK_HINTS.length >= 5, 'the hint list is shorter than the one it was moved from');
+});
+
+test('VIGIL-03: the newest matching line wins — a TUI repaints its whole frame', async () => {
+  const tail = 'Do you want to proceed?\n…\n❯ 1. Yes\n';
+  assert.equal(matchBlockHint(tail), '❯ 1. Yes', 'an older paint of the frame won over the live one');
+});
+
+test('VIGIL-03: control bytes are stripped and the line is capped at 120 chars, in that order', async () => {
+  // T-04-BLK-05: model-controlled text bound for a fixed-width row. Capping
+  // first would leave a truncated escape sequence in a string React inserts
+  // into the DOM as text, so the order is asserted, not just the two bounds.
+  const noisy = '\x1b[2J\x1b]0;title\x07\x1b[1;32mDo you want to proceed\x1b[0m? ' + 'x'.repeat(500) + ' (y/n)';
+  const got = matchBlockHint(noisy);
+  assert.ok(got, 'a prompt buried in ANSI never matched at all');
+  assert.ok(got.length <= 120, `the returned line is ${got.length} chars — an unbounded model string reached the row`);
+  assert.ok(!got.includes('\x1b'), 'an escape byte survived into the string a renderer paints');
+  assert.match(got, /^Do you want to proceed\? x+$/, 'stripping ran after the cap, or ate more than the controls');
+});
+
+test('VIGIL-03: only the recent window is examined — a prompt 300 KiB back is not a live prompt', async () => {
+  // T-04-BLK-06 (cost: this runs per live agent per 4 s tick over a 256 KiB ring)
+  // AND the recovery path: the agent printed past the prompt, so it is no longer
+  // sitting on it. Asserted rather than intended.
+  const stale = 'Do you want to proceed? (y/n)\n' + 'still working…\n'.repeat(20_000);
+  assert.ok(stale.length > 300_000, 'the fixture is smaller than the ring it stands in for');
+  assert.equal(
+    matchBlockHint(stale), null,
+    'a prompt that scrolled 300 KiB out of view still read as blocked — the window bound is missing'
+  );
+  // Same string, prompt at the END: the window bound must not be a matcher that
+  // never matches long inputs.
+  assert.equal(
+    matchBlockHint(stale + 'Do you want to proceed? (y/n)\n'),
+    'Do you want to proceed? (y/n)',
+    'a live prompt at the end of a 300 KiB ring was missed'
+  );
+});
+
 // ─── failover: the guard that used to die with the window ───────────────────
 
 const SWITCH = { agentId: 'dev1', from: 'a', to: 'b', fromLabel: 'Work', toLabel: 'Personal' };

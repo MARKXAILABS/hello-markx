@@ -53,6 +53,7 @@ import {
   inferAgentProvider, isClaudeProvider, type AgentProvider
 } from '../../shared/agentProvider';
 import { claudeAccountSecretRef } from '../../shared/claudeAccounts';
+import { matchBlockHint } from '../../shared/blockHints';
 import { DEFAULT_CONTEXT_TRIGGER, type ContextRule } from '../../shared/triggers';
 import type { FloorDeps } from './deps';
 import {
@@ -1078,6 +1079,18 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     inbox: (agentId) => (hive.enabled() ? hive.inbox(agentId).map((m) => ({ id: m.id, from: m.from })) : []),
     write: (ptyId, data) => ptyManager.write(ptyId, data),
     paused: (agentId) => control.isAutoDeliveryPaused(agentId),
+    // VIGIL-03. A DERIVED read of the PTY's own output ring, not a cached flag on
+    // PtyManager, for the two reasons that decide the whole requirement: the ring
+    // fills whether or not a renderer is listening (`pty.ts:64-71`), so this is
+    // the same answer on a windowed floor and on `floor/headless.ts`; and a
+    // derived read has no invalidation to get wrong, so the agent unblocks by
+    // itself the moment it prints past the prompt and the prompt leaves the
+    // matcher's bounded window. That is the inherited recovery path, preserved
+    // for free (`useHive.ts:140-144`).
+    blocked: (agentId) => {
+      const ptyId = ptyForAgent(agentId);
+      return !!ptyId && matchBlockHint(ptyManager.outputTail(ptyId)) !== null;
+    },
     drain: (agentId) => {
       if (!hive.enabled()) return { block: false };
       const before = readDeliveryCursor(agentId);
