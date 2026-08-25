@@ -225,6 +225,115 @@ test('pruneEvents deletes only strictly-older rows and leaves the day whole', ()
   );
 });
 
+// ── the mirror: the REAL appendLog, not appendEvent ─────────────────────────
+//
+// Everything above drives `appendEvent` directly, which proves the table can
+// hold a day but not that the floor's events reach it. 04-VALIDATION.md's
+// anti-vacuous rule bites hardest here: the whole requirement is about the
+// path from `hive.appendLog` to a readable day, so these two cases drive the
+// real method and let the 8 MiB rotate happen for real underneath.
+
+const { HiveManager } = loadTs('src/main/hive.ts');
+
+/** A live hive in a throwaway home. */
+function hiveFloor() {
+  const home = tempDir();
+  const hive = new HiveManager(() => home);
+  hive.ensureHive();
+  return { hive, home, root: path.join(home, 'hive') };
+}
+
+test('a >16 MiB day written through the REAL appendLog reads back from its FIRST row', () => {
+  const { hive, root } = hiveFloor();
+  const store = new PersistStore(path.join(tempDir(), 'harness.db'));
+  store.open();
+  stores.push(store);
+  hive.setEventStore(store);
+
+  // "Today", because appendLog stamps rows with the real Date.now() and this
+  // case exists to drive the real method. Straddling UTC midnight mid-run would
+  // split the day across two ranges, so it is asserted rather than assumed.
+  const dayStart = Math.floor(Date.now() / DAY_MS) * DAY_MS;
+  const dayEnd = dayStart + DAY_MS;
+
+  let bytes = 0;
+  for (let i = 0; i < ROW_COUNT; i++) {
+    const marker = i === 0 ? FIRST_MARKER : i === ROW_COUNT - 1 ? LAST_MARKER : `mid-${i}`;
+    const event = { kind: 'hive_event', marker, pad: 'x'.repeat(PAD_BYTES) };
+    bytes += Buffer.byteLength(JSON.stringify(event), 'utf8');
+    hive.appendLog(event);
+  }
+  assert.ok(Date.now() < dayEnd, 'the run crossed UTC midnight — re-run; this is a clock straddle, '
+    + 'not a defect in the mirror');
+  assert.ok(bytes > DAY_FLOOR_BYTES,
+    `the day is only ${bytes} bytes, under the ${DAY_FLOOR_BYTES} that makes this case mean anything`);
+
+  // The half that shows WHY the mirror exists: the JSONL has already lost the
+  // morning. One rotate generation over ~17 MiB means rows 1-8 were written to
+  // log.jsonl, renamed to log.jsonl.1, and then overwritten by rows 9-16.
+  const jsonl = fs.readFileSync(path.join(root, 'log.jsonl'), 'utf8');
+  const rotated = fs.existsSync(path.join(root, 'log.jsonl.1'))
+    ? fs.readFileSync(path.join(root, 'log.jsonl.1'), 'utf8') : '';
+  assert.ok(rotated.length > 0, 'positive control: the log must actually have rotated, or the '
+    + 'negative below passes over a day the JSONL could have carried intact');
+  assert.ok(!jsonl.includes(FIRST_MARKER) && !rotated.includes(FIRST_MARKER),
+    'the JSONL still holds the morning, so this day never crossed two rotate windows and the '
+    + 'assertion below is not the one RECORD-02 needs');
+
+  // THE assertion: SQLite still has it, at index 0, named by content.
+  const rows = store.eventsBetween(dayStart, dayEnd);
+  assert.equal(rows.length, ROW_COUNT,
+    `${rows.length} of ${ROW_COUNT} events reached the mirror. Every appendLog call must write a row.`);
+  assert.ok(rows[0].json.includes(FIRST_MARKER),
+    `the first row of the day is ${JSON.stringify(rows[0].json.slice(0, 120))} — not the one `
+    + 'appendLog wrote first. The JSONL above has already lost this row to the rotate; if the '
+    + 'mirror has lost it too then RECORD-02 has replaced nothing.');
+  assert.equal(rows[0].kind, 'hive_event', 'appendLog\'s own `kind` field is not reaching the column');
+  assert.ok(rows[rows.length - 1].json.includes(LAST_MARKER), 'the day is a window, not the day');
+});
+
+test('a failing event store costs the mirror and never the JSONL line', () => {
+  const { hive, root } = hiveFloor();
+  const logPath = path.join(root, 'log.jsonl');
+
+  // 1. A REAL store that has been closed — the realistic failure (shutdown
+  //    ordering, a reset mid-flight). appendEvent no-ops rather than throwing.
+  const closed = new PersistStore(path.join(tempDir(), 'harness.db'));
+  closed.open();
+  closed.close();
+  hive.setEventStore(closed);
+  assert.doesNotThrow(() => hive.appendLog({ kind: 'hive_event', marker: 'after-close' }));
+  assert.ok(fs.readFileSync(logPath, 'utf8').includes('after-close'),
+    'the JSONL line went missing when the store was closed. The event log\'s crash-safety must '
+    + 'not become contingent on the database being open — that is a regression dressed as an '
+    + 'improvement.');
+
+  // 2. A store that THROWS, which is what a locked or corrupt db does. The
+  //    no-op above cannot prove the swallow; only this can.
+  let called = 0;
+  hive.setEventStore({
+    appendEvent() { called++; throw new Error('database is locked'); }
+  });
+  assert.doesNotThrow(() => hive.appendLog({ kind: 'hive_event', marker: 'after-throw' }));
+  assert.equal(called, 1, 'the mirror was never called, so the swallow above proved nothing');
+  assert.ok(fs.readFileSync(logPath, 'utf8').includes('after-throw'),
+    'a throwing store took the JSONL line down with it');
+
+  // 3. No store at all — the pre-onboarding and headless-test shape.
+  hive.setEventStore(null);
+  assert.doesNotThrow(() => hive.appendLog({ kind: 'hive_event', marker: 'no-store' }));
+  assert.ok(fs.readFileSync(logPath, 'utf8').includes('no-store'));
+});
+
+test('hive.ts reaches the store through injection, never a db.ts import', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hive.ts'), 'utf8');
+  assert.equal((src.match(/from '\.\/db'|require\('\.\/db'\)/g) || []).length, 0,
+    'hive.ts imports db.ts. The store is injected at floor/boot.ts\'s composition root so hive.ts '
+    + 'stays loadable — and testable — without a database at all.');
+  // The paired positive: the seam it uses instead actually exists.
+  assert.match(src, /setEventStore\(/, 'the injection seam is gone');
+});
+
 test('the shipped retention window is a stated number, not an implicit one', () => {
   assert.equal(
     EVENT_RETENTION_MS,
