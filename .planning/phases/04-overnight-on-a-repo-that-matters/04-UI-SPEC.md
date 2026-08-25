@@ -1,7 +1,8 @@
 ---
 phase: 4
 slug: overnight-on-a-repo-that-matters
-status: draft
+status: approved
+approved: 2026-08-25 — gsd-ui-checker re-verification of rev 2 returned UI-SPEC VERIFIED, 6/6 dimensions PASS, all three rev-1 blockers resolved on evidence re-derived from live source. Three non-blocking nits fixed by the orchestrator after approval (the `back` label carries no glyph; the dismiss button is at `AskMeTab.tsx:236` not `:234`; `BlockedBanner`'s command block closes at `:59` not `:58`).
 shadcn_initialized: false
 preset: none
 created: 2026-08-25
@@ -485,7 +486,7 @@ if (bannerRef.current?.contains(document.activeElement)) dismissRef.current?.foc
 |---|---|---|
 | Desktop banner | §S1a rule 4 replaces the action row | the `dismiss` button (`BlockedBanner.tsx:78-80`) |
 | Desktop banner, no dismissable control rendered | any | the banner container itself, `tabIndex={-1}` |
-| Phone screen 2 | countdown hits `expired`, both buttons `disabled` | the existing `‹ back` button (`index.html:379`, `.p-back` at `:154`) — the only interactive element left on the screen once the two decision buttons disable, and the operator's way out |
+| Phone screen 2 | countdown hits `expired`, both buttons `disabled` | the existing `back` button (`index.html:379`, `.p-back` at `:154`) — its label is exactly `back`, no glyph (verified: `grep -n "‹" resources/phone/index.html` returns zero matches, and §Typography rule 3 adds zero glyphs) — the only interactive element left on the screen once the two decision buttons disable, and the operator's way out |
 
 > **This costs almost no code.** `BlockedBanner.tsx:78-80` **already** renders a `dismiss` button
 > whenever `reason.actions.length === 0`. §S1a rule 4's "replace the action row" is therefore
@@ -645,7 +646,7 @@ server by tens of milliseconds. That is the wrong sign, so:
 #### S1a — the desktop banner
 
 **Component:** `BlockedBanner` (`BlockedBanner.tsx:10`), **reused, not replaced.** It is already the
-app's "needs you" surface, already coral-framed, already renders a `command` line (`:44-58`), already renders
+app's "needs you" surface, already coral-framed, already renders a `command` line (`:44-59`), already renders
 `approve`/`deny`/`neutral` buttons from `reason.actions`. It is rendered at
 `AgentDetailPanel.tsx:221` and `CommandCenterPanel.tsx:236`.
 
@@ -764,7 +765,7 @@ counts *up*, and the countdown takes a duration and counts *down*.
 
 ```
 ┌─────────────────────────────────┐
-│ ‹ back                          │  min-height 48
+│ back                            │  min-height 48
 ├─────────────────────────────────┤
 │ Ada · 1m 48s left               │  --p-text-sm, --p-text-3; countdown in --p-warn
 │ wants to run a command          │  --p-text-lg
@@ -799,7 +800,7 @@ counts *up*, and the countdown takes a duration and counts *down*.
   same rule and same reason as §S1a rule 3.
 - Both buttons `disabled` while a POST is in flight and once the countdown reaches `expired`.
   **A9.2/A9.3 apply at `expired`**: disabling the focused button strands focus on `<body>`, so focus
-  moves to the `‹ back` button (`index.html:379`) in the same render, guarded on focus having been
+  moves to the `back` button (`index.html:379`) in the same render, guarded on focus having been
   on one of the two decision buttons. *(The in-flight case needs no move — `sending…` resolves in
   under a second and the button remounts enabled or replaced.)*
 
@@ -846,7 +847,7 @@ the OS toast for the hook event and that a renderer-side toast would double it.
 
 | Missing | Fix | Location |
 |---|---|---|
-| **what** was refused | populate `BlockReason.command` — the field exists (`store.ts:22`) and `BlockedBanner` already renders it (`:44-58`), but nothing sets it | `emitControl` (`hooks.ts:1521`) gains a `command` argument; `useHive.ts:617-621` passes it through |
+| **what** was refused | populate `BlockReason.command` — the field exists (`store.ts:22`) and `BlockedBanner` already renders it (`:44-59`), but nothing sets it | `emitControl` (`hooks.ts:1521`) gains a `command` argument; `useHive.ts:617-621` passes it through |
 | **for whom** | the summary names the agent: `Ada's Bash call was refused`, replacing `` `${tool ?? 'A tool'} was blocked` `` | `useHive.ts:619` |
 | **why** | the verbatim `DENY_*` string, already returned by main (`hooks.ts:251-292`), already passed as `reason`, already rendered as `detail` | already correct at `useHive.ts:620` — **only the fallback string changes**, see below |
 
@@ -1157,7 +1158,7 @@ always renders:
 the insertion point. The header `<div>` opens at **`:210`** (`display: 'flex', alignItems: 'center',
 gap: 8, padding: '6px 9px'` at `:211`) and holds, in order: the title `<button>` (`:214-224`,
 `flex: 1`), the recipient badge wrapped in a `title` span (`:230-232`, the `PixelBadge` itself at
-**`:231`**), and the dismiss `<button>` (from `:234`).
+**`:231`**), and the dismiss `<button>` (from `:236` — `:233-235` are its explanatory comment).
 
 **Insert the age immediately before the badge's wrapper span — that is, before `:230`** —
 `flexShrink: 0`, same treatment as the kanban card. The header's existing `gap: 8` absorbs it and
@@ -1485,7 +1486,7 @@ Every gray area, the option taken, and why.
 | 33 *(rev 2)* | When `armed && blocked`, the `⚠` is `aria-hidden` — does AT lose the breaker? | **Yes, so the `⚠` conditionally takes `role="img"` + `aria-label`** | A `title` on an `aria-hidden` span is announced to nobody. Once the badge is surrendered to `blocked`, the badge was AT's only armed signal too. A2's shipped pattern (`TasksKanban.tsx:262`) applied exactly where it becomes load-bearing — narrowest possible scope, not a general `aria-hidden` sweep |
 | 34 *(rev 2)* | D-25's phone channel: a third `PhoneAsk.kind: 'alarm'`, or a deviation? | **Neither — a `floorQuiet` sibling field on the asks response, rendered as a non-interactive pinned strip.** D-25's three channels are all present | Rev 1 silently substituted the titlebar chip for the phone ask list, leaving the phone **push-only** — miss the push and it shows nothing, the exact failure Q-1 identifies for the desktop. A third `kind` was rejected on measured grounds, not effort: it renders **`NEEDS YOU 1`** and suppresses the empty state (`screenListHtml:352-354` counts `state.asks.length`) when in fact *nothing* is asking, and it forces a tappable `<button class="p-ask">` (`askItemHtml:338-350`) to be un-answerable. The sibling field reuses the `p-offline-bar` slot that is already in the file, touches `PhoneAsk` not at all, and keeps L-12 untouched. §S6a rule Q-1b |
 | 35 *(rev 2)* | Can the phone alarm strip be dismissed? | **No — it is server state, not client state** | It appears when the latch sets and disappears when the 10s poll (`POLL_MS`, `index.html:249`) stops returning `floorQuiet`. Same lifecycle as the desktop chip (Q-3). A dismiss control would let the operator clear an alarm while the floor is still stopped, which is the one thing it must not be able to say |
-| 36 *(rev 2)* | Where does focus go when a timed prompt resolves? | **A9: to `dismiss` (desktop) / `‹ back` (phone), in the same render, guarded on focus having been inside the surface** | Rev 1 specified the ring (A5) and never specified placement, while rule 4 unmounts the action row and §S1b disables both buttons — dropping focus to `<body>` at the exact moment the operator answered a destructive prompt, with A7 then politely announcing `Approved.` into the void. The guard is what keeps A9 compatible with rule 5 / #29: focus elsewhere → nothing moves. Accessibility is on this project's never-simplify list |
+| 36 *(rev 2)* | Where does focus go when a timed prompt resolves? | **A9: to `dismiss` (desktop) / `back` (phone), in the same render, guarded on focus having been inside the surface** | Rev 1 specified the ring (A5) and never specified placement, while rule 4 unmounts the action row and §S1b disables both buttons — dropping focus to `<body>` at the exact moment the operator answered a destructive prompt, with A7 then politely announcing `Approved.` into the void. The guard is what keeps A9 compatible with rule 5 / #29: focus elsewhere → nothing moves. Accessibility is on this project's never-simplify list |
 | 37 *(rev 2)* | Does the banner take focus when an ask arrives? | **No — stated explicitly as A9.1** | Unchanged from #29; written down because A9.2 moves focus and an executor reading only A9 could reasonably infer autofocus on arrival. The rule now says both halves out loud |
 
 ---
