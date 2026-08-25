@@ -225,3 +225,218 @@ test('SCALE-04 / D-35 (d): neither tier present -> neither sentence', () => {
   assert.ok(!out.includes('no cost meter'), 'the meter declaration is unconditional boilerplate');
   assert.ok(!out.includes('never reaches the cost ledger'), 'the ledger declaration is unconditional boilerplate');
 });
+
+// ─── Part 3: the SHUTDOWN_STEPS entry ───────────────────────────────────────
+//
+// Same named-pin shape, and for the same reason, as boot-floor.test.cjs's
+// restorePointTimer / watchdogTimer pins: the digest timer is a module-level
+// `let`, so the "every subsystem appears in the shutdown list" coverage test
+// there walks Object.keys(floor) and cannot see it. Without this pin an
+// un-cleared digest timer fails by keeping `node --test` ALIVE FOREVER rather
+// than by a red assertion — D-30's own hang-not-red warning.
+
+test('SCALE-04: digestTimer is declared in the boot module and cleared by SHUTDOWN_STEPS', () => {
+  const { SHUTDOWN_STEPS } = loadTs('src/main/floor/boot.ts');
+  const shutdownSource = SHUTDOWN_STEPS.map((s) => s.stop.toString()).join('\n');
+  const bootSource = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'main', 'floor', 'boot.ts'), 'utf8'
+  );
+  assert.match(bootSource, /^let digestTimer: MissionTimer \| null = null;$/m,
+    "SCALE-04's timer is not declared in boot.ts's module `let` block — it has nowhere to live "
+    + 'that shutdown can reach');
+  assert.match(shutdownSource, /clearDigestTimer\(\)/,
+    'the digest timer is armed by startHiveServices but never cleared. An un-cleared setTimeout '
+    + 'keeps the process alive past shutdown, and the boot test fails that by HANGING');
+  assert.ok(SHUTDOWN_STEPS.some((s) => s.name === 'clearDigestTimer'),
+    'no SHUTDOWN_STEPS entry is NAMED clearDigestTimer — shutdown() logs by step name, so an '
+    + 'unnamed step is an unattributable failure');
+});
+
+// ─── Part 4: the delivery arms, driven through a REAL booted floor ──────────
+//
+// A `.toString()` assertion proves the SOURCE mentions deps.notify. It cannot
+// prove the file is written, cannot prove the toast fires, and cannot prove the
+// project stamp survives to any of the arms. Four Phase-4 features on this
+// codebase shipped fully wired and doing nothing while every grep stayed green,
+// so the arms below are driven end to end and the sinks are read back.
+
+let userData;
+const electronPath = require.resolve('electron');
+require.cache[electronPath] = {
+  id: electronPath,
+  filename: electronPath,
+  loaded: true,
+  exports: {
+    app: {
+      getPath: (name) => (name === 'userData' ? userData : path.join(userData, name)),
+      getAppPath: () => userData,
+      isPackaged: false,
+      getVersion: () => '0.0.0-test'
+    },
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (s) => Buffer.from(`enc:${s}`, 'utf8'),
+      decryptString: (b) => Buffer.from(b).toString('utf8').replace(/^enc:/, '')
+    },
+    Notification: class { show() { /* noop */ } static isSupported() { return false; } }
+  }
+};
+
+function writeCfg(obj) {
+  fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify(obj, null, 2), 'utf8');
+}
+
+/** A fresh (userData, harnessHome) pair with config.json pre-seeded, exactly as
+ *  test/boot-floor.test.cjs does it. `slackEnabled:false` and no webhook
+ *  triggers: a unit test must never open a real outbound anything. */
+function floorEnv(t, extra) {
+  userData = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'md-digest-')));
+  // The label the digest must stamp is basename(harnessHome), so the directory
+  // gets a distinctive prefix and the assertion reads the real value back.
+  const harnessHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'zzdigestproj-')));
+  writeCfg({ harnessHome, slackEnabled: false, webhookTriggers: [], notifications: false, ...extra });
+  const thisUserData = userData;
+  t.after(() => {
+    try { fs.rmSync(thisUserData, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { fs.rmSync(harnessHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+  return { userData: thisUserData, harnessHome, label: path.basename(harnessHome) };
+}
+
+function fakeDeps(env) {
+  const sent = [];
+  const notified = [];
+  return {
+    deps: {
+      paths: () => ({ userData: env.userData, logs: path.join(env.userData, 'logs'), appPath: env.userData }),
+      version: '0.0.0-test',
+      packaged: false,
+      secrets: {
+        available: () => true,
+        encrypt: (s) => `enc:${s}`,
+        decrypt: (s) => s.replace(/^enc:/, '')
+      },
+      notify: (a) => { notified.push(a); },
+      send: (channel, payload) => { sent.push({ channel, payload }); return true; },
+      quit: () => { /* noop */ },
+      focus: () => { /* noop */ },
+      syncKeepAwake: () => { /* noop */ },
+      respawnCore: async () => ({ ok: true }),
+      startWorkerWatcher: () => { /* noop */ }
+    },
+    sent,
+    notified
+  };
+}
+
+/** The local YYYY-MM-DD of the day the digest covers — yesterday, written out
+ *  longhand here so the test is not checking the implementation against itself. */
+function yesterdayKey(now = Date.now()) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - 1);
+  const two = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+test('SCALE-04: the file arm writes a stamped digest under the hive root, with no config at all', async (t) => {
+  const env = floorEnv(t);
+  const { deps, sent } = fakeDeps(env);
+  const { bootFloor, fireDigest } = loadTs('src/main/floor/boot.ts');
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  const target = path.join(floor.hive.root(), `digest-${yesterdayKey()}.md`);
+  fs.rmSync(target, { force: true }); // clear whatever the boot-time catch-up may have left
+  const sentBefore = sent.length;
+
+  await fireDigest();
+
+  assert.ok(fs.existsSync(target),
+    `no digest at ${target}. The file arm is the ONLY arm with no config gate — if it grows one, `
+    + 'a headless operator gets nothing at all');
+  const body = fs.readFileSync(target, 'utf8');
+  assert.ok(body.includes(env.label),
+    `the digest on disk does not name the project (${env.label}) — D-31, LOCKED:\n${body}`);
+
+  // Pitfall 2, asserted rather than grepped. deps.send returns FALSE with no
+  // window; a digest routed through it is a silent no-op on exactly the machine
+  // SCALE-04 exists for.
+  assert.equal(sent.length, sentBefore,
+    `fireDigest pushed ${sent.length - sentBefore} message(s) through deps.send: `
+    + JSON.stringify(sent.slice(sentBefore)));
+});
+
+test('SCALE-04: the toast arm is gated on dailyDigest — NOT on the notifications field', async (t) => {
+  const env = floorEnv(t, { dailyDigest: false, notifications: true });
+  const { deps, notified } = fakeDeps(env);
+  const { bootFloor, fireDigest } = loadTs('src/main/floor/boot.ts');
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  notified.length = 0;
+  await fireDigest();
+  assert.equal(notified.length, 0,
+    'the digest toasted with dailyDigest OFF, while `notifications` was ON. `notifications` is '
+    + 'documented as "agent lifecycle events" — borrowing it makes the digest toggle a decoration');
+
+  writeCfg({ harnessHome: env.harnessHome, slackEnabled: false, webhookTriggers: [], notifications: false, dailyDigest: true });
+  await fireDigest();
+  assert.equal(notified.length, 1, 'the digest did NOT toast with dailyDigest ON');
+  assert.ok(notified[0].title.includes(env.label),
+    `the toast title does not name the project: ${JSON.stringify(notified[0])}`);
+  assert.ok(typeof notified[0].body === 'string' && notified[0].body.length > 0,
+    'the toast has no body — a title-only toast tells the operator nothing happened');
+});
+
+test('SCALE-04 / D-30: catch-up on arm — a machine started past the fire hour is not silent', async (t) => {
+  // digestHour 0: whatever hour this suite runs at, "now is past the fire hour"
+  // is true, so bootFloor's own armDigestTimer must fire the catch-up.
+  const env = floorEnv(t, { digestHour: 0 });
+  const { deps } = fakeDeps(env);
+  const { bootFloor, startHiveServices } = loadTs('src/main/floor/boot.ts');
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  const target = path.join(floor.hive.root(), `digest-${yesterdayKey()}.md`);
+  assert.ok(fs.existsSync(target),
+    'bootFloor completed past the fire hour with nothing sent today, and wrote no digest. '
+    + 'Without catch-up-on-arm a machine that was asleep at 9am gets silence until tomorrow');
+
+  // ...and exactly once. A re-arm (a second startHiveServices, which index.ts
+  // really does call after onboarding) must not re-send today's digest.
+  fs.rmSync(target, { force: true });
+  startHiveServices();
+  assert.ok(!fs.existsSync(target),
+    'the digest was re-sent on a second arm. The last-sent stamp is what makes catch-up safe; '
+    + "without it every re-arm is another copy in the operator's Slack");
+});
+
+test('SCALE-04: a floor armed BEFORE its fire hour sends nothing yet', async (t) => {
+  const hourNow = new Date().getHours();
+  if (hourNow === 23) {
+    t.diagnostic('MEASUREMENT UNAVAILABLE — this suite is running in the 23:00 hour, so there is '
+      + 'no later hour today to arm against and the negative half cannot be driven.');
+    t.skip('no future hour left in the local day');
+    return;
+  }
+  const env = floorEnv(t, { digestHour: 23 });
+  const { deps } = fakeDeps(env);
+  const { bootFloor } = loadTs('src/main/floor/boot.ts');
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  assert.ok(!fs.existsSync(path.join(floor.hive.root(), `digest-${yesterdayKey()}.md`)),
+    `armed at ${hourNow}:00 with a fire hour of 23:00 and the digest went out anyway — the `
+    + 'catch-up branch fires unconditionally, which makes it fire-on-every-boot, not catch-up');
+});
+
+test('SCALE-04: fireDigest calls deps.notify and never deps.send (structural, T-03-05d)', () => {
+  const { fireDigest } = loadTs('src/main/floor/boot.ts');
+  const src = fireDigest.toString();
+  assert.ok(src.includes('deps.notify'),
+    'fireDigest does not reference deps.notify — the toast arm is not in this function');
+  assert.equal(src.includes('deps.send'), false,
+    'fireDigest routes through deps.send, which returns FALSE with no window attached. That is a '
+    + 'silent no-op on exactly the headless machine SCALE-04 exists for');
+});
