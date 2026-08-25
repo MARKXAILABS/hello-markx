@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 3 planned; red-team round 3 = 0 BLOCKER / 11 HIGH; RED_TEAM_CLEAN=false, iteration budget (3) reached — awaiting operator decision, NOT advanced to execute
-last_updated: "2026-08-24T17:04:06.182Z"
+stopped_at: "Phase 3 planned and red-teamed: 7 full rounds + 4 targeted verifications; all findings closed. Last FULL 8-lens round (r7) = 0 BLOCKER/8 HIGH, all 8 closed and re-verified. RED_TEAM_CLEAN not yet flipped — no full round has run against the final state."
+last_updated: "2026-08-25T00:55:58.958Z"
 progress:
   total_phases: 6
   completed_phases: 0
@@ -662,8 +662,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-24T17:04:06.164Z
-Stopped at: Phase 3 planned; red-team round 3 = 0 BLOCKER / 11 HIGH; RED_TEAM_CLEAN=false, iteration budget (3) reached — awaiting operator decision, NOT advanced to execute
+Last session: 2026-08-25T00:55:58.944Z
+Stopped at: Phase 3 planned and red-teamed: 7 full rounds + 4 targeted verifications; all findings closed. Last FULL 8-lens round (r7) = 0 BLOCKER/8 HIGH, all 8 closed and re-verified. RED_TEAM_CLEAN not yet flipped — no full round has run against the final state.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
@@ -673,4 +673,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: .planning/phases/03-scale-and-observability/03-REDTEAM-03.md
+Resume file: .planning/phases/03-scale-and-observability/03-REDTEAM-04.md
