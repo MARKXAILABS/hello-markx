@@ -228,3 +228,21 @@ canvas, img, svg { image-rendering: pixelated; image-rendering: crisp-edges; }
   background: var(--cth-cream-200); box-shadow: inset 0 0 0 1px var(--cth-ink-100);
   color: var(--cth-ink-500); border-radius: 2px;
 }
+
+/* Day-band scrubber (SCALE-03). Chromium-only by construction: this is an
+   Electron renderer, so the -webkit- pseudo-elements are the complete set —
+   a -moz- twin here would be dead code. --cth-ink-300 is the >=3:1 borders
+   token, so the track is perceivable in both themes; the focus ring comes free
+   from :focus-visible above, and nothing animates, so prefers-reduced-motion
+   has nothing to disable here. */
+.cth-scrub { -webkit-appearance: none; appearance: none; width: 100%; height: 24px; background: transparent; }
+.cth-scrub::-webkit-slider-runnable-track { height: 8px; border: 0; background: var(--cth-ink-300); }
+.cth-scrub::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 24px; height: 24px;          /* WCAG 2.2 SC 2.5.8 minimum target */
+  margin-top: -8px;                   /* (24 - 8) / 2 — centres the thumb, stays on the 4-grid */
+  border: 0; border-radius: 0;        /* DESIGN.md §6: no border-radius */
+  background: var(--cth-ink-900);
+  box-shadow: inset 0 0 0 1px var(--cth-cream-100);
+}
+.cth-scrub:disabled::-webkit-slider-thumb { background: var(--cth-ink-300); }
