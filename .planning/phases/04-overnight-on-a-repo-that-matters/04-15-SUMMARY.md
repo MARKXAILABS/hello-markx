@@ -40,7 +40,7 @@ metrics:
   duration: "~2h"
   completed: 2026-08-25
   tasks: 3
-  commits: 3
+  commits: 5
   tests_before: "970 total / 963 pass / 0 fail / 7 skipped"
   tests_after: "1003 total / 996 pass / 0 fail / 7 skipped"
 ---
@@ -62,6 +62,7 @@ token-derived agent id, a real target and its final decision.
 | 1 | `c530a64` | `approvals.ts` — the registry, its TTL, its unguessable single-use ids |
 | 2 | `b6a01b2` | the ask reply, the `ApprovalPoll` branch, the engine budgets and the derived TTL, GATE-05's ceiling (a)-(h) |
 | 3 | `1ea60e6` | RECORD-01's writer at all five PreToolUse exits, and the sweep that makes an unanswered ask auditable |
+| fix | `764db71` | task 1's id-provenance assertion was FLAKY — caught by a repeat run, fixed by changing the instrument (below) |
 
 Diffstat against the wave base `0ab5346` — exactly the five files in
 `files_modified`, no more:
@@ -161,13 +162,31 @@ All probes were reverted and the suite re-verified green afterwards.
 | 2 | after adding the stepping-clock case, same probe | **1 fail** |
 | 3 | probe: drop the expiry record from `sweepApprovals` | **1 fail** |
 | 3 | probe: forge `agentId` in `record()` | **4 fail** |
+| fix | probe: derive the id as `openedAt.toString(16) + hex(agentId)` | **4 fail** |
+| fix | 25 consecutive `node --test test/control.test.cjs` runs after the fix | **0 fail, 25/25** |
 
-**The one real defect this found in my own tests.** `assert.equal(hive_ask.deadlineMs,
-entry.expiresAt)` passes against a *recomputed* deadline, because `openedAt` and
-the recompute land in the same millisecond — exactly the vacuous pass the plan
-warns about elsewhere. Fixed by driving that case under a clock that steps 10 s
-per read, so only a deadline read **off the entry** can still equal `expiresAt`.
-The case carries that history in its own comment.
+### Two real defects this found in my OWN tests
+
+**1. A vacuous equality.** `assert.equal(hive_ask.deadlineMs, entry.expiresAt)`
+passes against a *recomputed* deadline, because `openedAt` and the recompute land
+in the same millisecond — exactly the vacuous pass the plan warns about
+elsewhere. Fixed by driving that case under a clock that steps 10 s per read, so
+only a deadline read **off the entry** can still equal `expiresAt`.
+
+**2. A FLAKY assertion, caught by re-running rather than by luck.** Task 1's
+id-provenance case asserted `!entry.id.includes(ASK.agentId)` with `agentId`
+= `'a1'`. Against 32 characters of hex that is a two-character substring search
+with roughly a **1-in-9 failure rate per run**. It passed the task-1 GREEN run,
+the task-2 run, the task-3 run and two full-suite runs, then went red on the
+sixth. Both the assertion and the flake are gone: the property it wanted — the id
+is not derived from `openedAt` or from `agentId` — is now asserted by
+**collision** (two asks minted from the same held clock, one for the same agent
+and one for another, must all differ), which a clock- or identity-derived id
+cannot satisfy. Verified both directions: 25 clean runs, and a deliberately
+derived id fails four cases.
+
+The lesson is recorded here rather than quietly patched: a green suite that has
+only been run once is not evidence of a green suite.
 
 ## Acceptance measurements
 
@@ -204,7 +223,9 @@ references it; the constant's value and every use of it are untouched.
 
 Gates, all run at the final commit:
 
-- `npm test` → **1003 tests, 996 pass, 0 fail, 7 skipped** (base: 970 / 963 / 0 / 7)
+- `npm test` → **1003 tests, 996 pass, 0 fail, 7 skipped** (base: 970 / 963 / 0 / 7),
+  and run **four times** after the flake fix rather than once — 0 fail every time.
+  Plus 25 consecutive runs of `test/control.test.cjs` alone.
 - `npm run typecheck` → 0 errors
 - `npm run lint` → exit 0
 - `node --test test/suite-integrity.test.cjs` → 4/4, `FROZEN` and `DECLARED_SKIPS` unchanged
@@ -362,6 +383,7 @@ Commits claimed, verified in `git log`:
 - `c530a64` — FOUND
 - `b6a01b2` — FOUND
 - `1ea60e6` — FOUND
+- `764db71` — FOUND
 
 `STATE.md` and `ROADMAP.md`: **not modified** by this plan, as required for a
 parallel worktree executor.
