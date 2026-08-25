@@ -440,8 +440,8 @@ actually requires — it is the same mechanism `Icon.tsx` uses to scale a 16-uni
 | # | Track | Fill | Source | Note |
 |---|-------|------|--------|------|
 | 1 | events | `--cth-ink-700` | `events` table, all `kind`s | the ground-truth track; takes no accent |
-| 2 | envelopes | `--cth-sky` | **the same `events` rows filtered to `kind='message'`** | **D-26: a FILTER, not a second source.** `hive.ts:1641` writes envelopes into the same funnel |
-| 3 | cost | `--cth-lemon` | `cost-ledger.jsonl` | **D-22: the clamped consecutive diff per `(agent_id, session_id)` via `applyCostRow` (`hive.ts:2611`) — never a SUM** |
+| 2 | envelopes | `--cth-sky` | **the same `events` rows filtered to `kind='message'`** | **D-26: a FILTER, not a second source.** `hive.ts:1668` writes envelopes into the same funnel |
+| 3 | cost | `--cth-lemon` | `cost-ledger.jsonl` | **D-22: the clamped consecutive diff per `(agent_id, session_id)` via `applyCostRow` (`hive.ts:2652`) — never a SUM** |
 
 **Density encoding: quantised bar height, never opacity.** Each bucket draws a `<rect>` whose height
 is an **integer 1..8 viewBox units**, `Math.ceil(8 * value / trackMax)`, anchored to the track's
@@ -604,7 +604,7 @@ mistake there would be ADR-0005's bug in a second place.
   imply a beat happened that cost nothing rather than a beat that moved no counter.
 
 **Declared limitation, in the UI and not only in a comment.** An envelope row shows the **subject
-only**, because the subject is all that was ever recorded — verified at `hive.ts:1641`:
+only**, because the subject is all that was ever recorded — verified at `hive.ts:1668`:
 `this.appendLog({ kind: 'message', from, to, act, subject, id })`, with **no body field**. The list
 therefore offers **no** "open message" or "read body" affordance, and the day tab's section header
 carries the standing note:
@@ -888,7 +888,7 @@ session.
 
 `03-CONTEXT.md`'s own anchors were spot-checked and **hold**: `LOG_ROTATE_BYTES` at `hive.ts:323`,
 `LOG_TAIL_BYTES` at `:326`, `SPAN_RING_CAP` at `telemetry.ts:161`, `Icon.tsx:147`,
-`AgentCard.tsx:193`, `ToolWaterfall.tsx:16`, `hive.ts:1641`, `preload/index.ts:787`.
+`AgentCard.tsx:193`, `ToolWaterfall.tsx:16`, `hive.ts:1668`, `preload/index.ts:787`.
 
 ---
 

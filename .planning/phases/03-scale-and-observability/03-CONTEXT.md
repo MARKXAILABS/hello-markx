@@ -8,7 +8,23 @@ load-bearing claim below was then **re-verified by the orchestrator against sour
 before being locked. Claims that did not survive that check are marked **CORRECTED**, and the
 corrected fact is what is locked. Nothing here is inherited on trust.
 
-**Measured baseline at `f04f9ec` (Windows 11, this machine, 2026-08-24):**
+**MERGED WITH MAIN 2026-08-25 — anchors re-measured.** PR #80 (Phase 2) landed on main during this
+phase's planning, so this branch was merged with `origin/main` and every file:line anchor below was
+RE-CHECKED against the post-merge tree. **20 of 28 load-bearing anchors were unchanged; 8 drifted and
+were corrected in place** (`hive.ts`'s log/cost cluster +21…+44, `index.ts` `hive:log` +15,
+`AgentDetailPanel.tsx` −1, `autoMode.ts` −21). No anchor went missing. Note that **no acceptance
+criterion is line-based** — every one is a symbol/content grep — so the drift touched prose citations
+only, never a gate. New suite baseline on the merged tree: **830 tests / 823 pass / 0 fail / 7
+skipped** (main added 23 tests).
+
+**Two corrections this merge forces on the text below.** (1) **D-04's "run 02-12 first" is now
+OBSOLETE** — 02-12 landed with PR #80, and PARITY-03 reads `Complete` on main. (2) **Phase 2 is still
+NOT closed**, for a different reason than D-01…D-04 record: its `02-VERIFICATION.md` on main reads
+`status: gaps_found` (3/6 must-haves fully verified), with **STRUCT-01** the named gap —
+`index.ts` measured 5,021 lines / 160 `ipcMain.handle`, only 53 of them thin, and `spawnAgentCore`
+still top-level. D-02's finding that STRUCT-02 does not block Phase 3 is unaffected.
+
+**Original baseline at `f04f9ec` (Windows 11, this machine, 2026-08-24):**
 `npm test` → **800 tests / 793 pass / 0 fail / 7 skipped** (21.7s). `npm run typecheck` → **0 errors**
 (node + web). Every number in this document was produced by a command run in this session; nothing is
 quoted from a prior SUMMARY or from ROADMAP.md.
@@ -216,7 +232,7 @@ D-01), iOS, any paid tier of anything, and **any change to `package.json` or `pa
 ### SCALE-03 — what a replayable day is read FROM
 
 - **D-20:** **LOCKED: an `events` table as MIGRATION #3 in the existing `PersistStore`, fed by an
-  OPTIONAL INJECTED SINK beside `appendLog` (`hive.ts:2485`) and `appendCostLedger` (`:2550`), wired
+  OPTIONAL INJECTED SINK beside `appendLog` (`hive.ts:2529`) and `appendCostLedger` (`:2550`), wired
   at `floor/boot.ts:1148`.** Schema: `events(id INTEGER PRIMARY KEY AUTOINCREMENT, floor_id TEXT NOT
   NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL, agent_id TEXT, task_id TEXT, session_id TEXT,
   payload TEXT)` with indexes on `(ts)` and `(floor_id, ts)`. `log.jsonl` is **kept** and explicitly
@@ -232,7 +248,7 @@ D-01), iOS, any paid tier of anything, and **any change to `package.json` or `pa
   `test/repo-claims.test.cjs:91` excludes `.planning/` by construction so this will never go red on
   its own. More importantly the **8 MB rotate has never fired** — the only real floor measured wrote
   4,521 bytes of `log.jsonl` over ~2.75 days. What actually truncates replay is
-  **`LOG_TAIL_BYTES = 64 * 1024` at `hive.ts:326`**, a *read* cap in `logTail()` (`hive.ts:2443`),
+  **`LOG_TAIL_BYTES = 64 * 1024` at `hive.ts:326`**, a *read* cap in `logTail()` (`hive.ts:2487`),
   and all renderer consumers already sit behind it. **Fixing rotation alone changes nothing an
   operator can see.** The honest case for a store is the other one: nothing in this app can ask for a
   time range, and nothing joins the five time-ordered stores. Beware the decoy — a second, unrelated
@@ -240,7 +256,7 @@ D-01), iOS, any paid tier of anything, and **any change to `package.json` or `pa
 
 - **D-22:** **Any cost lane MUST diff, never SUM.** ADR-0005 records that ledger rows are
   **cumulative** snapshots per `(agent_id, session_id)` and that this contract has already been
-  broken once. Use `applyCostRow`'s clamped consecutive diff (`hive.ts:2611`). A session's counter
+  broken once. Use `applyCostRow`'s clamped consecutive diff (`hive.ts:2652`). A session's counter
   restarts at zero on a new `session_id`, so a naive last-minus-first across a bucket goes negative
   or double-counts; the check needs a fixture with a mid-day session rollover.
 
@@ -272,7 +288,7 @@ D-01), iOS, any paid tier of anything, and **any change to `package.json` or `pa
   Arrow keys are the step control, so there are no icon-only buttons to trip `Icon.tsx:147`'s
   unconditional `aria-hidden`.
 
-- **D-26:** **Envelopes are a FILTER of the event track, not a second source.** `hive.ts:1641` writes
+- **D-26:** **Envelopes are a FILTER of the event track, not a second source.** `hive.ts:1668` writes
   envelopes into `log.jsonl` as `kind:'message'` rows. Only `cost-ledger.jsonl` is a genuinely second
   read. The merged detail list is where "one timeline" is literal.
 
@@ -574,7 +590,7 @@ ones — each has an owner and a reason it is not closed in Phase 3.
 
 ### Integration Points
 - `events` table ← injected sink at `boot.ts:1148` ← `appendLog`/`appendCostLedger` (D-20)
-- `hive:timeline` / `hive:timelineBucket` ← new handlers beside `index.ts:2983` → `preload:787` → the
+- `hive:timeline` / `hive:timelineBucket` ← new handlers beside `index.ts:2998` → `preload:787` → the
   new CCTab
 - `PersistStore` + `KnowledgeManager` default paths ← `harnessHome`, with `repoint()` at
   `index.ts:2712-2715` (D-09, D-12)

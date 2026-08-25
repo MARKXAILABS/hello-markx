@@ -181,7 +181,7 @@ agent would otherwise inherit and act on wrongly):
 **SCALE-03 — what a replayable day is read FROM**
 
 - **D-20:** LOCKED: an `events` table as MIGRATION #3 in the existing `PersistStore`, fed by an
-  OPTIONAL INJECTED SINK beside `appendLog` (`hive.ts:2485`) and `appendCostLedger` (`:2550`), wired at
+  OPTIONAL INJECTED SINK beside `appendLog` (`hive.ts:2529`) and `appendCostLedger` (`:2550`), wired at
   `floor/boot.ts:1148`. Schema: `events(id INTEGER PRIMARY KEY AUTOINCREMENT, floor_id TEXT NOT NULL,
   ts INTEGER NOT NULL, kind TEXT NOT NULL, agent_id TEXT, task_id TEXT, session_id TEXT, payload TEXT)`
   with indexes on `(ts)` and `(floor_id, ts)`. `log.jsonl` is kept and explicitly demoted in its own doc
@@ -197,7 +197,7 @@ agent would otherwise inherit and act on wrongly):
   `test/repo-claims.test.cjs:91` excludes `.planning/` by construction so this will never go red on its
   own. More importantly the 8 MB rotate has never fired — the only real floor measured wrote 4,521
   bytes of `log.jsonl` over ~2.75 days. What actually truncates replay is `LOG_TAIL_BYTES = 64 * 1024`
-  at `hive.ts:326`, a *read* cap in `logTail()` (`hive.ts:2443`), and all renderer consumers already sit
+  at `hive.ts:326`, a *read* cap in `logTail()` (`hive.ts:2487`), and all renderer consumers already sit
   behind it. Fixing rotation alone changes nothing an operator can see. The honest case for a store is
   the other one: nothing in this app can ask for a time range, and nothing joins the five time-ordered
   stores. Beware the decoy — a second, unrelated `LOG_ROTATE_BYTES` (5 MB, the console tee) lives at
@@ -205,7 +205,7 @@ agent would otherwise inherit and act on wrongly):
 
 - **D-22:** Any cost lane MUST diff, never SUM. ADR-0005 records that ledger rows are cumulative
   snapshots per `(agent_id, session_id)` and that this contract has already been broken once. Use
-  `applyCostRow`'s clamped consecutive diff (`hive.ts:2611`). A session's counter restarts at zero on a
+  `applyCostRow`'s clamped consecutive diff (`hive.ts:2652`). A session's counter restarts at zero on a
   new `session_id`, so a naive last-minus-first across a bucket goes negative or double-counts; the
   check needs a fixture with a mid-day session rollover.
 
@@ -236,7 +236,7 @@ agent would otherwise inherit and act on wrongly):
   playhead structurally is not. Arrow keys are the step control, so there are no icon-only buttons to
   trip `Icon.tsx:147`'s unconditional `aria-hidden`.
 
-- **D-26:** Envelopes are a FILTER of the event track, not a second source. `hive.ts:1641` writes
+- **D-26:** Envelopes are a FILTER of the event track, not a second source. `hive.ts:1668` writes
   envelopes into `log.jsonl` as `kind:'message'` rows. Only `cost-ledger.jsonl` is a genuinely second
   read. The merged detail list is where "one timeline" is literal.
 
@@ -485,7 +485,7 @@ exact locations this session:
 | `node:https` | `src/main/slack.ts` (raw `httpsRequest`) | SCALE-04's `postSlackDigest` sibling function | `postSlackReply` (`slack.ts:373-411`) is the exact zero-SDK pattern to clone — no `@slack/*` dep exists or is needed |
 | `node:fs` (`writeFileSync`) | `src/main/floor/boot.ts:470` `writeFleetSnapshot` | SCALE-04's `digest-YYYY-MM-DD.md` writer | Best-effort, never-throws-from-a-timer shape already proven at 8s cadence |
 | DOM `<input type="range">` | none yet — genuinely new UI | SCALE-03's bucket scrubber | Zero hits for `type="range"` anywhere in `src/renderer/src` today — this is new markup, not a new dependency |
-| `useSyncExternalStore` (React 18 builtin) | `src/renderer/src/store/autoMode.ts:155` + 4 `.tsx` consumers | SCALE-05's `agentView.ts` singleton | Already the established module-singleton pattern for exactly this kind of "one derivation, many renderings" problem |
+| `useSyncExternalStore` (React 18 builtin) | `src/renderer/src/store/autoMode.ts:134` + 4 `.tsx` consumers | SCALE-05's `agentView.ts` singleton | Already the established module-singleton pattern for exactly this kind of "one derivation, many renderings" problem |
 
 ### Alternatives Considered
 | Instead of | Could Use | Tradeoff |
@@ -505,7 +505,7 @@ exact locations this session:
 SCALE-01 (isolation)                    SCALE-03 (replay)
 ┌─────────────┐                         ┌──────────────────────┐
 │ readConfig()│──harnessHome────┐       │ hive.appendLog()      │──kind:'message'──┐
-│ .harnessHome│                 │       │ (hive.ts:2485, single │                   │
+│ .harnessHome│                 │       │ (hive.ts:2529, single │                   │
 └─────────────┘                 │       │  funnel, 24 sites)    │                   ▼
        │                        ▼       └───────────┬──────────┘        ┌──────────────────┐
        │              ┌──────────────────┐          │ injected sink     │ events (SQLite,   │
@@ -725,7 +725,7 @@ private committer = new GitCommitter({
 The events sink for SCALE-03 is a **fourth constructor parameter** (or a setter, matching how
 `boot.ts:1146`'s `hookServer` already injects `(s) => telemetry.recordCostSample(s)` into a
 constructed object) — never a `import { PersistStore } from './db'` inside `hive.ts`. `appendLog`
-(`hive.ts:2485`) and `appendCostLedger` (`hive.ts:2527`) are the two call sites that need to ALSO
+(`hive.ts:2529`) and `appendCostLedger` (`hive.ts:2527`) are the two call sites that need to ALSO
 call the injected sink, keeping `log.jsonl`/`cost-ledger.jsonl` as the two on-disk sinks and `events`
 as the third, SQL-queryable one — "one funnel, [now three] sinks, not [three] sources of truth" per
 D-20.
@@ -1055,7 +1055,7 @@ before being treated as locked.
      aggregating in main keeps the IPC payload bounded to bucket count (96 buckets/day at the
      suggested 15-min granularity).
    - What's unclear: CONTEXT.md's Integration Points section names `hive:timeline` /
-     `hive:timelineBucket` as "new handlers beside `index.ts:2983`" without specifying the aggregation
+     `hive:timelineBucket` as "new handlers beside `index.ts:2998`" without specifying the aggregation
      boundary.
    - Recommendation: aggregate in main (one handler returns the day's 96 bucket summaries; a second
      handler returns one bucket's full merged detail-row list on demand, matching D-25's "ONE merged
