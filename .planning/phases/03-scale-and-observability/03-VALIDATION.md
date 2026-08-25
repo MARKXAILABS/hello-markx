@@ -23,7 +23,7 @@ created: 2026-08-24
 | **Quick run command** | `node --test test/<the specific file(s) this task touches>.test.cjs` |
 | **Full suite command** | `npm test` (= `node --test test/*.test.cjs`) |
 | **Estimated runtime** | ~22s full suite (measured this session: 21.7s) |
-| **Measured baseline** | **800 tests / 793 pass / 0 fail / 7 skipped** at `f04f9ec`; `npm run typecheck` → 0 errors |
+| **Measured baseline** | **830 tests / 823 pass / 0 fail / 7 skipped** — re-measured 2026-08-25 on the tree AFTER merging `origin/main` (PR #80, Phase 2). The earlier figure of 800/793/0/7 at `f04f9ec` is superseded: PR #80 added 23 tests. Re-measure again before Wave 0 if further commits land on main. |
 
 **Baseline rule:** 0 failures is the standing bar. Any red test is a real regression, never an
 expected cost of the change. The skip count may not rise above 7 without an explicit, named reason.
