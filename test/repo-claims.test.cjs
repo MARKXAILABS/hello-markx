@@ -1899,8 +1899,15 @@ test('GATE-05: the ANSWER is exactly one new renderer→main invoke channel', ()
     'the preload no longer invokes the answer channel, or invokes it from two places');
 
   const main = readStripped('src/main/index.ts');
-  assert.equal(main.split("ipcMain.handle('control:").length - 1, 9,
-    'the `control:` handler count moved off 9 (measured 8 before plan 04-18 added the answer) — exactly one handler was added and no other was dropped');
+  // 8 before plan 04-18 added `control:answerApproval` -> 9. Plan 03-02 (wave 2)
+  // then added `control:breakerSnapshot`, the PULL counterpart of the existing
+  // `control:breakerState` push event -> 10. The assertion stays an exact
+  // equality on purpose: the point is that no OTHER `control:` handler appeared
+  // or vanished alongside the one the commit means to add, and the two GATE-05
+  // channel counts above — the security property this case is actually named for
+  // — are unchanged by either bump.
+  assert.equal(main.split("ipcMain.handle('control:").length - 1, 10,
+    'the `control:` handler count moved off 10 (8 before plan 04-18 added the answer, 9 before plan 03-02 added the breaker snapshot) — exactly one handler was added and no other was dropped');
 
   // The settle routes through HookServer's NAMED accessor, never a second
   // registry: two registries means an ask answered on the desktop stays open on

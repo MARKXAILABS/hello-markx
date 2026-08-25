@@ -28,7 +28,7 @@ import {
   readConfig, writeConfig,
   OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type ScheduledMission
 } from '../config';
-import { HiveManager, redactSecrets, type AgentMeta, type HiveTask } from '../hive';
+import { HiveManager, redactSecrets, hasOwnCostSource, type AgentMeta, type HiveTask } from '../hive';
 import { AccountPoolManager } from '../accountPool';
 import {
   DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
@@ -515,7 +515,18 @@ function writeFleetSnapshot(): void {
     const agents = Object.entries(reg.agents)
       .filter(([, a]) => !a.archived)
       .map(([id, a]) => {
-        const u = usageById.get(id);
+        // `telemetry.snapshot()` only iterates agents with a LIVE OTel session, so
+        // a transcript-only agent silently read as $0. Reach the fallback — but
+        // ONLY for an agent whose transcript root is provably its own. Note the
+        // FULL `reg.agents` goes to the predicate, not the archived-filtered list
+        // above: an archived neighbour's transcripts are still sitting in that
+        // directory, so hiding it would declare a shared cwd exclusive.
+        const own = hasOwnCostSource(reg.agents, id);
+        // `usageById` SURVIVES: it is what still delivers live-OTel spend to an
+        // agent that fails the predicate. Dropping it would swap a fabricated
+        // neighbour figure for a fabricated zero. `getAgentUsage` tries the live
+        // aggregate first, so the `own` branch loses nothing either.
+        const u = own ? telemetry.getAgentUsage(id) : (usageById.get(id) ?? null);
         const spans = snap.spans[id] ?? [];
         const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
         return {
@@ -528,7 +539,19 @@ function writeFleetSnapshot(): void {
           tokens,
           usd: u ? Number(u.usd.toFixed(4)) : 0,
           lastTool: spans.length ? spans[spans.length - 1].tool : null,
-          lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
+          // A fallback sample's `ts` is the READ time, not an activity time, so
+          // the old expression would render a dormant agent as permanently "0s
+          // ago". `sessionId` is already the exact discriminator — the fallback
+          // sets it to `''` and a live OTel sample never does.
+          lastActiveSecAgo: u?.sessionId ? Math.round((now - u.ts) / 1000) : null,
+          // Same discriminator, surfaced rather than left for a consumer to
+          // re-derive from a `sessionId` neither response exposes: this figure is
+          // ALL-TIME cumulative, not spend since this spawn.
+          costLifetime: u ? u.sessionId === '' : false,
+          // ...and the honest zero. No sample AND no provable source means "this
+          // agent's spend cannot be attributed from here" — a DECLARED GAP, not a
+          // measured $0 that reads as "cheap".
+          costUnattributed: !u && !own,
           inboxBacklog: hive.inboxBacklog(id),
           account: a.account ?? null,
           accountUuid: u?.accountUuid ?? null
@@ -1129,7 +1152,16 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   control = new ControlRegistry();
   telemetry = new TelemetryCollector({
     emit: (channel: string, payload: unknown) => { deps.send(channel, payload); },
-    resolveCwd: (agentId: string) => hive.registry().agents[agentId]?.cwd ?? null
+    resolveCwd: (agentId: string) => hive.registry().agents[agentId]?.cwd ?? null,
+    // Codex keeps its rollouts in the per-agent CODEX_HOME this app derives for
+    // it, NOT in `~/.claude/projects`. Without this the fallback drops to
+    // `resolveCwd` and reads whatever Claude transcripts happen to live in that
+    // directory — i.e. bills a codex worker for the claude worker sharing its
+    // repo. The option existed on the collector and was passed nowhere, which is
+    // the same thing as not existing. Gated on the registry's OWN recorded
+    // provider: every other engine still falls through to `resolveCwd`, unchanged.
+    resolveCodexHome: (agentId: string) =>
+      (hive.registry().agents[agentId]?.provider === 'codex' ? hive.codexHomeFor(agentId) : null)
   });
   breaker = new CircuitBreaker(() => {
     const c = readConfig();

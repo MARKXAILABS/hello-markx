@@ -942,3 +942,142 @@ test('04-20 GATE-05: the publisher fires, and honours the operator\'s notificati
     assert.equal(open[0].id, r.hive_ask.id);
   });
 });
+
+// ─── Plan 03-02: THE COMPOSITION ROOT, second seam ───────────────────────────
+//
+// `TelemetryCollectorOptions.resolveCodexHome` shipped with a doc comment saying
+// "Wired in index.ts, next to `resolveCwd`". It was wired NOWHERE. A declared,
+// optional, never-passed option fails silently and completely: `transcriptFallback`
+// drops to `resolveCwd` and bills a codex worker for whatever Claude transcripts
+// happen to live in the repo it shares with a claude worker.
+//
+// test/telemetry-auth.test.cjs proves the COLLECTOR honours the option when it is
+// given one. That is the half that was already true before this plan. It cannot
+// prove boot.ts passes it — and "the feature exists and does nothing" is exactly
+// the defect this repo keeps paying for, so the wiring gets its own assertion
+// against a REALLY BOOTED floor, driven through `floor.telemetry` and the real
+// `hive.codexHomeFor()` path, never a grep over the argument list.
+test('03-02: a really-booted floor reads a codex agent OWN rollout, not its cwd-neighbour transcripts', async (t) => {
+  const env = floorEnv(t);
+  const { deps } = fakeDeps(env);
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  const hiveRoot = floor.hive.root();
+  const sharedCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'md-0302-boot-cwd-')));
+  // A fake HOME so `projectDir()` resolves into a directory this test owns.
+  // Set AFTER boot: bootFloor takes its paths from deps.paths(), not from HOME.
+  const fakeHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'md-0302-boot-home-')));
+  const prev = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
+  t.after(() => {
+    for (const k of ['HOME', 'USERPROFILE']) {
+      if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+    }
+    for (const d of [sharedCwd, fakeHome]) {
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  });
+
+  // Two agents, ONE cwd, two providers — the production registry boot.ts's
+  // closures actually read (`hive.registry()` re-reads registry.json per call).
+  fs.writeFileSync(path.join(hiveRoot, 'registry.json'), JSON.stringify({
+    godId: null,
+    agents: {
+      cx: { id: 'cx', name: 'Codex', cwd: sharedCwd, provider: 'codex', status: 'idle', lastSeen: Date.now() },
+      cl: { id: 'cl', name: 'Claude', cwd: sharedCwd, provider: 'claude', status: 'idle', lastSeen: Date.now() }
+    }
+  }, null, 2), 'utf8');
+
+  // The NEIGHBOUR's money, in the shared cwd's Claude project dir.
+  const { projectDir } = loadTs('src/main/transcript.ts');
+  const projDir = projectDir(sharedCwd);
+  fs.mkdirSync(projDir, { recursive: true });
+  fs.writeFileSync(path.join(projDir, 'sid-neighbour.jsonl'), JSON.stringify({
+    type: 'assistant', sessionId: 'sid-neighbour',
+    message: {
+      model: 'claude-sonnet-4-6',
+      usage: {
+        input_tokens: 111, output_tokens: 222,
+        cache_creation_input_tokens: 333, cache_read_input_tokens: 444
+      }
+    }
+  }) + '\n', 'utf8');
+
+  // The codex agent's OWN money — written at the path PRODUCTION derives, so
+  // this also proves `codexHomeFor` agrees with `installCodexHooks`.
+  const codexHome = floor.hive.codexHomeFor('cx');
+  assert.equal(codexHome, path.join(hiveRoot, 'agents', 'cx', '.codex'),
+    'codexHomeFor no longer mirrors installCodexHooks join(agentDir, ".codex")');
+  const rollDir = path.join(codexHome, 'sessions', '2026', '08', '26');
+  fs.mkdirSync(rollDir, { recursive: true });
+  fs.writeFileSync(path.join(rollDir, 'rollout-2026-08-26T10-00-00-019e1250-177c-7b51-aa43-1bc553929cf8.jsonl'),
+    JSON.stringify({
+      timestamp: '2026-08-26T10:00:00.000Z', type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: { total_token_usage: { input_tokens: 5000, cached_input_tokens: 1000, output_tokens: 700, reasoning_output_tokens: 0, total_tokens: 5700 } }
+      }
+    }) + '\n', 'utf8');
+
+  // THE ASSERTION: through the floor's own collector, wired by boot.ts alone.
+  const cx = floor.telemetry.getAgentUsage('cx');
+  assert.ok(cx, 'the booted floor read NO usage for the codex agent — resolveCodexHome is unwired and '
+    + 'resolveCwd found nothing either, so the fixture is not reaching production code');
+  assert.equal(cx.output, 700,
+    `the booted floor billed the codex agent ${cx.output} output tokens; its own rollout says 700 and the `
+    + 'cwd-sharing claude NEIGHBOUR says 222. A 222 here means boot.ts never passed resolveCodexHome');
+  assert.equal(cx.input, 4000, 'codex input is input_tokens - cached_input_tokens');
+  assert.equal(cx.cacheCreation, 0,
+    'codex has no cache-creation concept — a 333 here is the neighbour Claude transcript bleeding through');
+
+  // The mirror image: a NON-codex agent must be completely unaffected by the
+  // wiring — it still reads its cwd, exactly as before this plan.
+  const cl = floor.telemetry.getAgentUsage('cl');
+  assert.ok(cl, 'the claude agent lost its cwd fallback — the gating closure is refusing every provider');
+  assert.equal(cl.output, 222, 'a non-codex agent must still read its cwd transcripts, unchanged');
+
+  // ...and the DISPLAY gate agrees about which of the two can be shown a figure.
+  const { hasOwnCostSource } = loadTs('src/main/hive.ts');
+  const reg = floor.hive.registry();
+  assert.equal(hasOwnCostSource(reg.agents, 'cx'), true);
+  assert.equal(hasOwnCostSource(reg.agents, 'cl'), false,
+    'the claude agent shares that cwd — its whole-directory total is not provably its own money');
+
+  // ─── the DISPLAY join itself, read out of the file it really writes ───────
+  //
+  // Everything above proves the COLLECTOR is wired. This proves the join that
+  // consumes it: `writeFleetSnapshot` sourced `usageById` from
+  // `telemetry.snapshot()`, which iterates LIVE OTel sessions only — so a
+  // transcript-only agent was written to fleet.json as a flat $0 no matter how
+  // much it had spent. `armAlwaysOnBeats()` writes the snapshot synchronously
+  // before arming its timer, so the real function runs here, not a copy of it.
+  loadTs('src/main/floor/boot.ts').armAlwaysOnBeats();
+  const fleet = JSON.parse(fs.readFileSync(path.join(hiveRoot, 'fleet.json'), 'utf8'));
+  const row = (id) => fleet.agents.find((a) => a.id === id);
+
+  const cxRow = row('cx');
+  assert.ok(cxRow, 'the codex agent is missing from fleet.json entirely');
+  assert.equal(cxRow.tokens, 5700,
+    `the fleet snapshot shows ${cxRow.tokens} tokens for a codex agent whose rollout totals 5700. `
+    + 'A 0 means the join is still sourced from the live-OTel-only snapshot() map');
+  assert.ok(cxRow.usd > 0, 'a measured transcript total was written with no dollar figure');
+  assert.equal(cxRow.costLifetime, true,
+    'a transcript total is ALL-TIME cumulative and must say so — rendered beside "up 4m" without this '
+    + 'flag it reads as spend since this spawn');
+  assert.equal(cxRow.costUnattributed, false, 'this figure IS attributable — it came from a per-agent CODEX_HOME');
+  assert.equal(cxRow.lastActiveSecAgo, null,
+    'a fallback sample ts is the READ time, not an activity time — reporting it as freshness renders a '
+    + 'dormant agent as permanently "0s ago"');
+
+  // The mirror image, and the reason the gate exists: same cwd, same transcripts
+  // sitting right there, but nothing proves they are THIS agent's money.
+  const clRow = row('cl');
+  assert.ok(clRow, 'the claude agent is missing from fleet.json entirely');
+  assert.equal(clRow.tokens, 0, 'a cwd-sharing claude agent was handed a whole-directory total it cannot prove is its own');
+  assert.equal(clRow.usd, 0);
+  assert.equal(clRow.costUnattributed, true,
+    'its 0 must be a DECLARED GAP, not a measurement — an undeclared $0 reads as "this agent is cheap"');
+  assert.equal(clRow.costLifetime, false);
+});

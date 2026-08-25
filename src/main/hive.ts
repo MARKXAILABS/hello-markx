@@ -240,6 +240,12 @@ export interface AgentMeta {
 export interface RegistryAgent extends AgentMeta {
   status: 'idle' | 'working' | 'blocked' | 'gone';
   lastSeen: number;
+  /** When the CURRENT PTY was spawned. Re-stamped on every (re)spawn — unlike
+   *  `sessionId`, which `...prev` deliberately preserves — so a card showing
+   *  "up 4m" means since this terminal, never cumulative across restarts.
+   *  Optional: registries written before this field exists read `undefined`,
+   *  which the directory surfaces as `null` rather than as a fake epoch. */
+  spawnedAt?: number;
   /** True once the agent's terminal/PTY tab is closed. The record is retained
    *  (not deleted) so its history/memory survive; only agents with a live PTY
    *  are 'active'. Broadcast fan-out + roster reads skip archived agents. */
@@ -260,6 +266,33 @@ export interface RegistryAgent extends AgentMeta {
 export interface Registry {
   godId: string | null;
   agents: Record<string, RegistryAgent>;
+}
+
+/** Can this agent's TRANSCRIPT-tier spend be proven to be its own money?
+ *
+ *  True for EXACTLY ONE case: a codex agent. Codex writes its rollouts under the
+ *  per-agent `CODEX_HOME` this app derives for it (`codexHomeFor`), so the
+ *  directory read is scoped to one agent BY CONSTRUCTION.
+ *
+ *  False for everything else, claude included — and that is the point, not an
+ *  oversight. Every other engine's fallback is a whole-`cwd` sum over
+ *  `~/.claude/projects`, and a cwd is not a per-agent transcript root: the
+ *  directory can hold another PROJECT's agent (invisible to THIS registry), an
+ *  agent that was deleted, or the operator's own Claude Code CLI sessions. A
+ *  "sole holder of its cwd" test cannot see any of those, so it cannot make the
+ *  claim true. Callers show the declared gap (`costUnattributed`) instead of a
+ *  figure they cannot attribute — an under-report, never a neighbour's dollars.
+ *
+ *  Pure and free-standing rather than a method: both display joins already hold
+ *  `reg.agents`, and this way it is testable over an object literal with no
+ *  HiveManager and no filesystem. An unknown id is false, never a throw. */
+export function hasOwnCostSource(agents: Record<string, RegistryAgent>, id: string): boolean {
+  const a = agents[id];
+  if (!a) return false;
+  // `?? 'claude'` is the same default the rest of this file applies to a legacy
+  // entry with no recorded provider — omitting it would classify every one of
+  // them as "not claude" and quietly hand them a whole-directory total.
+  return (a.provider ?? 'claude') === 'codex';
 }
 
 /** One open `requires_reply` obligation, persisted in `pending-replies.json` so
@@ -587,6 +620,22 @@ export class HiveManager {
   private agentDir(id: string): string {
     if (!isSafeAgentId(id)) throw new Error('unsafe agent id');
     return join(this.root()!, 'agents', id);
+  }
+
+  /** A codex agent's isolated `CODEX_HOME` — the same `join(dir, '.codex')`
+   *  `installCodexHooks` derives at spawn, exposed so the telemetry collector can
+   *  read that agent's OWN rollouts instead of a cwd-sharing neighbour's Claude
+   *  transcripts. A pure path join: no filesystem check, no side effect, and
+   *  `agentDir`'s id guard still throws on an unsafe id.
+   *
+   *  KNOWN LIMIT (T-03-02h): a RESUMED codex agent whose `CODEX_HOME` index.ts
+   *  repointed to the sibling home that OWNS its rollout reads its own, empty
+   *  home here and displays zero. That is an UNDER-report of its own spend, never
+   *  another agent's dollars. Fixing it means recording the EFFECTIVE home on the
+   *  registry entry at spawn, which needs a public per-agent registry writer this
+   *  class does not have. */
+  codexHomeFor(id: string): string {
+    return join(this.agentDir(id), '.codex');
   }
   /** IPC endpoint the cth-hook shim talks to (Phase 1 autonomy).
    *  On POSIX this is a Unix-domain socket file under the hive root. On Windows,
@@ -1008,7 +1057,10 @@ export class HiveManager {
       cwdValid: cwd.valid,
       // A (re)spawn always means a live terminal — clear any prior archived flag.
       archived: false,
-      lastSeen: Date.now()
+      lastSeen: Date.now(),
+      // UNCONDITIONAL, not spread from `...prev`: every (re)spawn is a new PTY,
+      // so "up" must reset. Sits beside `lastSeen` because it behaves the same way.
+      spawnedAt: Date.now()
     };
     if (meta.isGod) reg.godId = meta.id;
     this.writeJson(join(root, 'registry.json'), reg);

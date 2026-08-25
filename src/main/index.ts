@@ -28,7 +28,7 @@ import {
   addWorktree, removeWorktree, worktreeHasUnintegratedWork, worktreeIsGcSafe,
   getLogGraph, getCommitFiles, getFileAtRev, compareRefs, listWorktrees, checkoutRef
 } from './git';
-import { HiveManager, redactSecrets, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
+import { HiveManager, redactSecrets, hasOwnCostSource, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
 import { AccountPoolManager } from './accountPool';
 import {
   DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
@@ -3629,7 +3629,14 @@ ipcMain.handle('hive:agentDirectory', () => {
   const usageById = new Map(snap.usage.map((u) => [u.agentId, u]));
   const now = Date.now();
   const agents = Object.entries(reg.agents).map(([id, a]) => {
-    const u = usageById.get(id);
+    // Same gated join writeFleetSnapshot does, for the same reason: `snapshot()`
+    // is live-OTel-only, so a transcript-only agent read $0 here — but a whole-cwd
+    // sum is only provably THIS agent's money when its transcript root is
+    // per-agent, which is codex and nothing else.
+    const own = hasOwnCostSource(reg.agents, id);
+    // `usageById` survives: it still carries live spend for an agent the
+    // predicate refuses.
+    const u = own ? telemetry.getAgentUsage(id) : (usageById.get(id) ?? null);
     const spans = snap.spans[id] ?? [];
     const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
     const ctx = hookServer.contextFor(id);
@@ -3652,7 +3659,18 @@ ipcMain.handle('hive:agentDirectory', () => {
       tokens,
       usd: u ? Number(u.usd.toFixed(4)) : 0,
       lastTool: spans.length ? spans[spans.length - 1].tool : null,
-      lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
+      // A fallback sample's `ts` is the READ time — the old expression rendered a
+      // dormant transcript-only agent as permanently "0s ago". `sessionId` is the
+      // discriminator the fallback already sets to `''`.
+      lastActiveSecAgo: u?.sessionId ? Math.round((now - u.ts) / 1000) : null,
+      // This spend is ALL-TIME cumulative, not spend since this spawn — so the
+      // card never puts it beside `up` as though the two shared a window.
+      costLifetime: u ? u.sessionId === '' : false,
+      // No sample and no provable source: a declared gap, not a measured $0.
+      costUnattributed: !u && !own,
+      // When the CURRENT PTY started — the clock a card's "up" reads. `null` for a
+      // registry entry written before the field existed.
+      spawnedAt: a.spawnedAt ?? null,
       contextTokens: ctx?.tokens ?? null,
       contextLimit: ctx?.limit ?? null,
       contextPct: ctx && ctx.limit > 0 ? Math.round((ctx.tokens / ctx.limit) * 100) : null

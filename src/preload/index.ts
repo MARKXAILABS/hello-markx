@@ -155,7 +155,23 @@ export interface AgentDirectoryEntry {
   /** Aggregate spend; carried for completeness — the voice layer speaks tokens. */
   usd: number;
   lastTool: string | null;
+  /** Seconds since this agent's last LIVE activity, or null when there is no
+   *  activity clock to read — a transcript-derived sample is stamped at READ
+   *  time, so reporting it as freshness would render a dormant agent as
+   *  permanently "0s ago". */
   lastActiveSecAgo: number | null;
+  /** `usd`/`tokens` above are an ALL-TIME cumulative total read off a transcript,
+   *  not spend since this spawn. Render it with its own label — never beside
+   *  `spawnedAt`-derived uptime as though the two shared a window. */
+  costLifetime: boolean;
+  /** `usd: 0` / `tokens: 0` here is a DECLARED GAP, not a measurement: this
+   *  agent's transcript root is shared (a cwd can hold another project's agent, a
+   *  deleted agent, or the operator's own CLI sessions), so no figure can be
+   *  proven to be its money. Render the gap, never the zero as a dollar amount. */
+  costUnattributed: boolean;
+  /** When the CURRENT PTY was spawned — the clock "up 4m" reads. Resets on every
+   *  respawn; null for a registry entry written before the field existed. */
+  spawnedAt: number | null;
   contextTokens: number | null;
   contextLimit: number | null;
   contextPct: number | null;
