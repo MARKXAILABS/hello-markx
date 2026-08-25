@@ -1023,7 +1023,13 @@ export class HookServer {
       + ' ask=' + entry.id + ': ' + a.reason.slice(0, 90)
       + ' | command: ' + a.command.slice(0, 200)
     );
-    this.emitControl(a.agentId, a.tool, a.reason, a.command);
+    // The ONE call site that carries an ask id. Read off the entry rather than
+    // recomputed, exactly as `hive_ask.deadlineMs` below is: the operator's
+    // countdown and the shim's deadline must be the same number.
+    this.emitControl(
+      a.agentId, a.tool, a.reason, a.command,
+      entry.id, entry.expiresAt - Date.now()
+    );
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -2222,12 +2228,26 @@ export class HookServer {
    *  until now nothing ever set it: the banner could say a command was refused
    *  and not say which. Truncated for the same reason the log line is — a
    *  `tool_input` can carry a whole heredoc. The reason string itself is authored
-   *  beside the gate that decided it and is never re-written in the renderer. */
+   *  beside the gate that decided it and is never re-written in the renderer.
+   *
+   *  `askId`/`expiresInMs` are supplied ONLY by `openApproval` (GATE-05), and
+   *  their presence is the renderer's whole discriminator: an ask is still open
+   *  and answerable, a GATE-03 notice is already denied and carries neither. The
+   *  three other `emitControl` call sites are refusals and pass nothing here.
+   *
+   *  `expiresInMs` is a DURATION measured at emit time, never a deadline — rule
+   *  G-3, and the same computation `openPhoneAsks` already does for the phone.
+   *  The renderer's clock is not this one, and a deadline handed to a client is
+   *  optimistic by the skew, which is the one direction that is unsafe: it tells
+   *  the operator they have time to answer a question that already auto-denied.
+   *  `expiresAt` therefore never leaves this process on this channel either. */
   private emitControl(
-    agentId: string, tool: string | undefined, reason: string | undefined, command?: string
+    agentId: string, tool: string | undefined, reason: string | undefined, command?: string,
+    askId?: string, expiresInMs?: number
   ): void {
     this.getWebContents()?.send('control:approvalRequest', {
-      agentId, tool, reason, command: command ? command.slice(0, 2000) : undefined
+      agentId, tool, reason, command: command ? command.slice(0, 2000) : undefined,
+      askId, expiresInMs
     });
   }
 

@@ -523,6 +523,51 @@ test('GATE-05: the production registry really got ASK_TTL_MS, measured as an EFF
   );
 });
 
+test('GATE-05: the ask reaches the DESKTOP carrying its id and its remaining duration', () => {
+  const { sent, fire } = hookServer();
+  const { hive_ask: ask } = fire('Bash', { command: 'git push origin +main --force' });
+
+  const evt = sent.find((s) => s.channel === 'control:approvalRequest');
+  assert.ok(evt, 'the ask fired no control:approvalRequest at all — the desktop banner never hears about it');
+
+  // `askId` PRESENT is the only discriminator the renderer has between a
+  // GATE-05 ask (still open, answerable, expiring) and a GATE-03 notice (already
+  // denied, nothing to answer). Without it the banner renders a `dismiss` button
+  // for a question the floor is still blocking on, and GATE-05's desktop half is
+  // dead by construction however well the banner is built.
+  assert.equal(evt.payload.askId, ask.id,
+    'the desktop was told a command was refused and NOT told which question it may answer — `askId` is the ask\'s whole capability on this path, and the shim is meanwhile sitting on a poll loop nobody can settle');
+
+  // Rule G-3: a DURATION measured at emit time, never a deadline. The renderer's
+  // clock is not main's, and a deadline sent to a client is optimistic by the
+  // skew — which is the one direction that is unsafe.
+  assert.ok(typeof evt.payload.expiresInMs === 'number' && evt.payload.expiresInMs > 0 && evt.payload.expiresInMs <= ASK_TTL_MS,
+    `the desktop got expiresInMs=${JSON.stringify(evt.payload.expiresInMs)}; rule G-3 wants a positive duration no larger than the server-side TTL (${ASK_TTL_MS}ms)`);
+  assert.equal(evt.payload.expiresAt, undefined,
+    'a deadline TIMESTAMP reached the renderer. `expiresAt` never leaves this process — openPhoneAsks already computes a duration for the same reason');
+
+  // The command survives the trip: rule 3 exists because the dangerous half of
+  // `git push origin +main --force` is at the END, and a banner that cannot show
+  // it cannot be ellipsis-safe either.
+  assert.equal(evt.payload.command, 'git push origin +main --force',
+    'the refused command did not reach the banner verbatim');
+});
+
+test('GATE-05: a hard deny reaches the desktop with NO ask id — a final decision is not answerable', () => {
+  // The paired negative for the case above, and not a formality: an askId on a
+  // GATE-03 notice renders approve/deny buttons that settle nothing, which is a
+  // worse lie than the silent banner it replaced.
+  const { sent, fire } = hookServer({ hostAllowlist: () => [] });
+  fire('Bash', { command: 'curl https://evil.example/x' });
+
+  const notice = sent.find((s) => s.channel === 'control:approvalRequest');
+  assert.ok(notice, 'the hard deny stopped reaching the renderer entirely');
+  assert.equal(notice.payload.askId, undefined,
+    'a hard deny carried an ask id — the banner would offer to approve a decision that is already final');
+  assert.equal(notice.payload.expiresInMs, undefined,
+    'a hard deny carried a countdown — there is nothing counting down, the call was refused');
+});
+
 test('GATE-05: a bare deny carries NO hive_ask, and an ordinary command carries neither', () => {
   // The emptied allowlist is the one producer of kind:'deny' — an operator who
   // cleared the list said "no hosts". Without this leg, "a force-push asks" is
