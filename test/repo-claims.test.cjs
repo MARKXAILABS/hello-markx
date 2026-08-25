@@ -1294,11 +1294,24 @@ test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => 
  *  in the same commit as the marker it adds. `src/shared/agentProvider.ts`
  *  went 3 → 4: GATE-04's codex sandbox path. The FILE SET is unchanged — no
  *  file gained or lost its first marker — which is why the file-set assertion
- *  below stays green while the two counts move. */
+ *  below stays green while the two counts move.
+ *  RE-MEASURED AGAIN by plan 04-16 (2026-08-25, wave 5) with the command above
+ *  in that session, in the same commit as the two markers it adds — not by
+ *  adding 2 to plan 04-13's figures. `src/main/hiveTemplates.ts` went 5 → 7:
+ *  GATE-05's bounded wait puts a poll loop in `HOOK_SHIM`, and the two markers
+ *  say DIFFERENT things. One is kimi's — the loop is real new code and kimi is
+ *  one of the three engines that runs this shim, exercised here on Claude's and
+ *  codex's contract rather than kimi's, with `hiveTemplates.ts`'s own note that
+ *  Moonshot documents a BLOCK as exit code 2 still open. The other is grok's
+ *  and agy's — their shims are UNCHANGED and an ask degrades to a deny through
+ *  decoders they already ship, a translation `test/gate05-bounded-wait.test.cjs`
+ *  case 7 drives as a real child process on this machine, so what is unverified
+ *  there is the ENGINE honouring the deny, not the shim writing it. The FILE
+ *  SET is unchanged again. */
 const MARKER_LEDGER = {
   'src/main/hive.ts': 3,
   'src/main/hiveProvisioning.ts': 5,
-  'src/main/hiveTemplates.ts': 5,
+  'src/main/hiveTemplates.ts': 7,
   'src/main/index.ts': 1,
   'src/main/webhook.ts': 3,
   'src/shared/agentProvider.ts': 4
@@ -1316,8 +1329,13 @@ const MARKER_LEDGER = {
  *  built-but-unverified, because this machine's codex auth is dead
  *  (401 `refresh_token_reused`, re-tested live in that session) so the plan's
  *  own live interactive run could not execute. openai/codex#23552 is OPEN and
- *  neither reproduced nor ruled out. */
-const LIVE_UNVERIFIED_TOTAL = 21;
+ *  neither reproduced nor ruled out.
+ *  21 → 23, re-measured by plan 04-16 (2026-08-25, wave 5) with the command
+ *  above in that session and NOT by adding two to 21: GATE-05's poll loop ships
+ *  with one marker for kimi's path through it and one for grok's and agy's
+ *  deliberate absence from it. This is also the answer to plan 04-19's
+ *  zero-marker sweep for GATE-05 — a decision, recorded, rather than a hole. */
+const LIVE_UNVERIFIED_TOTAL = 23;
 
 /** The five engines this project built bridges for and never live-verified
  *  (D-33, D-35), mapped to the MINIMUM number of marker blocks that must
@@ -1348,9 +1366,32 @@ const LIVE_UNVERIFIED_TOTAL = 21;
  *  five pre-existing marker blocks that merely CROSS-REFERENCE codex (kimi's
  *  says "the CODEX case, not the grok case"), so it would pin almost nothing.
  *  Measured, not assumed: 6 blocks name codex with the new marker, 5 without.
- *  The repo-wide total above is what holds the new marker in place. */
+ *  The repo-wide total above is what holds the new marker in place.
+ *
+ *  RAISED FOR kimi ONLY by plan 04-16 (2026-08-25, wave 5), 5 → 6, from a live
+ *  run of this file's own `markerBlocks` over `src/` in that session — before
+ *  21 blocks {pi 4, opencode 5, crush 1, qwen 1, kimi 5, grok 3, agy 1,
+ *  codex 6}, after 23 blocks {pi 4, opencode 5, crush 1, qwen 1, kimi 6,
+ *  grok 4, agy 2, codex 7}. GATE-05's poll loop carries a kimi marker, and
+ *  raising the floor to the measured value is what stops that marker being
+ *  quietly dropped later while the total still balances — the exact drift this
+ *  per-engine half exists to catch.
+ *
+ *  `grok` and `agy` are DELIBERATELY still absent, which is a decision rather
+ *  than an oversight and is written down so plan 04-19's sweep finds one. Both
+ *  gained a marker block in the same commit (3 → 4 and 1 → 2), and neither CLI
+ *  is installed here. But this map is the set plans 04-10 and 04-13 scoped to
+ *  bridges that were never live-verified, and adding two engines to it is a
+ *  claim about THEIR bridges that this plan neither made nor measured: what
+ *  04-16 observed is that their UNCHANGED decoders translate an ask reply into
+ *  their own deny, driven as real child processes here
+ *  (`test/gate05-bounded-wait.test.cjs` case 7 for grok,
+ *  `test/engine-parity.test.cjs` for agy). Widening the map on the back of that
+ *  would conflate an unverified engine with an unverified bridge, the same
+ *  conflation 04-13 refused for codex. The repo-wide total above is what holds
+ *  the grok/agy marker in place. */
 const LIVE_UNVERIFIED_ENGINES = {
-  pi: 4, opencode: 5, crush: 1, qwen: 1, kimi: 5
+  pi: 4, opencode: 5, crush: 1, qwen: 1, kimi: 6
 };
 
 /** Raw (un-stripped) contents of a repo-relative file. The required read
