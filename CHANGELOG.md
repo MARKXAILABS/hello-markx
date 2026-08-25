@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed — action may be required
+
+- **`harness.db` and the knowledge-graph store now live under the active project's own home
+  folder** instead of one shared app-data location. Until now every project on the machine
+  read and wrote the *same* `harness.db` and the *same* `knowledge/` store, so "an agent in
+  project X cannot see project Y's data" was simply false for command history, the key-value
+  store (including each mission's `lastFiredAt`, which is why a mission that fired in one
+  project could read as already-fired in another), the SQLite FTS recall index and the whole
+  knowledge graph. Both now follow `harnessHome`.
+
+  **Data already written to the old location is not copied forward automatically.** Nothing is
+  deleted — the old `harness.db` and `knowledge/` stay exactly where they are, simply unused,
+  and a fresh empty pair is created under the project home on first run. Two ways to keep the
+  old data: use **Settings → change home folder** in *move* mode, which now copies `harness.db`
+  (and its `-wal`/`-shm` siblings) and `knowledge/` along with `hive`, `palace` and the roster;
+  or copy those two entries by hand from the old app-data folder into the project home while
+  the app is closed. A copy-forward on upgrade was deliberately not written: it is untested
+  migration code on the boot path, and the explicit move already exists.
+
+- **No per-agent memory scope.** `README.md` and the in-app memory panel used to tell you to
+  switch memory scope to per-agent for real isolation. That control does not exist in the
+  shipped app — memory is shared across the hive and the scope a search names is supplied by
+  the asking agent, so it narrows results rather than enforcing anything. Server-side
+  enforcement lands with RECALL-02. Both places now say so instead.
+
+- **Only one project runs at a time.** The harness-config picker claimed you could "run
+  different setups side by side"; switching projects relaunches the app into the new one, and
+  two never run simultaneously. The picker and `README.md` now state the real behaviour.
+
 ### Documentation
 
 - **Shipped docs now describe the code, not the plan** (#46, from the floor-inspection
