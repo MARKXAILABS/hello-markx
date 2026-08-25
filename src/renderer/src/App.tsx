@@ -36,6 +36,25 @@ import brandLogo from '@brand/logo.png?url';
 // Injected at build time from package.json (see electron.vite.config.ts).
 declare const __APP_VERSION__: string;
 
+// DAEMON-05 titlebar chip — two measured degradation steps (02-UI-SPEC.md
+// §S4a). Both widths are MEASURED this session against the literal
+// 48-character probe host `adams-medical-meeting-enormous.trycloudflare.com`
+// (D-14's live-measured random-word label on cloudflared's fixed suffix) via
+// a CDP `Emulation.setDeviceMetricsOverride` probe over the REAL built
+// renderer bundle (route B, 01-18's method — route A's contextBridge freeze
+// on `window.cth` was hit and confirmed live before falling back).
+// TUNNEL_CHIP_W1 = 833: the titlebar's natural content width with the full
+// chip (`PUBLIC · adams-medical-meeting-enormous.trycloudflare.com`) present
+// — pinpointed exactly (833px: no overflow, 832px: overflow) — below this
+// the `auto mode on/off` text hides (display:none, not ellipsised) — step 1.
+// TUNNEL_CHIP_W2 = 783: the titlebar's natural content width with the
+// auto-mode text ALREADY hidden and the full chip still present — pinpointed
+// exactly (783px: no overflow, 782px: overflow) — below this the chip drops
+// the host and renders `PUBLIC` alone — step 2. The host is never truncated
+// at either step.
+const TUNNEL_CHIP_W1 = 833;
+const TUNNEL_CHIP_W2 = 783;
+
 export function App() {
   const agent = useStore(selectedAgent);
   const agents = useStore(s => s.agents);
@@ -80,6 +99,14 @@ export function App() {
   /** Is the collapsed sidebar showing as an overlay? Only consulted below 1024;
    *  starts closed, so a narrow window opens on a full-width floor. */
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // DAEMON-05 titlebar chip: the operator's ONLY always-on signal that the
+  // public tunnel is up. Rendered only while `tunnelUp` is true — when it is
+  // false, nothing renders, because absence is the signal (never an
+  // optimistic local flag that survives a failed start or a crash). Seeded
+  // from `tunnelStatus()` on mount, then tracked via `onTunnelChanged` —
+  // never polled.
+  const [tunnelUp, setTunnelUp] = useState(false);
+  const [tunnelHost, setTunnelHost] = useState('');
 
   // Deep link into Settings from anywhere in the tree. Settings' open state is
   // local to App, so a nested control (e.g. "set it now" beside a disabled Talk
@@ -94,6 +121,26 @@ export function App() {
     };
     window.addEventListener('cth:open-settings', onOpenSettings);
     return () => window.removeEventListener('cth:open-settings', onOpenSettings);
+  }, []);
+
+  // Public tunnel (cloudflared, DAEMON-05): seed live state on mount, then
+  // subscribe for the app's whole lifetime — the `onUpdateStatus`/
+  // `updateCurrent` precedent (a reloaded window subscribes AFTER main may
+  // already have emitted, so it pulls the current state instead of waiting).
+  useEffect(() => {
+    let alive = true;
+    const apply = (s: { running: boolean; url: string | null }) => {
+      if (!alive) return;
+      setTunnelUp(s.running);
+      if (s.url) {
+        try { setTunnelHost(new URL(s.url).host); } catch { setTunnelHost(''); }
+      } else {
+        setTunnelHost('');
+      }
+    };
+    window.cth.tunnelStatus().then(apply).catch(() => { /* status unavailable - assume down */ });
+    const unsubscribe = window.cth.onTunnelChanged(apply);
+    return () => { alive = false; unsubscribe(); };
   }, []);
 
   // Initial config load
@@ -349,10 +396,56 @@ export function App() {
           fontFamily: 'var(--cth-font-ui)',
           fontSize: 'var(--cth-text-body-md)',
           lineHeight: 'var(--cth-lh-body-md)',
-          color: 'var(--cth-ink-500)'
+          color: 'var(--cth-ink-500)',
+          // Degradation step 1: hidden (not ellipsised) once the tunnel chip is
+          // present and the row no longer has room for it — "auto mode of…"
+          // is noise; the same state is already the AUTO chip on every card.
+          display: (tunnelUp && vpWidth < TUNNEL_CHIP_W1) ? 'none' : undefined
         }}>
           {config.autoMode ? 'auto mode on' : 'auto mode off'}
         </span>
+        {/* DAEMON-05 — exists ONLY while the tunnel is up; absence is the
+            signal. Never an optimistic local flag: `tunnelUp` comes straight
+            off tunnelStatus()/onTunnelChanged, so a failed start or a crashed
+            child never leaves a stale chip on screen. */}
+        {tunnelUp && (
+          <button
+            className="cth-titlebar-nodrag"
+            onClick={() => { setSettingsSection('Connections'); setSettingsOpen(true); }}
+            title="Your floor is reachable at this public address. Click to open the tunnel panel."
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: 'var(--cth-lemon)', color: 'var(--cth-on-accent)',
+              boxShadow: 'inset 0 0 0 1px var(--cth-ink-900)',
+              border: 'none', borderRadius: 0, cursor: 'pointer',
+              padding: '1px 4px 0', flexShrink: 0
+            }}
+          >
+            <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>
+              PUBLIC
+            </span>
+            {/* Degradation step 2 — below TUNNEL_CHIP_W2 the chip drops the
+                host entirely rather than truncating it: an ellipsised public
+                address looks verifiable while being neither usable nor
+                checkable, so this contract forbids it at every step. The
+                requirement's literal "always visible" clause is not met at
+                this width (D-41) — its PURPOSE is: the tunnel can never be
+                up without the operator seeing it, and a solid PUBLIC chip
+                satisfies that because presence is the signal; the
+                untruncated URL is one click away in the panel this chip
+                opens. Stated as a limitation, not paraphrased away. */}
+            {!(vpWidth < TUNNEL_CHIP_W2) && (
+              <>
+                <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>
+                  ·
+                </span>
+                <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)' }}>
+                  {tunnelHost}
+                </span>
+              </>
+            )}
+          </button>
+        )}
         {/* v0.3.4: theme + fullscreen live HERE (top right), not buried in the
             terminal header — and the theme darkens the whole app, terminals
             included (design/theme.ts + tokens.css dark block). */}

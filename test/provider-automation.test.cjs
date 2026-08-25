@@ -9,6 +9,7 @@ const {
   compactionCommandForProvider,
   contextCommandsForProvider,
   isCompactionCommand,
+  providerCapabilities,
   remoteControlCommandForProvider,
   terminalReadySettleMs,
   terminalReadyToReceive
@@ -138,4 +139,48 @@ test('continuous TUI repainting cannot block terminal readiness', () => {
   assert.equal(terminalReadyToReceive(true, 499, 'codex'), false);
   assert.equal(terminalReadyToReceive(true, 500, 'codex'), true);
   assert.equal(terminalReadyToReceive(undefined, 500, 'codex'), true);
+});
+
+// UI-SPEC Rule C-1a step 1 — the `??` mechanism, proven MECHANICALLY. A passed
+// platform must short-circuit `process.platform` entirely (not merely be
+// accepted and ignored), and an omitted one must still read it (today's
+// main-side / test-side behaviour, unchanged). Neither half alone proves the
+// mechanism: the first alone passes if the parameter is accepted and ignored;
+// the second alone passes if the function never reads the platform at all.
+test('providerCapabilities: a passed platform short-circuits process.platform via ??', (t) => {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform');
+  t.after(() => Object.defineProperty(process, 'platform', original));
+
+  Object.defineProperty(process, 'platform', {
+    configurable: true,
+    get() {
+      throw new Error('process.platform was read despite an explicit platform argument — the ?? did not short-circuit');
+    }
+  });
+
+  assert.doesNotThrow(
+    () => providerCapabilities('codex', 'linux'),
+    'a caller that supplies platform must never touch process.platform at all'
+  );
+  assert.throws(
+    () => providerCapabilities('codex'),
+    /process\.platform was read/,
+    'a caller that omits platform must still read process.platform — the default is not a no-op'
+  );
+});
+
+// End-to-end forwarding: the value that reaches remoteControlAvailability is
+// the one actually passed, not always the live host's.
+test('providerCapabilities forwards the passed platform end to end', () => {
+  assert.equal(providerCapabilities('codex', 'win32').remote, false);
+  assert.equal(providerCapabilities('codex', 'darwin').remote, true);
+});
+
+// Rule C-1b — one source of truth, proven directly: ProviderCapabilities.mcp
+// is exactly AgentProviderPreset.supportsMcp, over every preset, not just the
+// committed map engine-parity.test.cjs pins.
+test('providerCapabilities.mcp mirrors the preset\'s supportsMcp bit, for every preset', () => {
+  for (const preset of AGENT_PROVIDER_PRESETS) {
+    assert.equal(providerCapabilities(preset.id).mcp, preset.supportsMcp, preset.id);
+  }
 });

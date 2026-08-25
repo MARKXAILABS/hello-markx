@@ -370,13 +370,20 @@ export class TelemetryCollector {
   private listen(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const server = createServer((req, res) => this.handleRequest(req, res));
-      const onError = (e: Error): void => reject(e);
+      // Assigned BEFORE listen(), not inside its callback: a `stop()` racing
+      // ahead of an in-flight bind (bootFloor's start() is fire-and-forget, so
+      // a caller that shuts down within the same tick — exactly what
+      // test/boot-floor.test.cjs does — used to find `this.server` still null
+      // and no-op, leaking the real listener forever, which is a
+      // `node --test` hang, not just a resource leak). `server.close()` on a
+      // not-yet-listening server is a safe, standard Node pattern.
+      this.server = server;
+      const onError = (e: Error): void => { this.server = null; reject(e); };
       server.once('error', onError);
       server.listen(this.port, this.host, () => {
         server.off('error', onError);
         const addr = server.address();
         this.boundPort = addr && typeof addr === 'object' ? addr.port : null;
-        this.server = server;
         resolve();
       });
     });

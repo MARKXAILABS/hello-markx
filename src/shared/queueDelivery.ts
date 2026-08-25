@@ -118,3 +118,43 @@ export function noteAttempt(item: QueuedDelivery): { drop: boolean } {
   item.attempts = (item.attempts ?? 0) + 1;
   return { drop: item.attempts >= MAX_SEND_ATTEMPTS };
 }
+
+/** A hive message being handed to a non-Claude agent's terminal because the
+ *  provider cannot drain a hive inbox (a hookless custom CLI, or a proxy-tier
+ *  bridge whose `inboxDelivery` is `'terminal'`). D-11: this used to be an
+ *  IPC payload the renderer alone consumed (`hive:terminalHandoff`); it moved
+ *  here, byte-identical, when the consumer moved from the renderer to main
+ *  (`src/main/floor/boot.ts`'s `handoff` dep) — the prompt is typed into a
+ *  live agent's terminal either way, and a reworded copy in two places is how
+ *  the two silently drift. */
+export interface TerminalWorkOrder {
+  id: string;
+  from: string;
+  to: string;
+  act: string;
+  subject: string;
+  body: string;
+  requiresReply: boolean;
+  createdAt: string;
+}
+
+/** Render a `TerminalWorkOrder` as the literal text typed into the target's
+ *  terminal. Byte-identical to the text this rendered before the move — see
+ *  this module's header. */
+export function terminalWorkOrderPrompt(msg: TerminalWorkOrder): string {
+  return [
+    'WORK ORDER FROM HIVE',
+    `Message: ${msg.id}`,
+    `From: ${msg.from}`,
+    `Subject: ${msg.subject}`,
+    `Act: ${msg.act}${msg.requiresReply ? ' (reply expected)' : ''}`,
+    `Issued: ${msg.createdAt}`,
+    '',
+    msg.body,
+    '',
+    'Notes:',
+    '- This arrived through your terminal because this provider does not support hive inbox.',
+    '- Work in your current cwd.',
+    '- When done, report changes, validation, blockers, and next step in this terminal.'
+  ].join('\n');
+}

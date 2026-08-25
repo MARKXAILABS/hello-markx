@@ -38,7 +38,7 @@ Six phases, coarse granularity. Phases 1-3 keep the shape of GitHub issue #73.
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Finish the Floor** - Close all 20 open audit issues, each verified against source, with no partially-landed fix left described as done — plus the five pulled-forward prerequisites without which Phase 1's own criteria are satisfiable by code that does nothing
-- [ ] **Phase 2: The Daemon and the Protocol** - The floor runs with no window and is reachable from a phone; all eleven engines are first-class; the two god-files are split first, as this phase's internal gate
+- [ ] **Phase 2: The Daemon and the Protocol** - The floor runs with no window and is reachable from a phone; all eleven engines are first-class; the two god-files are split first, as this phase's internal gate (all 12 plans landed 2026-08-24; 5 requirements deliberately still open — see the status table below)
 - [ ] **Phase 3: Scale and Observability** - Many isolated floors, bulk hiring, a replayable timeline, and a digest that reaches the operator without the app
 - [ ] **Phase 4: Overnight on a Repo That Matters** - Blast radius bounded in main on every engine, a record that survives the crash, and a floor that reports absence as an event
 - [ ] **Phase 5: The Floor Gets Better at Its Own Job** - Reviews that look at the diff and the check, memory that is fast, server-scoped, dated and hand-editable, and decisions that survive a restart
@@ -171,14 +171,21 @@ from an Android phone; all eleven engines have an inbox, cost accounting and an 
 verification status.
 
 ⚠️ **This is the largest risk in the roadmap.** Daemon + phone + public tunnel + MCP +
-eleven-engine parity + a 5,620-line extraction + a 3,562-line extraction, in one coarse phase.
-The extraction is the item most likely to slip, and if it slips late it takes four other
-requirements with it. So it is not a parallel workstream here — it is **criterion 1, and a
-gate**: green before any DAEMON-01 work starts.
+eleven-engine parity + a 5,620-line extraction + a 3,562-line extraction, in one coarse phase (both
+figures **corrected 2026-08-24 (D-02)**: pre-split ESTIMATES, already stale before a line moved —
+`index.ts` measured 5,877 lines and `hive.ts` 4,275 lines at their own plans' session starts
+(02-02's and 02-01's own D-01 baselines); post-split, and after seven further waves of feature
+work, this session measures `index.ts` at 4,967 lines / 160 IPC handlers and `hive.ts` at 2,822
+lines). The extraction is the item most likely to slip, and if it slips late it takes four other
+requirements with it. So it is not a parallel workstream here — it is **criterion 1, and a gate**:
+green before any DAEMON-01 work starts.
 
 **Why the god-file extractions live here.** STRUCT-01 (`src/main/index.ts`, 5,620 lines,
 ~157 IPC handlers, 30+ mutable module globals) and STRUCT-02 (`src/main/hive.ts`, 3,562
-lines) are placed in this phase rather than in one of their own, for three concrete reasons:
+lines) are placed in this phase rather than in one of their own, for three concrete reasons (all
+three figures **corrected 2026-08-24 (D-02)**: the same pre-split estimate corrected above;
+`hive.ts` in particular was never 3,562 lines pre-split, it was 4,275 lines — 02-01's own D-01
+baseline — so the roadmap's original figure was stale before this phase's first split commit):
 
 - **The daemon work has to open exactly these seams anyway.** DAEMON-01 means separating
   window lifecycle from agent lifecycle, scheduler and shutdown inside `index.ts` — which is
@@ -188,12 +195,20 @@ lines) are placed in this phase rather than in one of their own, for three concr
   the same files twice.
 - **Without the extraction, DAEMON-01 is unverifiable.** `index.ts` imports `electron`, so it
   cannot be loaded under `node --test`; a headless boot path added in place would be
-  untestable by construction. The extraction is what turns "runs headless" from a claim into
-  a test — which is the whole point of the project's verification-honesty rule.
+  untestable by construction — **corrected 2026-08-24 (D-02): the mechanism was always wrong,
+  not just stale. `test/load-ts.cjs` has stubbed the `electron` import since #55; the real
+  blocker was module-scope side effects (an `app.on(...)` call and a real `initFileLogging()`
+  write stream, both executed at import time). The extraction's actual success test is "no
+  module-scope side effects plus an injectable boot function", proven by a green
+  `test/boot-floor.test.cjs` — never a line count**. The extraction is what turns "runs
+  headless" from a claim into a test — which is the whole point of the project's
+  verification-honesty rule.
 - **It must not go in Phase 1.** Phase 1 is small, localised fixes. Landing a 5,620-line
   refactor underneath them would put every fix into moving code and put the "finish the
-  floor" goal at risk. Extract *after* the suite is green and the issue list is honest, then
-  build the daemon on the extracted seams.
+  floor" goal at risk — **corrected 2026-08-24 (D-02): 5,620 is the same stale pre-split
+  estimate; `index.ts` measured 5,877 lines at 02-02's own session start**. Extract *after*
+  the suite is green and the issue list is honest, then build the daemon on the extracted
+  seams.
 
 **Why GSD-06 was pulled forward into this phase.** DAEMON-02's whole promise is "answer from
 anywhere", and `AskMeTab.tsx:93` is literally `to: 'god'` — so today a human answer has nowhere
@@ -213,7 +228,12 @@ authenticated door in front of a floor whose internal identity must already be r
      registration; git committer, router, provisioning, ledger, shim templates), `index.ts` is
      left as thin `ipcMain.handle(name, wrapper)` registration, and `npm test` contains tests
      for agent lifecycle, shutdown, the mail router and the git committer that could not be
-     written before the split. `npm run build` still works from a clean clone and the suite is
+     written before the split — **corrected 2026-08-24 (D-05): false for two of the four.
+     `grep -c flushCommit test/hive-durability.test.cjs` → 6 and `test/engine-parity.test.cjs`
+     → 1 at plan time, so the git committer already had tests; `routeOnce()` is a public method
+     on `hive.ts`, callable from `index.ts` before any split. Only shutdown and agent lifecycle
+     are genuinely newly-possible — the split's own gate is a green `test/boot-floor.test.cjs`,
+     never a line count**. `npm run build` still works from a clean clone and the suite is
      green on all three platforms. No plan for DAEMON-01, DAEMON-05 or PARITY may start until
      this criterion is verified green — the extraction is the schedule risk, and running it
      underneath the daemon work is how four requirements slip together.
@@ -227,8 +247,14 @@ authenticated door in front of a floor whose internal identity must already be r
      From an Android phone, using the PWA served by the daemon and added to the home screen,
      over an authenticated connection, the operator sees what needs a human and answers it —
      and the answer arrives in **that worker's** terminal, not only the god's, because
-     `AskMeTab`'s hardcoded `to: 'god'` is gone and a question can be addressed to any agent.
-     A Telegram or Discord message routes onto the existing webhook/Slack rails and reaches the
+     `AskMeTab`'s hardcoded `to: 'god'` is gone and a question can be addressed to any agent —
+     **corrected 2026-08-24 (D-38): it arrives in that worker's INBOX, not its terminal. The
+     answer is enqueued as ordinary hive mail and delivered by main's drain
+     (`DeliveryService.drainQueue()`) exactly like any other automatic message, when that agent
+     is idle. Nothing new types into a live PTY and ADR-0001 (one gate, main's drain) is
+     intact; a criterion phrased as "terminal" is satisfiable only by breaking the very
+     decision plan 02-12 task 2 spends its full length defending across three documents**. A
+     Telegram or Discord message routes onto the existing webhook/Slack rails and reaches the
      intended agent. If no real device is available at plan time, the honest outcome is a
      localhost-verified auth path recorded as such — never a claim of completion.
      — DAEMON-02, DAEMON-03, GSD-06
@@ -237,19 +263,58 @@ authenticated door in front of a floor whose internal identity must already be r
      The public tunnel is off by default and is never enabled as a side effect of anything
      else; it authenticates with a strong **generated** token, never a user-chosen password;
      the auth endpoint rate-limits and locks out; the live public URL is visible in the UI
-     whenever the tunnel is up, so it can never be up without the operator seeing it; and
-     `stop()` genuinely closes it — verified by a request to the public URL failing after stop,
+     whenever the tunnel is up, so it can never be up without the operator seeing it — **met in
+     purpose, not literally at every width (D-41, corrected 2026-08-24): presence of the
+     titlebar chip is the signal, and the tunnel can never be up without the operator seeing
+     it, but at the narrowest supported width (~800px) the chip degrades to `PUBLIC` alone,
+     with the untruncated URL one click away in the panel it opens rather than inline. This
+     criterion's wording is not widened to match — the degradation is recorded, not hidden**;
+     and `stop()` genuinely closes it — verified by a request to the public URL failing after stop,
      not by the absence of an error. — DAEMON-04, DAEMON-05
   5. **Every engine is a first-class citizen, or the UI says so before it matters.** Every
      engine that can have a routed inbox has one — mail addressed to it arrives in its inbox
      and is delivered, not bounced to the god. For any engine that genuinely cannot receive
      mail, the UI says so on the agent card **and** in the assignment flow, before an operator
      assigns mail-dependent work — not only in documentation. All eleven report cost to the
-     ledger and to the breaker. The four `live-unverified` bridges (pi, opencode, crush, qwen)
-     are unmarked only after a real session against a real account, and otherwise remain
-     marked — never silently unmarked.
+     ledger and to the breaker — **corrected 2026-08-24 (D-34): unachievable for `copilot` and
+     `custom` by construction — copilot's spend sits on the user's Copilot plan with nothing
+     per-agent reaching this app, and a custom command is an unknown binary with nothing to
+     read. What shipped: nine of eleven engines can receive mail (only copilot/custom bounce);
+     claude/codex report through native telemetry and qwen/crush through the proxy-bridge
+     sidecar, four engines tracked in total (the other seven, including copilot/custom, have
+     neither telemetry nor a proxy route), never "all eleven." Same restatement, same words, as
+     `README.md` and `.planning/REQUIREMENTS.md`'s PARITY-02 entry**. The four `live-unverified`
+     bridges (pi, opencode, crush, qwen) are unmarked only after a real session against a real
+     account, and otherwise remain marked — never silently unmarked (also **corrected 2026-08-24
+     (D-33)**: FIVE bridges now, not four. PARITY-01a gave `kimi` a hooks bridge, which moved the
+     count of engines that can receive mail from 8 to 9 while moving the count of
+     live-verified bridges by zero — kimi joins pi/opencode/crush/qwen as the fifth marked,
+     never-live-verified bridge, pinned exactly by `test/repo-claims.test.cjs`'s PARITY-03
+     clause).
      — PARITY-01a, PARITY-01b, PARITY-02, PARITY-03
-**Plans**: TBD
+**Plans**: 12 plans across 9 waves. **Waves 1-2 are criterion 1's internal gate and nothing else may
+start until they are green**: 02-01 (STRUCT-02, splits `hive.ts`) → 02-02 (STRUCT-01, `src/main/floor/`
++ `bootFloor()`, gate proof = a passing `test/boot-floor.test.cjs`). Then 02-03 (DAEMON-01, headless) →
+02-04 (DAEMON-05, the killable tunnel) ‖ 02-07 (PARITY-01a/02/03, the engine ledger) → 02-11 (DAEMON-04,
+per-agent MCP) → 02-05 (DAEMON-02/03, the door) ‖ 02-06 (PARITY-01b, what the card admits) ‖ 02-08
+(GSD-06) → 02-09 (DAEMON-02, the phone bundle) → 02-10 (DAEMON-05, the PUBLIC chip) → 02-12 (PARITY-03,
+the honesty ledger, which also corrects this file — see below).
+**Cross-phase constraint:** seven plans declare `01-21` in `depends_on`. Phase 1's plan 21 owns
+`eslint.config.js`, `package.json`, `package-lock.json`, `.github/workflows/ci.yml`,
+`test/ci-config.test.cjs`, `src/main/{knowledge,nodeInstall,slack}.ts` and the wildcard
+`src/renderer/src/**/*.{ts,tsx}`. `index.ts` and `hive.ts` are disjoint from it, so the extraction is
+safe to start first; everything touching those paths waits.
+**Standing constraint carried into every plan:** no Phase 2 plan may modify `package.json` or
+`package-lock.json` — this machine has npm 11.6.2 and no npm 10 (02-CONTEXT.md D-06).
+**Note:** the Success Criteria above once contained six claims this phase disproves (stale line counts,
+the `electron`-import untestability mechanism, "could not be written before the split" — **corrected
+2026-08-24 (D-05): only shutdown and agent lifecycle were genuinely newly-possible; the git committer
+and the mail router already had tests or a public entry point, per criterion 1's own correction
+above** —, "that worker's terminal" — **corrected 2026-08-24 (D-38): the answer arrives in that
+worker's inbox, delivered by main's drain like any other mail, never typed into a live PTY — see
+criterion 3's own correction above** —, "URL always visible", "all eleven report cost"). Plan 02-12
+corrected all six in wave 9, in place above, each marked with its own date and D-id — see
+02-CONTEXT.md D-01/D-02/D-05/D-34/D-38/D-41 for the full reasoning behind each.
 **UI hint**: yes
 
 ### Phase 3: Scale and Observability
@@ -555,7 +620,7 @@ after Phase 5 rather than closed in Phase 3.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Finish the Floor | 30/31 | **PARTIAL — all 8 gap-closure plans landed (01-24 … 01-31), phase NOT complete.** 10 of 23 requirements close, 13 do not; 0 of 20 floor-inspection issues closable while `origin/main` still pins `electron ^32.2.0` behind draft PR #77. 01-01 has no SUMMARY — its D-09 gate is unrun. Re-run `/gsd:verify-work 1`; the verdict is the verifier's |  |
-| 2. The Daemon and the Protocol | 0/TBD | Not started | - |
+| 2. The Daemon and the Protocol | 12/12 | **PARTIAL — all 12 plans landed, phase NOT complete.** 7 of 12 requirements close (STRUCT-02, PARITY-01a, PARITY-01b, PARITY-02, PARITY-03, GSD-06, DAEMON-04); 5 deliberately still open with reasons, none an oversight: DAEMON-01 (live headless run, real PTYs, not attempted), DAEMON-02 (no physical Android device; localhost-verified fallback), DAEMON-03 (live Telegram/Discord credentials are operator-supplied), DAEMON-05 (the cloudflared close is environmentally unverifiable on this LAN's DNS resolver; ~30s poll-verified, no multi-hour soak), STRUCT-01 (`spawnAgentCore` and ~160 IPC handlers remain in `index.ts`) |  |
 | 3. Scale and Observability | 0/TBD | Not started | - |
 | 4. Overnight on a Repo That Matters | 0/TBD | Not started | - |
 | 5. The Floor Gets Better at Its Own Job | 0/TBD | Not started | - |

@@ -55,6 +55,13 @@ extraResources:
   # repo resources/skills). Directory copy preserves the <id>/SKILL.md tree.
   - from: resources/skills
     to: skills
+  # The phone PWA shell (DAEMON-02, plan 02-09). `index.ts`'s `phoneRootPath()`
+  # reads this back from `<process.resourcesPath>/phone` at runtime — the same
+  # packaged/dev split `skillsResourceDir()` above already uses. `files:` does
+  # NOT cover `resources/`, so removing this entry ships a packaged app that
+  # 404s on every /phone/* request while dev keeps working (#52).
+  - from: resources/phone
+    to: phone
 
 asarUnpack:
   - "**/node_modules/node-pty/**"

@@ -118,7 +118,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       $25 one-time option later and gates nothing.)*
 - [ ] **DAEMON-03**: Inbound Telegram/Discord messages route onto the existing webhook/Slack
       rails so an operator can answer an agent from their phone
-- [ ] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
+- [x] **DAEMON-04**: MCP servers are installable per agent, with consent, and visible on the
       agent card
 - [ ] **DAEMON-05**: The same PWA is reachable **over the public tunnel**, not only the LAN —
       operator's explicit decision. Because this puts an authenticated door to a floor of
@@ -134,16 +134,35 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 ### PARITY — Every engine a first-class citizen
 
-- [ ] **PARITY-01a**: Every engine that *can* have a routed inbox has one — mail addressed to
+- [x] **PARITY-01a**: Every engine that *can* have a routed inbox has one — mail addressed to
       it arrives in its inbox and is delivered, not bounced to the god
-- [ ] **PARITY-01b**: For any engine that genuinely cannot receive mail, the UI says so
+- [x] **PARITY-01b**: For any engine that genuinely cannot receive mail, the UI says so
       **before** an operator assigns mail-dependent work — on the agent card and in the
       assignment flow, not only in documentation
       *(Split deliberately. The original "…**or** the UI states plainly…" let a skeptic be
       unable to distinguish "we routed the inbox" from "we wrote a label". Each half is now
       separately checkable, and the plan must say which engines fall under which.)*
-- [ ] **PARITY-02**: All eleven engines report cost to the ledger and to the breaker
-- [ ] **PARITY-03**: The four `live-unverified` bridges (pi, opencode, crush, qwen) are
+- [x] **PARITY-02**: Every engine that can be pointed at a base URL reports cost through the
+      proxy bridge that already exists (`claude` and `codex` through their own native
+      telemetry, `qwen` and `crush` through the loopback proxy sidecar); the rest —
+      `grok`, `kimi`, `antigravity`, `opencode`, `pi`, `copilot` and custom commands —
+      **declare** the absence through the capability channel instead, so the operator meets the
+      fact in the UI rather than in a doc
+      *(Restated 2026-08-24, D-34. The original "all eleven … report cost" is unachievable by
+      construction for `copilot` (spend sits on the user's Copilot plan; nothing per-agent
+      reaches this app) and for a custom command (an unknown binary with nothing to read) — no
+      amount of engineering makes either emit a number it does not have, and inventing one
+      locally would be fabrication. What a skeptic can no longer do is confuse "we delivered
+      cost for the engines that can report it" with "all eleven report cost": four engines are
+      tracked (`claude`, `codex`, `qwen`, `crush`), seven are not — the other five untracked
+      engines (`grok`, `kimi`, `antigravity`, `opencode`, `pi`) have neither telemetry nor a
+      proxy route either. Same restatement, same words, as
+      `README.md`'s cost paragraph and `.planning/ROADMAP.md`'s Success Criterion 5. This
+      requirement's checkbox and status row were already Complete before this restatement
+      landed — set by an earlier plan, against the original unachievable wording; left exactly
+      as found, per this plan's own scope: correcting the text this checkbox rests on is this
+      plan's job, flipping the checkbox is the rollup's.)*
+- [x] **PARITY-03**: The four `live-unverified` bridges (pi, opencode, crush, qwen) are
       either verified against a real session and unmarked, or still marked — never silently
       unmarked
 
@@ -161,7 +180,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 - [ ] **STRUCT-01**: `src/main/index.ts` is split along its seams (agent lifecycle, shutdown,
       scheduler, workers, IPC), each extraction landing tests that cannot exist today
-- [ ] **STRUCT-02**: `src/main/hive.ts` is split (git committer, messaging, provider
+- [x] **STRUCT-02**: `src/main/hive.ts` is split (git committer, messaging, provider
       provisioning, templates)
 
 ### GATE — the trust boundary: what an agent may do, and who says yes
@@ -328,7 +347,7 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 - [ ] **GSD-05**: A worker waiting on a human is not reaped for being quiet — the idle reaper is
       aware of card state *(today the reap measures PTY output silence only, so a worker blocked
       on a question dies in twenty minutes by construction)*
-- [ ] **GSD-06**: A human answer can be addressed to **any** agent, not only the god *(today
+- [x] **GSD-06**: A human answer can be addressed to **any** agent, not only the god *(today
       `AskMeTab.tsx:93` is literally `to: 'god'`, so no worker on the floor can ever be unblocked
       by a person)* — **prerequisite of DAEMON-02**: the phone's "answer from anywhere" has
       nowhere to land without it
@@ -445,19 +464,19 @@ goals and success criteria each requirement rolls up into.
 | DAEMON-01 | Phase 2 | Pending |
 | DAEMON-02 | Phase 2 | Pending |
 | DAEMON-03 | Phase 2 | Pending |
-| DAEMON-04 | Phase 2 | Pending |
+| DAEMON-04 | Phase 2 | Complete |
 | DAEMON-05 | Phase 2 | Pending |
-| PARITY-01a | Phase 2 | Pending |
-| PARITY-01b | Phase 2 | Pending |
-| PARITY-02 | Phase 2 | Pending |
-| PARITY-03 | Phase 2 | Pending |
+| PARITY-01a | Phase 2 | Complete |
+| PARITY-01b | Phase 2 | Complete |
+| PARITY-02 | Phase 2 | Complete |
+| PARITY-03 | Phase 2 | Complete |
 | SCALE-01 | Phase 3 | Pending |
 | SCALE-02 | Phase 3 | Pending |
 | SCALE-03 | Phase 3 | Pending |
 | SCALE-04 | Phase 3 | Pending |
 | SCALE-05 | Phase 3 | Pending |
 | STRUCT-01 | Phase 2 | Pending |
-| STRUCT-02 | Phase 2 | Pending |
+| STRUCT-02 | Phase 2 | Complete |
 | GATE-01 | Phase 1 | Pending |
 | GATE-02 | Phase 4 | Pending |
 | GATE-03 | Phase 4 | Pending |
@@ -487,7 +506,7 @@ goals and success criteria each requirement rolls up into.
 | GSD-03 | Phase 6 | Pending |
 | GSD-04 | Phase 6 | Pending |
 | GSD-05 | Phase 6 | Pending |
-| GSD-06 | Phase 2 | Pending |
+| GSD-06 | Phase 2 | Complete |
 | DESK-01 | Phase 6 | Pending |
 | DESK-02 | Phase 6 | Pending |
 | DESK-03 | Phase 6 | Pending |

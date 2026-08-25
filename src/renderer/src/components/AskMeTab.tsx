@@ -3,7 +3,7 @@ import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { useStore } from '@/store/store';
 import { useHiveTasks } from '@/hooks/useHiveTasks';
-import { type HiveTask, openQuestion, waitsOnHuman } from './TasksKanban';
+import { type HiveTask, type HumanQA, openQuestion, waitsOnHuman } from './TasksKanban';
 
 /**
  * ASK ME — first-class human feedback through the task system.
@@ -19,9 +19,20 @@ import { type HiveTask, openQuestion, waitsOnHuman } from './TasksKanban';
  * Sending an answer does two things:
  *   1. writes it into the card's humanQA entry in hive/tasks.json (the
  *      decision is documented ON the task, forever), and
- *   2. mails the god so it picks the answer up, unblocks the card, and the
- *      work continues — no separate HumanQuestion.md side-channel anymore.
+ *   2. mails BOTH the god and the agent that asked (D-39): the god's copy is
+ *      the ADDITION and is sent first — it carries the unblock, since the god
+ *      owns the board — and the asker's copy (recipientOf, below) tells it to
+ *      continue its own work without touching the card's status. When the
+ *      asker IS the god, exactly one message goes out, not two into one inbox.
  */
+
+/** A humanQA entry as `bin/task.cjs` actually writes it since D-37: `askedBy`
+ *  is not part of the shared `HumanQA` shape in `./TasksKanban` (that file's
+ *  own `parseTasks()` whitelist would drop it — this component deliberately
+ *  does not route through that whitelist, see `parse()` below), so the wider
+ *  shape is declared locally rather than widening a shared interface for one
+ *  optional field two other files still read. */
+type OpenAsk = HumanQA & { askedBy?: string };
 
 function parse(raw: unknown): HiveTask[] {
   const list = (raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks))
@@ -63,6 +74,19 @@ export function AskMeTab() {
   const nameFor = (id?: string): string | undefined =>
     id ? (agents.find((a) => a.id === id)?.name ?? restorable.find((a) => a.id === id)?.name ?? id) : undefined;
 
+  // D-37's chain plus one security control (D-36): `askedBy` is agent-authored
+  // text from a bypassed-permission shell (`AGENT_ID`), so it is never used as
+  // a mail `to:` unless it names an agent CURRENTLY on this floor. Same for
+  // `assignee`. Neither check narrows to the god specially — the literal
+  // 'god' fallback below is always routable (hive.ts's resolveTo), so it needs
+  // no membership check of its own.
+  const recipientOf = (task: HiveTask): string => {
+    const askedBy = (openQuestion(task) as OpenAsk | undefined)?.askedBy;
+    if (askedBy && agents.some((a) => a.id === askedBy)) return askedBy;
+    if (task.assignee && agents.some((a) => a.id === task.assignee)) return task.assignee;
+    return 'god';
+  };
+
   const waiting = tasks.filter(waitsOnHuman);
 
   const sendAnswer = async (task: HiveTask) => {
@@ -87,7 +111,13 @@ export function AskMeTab() {
         : { ok: false };
       if (!result.ok) throw new Error('task changed before answer could be saved');
       setTasks(next);
-      // 2) Tell the god, so the card gets unblocked and work continues.
+
+      const recipient = recipientOf(task);
+      const recipientIsGod = recipient === 'god' || agents.find((a) => a.id === recipient)?.isGod === true;
+
+      // 2a — the god, and this is the message that carries the unblock (D-39).
+      // Sent FIRST, deliberately: if 2b below fails, the card is still
+      // unblocked and the god still holds the full answer.
       await window.cth.hiveSend({
         to: 'god',
         act: 'inform',
@@ -96,9 +126,29 @@ export function AskMeTab() {
           `The human answered the open question on task ${task.id} ("${task.title}"):`,
           `Q: ${open.q}`,
           `A: ${text}`,
-          'The answer is also recorded in the card\'s humanQA. Act on it, unblock the card, and continue the work.'
+          recipientIsGod
+            ? 'The answer is also recorded in the card\'s humanQA. Act on it, unblock the card, and continue the work.'
+            : `The answer is also recorded in the card's humanQA and was sent to ${recipient}, who asked it. Act on it, unblock the card, and continue the work.`
         ].join('\n')
       }, 'human');
+
+      // 2b — the asker. Skipped when recipientOf(task) already resolves to the
+      // god: two copies into one inbox is not "the god is still told", it is
+      // noise the god has to de-duplicate.
+      if (!recipientIsGod) {
+        await window.cth.hiveSend({
+          to: recipient,
+          act: 'inform',
+          subject: `HUMAN ANSWER on task "${task.title}"`,
+          body: [
+            `The human answered your open question on task ${task.id} ("${task.title}"):`,
+            `Q: ${open.q}`,
+            `A: ${text}`,
+            'Continue your own work with this answer. Do not change the card\'s status yourself — the god owns the board and will unblock it.'
+          ].join('\n')
+        }, 'human');
+      }
+
       setAnswerDraft(task.id, '');
     } catch { /* leave the draft so the user can retry */ }
     setSending(null);
@@ -150,6 +200,7 @@ export function AskMeTab() {
       {waiting.map((t) => {
         const open = openQuestion(t)!;
         const stuck = dependentsTree(t.id, tasks);
+        const recipient = nameFor(recipientOf(t))!;
         return (
           <div key={t.id} style={{
             background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)',
@@ -171,7 +222,14 @@ export function AskMeTab() {
               >
                 {t.title}
               </button>
-              {nameFor(t.assignee) && <PixelBadge status="blocked" label={nameFor(t.assignee)!} />}
+              {/* the recipient badge — sourced from the SAME recipientOf() call
+                  sendAnswer mails to, so this card can never display one
+                  recipient and mail another (D-36/T-P02-08-02). The operator
+                  may be answering with a credential; the recipient is visible
+                  before the send, not after. */}
+              <span title={`your answer will be sent to ${recipient}`}>
+                <PixelBadge status="blocked" label={recipient} />
+              </span>
               {/* Dismiss — clears this ask off the board without answering it.
                   The card's Q&A history is preserved (the question stays on the
                   card, just marked dismissed). */}

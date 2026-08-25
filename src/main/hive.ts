@@ -34,16 +34,33 @@ import {
   canReceiveInbox,
   providerPreset,
   bridgeOf,
+  isAgentProvider,
   type AgentProvider
 } from '../shared/agentProvider';
-import { MCP_CATALOG } from '../shared/mcpCatalog';
+import { capabilityLine, providerCapabilities } from '../shared/providerAutomation';
+import { MCP_CATALOG, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { expandTilde } from './fs';
 import { memoryBin } from './memory';
-
-/** The subset of HarnessConfig the hive consumes for the default-MCP merge.
- *  Kept as a local shape so hive.ts never imports the foundation-owned config
- *  module just for a type. */
-type McpDefaultsMap = { [id: string]: { enabled: boolean } } | undefined;
+import {
+  TASK_CLI,
+  PROTOCOL_MD,
+  HOOK_SHIM,
+  PROXY_BRIDGE_SHIM
+} from './hiveTemplates';
+import { GitCommitter } from './gitCommitter';
+import {
+  installAgyHooks,
+  installCodexHooks,
+  installKimiConfig,
+  installPiHooks,
+  installOpenCodePlugin,
+  installCrushConfig,
+  installGrokHooks,
+  hookSettings,
+  buildDefaultMcpServers,
+  effectiveMcpConsent
+} from './hiveProvisioning';
+import type { TerminalWorkOrder } from '../shared/queueDelivery';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -275,12 +292,14 @@ const SWEEP_INTERVAL_MS = 60_000;
 /**
  * Where the hive's own `git` looks for hooks: nowhere.
  *
- * The hive root IS a git repo (`git init` in ensureHive) and both wrappers below
- * spawn `git` as a child of the Electron MAIN process, inheriting main's
- * environment. Nothing stopped an agent writing `<root>/.git/hooks/pre-commit`
- * and having the next hive commit execute it — arbitrary code with more
- * privilege than the agent that planted it, reached from outside the PreToolUse
- * write gate (which cannot see the pi, opencode or proxy tiers at all).
+ * The hive root IS a git repo (`git init` in ensureHive) and this blocking
+ * wrapper spawns `git` as a child of the Electron MAIN process, inheriting
+ * main's environment — as does GitCommitter's async twin (`gitAsync`,
+ * gitCommitter.ts). Nothing stopped an agent writing
+ * `<root>/.git/hooks/pre-commit` and having the next hive commit execute it —
+ * arbitrary code with more privilege than the agent that planted it, reached
+ * from outside the PreToolUse write gate (which cannot see the pi, opencode or
+ * proxy tiers at all).
  *
  * `core.hooksPath` rather than `--no-verify`, deliberately: `--no-verify`
  * suppresses only `pre-commit`/`commit-msg` on a commit, leaves `post-commit`
@@ -299,46 +318,12 @@ const SWEEP_INTERVAL_MS = 60_000;
  */
 const GIT_HOOKS_DISABLED = '/dev/null';
 
-// ─── git + log budgets ──────────────────────────────────────────────────────
-// Every number here used to be an order of magnitude larger and paid for on the
-// MAIN THREAD (see commit()). They are deliberately small: git is history, not
-// data — the files are already durable on disk before any of this runs.
-
-/** Trailing debounce on hive commits. A busy floor commits per message; one
- *  commit per 5 s window is the same history at a fraction of the git. */
-const COMMIT_DEBOUNCE_MS = 5_000;
-/** Per-git-child timeout on the commit path. */
-const GIT_TIMEOUT_MS = 2_000;
-/** Attempts before a commit gives up — the NEXT mutation retries anyway. */
-const GIT_ATTEMPTS = 2;
-/** Base backoff between attempts (async timer, never a blocking sleep). */
-const GIT_RETRY_MS = 50;
-/** FLOOR-04 bound on the staged diff the secret scrub will scan, in LINES
- *  (added + deleted, straight off `--numstat`). Measured BEFORE the content diff
- *  is ever pulled into memory, so a pathological commit is turned away rather
- *  than buffered — `--numstat` costs one short row per changed PATH, not per
- *  byte. Past this the scan is skipped and said out loud; never skipped quietly. */
-const SECRET_SCAN_MAX_LINES = 20_000;
-/** …and a byte bound on the text actually handed to the matcher, because a line
- *  count does not bound bytes: one minified 10 MB line is a single line to
- *  `--numstat`. Beyond this only the first slice is scanned, and the shortfall
- *  is logged rather than presented as a clean scan. */
-const SECRET_SCAN_MAX_BYTES = 4 * 1024 * 1024;
-/** How old `.git/index.lock` must be before we treat it as abandoned. Must stay
- *  comfortably ABOVE GIT_TIMEOUT_MS — the old 10 s was BELOW the old 8 s git
- *  timeout, so a slow-but-alive git (a big `add -A` behind Windows antivirus)
- *  could have its live lock deleted out from under it. */
-const STALE_LOCK_MS = 60_000;
 /** Rotate log.jsonl past this size (one generation kept). It is append-only with
  *  a dozen writers and was never rotated. */
 const LOG_ROTATE_BYTES = 8 * 1024 * 1024;
 /** How much of log.jsonl's tail logTail() reads. Bounded so an IPC/voice read
  *  never slurps a multi-megabyte file to show the last 200 events. */
 const LOG_TAIL_BYTES = 64 * 1024;
-/** Paths the hive repo must stop VERSIONING — see untrackIgnored(). Mirrors the
- *  churny half of the .gitignore seed in ensureHive; a `.gitignore` line alone
- *  does nothing to a file git is already tracking. */
-const UNTRACK_PATHS = ['cost-ledger.jsonl', 'log.jsonl', 'log.jsonl.1', 'backups'];
 
 /** Filesystem- and sort-safe timestamp, e.g. 2026-05-30T14-03-11-123Z. */
 function stamp(): string {
@@ -351,8 +336,23 @@ function shortRand(): string {
 
 /** Non-memory files `mempalace mine` must not ingest (Claude Code hooks config,
  *  cursor, raw inbox/outbox JSON). `mempalace mine` honors .gitignore, so we drop
- *  one in each agent dir; written on birth here and refreshed by the mine loop. */
-const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/'];
+ *  one in each agent dir; written on birth here and refreshed by the mine loop.
+ *  `kimi-config.toml` differs from its four neighbours in KIND, not degree: the
+ *  others are churn (session state, message queues); this one is a live
+ *  CREDENTIAL — `kimi login` stores its OAuth token INSIDE the file
+ *  installKimiConfig seeds (T-P02-07-01). This is the fail-closed guard, and it
+ *  runs BEFORE any spawn writes the config (ensureMineIgnore is called at agent
+ *  birth in ensureAgent, ahead of the install call). `scrubStagedSecrets` is
+ *  deliberately NOT relied on for this file: it commits UNSCANNED above
+ *  SECRET_SCAN_MAX_LINES, commits UNSCANNED when the staged diff cannot be
+ *  read, matches on a redactSecrets regex battery rather than on knowing what
+ *  the file IS, and carries a `harnessAuthored` bypass — none of which is a
+ *  substitute for the credential never being staged in the first place.
+ *  `mcp.json` (DAEMON-04, plan 02-11) is the same KIND of entry as
+ *  `kimi-config.toml`: a live per-agent credential (a write/secret MCP
+ *  server's API key, in `env`), not mere churn — same fail-closed reasoning,
+ *  same append-only migration for existing agents for free. */
+const MINE_IGNORE_LINES = ['settings.json', 'cursor.json', 'inbox/', 'outbox/', 'kimi-config.toml', 'mcp.json'];
 
 /** Idempotently ensure `<agentDir>/.gitignore` excludes the non-memory files.
  *  Append-only: writes only the missing lines, leaving any existing entries. */
@@ -464,75 +464,6 @@ export function redactSecrets(text: unknown): string {
   return s;
 }
 
-/**
- * The standing `permissions.deny` list written into every hive-authored
- * per-agent settings.json.
- *
- * WHY IT EXISTS. `autoMode` defaults to true, and it appends
- * `--permission-mode bypassPermissions` (and `--yolo` / `--dangerously-*` on the
- * other engines). So the tool-permission PROMPT that HIVE.md §2.3 and
- * PROTOCOL.md both describe as the human-in-the-loop gate never fires — the gate
- * was prose. A `deny` rule is still enforced UNDER bypassPermissions, which makes
- * it the only gate on that path that actually holds, and it costs one array.
- *
- * CALIBRATION. Deny only what is UNRECOVERABLE or leaks a credential. Anything
- * an agent can undo — an ordinary commit, an ordinary push, deleting one file —
- * stays allowed, because a floor of agents that cannot work is not a security
- * control, it is an outage. Everything listed below either destroys committed or
- * uncommitted work with no reflog to recover it, escalates privilege, or reads a
- * secret the agent has no business holding. Deliberately NOT here: `curl`/`wget`
- * (the `curl | sh` shape cannot be matched by a prefix rule without denying all
- * network fetches, which is most of an agent's day), and `git commit`/`git push`
- * without `--force` (undoable, and integration is the god's actual job).
- *
- * HONEST LIMITS, so nobody mistakes this for a sandbox. (1) `Bash(…)` rules are
- * PREFIX matches on the command string: a model that wants past them writes a
- * shell script, or varies the spacing. This stops the confident accident — the
- * failure that actually happens — not a hostile model. (2) The `Read`/`Edit`
- * rules bind the file tools, not `cat`; they keep the default path to a secret
- * closed. (3) Claude Code only — the hookless engines take no settings file, so
- * their `--yolo` really is ungated. The real gate for all three is autoMode off
- * plus `control.toolDecision`.
- */
-const AGENT_DENY_RULES = [
-  // Destructive git. `push --force` (which prefix-matches --force-with-lease
-  // too), `reset --hard` and `clean -f…` each throw away work that no reflog
-  // brings back — someone else's history, the index, the untracked tree.
-  'Bash(git push --force:*)',
-  'Bash(git push -f:*)',
-  'Bash(git reset --hard:*)',
-  'Bash(git clean -f:*)',
-  'Bash(git clean -d:*)',
-  'Bash(git clean -x:*)',
-  // Recursive force-delete. `rm -r` without `-f` is still allowed, so cleaning a
-  // build dir is one flag away — the deny is on the shape that eats a home
-  // directory when a path variable came back empty.
-  'Bash(rm -rf:*)',
-  'Bash(rm -fr:*)',
-  'Bash(rm -r -f:*)',
-  'Bash(rm -f -r:*)',
-  // Windows equivalents — the floor runs there too.
-  'Bash(rd /s:*)',
-  'Bash(rmdir /s:*)',
-  'Bash(Remove-Item -Recurse -Force:*)',
-  // Privilege escalation: whatever follows runs outside every other limit here.
-  'Bash(sudo:*)',
-  'Bash(doas:*)',
-  'Bash(runas:*)',
-  // Credentials and keys — read AND write, so an agent can neither exfiltrate a
-  // secret through its context nor quietly rewrite the machine's auth.
-  'Read(~/.ssh/**)', 'Edit(~/.ssh/**)',
-  'Read(~/.aws/**)', 'Edit(~/.aws/**)',
-  'Read(~/.config/gcloud/**)',
-  'Read(~/.config/gh/**)', 'Edit(~/.config/gh/**)',
-  'Read(~/.docker/config.json)',
-  'Read(~/.npmrc)', 'Edit(~/.npmrc)',
-  'Read(~/.netrc)', 'Edit(~/.netrc)',
-  'Read(~/.claude/.credentials.json)',
-  'Read(**/*.pem)', 'Read(**/*.p12)', 'Read(**/id_rsa*)', 'Read(**/id_ed25519*)',
-  'Read(./.env)', 'Read(./.env.*)'
-];
-
 // ─── HiveManager ────────────────────────────────────────────────────────────
 
 export class HiveManager {
@@ -541,11 +472,31 @@ export class HiveManager {
    * @param emit     Optional sink for renderer-facing events (set by the main
    *                 process to `webContents.send`). Used to animate routed
    *                 messages on the office floor; a no-op in tests/headless.
+   * @param handoff  D-11 gap 1: parks a terminal work order in main's queue
+   *                 for a non-Claude (hookless or proxy-tier) agent, returning
+   *                 whether it was accepted. Wired in `src/main/floor/boot.ts`
+   *                 to `delivery.enqueue()` — see the comment there (copies
+   *                 `index.ts`'s `claudeAccount:failover` interception in
+   *                 shape and reasoning) for why this is a THIRD constructor
+   *                 param and not an interception inside `emit`.
    */
   constructor(
     private getHome: () => string | null,
-    private emit?: (channel: string, payload: unknown) => boolean | void
+    private emit?: (channel: string, payload: unknown) => boolean | void,
+    private handoff?: (order: TerminalWorkOrder) => boolean
   ) {}
+
+  /** ADR-0004: the hive's single git committer, composed rather than
+   *  inherited. HiveManager owns the only instance — commit()/flushCommit()
+   *  below are one-line delegations, kept on this class so their names,
+   *  signatures and (for flushCommit) `private` visibility never move out
+   *  from under the six runtime call sites in test/hive-durability.test.cjs
+   *  and test/engine-parity.test.cjs. */
+  private committer = new GitCommitter({
+    root: () => this.root(),
+    log: (event) => this.appendLog(event),
+    redactSecrets: (text) => redactSecrets(text)
+  });
 
   private routerTimer: NodeJS.Timeout | null = null;
 
@@ -571,7 +522,25 @@ export class HiveManager {
   enabled(): boolean {
     return this.root() !== null;
   }
+  /** IPC-01 / MAIN-02 class. Every per-agent path in this class is built here,
+   *  so this is the one place a hostile id has to be stopped. `id` reaches this
+   *  method from the RENDERER through `hive:memory`, `hive:inbox`,
+   *  `hive:messages` and `mcp:agentState` — `'../agents/someone-else'` is a
+   *  perfectly good string, and `mcpArmed('../agents/a1')` was MEASURED
+   *  returning another agent's armed server list before any guard existed.
+   *
+   *  Guarding the callers one at a time is how this defect kept reappearing:
+   *  `mcp:agentState` was fixed, then `mcp:grant`/`mcp:revoke` turned out to
+   *  share the same ungated input, then the phase-02 security audit found
+   *  `hive:memory`/`hive:inbox`/`voiceMessages` ungated as well. This guard is
+   *  at the chokepoint instead, so a caller added tomorrow inherits it.
+   *
+   *  Throws rather than returning a sanitized path: a caller asking for an
+   *  impossible agent has a bug or is hostile, and both deserve to fail loudly
+   *  rather than silently read some other directory. The public read accessors
+   *  below convert it to their own empty-value contract. */
   private agentDir(id: string): string {
+    if (!isSafeAgentId(id)) throw new Error('unsafe agent id');
     return join(this.root()!, 'agents', id);
   }
   /** IPC endpoint the cth-hook shim talks to (Phase 1 autonomy).
@@ -912,8 +881,19 @@ export class HiveManager {
       kgCliPath?: string;
       theme?: 'light' | 'dark';
       /** Consent state for the default-MCP bundle (W3). Threaded from the live
-       *  HarnessConfig by the caller; undefined → catalog defaults apply. */
+       *  HarnessConfig by the caller; undefined → catalog defaults apply. Only
+       *  the `safe-readonly` tier is actually read from this map (D-27) — see
+       *  `effectiveMcpConsent`. */
       mcpDefaults?: { [id: string]: { enabled: boolean } };
+      /** This agent's per-server `write`/`secret` grants (D-27) — floor-wide
+       *  `mcpDefaults` above no longer arms these; only this map does. */
+      mcpAgentGrants?: { [mcpId: string]: { enabled: boolean } };
+      /** Resolves a granted catalog id to its live decrypted secret, or
+       *  undefined when unarmed/unavailable (D-28). Injected rather than
+       *  imported: `getSecret` pulls in electron's `safeStorage`, and this
+       *  module plus hiveProvisioning.ts stay electron-free so `node --test`
+       *  can load them directly. */
+      mcpSecret?: (mcpId: string) => string | undefined;
       /** App-resources `skills/` source dir (W3). The bundled read-only skills are
        *  copied into the agent's `.claude/skills/` per spawn; undefined or missing
        *  is a no-op (tolerated until Kevin populates the resource dir). */
@@ -1050,9 +1030,9 @@ export class HiveManager {
         env.HIVE_SOCK = sock;
         try {
           if (desc.kind === 'hooks') {
-            if (desc.shim === 'agy') this.installAgyHooks();
+            if (desc.shim === 'agy') installAgyHooks(root, this.nodeRunUnquoted.bind(this));
             else if (desc.shim === 'codex') {
-              env.CODEX_HOME = this.installCodexHooks(dir);
+              env.CODEX_HOME = installCodexHooks(dir, this.shimPath(), this.nodeRunUnquoted.bind(this));
               // Codex refuses to run hooks from a config dir without persisted
               // "hook trust" (normally an interactive gate). Our hooks.json is
               // hive-authored inside an isolated CODEX_HOME, so we bypass that gate
@@ -1060,6 +1040,20 @@ export class HiveManager {
               // that already vets hook sources"). Without it the hooks silently
               // never fire. Must precede the positional prompt.
               preArgs.push('--dangerously-bypass-hook-trust');
+            }
+            else if (desc.shim === 'kimi') {
+              // Kimi Code (Moonshot) — the CODEX case (installKimiConfig,
+              // hiveProvisioning.ts), not the grok case: HOOK_SHIM is reused
+              // verbatim (kimi's hook payload is already Claude-shaped
+              // snake_case). `--config-file` is a PER-INVOCATION flag, so the
+              // operator's global ~/.kimi/config.toml is never mutated — the
+              // same per-agent isolation codex gets, and the property D-26
+              // originally disqualified kimi for. LIVE-UNVERIFIED: no
+              // Moonshot account exists on this machine to run a live kimi
+              // session against the file this writes.
+              preArgs.push('--config-file', installKimiConfig({
+                dir, shim: this.shimPath(), nodeRun: this.nodeRunUnquoted.bind(this), userHome: homedir()
+              }));
             }
             else if (desc.shim === 'pi') {
               // Pi (earendil-works) has a rich pi.on(event) lifecycle. We drop a
@@ -1070,7 +1064,7 @@ export class HiveManager {
               // config.autoMode) gates the auto-allow — Pam guardrail #5.
               // LIVE-UNVERIFIED: the exact extension API surface needs BYOK keys to
               // prove; the renderer idle inbox-wake nudge is the guaranteed drain.
-              env.PI_CODING_AGENT_DIR = this.installPiHooks(dir);
+              env.PI_CODING_AGENT_DIR = installPiHooks(dir);
             }
             else if (desc.shim === 'opencode') {
               // OpenCode (anomalyco/opencode) has no Claude-shaped Stop hook, but its
@@ -1080,9 +1074,9 @@ export class HiveManager {
               // same Stop→drain semantics, provider-agnostic, no traffic interception.
               // LIVE-UNVERIFIED (plugin auto-load + session.idle firing); the renderer
               // idle inbox-wake nudge is the guaranteed drain fallback.
-              env.OPENCODE_CONFIG_DIR = this.installOpenCodePlugin(dir);
+              env.OPENCODE_CONFIG_DIR = installOpenCodePlugin(dir);
             }
-            else if (desc.shim === 'grok') this.installGrokHooks();
+            else if (desc.shim === 'grok') installGrokHooks(root, this.nodeRun.bind(this));
           } else if (desc.kind === 'proxy') {
             // Stable per-spawn session id, stamped on every synthesized payload so
             // recordSession (registry resume key) and the cost ledger persist.
@@ -1110,7 +1104,7 @@ export class HiveManager {
                 // (captured above from the inert sentinel env or cloud default) is the
                 // proxy's real target. Per-agent CRUSH_GLOBAL_DATA isolates session
                 // state from the user's global ~/.config/crush.
-                const crush = this.installCrushConfig(dir, loopback, desc.api);
+                const crush = installCrushConfig(dir, loopback, desc.api);
                 env.CRUSH_GLOBAL_CONFIG = crush.config;
                 env.CRUSH_GLOBAL_DATA = crush.data;
               } else {
@@ -1129,6 +1123,13 @@ export class HiveManager {
       // If a provider somehow exposes neither a flag nor a positional prompt, spawn bare.
       if (flag) return { args: [...preArgs, flag, prompt], env };
       if (preset.positionalInitialPrompt) return { args: [...preArgs, prompt], env };
+      // Neither a flag, nor a positional, nor type-into-tui: the hive protocol
+      // was built above and is now DROPPED. This agent starts with no
+      // identity, no protocol and no orientation — survivable while kimi could
+      // only be a WORKER whose mail bounced (canReceiveInbox: false); not
+      // survivable now that kimi is god-eligible (D-33). Record it rather than
+      // silently spawning unoriented.
+      this.appendLog({ kind: 'protocol-not-seeded', agentId: meta.id, provider: meta.provider });
       return { args: preArgs, env };
     }
 
@@ -1163,8 +1164,51 @@ export class HiveManager {
     if (sock && shim) {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
-      this.writeJson(settingsPath, this.hookSettings(shim, meta.cwd, opts.mcpDefaults, opts.theme));
+      this.writeJson(settingsPath, hookSettings(shim, opts.theme, this.nodeRun.bind(this)));
       args.push('--settings', settingsPath);
+
+      // DAEMON-04 — the default-MCP bundle rides `--mcp-config`, the channel
+      // scripts/mcp-live-probe.cjs live-verified spawns a server (claude
+      // 2.1.236); `mcpServers` inside --settings above is a measured no-op.
+      // Gated on mcpWiredFor: claude is the one engine this build wires
+      // (D-26 — nine other engines stay documented, not built).
+      const mcpPath = join(dir, 'mcp.json');
+      // D-27: the SAME predicate buildDefaultMcpServers already runs, fed a map
+      // assembled per agent — safe-readonly from the floor, write/secret from
+      // this agent's own grants. The resolver is main's, injected via opts.
+      const consent = effectiveMcpConsent(opts.mcpDefaults, opts.mcpAgentGrants);
+      const mcpServers = mcpWiredFor(meta.provider ?? 'claude')
+        ? buildDefaultMcpServers(meta.cwd, consent, { secretFor: opts.mcpSecret })
+        : {};
+      if (Object.keys(mcpServers).length) {
+        this.writeJson(mcpPath, { mcpServers }, 0o600);
+        args.push('--mcp-config', mcpPath);
+      } else {
+        // Nothing armed (no consent, an unwired provider, or a revoke) — a
+        // STALE file must not survive to re-arm the server on the next
+        // spawn. This is what mcpArmed() reads to answer "what did the
+        // running session actually get" (D-29).
+        try { rmSync(mcpPath, { force: true }); } catch { /* best-effort */ }
+      }
+      // POLICY (D-25/RESEARCH §5): --strict-mcp-config is deliberate, not
+      // incidental. Without it the operator's own ~/.claude.json servers are
+      // silently inherited by every hive agent — one already running with
+      // --permission-mode bypassPermissions would then hold tools the card
+      // never showed, using the operator's own credentials. The cost is real
+      // and recorded in the SUMMARY: an operator who relied on their personal
+      // MCP servers inside hive agents loses them here and re-grants the
+      // catalog equivalent per agent.
+      //
+      // T-P02-11-07: this MUST be tied to the provider being wired, NOT to
+      // whether this agent happens to have anything armed. It used to sit
+      // inside the non-empty branch above, so a freshly spawned agent with
+      // zero grants — the DEFAULT state of every new agent, and the common
+      // case — launched with neither flag and inherited the operator's
+      // servers anyway. The mitigation was defeated in exactly the situation
+      // it was written for. Pushing it unconditionally for a wired provider
+      // is harmless when nothing is armed: it simply asserts "no servers
+      // beyond what I was given", which with no --mcp-config means none.
+      if (mcpWiredFor(meta.provider ?? 'claude')) args.push('--strict-mcp-config');
     }
     return { args, env };
   }
@@ -1218,89 +1262,6 @@ export class HiveManager {
     return this.registry().agents[agentId]?.sessionId;
   }
 
-  /** Claude Code settings that route every relevant hook through the shim, plus
-   *  (W3) the default MCP bundle merged into this PER-SESSION settings file. cwd
-   *  scopes the filesystem/git servers; cfg (the consent map) gates which servers
-   *  are written. Claude-only — this is invoked solely on the Claude spawn path. */
-  private hookSettings(shim: string, cwd: string, cfg: McpDefaultsMap, theme?: 'light' | 'dark'): unknown {
-    // Bundled node, NOT bare `node` — see nodeLauncherPath(). Claude runs each of
-    // these through `sh -c` with a stripped PATH, where `node` is often absent.
-    const cmd = this.nodeRun(shim);
-    const entry = (matcher?: string) => ({
-      ...(matcher ? { matcher } : {}),
-      hooks: [{ type: 'command', command: cmd }]
-    });
-    const mcpServers = this.buildDefaultMcpServers(cwd, cfg);
-    return {
-      // The standing HITL backstop — see AGENT_DENY_RULES. `deny` is the one
-      // permission surface that survives `--permission-mode bypassPermissions`,
-      // which autoMode turns on by default; without it the "permission prompts
-      // are the gate" contract in HIVE.md §2.3 / PROTOCOL.md is documentation
-      // describing a prompt that never appears.
-      permissions: { deny: AGENT_DENY_RULES },
-      // Match the TUI's truecolor palette to the harness terminal theme —
-      // PER SESSION, so the user's global Claude theme (their own terminals
-      // outside the app) is never touched.
-      ...(theme ? { theme } : {}),
-      // W3 — default skills/MCP bundle. Written into the PER-SESSION settings file
-      // only (never ~/.claude), so the user's own MCP servers are never clobbered;
-      // Claude merges this additively. Omitted entirely when empty so a settings
-      // file with no enabled servers is unchanged from before.
-      ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
-      // The status line gets the session status JSON after every response —
-      // including context_window.{total_input_tokens,context_window_size},
-      // the only clean programmatic source for the session's REAL context
-      // window. The shim prints a compact in-terminal gauge and forwards the
-      // payload to the harness (agent-card context gauge, exact limit).
-      statusLine: { type: 'command', command: `${cmd} --status`, padding: 0 },
-      hooks: {
-        Stop: [entry()],
-        SubagentStop: [entry()],
-        PreToolUse: [entry('*')],
-        PostToolUse: [entry('*')],
-        UserPromptSubmit: [entry()],
-        Notification: [entry()],
-        SessionStart: [entry()],
-        // #5C: surface mid-`/compact` so an agent boxing up its context reads as
-        // 'compacting' on the floor instead of looking frozen.
-        PreCompact: [entry()],
-        PostCompact: [entry()]
-      }
-    };
-  }
-
-  /**
-   * W3 — build the per-agent `mcpServers` map from the default catalog. Includes a
-   * server only when it's enabled (catalog ∩ consent), scopes filesystem/git to the
-   * agent cwd (never whole-disk), and namespaces every id `hellomarkx-<id>` so a server
-   * of the same name in the user's own ~/.claude is never clobbered. A write/secret
-   * server is included ONLY on an explicit `enabled:true` consent — never via a
-   * default — so a malformed/partial config can't silently arm a keyed server.
-   */
-  private buildDefaultMcpServers(
-    cwd: string,
-    cfg: McpDefaultsMap
-  ): Record<string, { command: string; args: string[]; env?: Record<string, string> }> {
-    const out: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
-    for (const e of MCP_CATALOG) {
-      const consented = cfg?.[e.id]?.enabled;
-      const enabled = consented ?? e.defaultEnabled;
-      if (!enabled) continue;
-      // Defense-in-depth: a write/secret server requires an EXPLICIT opt-in; it can
-      // never ride in on a default (the catalog already ships these OFF, but this
-      // guards a hand-edited/partial mcpDefaults map too).
-      if (e.tier !== 'safe-readonly' && consented !== true) continue;
-      // Replace the `<cwd>` placeholder (filesystem/git) with the agent cwd at merge
-      // time so these stay strictly workspace-scoped.
-      const args = e.spec.args.map((a) => (a === '<cwd>' ? cwd : a));
-      out[`hellomarkx-${e.id}`] = {
-        command: e.spec.command,
-        args,
-        ...(e.spec.env ? { env: e.spec.env } : {})
-      };
-    }
-    return out;
-  }
 
   /**
    * W3 — refresh an agent's bundled skills from the app-resources `skills/` dir.
@@ -1534,7 +1495,7 @@ export class HiveManager {
       : '';
     const godLine = meta.isGod
       ? 'You are the GOD / ORCHESTRATOR of this hive — your job is to ORCHESTRATE, not to implement: maintain live situational awareness and delegate the work. (1) AWARENESS — always know what is going on: keep an accurate picture of every agent (active vs archived/idle), the task board, and all in-flight work; drain your inbox continually and triage every other agent\'s requests, answering clarifications so the team runs autonomously. (2) DELEGATE — decompose work and fan it out to the hive agents via their inboxes (route messages and assign owners; do not do their jobs); do NOT take on grunt implementation yourself. Stay aware of who is already on the floor and delegate OPPORTUNISTICALLY: BEFORE you spawn anything, CHECK THE LIVE ROSTER (active agents in registry.json + their state in fleet.json) and prefer routing to an EXISTING agent that fits — above all when the request names one ("ask Pam to…", "have Jim…"), route to that agent instead of reflexively creating a new one. Reuse an idle or already-running agent whose role matches; only spawn a fresh agent when no existing one is a sensible fit, and say that you checked. One capable owner beats a duplicate. (3) OWN ONLY THE IMPORTANT, high-leverage things — task decomposition, dispatch decisions, sign-offs, conflict resolution, branch integration, and final QA — and remain the sole scribe of board.md. You are otherwise fully autonomous — there is NO separate approval queue. For the genuinely critical (destructive actions, spending real money, scope changes, unresolvable conflicts), ask the human directly in your own session and let the tool-permission prompt gate the action; the human approves natively, including remotely from their phone via /remote-control. Keep the team unblocked. When you DISPATCH a task, write it as a 4-part contract so the agent can run autonomously: (1) OBJECTIVE — the concrete goal; (2) OUTPUT — the expected deliverable/format; (3) TOOLS — what to use or avoid, and any references to read instead of re-deriving; (4) BOUNDARIES — scope limits + the definition of done. Pass references (file paths, message ids, board sections), not pasted content — keep dispatches short.'
-        + ` MONITOR the floor by reading ${inRoot('fleet.json')} (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${inRoot('registry.json')} — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${inRoot('COMMANDS.md')} (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. NEVER edit tasks.json with your Write tool — it has several concurrent writers (you, the kanban UI, inbound webhooks and Slack), so writing back a copy you read a minute ago ERASES whatever landed in between, including answers the human just gave. Mutate ONE card at a time with \`"${hiveNode}" "${inRoot('bin', 'task.cjs')}" {add|patch|claim|done}\`, which compare-and-swaps on the ledger revision (full usage in PROTOCOL.md). ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — run \`task.cjs patch <id> --q "<the ask>"\`, which appends to the card's "humanQA" history and blocks it (phrase actions as clear to-dos; every past entry is kept — the history documents the card's decisions). The harness surfaces open questions on the office floor's ASK ME board; the human's answer lands in the same entry ("a") AND arrives as an inbox message to you — read it, act on it, and unblock the card so work continues. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. Steward the token budget.`
+        + ` MONITOR the floor by reading ${inRoot('fleet.json')} (live per-agent tokens, cost, status, last tool, breaker level, inbox backlog) and ${inRoot('registry.json')} — note that running 'claude agents' will NOT list your hive's sibling agents. A full Claude Code command reference is at ${inRoot('COMMANDS.md')} (slash commands act ONLY on your own session; CLI commands run in your shell and can target the fleet). You periodically receive scheduler / "Heartbeat" standup requests — on each, review every agent via fleet.json, re-engage anyone stalled, over-budget, or breaker-armed, and keep board.md and tasks.json accurate. NEVER edit tasks.json with your Write tool — it has several concurrent writers (you, the kanban UI, inbound webhooks and Slack), so writing back a copy you read a minute ago ERASES whatever landed in between, including answers the human just gave. Mutate ONE card at a time with \`"${hiveNode}" "${inRoot('bin', 'task.cjs')}" {add|patch|claim|done}\`, which compare-and-swaps on the ledger revision (full usage in PROTOCOL.md). ALWAYS set each task's "assignee" to the worker's agent id the moment you dispatch it, and NEVER clear it on status changes — a done card must still say who did the work (the human reads the board by who-did-what). HUMAN FEEDBACK is first-class in the ledger: when a task can only proceed with the human's input — a QUESTION to answer OR an ACTION only the human can perform (create an account, approve a purchase, provide credentials/screenshots, test on their device) — run \`task.cjs patch <id> --q "<the ask>"\`, which appends to the card's "humanQA" history and blocks it (phrase actions as clear to-dos; every past entry is kept — the history documents the card's decisions). The harness surfaces open questions on the office floor's ASK ME board; \`--q\` automatically records the asking agent as "askedBy" (from your AGENT_ID) — the human's answer lands in the same entry ("a") and is delivered to the inbox of whichever agent asked it. You always receive your own copy of every answer too, and YOUR copy is the one that carries the unblock: read it, act on it, and set the card's status yourself — the asker resumes its own work and must not touch the card's status. Do NOT park human questions in separate files (no HumanQuestion.md) and never sit waiting on the human in your own session. Steward the token budget.`
       : meta.isAssistant
       ? 'You are Michael\'s PREP ASSISTANT. You will be handed short, possibly vague instructions (each begins with "ENRICH TASK:"). For each one: (1) figure out which project it concerns and cd into the most relevant repo — you start in Michael\'s home directory; (2) gather concrete context READ-ONLY (exact file paths, current state, relevant code, conventions, active branch, gotchas) — NEVER modify, create, or delete files; (3) rewrite the instruction into ONE clear, self-contained prompt that Michael can execute autonomously, preserving the user\'s original intent without inventing scope. Then deliver it: write ONE message JSON into your outbox with "to":"god", "act":"request", a short subject, and the finished prompt as the body. Do NOT perform the task yourself — your only output is the improved prompt sent to Michael.'
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
@@ -1662,14 +1623,14 @@ export class HiveManager {
       // would let direct mail rot unread. Claude and bridged Antigravity/Codex
       // receive directly into inbox/ for guarded renderer delivery. Otherwise try
       // a terminal work-order handoff to its REPL (#53);
-      // if the renderer is unavailable, bounce to god to relay. God is exempt
+      // if main's queue refuses it, bounce to god to relay. God is exempt
       // (the bounce target).
       if (t !== godId && !canReceiveInbox(reg.agents[t]?.provider)) {
-        if (!this.emitTerminalHandoff(msg, t)) {
+        if (!this.terminalHandoff(msg, t)) {
           this.deliver({
             ...msg,
             to: godId,
-            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a hookless CLI'} and the terminal handoff failed (renderer unavailable); relay this to it] ${msg.subject}`
+            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a hookless CLI'} and main's queue refused the terminal handoff (unknown/archived agent, queue full, or no harness home); relay this to it] ${msg.subject}`
           }, godId);
         }
         continue;
@@ -1681,11 +1642,11 @@ export class HiveManager {
       // provider; the synthesized Stop→drain keeps the cursor in step.
       const proxyDesc = bridgeOf(reg.agents[t]?.provider);
       if (t !== godId && proxyDesc?.kind === 'proxy' && proxyDesc.inboxDelivery === 'terminal') {
-        if (!this.emitTerminalHandoff(msg, t)) {
+        if (!this.terminalHandoff(msg, t)) {
           this.deliver({
             ...msg,
             to: godId,
-            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a proxy-tier CLI'} and the terminal handoff failed (renderer unavailable); relay this to it] ${msg.subject}`
+            subject: `[undeliverable — "${t}" runs ${reg.agents[t]?.provider ?? 'a proxy-tier CLI'} and main's queue refused the terminal handoff (unknown/archived agent, queue full, or no harness home); relay this to it] ${msg.subject}`
           }, godId);
         }
         continue;
@@ -1736,10 +1697,17 @@ export class HiveManager {
     });
   }
 
-  /** Non-Claude providers cannot drain hive inbox; hand direct mail to the
-   *  renderer so it can queue a terminal work order for the target PTY. */
-  private emitTerminalHandoff(msg: HiveMessage, targetId: string): boolean {
-    const delivered = this.emit?.('hive:terminalHandoff', {
+  /** Non-Claude providers cannot drain hive inbox; hand direct mail to main's
+   *  queue as a terminal work order for the target PTY (D-11 gap 1 — this
+   *  used to hand it to the renderer over `emit`, which returned `false` with
+   *  no window and bounced the mail to god blaming a missing UI that was
+   *  never the true cause; main is now the one place typing into a terminal
+   *  ever happens, ADR-0001, so it is the one place this hands off to). */
+  private terminalHandoff(msg: HiveMessage, targetId: string): boolean {
+    // `delivered` now means "main's queue accepted it", not "the renderer
+    // took it" — the durable log's `kind: 'terminal-handoff'` shape and its
+    // `delivered` field are unchanged; only what `delivered` MEANS changed.
+    const delivered = this.handoff?.({
       id: msg.id,
       from: msg.from,
       to: targetId,
@@ -2235,6 +2203,7 @@ export class HiveManager {
     });
   }
   memory(id: string): string {
+    if (!isSafeAgentId(id)) return ''; // IPC-01: renderer-supplied; fail closed, never throw across IPC
     const p = join(this.agentDir(id), 'memory.md');
     return existsSync(p) ? readFileSync(p, 'utf8') : '';
   }
@@ -2245,6 +2214,7 @@ export class HiveManager {
    *  but most of the floor's history lives in a handful of them). Cheap: reads a
    *  small markdown file; never throws. Works for ANY id, active OR archived. */
   hasMemory(id: string): boolean {
+    if (!isSafeAgentId(id)) return false; // IPC-01
     const p = join(this.agentDir(id), 'memory.md');
     if (!existsSync(p)) return false;
     try {
@@ -2254,13 +2224,41 @@ export class HiveManager {
     } catch { return false; }
   }
   inbox(id: string): HiveMessage[] {
+    if (!isSafeAgentId(id)) return []; // IPC-01: reachable from the renderer via `hive:inbox`
     return this.listMessages(join(this.agentDir(id), 'inbox'));
   }
   /** Read an agent's OUTBOX (messages it has authored/sent). Symmetric with
    *  inbox(); the router drains live outbox files into recipients' inboxes and
    *  archives the original under outbox/.sent, so a sent message survives there. */
   outbox(id: string): HiveMessage[] {
+    if (!isSafeAgentId(id)) return []; // IPC-01
     return this.listMessages(join(this.agentDir(id), 'outbox'));
+  }
+
+  /** Catalog ids actually armed in `<agentDir>/mcp.json` RIGHT NOW — what the
+   *  RUNNING session got, read straight off disk. This is the fact half of
+   *  D-29's `granted` vs `armed` split: nothing hot-reloads, so `mcp:agentState`
+   *  reports both and the renderer computes `pending · restart` from the
+   *  difference — main never asserts a live connection. `[]` when the file is
+   *  absent or unparseable; never throws. */
+  mcpArmed(agentId: string): string[] {
+    // MAIN-02: `agentId` arrives here straight from the RENDERER (mcp:agentState),
+    // and a `typeof agentId === 'string'` shape check is not a membership check —
+    // `../agents/<someone-else>` is a perfectly good string. Validate against the
+    // live registry BEFORE constructing any path, so an id the roster never issued
+    // cannot be used to read a `mcpServers` key list off an arbitrary JSON file.
+    // Fails closed on a hive with no home too: `registry()` answers `{ agents:{} }`
+    // there, which also keeps `agentDir`'s `root()!` non-null assertion — a
+    // compile-time fiction — from throwing a TypeError across a sync IPC handler.
+    if (!this.registry().agents[agentId]) return [];
+    const p = join(this.agentDir(agentId), 'mcp.json');
+    if (!existsSync(p)) return [];
+    try {
+      const parsed = JSON.parse(readFileSync(p, 'utf8')) as { mcpServers?: Record<string, unknown> };
+      return Object.keys(parsed.mcpServers ?? {}).map((k) => k.replace(/^hellomarkx-/, ''));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -2291,6 +2289,9 @@ export class HiveManager {
     const includeArchived = opts.includeArchived !== false; // default true
 
     let owners: string[];
+    // IPC-01: `opts.agentId` reaches here from the renderer via `hive:messages`
+    // and is about to become `join(root,'agents',<id>)`. Fail closed.
+    if (onlyAgent && !isSafeAgentId(onlyAgent)) return [];
     try {
       owners = onlyAgent
         ? [onlyAgent]
@@ -2344,286 +2345,15 @@ export class HiveManager {
   }
   /** Count undrained inbox messages for an agent (cheap — for the fleet snapshot). */
   inboxBacklog(id: string): number {
+    if (!isSafeAgentId(id)) return 0; // IPC-01
     const dir = join(this.agentDir(id), 'inbox');
     if (!existsSync(dir)) return 0;
     try { return readdirSync(dir).filter((f) => f.endsWith('.json')).length; } catch { return 0; }
   }
-  /** Install the Antigravity (`agy`) lifecycle-hook bridge: write the normalizer
-   *  shim and merge a `hellomarkx-hive` hook group into agy's global hooks.json so a
-   *  Gemini worker reports PreToolUse/PostToolUse/Stop/PreInvocation/PostInvocation
-   *  to this HookServer (live status + guarded idle delivery), reusing the Claude pipeline.
-   *
-   *  Two agy-isms handled: (1) antigravity-cli#49 — agy LOADS hooks from
-   *  `~/.gemini/antigravity-cli/hooks.json` but TRIGGERS from `~/.gemini/config/
-   *  hooks.json`, so we write BOTH; (2) commands go to cmd.exe and agy mangles
-   *  embedded quotes, so the shim path must be space-free (hive roots are).
-   *  Runtime-scoped by AGENT_ID (the shim no-ops for non-hive agy sessions), so
-   *  this global config never disturbs the user's own `agy` usage. Best-effort,
-   *  idempotent (only our own group is overwritten). */
-  private installAgyHooks(): void {
-    const root = this.root();
-    if (!root) return;
-    const shim = join(root, 'bin', 'agy-hook.cjs');
-    mkdirSync(join(root, 'bin'), { recursive: true });
-    writeFileSync(shim, AGY_HOOK_SHIM, 'utf8');
-    // Bundled node, not bare `node` — agy's hooks run with a stripped PATH too.
-    const tool = (event: string) => ({
-      matcher: '*',
-      hooks: [{ type: 'command', command: this.nodeRunUnquoted(shim, event), timeout: 0 }]
-    });
-    const plain = (event: string) => ({
-      hooks: [{ type: 'command', command: this.nodeRunUnquoted(shim, event), timeout: 0 }]
-    });
-    const group = {
-      PreToolUse: [tool('PreToolUse')],
-      PostToolUse: [tool('PostToolUse')],
-      PreInvocation: [plain('PreInvocation')],
-      PostInvocation: [plain('PostInvocation')],
-      Stop: [plain('Stop')]
-    };
-    const gem = join(homedir(), '.gemini');
-    for (const p of [join(gem, 'config', 'hooks.json'), join(gem, 'antigravity-cli', 'hooks.json')]) {
-      try {
-        mkdirSync(dirname(p), { recursive: true });
-        let existing: Record<string, unknown> = {};
-        if (existsSync(p)) {
-          try { existing = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>; } catch { existing = {}; }
-        }
-        // Drop the pre-rename group so an upgraded machine never fires both.
-        delete existing['munder-hive'];
-        existing['hellomarkx-hive'] = group;
-        writeFileSync(p, JSON.stringify(existing, null, 2), 'utf8');
-      } catch { /* best-effort per file */ }
-    }
-  }
-
-  /** Codex lifecycle-hook bridge → full hive parity for a `codex` worker (live
-   *  status + Stop→inbox-drain), the codex counterpart of installAgyHooks().
-   *
-   *  Codex's hook contract is already Claude-shaped: snake_case stdin
-   *  (hook_event_name/tool_name/tool_input/session_id/cwd) and a matching response
-   *  contract, where `Stop` honoring {decision:'block',reason} means "continue,
-   *  using reason as the next prompt" — exactly what drainForStop() returns. So we
-   *  reuse the Claude `cth-hook` shim VERBATIM (no translator, unlike agy) and let
-   *  HookServer handle everything unchanged.
-   *
-   *  ISOLATION: rather than mutate the user's global ~/.codex (which also holds
-   *  their login), we point this worker at a PER-AGENT CODEX_HOME (`<dir>/.codex`,
-   *  alongside Claude's settings.json) holding our own config.toml with `[hooks]`
-   *  tables — so the hooks fire ONLY for hive workers and a personal `codex` run is
-   *  untouched. The user's ~/.codex/auth.json is linked in and their config.toml is
-   *  copied + extended (login + model/provider/trust settings still apply).
-   *  Returns the CODEX_HOME path for the caller to put in the worker's env. */
-  private installCodexHooks(dir: string): string {
-    const home = join(dir, '.codex');
-    try {
-      mkdirSync(home, { recursive: true });
-      const userHome = join(homedir(), '.codex');
-      // Symlink the user's login so the isolated home authenticates as them.
-      // (config.toml is NOT symlinked — we write our own below, seeded from theirs,
-      // because it must carry our [hooks] tables.) Fall back to copy where symlinks
-      // need privilege (Windows). Idempotent — skip if already linked.
-      const authSrc = join(userHome, 'auth.json');
-      const authDest = join(home, 'auth.json');
-      if (existsSync(authSrc) && !existsSync(authDest)) {
-        try { symlinkSync(authSrc, authDest); }
-        catch { try { copyFileSync(authSrc, authDest); } catch { /* best-effort */ } }
-      }
-      // The managed app-server daemon used by Codex Remote Control is launched
-      // from the standalone install rooted at $CODEX_HOME/packages. Share the
-      // user's installed binaries without duplicating them into every agent.
-      const packagesSrc = join(userHome, 'packages');
-      const packagesDest = join(home, 'packages');
-      if (existsSync(packagesSrc) && !existsSync(packagesDest)) {
-        try {
-          symlinkSync(packagesSrc, packagesDest, process.platform === 'win32' ? 'junction' : 'dir');
-        } catch { /* remote integration falls back to a local TUI if unavailable */ }
-      }
-      // Wire lifecycle hooks via config.toml `[hooks]` tables — the user-layer
-      // discovery surface Codex actually scans. (A bare $CODEX_HOME/hooks.json is
-      // plugin-scoped — referenced FROM a plugin manifest — and is NOT discovered
-      // for a plain config dir; verified empirically that it never fires.) We seed
-      // this config.toml from the user's (their model/provider/trust settings carry
-      // over) and append a `[[hooks.<Event>]]` group per event, each pointing at the
-      // SAME cth-hook shim — reused verbatim (Codex's hook payload + response are
-      // already Claude-shaped, so HookServer/drainForStop run unchanged). Regenerated
-      // each spawn (idempotent). A single-quoted TOML literal avoids path escaping
-      // (hive roots are space/quote-free). NOTE: hooks fire in INTERACTIVE codex
-      // sessions (how hive workers run), not in headless `codex exec`.
-      //
-      // `timeout` IS SECONDS HERE — do NOT copy Claude's `timeout: 0` sentinel into
-      // this file. Codex parses the key as `timeout_sec` and normalizes it with
-      // `timeout_sec.unwrap_or(600).max(1)`, so 0 does not mean "no timeout": it is
-      // floored to ONE SECOND, the shortest budget there is. That shipped through
-      // v0.3.7 and made every codex worker log `SessionStart hook (failed) — hook
-      // timed out after 1s` (same for UserPromptSubmit), because each hook cold-starts
-      // the Electron binary via hive-node and then waits on hooks.sock — measured
-      // 0.08-0.16s idle but 0.6-0.7s under 8 concurrent spawns, which is exactly what
-      // session start and prompt dispatch look like. 30s clears that by two orders of
-      // magnitude while still capping a wedged shim well before its own 5s internal
-      // cap stops mattering; bare omission (600s) would leave a hang looking like a
-      // freeze. Verify any change with codex's own resolver, no model spend:
-      // `codex app-server` → initialize → `hooks/list` reports the normalized
-      // timeoutSec per event.
-      const shim = this.shimPath();
-      let config = existsSync(join(userHome, 'config.toml'))
-        ? readFileSync(join(userHome, 'config.toml'), 'utf8') : '';
-      if (shim) {
-        const events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop',
-          'SessionStart', 'UserPromptSubmit', 'PreCompact', 'PostCompact'];
-        config += '\n# --- hellomarkx-hive lifecycle hooks (auto-generated; do not edit) ---\n';
-        for (const ev of events) {
-          config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = '${this.nodeRunUnquoted(shim)}'\ntimeout = 30\n`;
-        }
-      }
-      writeFileSync(join(home, 'config.toml'), config, 'utf8');
-    } catch (e) { console.error('[hive] installCodexHooks failed:', e); }
-    return home;
-  }
-
-  /** Pi (earendil-works) bridge. Pi has a rich `pi.on(event, …)` lifecycle but no
-   *  Claude-shaped hook file; instead we drop a bundled EXTENSION into a PER-AGENT
-   *  PI_CODING_AGENT_DIR (so the user's global ~/.pi is never mutated) that, when Pi
-   *  loads it, posts cth-hook-shaped payloads to HIVE_SOCK on tool_call/agent_end and
-   *  auto-approves tool calls when the floor is in auto mode (HIVE_AUTO_APPROVE).
-   *  Emitting an `agent_end`→`Stop` keeps the harness status in step (→ idle), which
-   *  lets the renderer idle inbox-wake nudge deliver mail. Returns the per-agent dir
-   *  for PI_CODING_AGENT_DIR.
-   *
-   *  LIVE-UNVERIFIED: Pi's exact extension-discovery path + event API need BYOK keys
-   *  to confirm; this is written best-effort and wrapped so a wrong guess can never
-   *  break the spawn. The renderer nudge is the guaranteed drain regardless. */
-  private installPiHooks(dir: string): string {
-    const home = join(dir, '.pi-agent');
-    try {
-      // Pi discovers extensions under its agent dir; we write to the documented
-      // `extensions/` location (and keep it isolated per agent).
-      const extDir = join(home, 'extensions');
-      mkdirSync(extDir, { recursive: true });
-      writeFileSync(join(extDir, 'hive-bridge.js'), PI_EXTENSION, 'utf8');
-      // A manifest so Pi auto-loads the extension on start (best-effort; harmless if
-      // Pi ignores it). Kept minimal and hive-authored.
-      const manifest = { name: 'hellomarkx-hive-bridge', version: '0.3.1', main: 'extensions/hive-bridge.js', auto: true };
-      writeFileSync(join(home, 'extensions.json'), JSON.stringify(manifest, null, 2), 'utf8');
-    } catch (e) { console.error('[hive] installPiHooks failed:', e); }
-    return home;
-  }
-
-  /** OpenCode (anomalyco/opencode) bridge — god Decision 1 (native plugin, not proxy).
-   *  OpenCode has no Claude-shaped Stop hook, but its plugin API exposes a real
-   *  `session.idle` lifecycle event. We drop a bundled PLUGIN into a PER-AGENT config
-   *  dir's `plugin/` folder (OpenCode auto-loads `*.js` plugins from there) that posts
-   *  HIVE_SOCK payloads on tool.execute.before/after + session.idle — the same
-   *  Stop→drain semantics as codex's hooks, provider-agnostic, no traffic interception.
-   *  Returns the config dir for OPENCODE_CONFIG_DIR (isolates from ~/.config/opencode).
-   *
-   *  LIVE-UNVERIFIED: plugin auto-load + session.idle firing + the inject path need
-   *  BYOK keys to confirm; written best-effort, wrapped so it can't break the spawn.
-   *  The renderer idle inbox-wake nudge is the guaranteed drain fallback. */
-  private installOpenCodePlugin(dir: string): string {
-    const home = join(dir, '.opencode');
-    try {
-      // BOTH `plugin/` and `plugins/`. OpenCode's current docs specify `plugins/`
-      // (plural); older builds — and the shape this bridge was originally written
-      // against — auto-load from `plugin/` (singular). Since the whole bridge is
-      // LIVE-UNVERIFIED (no BYOK keys to prove which the installed version reads),
-      // guessing one of them is a coin flip whose losing side is silent: the plugin
-      // simply never loads and the agent's only inbox drain becomes the renderer
-      // nudge. Writing the same ~2KB file twice costs nothing, is idempotent, and
-      // is correct whichever directory the installed OpenCode actually scans.
-      for (const name of ['plugin', 'plugins']) {
-        const pluginDir = join(home, name);
-        mkdirSync(pluginDir, { recursive: true });
-        writeFileSync(join(pluginDir, 'hive-bridge.js'), OPENCODE_PLUGIN, 'utf8');
-      }
-    } catch (e) { console.error('[hive] installOpenCodePlugin failed:', e); }
-    return home;
-  }
-
-  /** Crush (charmbracelet/crush) proxy routing. Crush has NO base-URL env override, so
-   *  the generic proxy env-rewrite is a no-op for it; instead we write a per-agent
-   *  CRUSH_GLOBAL_CONFIG whose standard providers' `base_url` all point at the loopback
-   *  proxy (so whatever model the worker picks, its LLM traffic routes through the
-   *  sidecar → synthesized Status/Stop/cost → status goes idle → the terminal
-   *  work-order + renderer nudge deliver mail). A per-agent CRUSH_GLOBAL_DATA isolates
-   *  session state from the user's global ~/.config/crush. Keys ride BYOK env vars
-   *  (Crush reads ANTHROPIC_API_KEY/OPENAI_API_KEY/… directly), so none are written
-   *  here. `api` follows the proxy's wire shape (advisory). Returns the config + data
-   *  paths for the spawn env.
-   *
-   *  LIVE-UNVERIFIED: the single-upstream proxy serves one provider/endpoint shape at a
-   *  time — for full synthesized events pick a model whose provider matches the
-   *  configured upstream (or a local OpenAI-compatible endpoint). Cross-provider mixing
-   *  is humanQA; the renderer nudge still delivers mail regardless. */
-  private installCrushConfig(dir: string, loopbackUrl: string, api: 'openai' | 'anthropic'): { config: string; data: string } {
-    const config = join(dir, 'crush.json');
-    const data = join(dir, '.crush-data');
-    try {
-      mkdirSync(data, { recursive: true });
-      // Override base_url → loopback for ONLY the provider whose wire-shape matches
-      // the proxy (`api`): the single-upstream sidecar forwards bytes unchanged, so
-      // routing a different-wire/host provider (e.g. anthropic when api='openai', or
-      // openrouter/groq which are openai-wire but different hosts) through it would
-      // hit the wrong endpoint and the call would fail. Those are left to their real
-      // upstreams (working calls, un-proxied — no synthesized events, but mail still
-      // drains via the renderer nudge + the pty-quiescence idle fallback). For the
-      // default god (openai-wire) and a local OpenAI-compatible endpoint this routes
-      // through the proxy cleanly. Cross-provider Crush-via-proxy is on-device
-      // live-verify (Dwight verify-crush MF1; the default god model is openai-wire to
-      // match). Literal loopback (Dwight's b1 — no ${VAR} expansion edge cases);
-      // Crush merges config so only base_url is rewritten.
-      const wireProvider = api === 'anthropic' ? 'anthropic' : 'openai';
-      const providers: Record<string, { base_url: string }> = { [wireProvider]: { base_url: loopbackUrl } };
-      writeFileSync(config, JSON.stringify({ providers }, null, 2), 'utf8');
-    } catch (e) { console.error('[hive] installCrushConfig failed:', e); }
-    return { config, data };
-  }
-
-  /** Grok lifecycle-hook bridge → live hive status, session capture, guarded
-   *  inbox delivery, and operator gates for `grok` workers.
-   *
-   *  Grok supports the same hook events and decision vocabulary as Claude Code,
-   *  but its stdin payload uses camelCase keys. A small adapter normalizes those
-   *  keys to HookServer's Claude-shaped contract. The hook is installed in the
-   *  user's global Grok hook directory because global hooks are trusted and
-   *  Grok sessions/resume stay in the user's normal GROK_HOME. The adapter is
-   *  strictly scoped by AGENT_ID, so ordinary Grok sessions exit without doing
-   *  anything. Best-effort and idempotent. */
-  private installGrokHooks(): void {
-    const root = this.root();
-    if (!root) return;
-    try {
-      const shim = join(root, 'bin', 'grok-hook.cjs');
-      mkdirSync(join(root, 'bin'), { recursive: true });
-      writeFileSync(shim, GROK_HOOK_SHIM, 'utf8');
-      const tool = (matcher?: string) => ({
-        ...(matcher ? { matcher } : {}),
-        // Let Grok apply its event-aware defaults (5s normally, 600s for Stop).
-        // Grok is a HOOK bridge (not a proxy sidecar), so it is hit by the same
-        // `node: command not found` 127 — bundled node here too.
-        hooks: [{ type: 'command', command: this.nodeRun(shim) }]
-      });
-      const hooks = {
-        PreToolUse: [tool('.*')],
-        PostToolUse: [tool('.*')],
-        Stop: [tool()],
-        SubagentStop: [tool('.*')],
-        SessionStart: [tool('.*')],
-        UserPromptSubmit: [tool()],
-        PreCompact: [tool('.*')],
-        PostCompact: [tool('.*')]
-      };
-      const hookDir = join(homedir(), '.grok', 'hooks');
-      mkdirSync(hookDir, { recursive: true });
-      // Remove the pre-rename hook file so an upgraded machine never fires both.
-      try { rmSync(join(hookDir, 'munder-hive.json'), { force: true }); } catch { /* best-effort */ }
-      writeFileSync(
-        join(hookDir, 'hellomarkx-hive.json'),
-        JSON.stringify({ hooks }, null, 2),
-        'utf8'
-      );
-    } catch (e) { console.error('[hive] installGrokHooks failed:', e); }
-  }
+  // installAgyHooks, installCodexHooks, installPiHooks, installOpenCodePlugin,
+  // installCrushConfig and installGrokHooks moved to hiveProvisioning.ts
+  // (STRUCT-02, plan 02-01) as free functions taking their inputs explicitly.
+  // See the bootstrap-seam call sites above for the imports.
 
   /** Write the live fleet snapshot Michael reads (`fleet.json`, gitignored).
    *  Best-effort — called from a timer, must never throw. */
@@ -2701,6 +2431,20 @@ export class HiveManager {
         engines.add(engine);
         const bits = [a.role ?? 'agent', engine,
           typeof a.lastActiveSecAgo === 'number' ? `active ${ago(a.lastActiveSecAgo)}` : 'no activity yet'];
+        // capabilityLine()'s first production consumer (D-30). Gated TWICE: on
+        // isAgentProvider (providerPreset silently falls back to claude's own
+        // capabilities for an unrecognised string — no claim beats a wrong
+        // claim) and on the engine actually HAVING a gap, so a fully-capable
+        // floor renders byte-for-byte what it rendered before this line
+        // existed. Never touches injectedPrompt() — see this method's own doc
+        // above for why that seam must stay volatile-free.
+        // ponytail: emitted per row, one clause per gapped engine per prompt —
+        // dedupe to first-mention-per-engine or move to the legend if a
+        // measured roster (see 02-08-SUMMARY.md) ever crowds the MAX=24 cap.
+        if (isAgentProvider(engine)) {
+          const c = providerCapabilities(engine);
+          if (!c.mail || c.spend === 'none' || !c.compact || !c.remote) bits.push(capabilityLine(engine));
+        }
         if (a.tokens) bits.push(`${Math.round(a.tokens / 1000)}k tok`);
         if (a.usd) bits.push(`$${a.usd.toFixed(2)}`);
         if (a.inboxBacklog) bits.push(`inbox ${a.inboxBacklog}`);
@@ -3045,12 +2789,15 @@ export class HiveManager {
    * onboarding as if the floor had never existed. tmp+rename costs one extra
    * file operation; the truncation window is worth more than that.
    */
-  private writeJson(p: string, data: unknown): void {
-    this.atomicWriteJson(p, data);
+  private writeJson(p: string, data: unknown, mode?: number): void {
+    this.atomicWriteJson(p, data, mode);
   }
-  private atomicWriteJson(p: string, data: unknown): void {
+  private atomicWriteJson(p: string, data: unknown, mode?: number): void {
     const tmp = `${p}.tmp-${shortRand()}`;
-    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    // `mode`, when given, goes on the TEMP file — integrations.ts:104-108's
+    // reasoning, copied verbatim: a credential (mcp.json) must never be
+    // briefly world-readable under its final name between write and rename.
+    writeFileSync(tmp, JSON.stringify(data, null, 2), mode !== undefined ? { encoding: 'utf8', mode } : 'utf8');
     renameSync(tmp, p);
   }
 
@@ -3066,403 +2813,25 @@ export class HiveManager {
     return { ok: res.status === 0, out: res.stdout ?? '', err: res.stderr ?? '' };
   }
 
-  /** Set while a git child WE spawned is alive, so clearStaleLock can never
-   *  delete an index.lock that belongs to a live child of ours. */
-  private gitInFlight = false;
-
-  /** Same as {@link git}, but awaits the child instead of blocking the loop. */
-  private gitAsync(args: string[], cwd: string): Promise<{ ok: boolean; out: string; err: string }> {
-    return new Promise((resolve) => {
-      let out = '';
-      let err = '';
-      this.gitInFlight = true;
-      const done = (ok: boolean): void => { this.gitInFlight = false; resolve({ ok, out, err }); };
-      try {
-        const child = spawn(
-          'git',
-          ['-c', `core.hooksPath=${GIT_HOOKS_DISABLED}`, '-c', 'commit.gpgsign=false', '-c', 'user.name=Hive', '-c', 'user.email=hive@local', ...args],
-          { cwd, timeout: GIT_TIMEOUT_MS }
-        );
-        child.stdout?.on('data', (d) => { out += d.toString(); });
-        child.stderr?.on('data', (d) => { err += d.toString(); });
-        child.on('error', (e) => { err += String(e); done(false); });
-        child.on('close', (code) => done(code === 0));
-      } catch (e) { err = String(e); done(false); }
-    });
-  }
-
-  /** Has the one-time untrack pass run in this process yet? */
-  private untrackedIgnored = false;
-
-  /**
-   * Stop versioning the churny files the ignore seed lists.
-   *
-   * `cost-ledger.jsonl`, `log.jsonl` and `backups/` are all append-only or
-   * regenerated wholesale, so a repo that TRACKS them stores a fresh copy of the
-   * whole thing in every hive commit — and the hive commits constantly. A
-   * quarter-gigabyte ledger with a few thousand commits behind it is several
-   * hundred gigabytes of blob that git has to walk, which is what turns a routine
-   * `gc` into a multi-gigabyte `pack-objects` run. The ignore lines in ensureHive
-   * keep NEW copies out; this drops the ones already in the index, because git
-   * keeps recording a file it already tracks no matter what .gitignore says — so
-   * the ignore line alone reads as a fix while the repo goes on growing.
-   *
-   * The files stay on disk; only their history is dropped.
-   */
-  private async untrackIgnored(root: string): Promise<void> {
-    if (this.untrackedIgnored) return;
-    this.untrackedIgnored = true;
-    // Probe before mutating: `rm --cached` on a repo that never tracked any of
-    // these would still rewrite the index on every launch, inside the retry path.
-    const tracked = await this.gitAsync(['ls-files', '--', ...UNTRACK_PATHS], root);
-    if (!tracked.ok || !tracked.out.trim()) return;
-    await this.gitAsync(['rm', '--cached', '-r', '-q', '--ignore-unmatch', '--', ...UNTRACK_PATHS], root);
-    console.warn('[hive] untracked churny files from the hive repo:', tracked.out.trim().split('\n').length, 'path(s)');
-  }
-
-  /** Trailing debounce timer for the next commit, and the messages folded into it. */
-  private commitTimer: NodeJS.Timeout | null = null;
-  private pendingCommits: string[] = [];
-  /** Set for the whole flush, so two flushes can never interleave `add -A`. */
-  private committing = false;
-
-  /**
-   * Commit all hive changes. Fire-and-forget: DEBOUNCED and never blocking.
-   *
-   * This used to run `git add -A` + `git commit` synchronously, with an 8 s
-   * timeout, five attempts and an `Atomics.wait` backoff — all on the Electron
-   * main thread, once per hive message, and also from the router tick,
-   * writeTasks(), ensureAgent() and setArchived(). A repo whose index was locked
-   * froze the supervisor for something like 80 seconds: no IPC, no PTY bytes
-   * forwarded, hook shims timing out, the UI beachballed.
-   *
-   * Nothing is lost if the app quits with a commit pending — git here is history,
-   * not storage. Every file was already written (atomically) before commit() was
-   * called, and the next launch's `add -A` picks up whatever the timer did not.
-   * That is also why the timer is unref'd: a pending commit must never be the
-   * reason the process stays alive.
-   */
+  /** Delegates to {@link GitCommitter.commit} — ADR-0004: this class owns the
+   *  hive's only committer instance (`this.committer`, constructed above).
+   *  The debounce, retry/backoff and FLOOR-04 secret scrub live in
+   *  gitCommitter.ts now; this stays a public one-line call so every existing
+   *  caller (the router tick, writeTasks(), ensureAgent(), setArchived(), …)
+   *  is unaffected. */
   commit(message: string): void {
-    const root = this.root();
-    if (!root || !existsSync(join(root, '.git'))) return;
-    this.pendingCommits.push(message);
-    this.scheduleCommit(root);
+    this.committer.commit(message);
   }
 
-  private scheduleCommit(root: string): void {
-    if (this.commitTimer) return;
-    this.commitTimer = setTimeout(() => {
-      this.commitTimer = null;
-      void this.flushCommit(root);
-    }, COMMIT_DEBOUNCE_MS);
-    this.commitTimer.unref?.();
-  }
-
-  /** Fold the batched messages into one commit: the first as the subject, the
-   *  full list as the body so a 5 s window's worth of history is still readable. */
-  private drainCommitMessages(): { subject: string; body: string } {
-    const msgs = this.pendingCommits;
-    this.pendingCommits = [];
-    const uniq = [...new Set(msgs)];
-    const subject = uniq.length <= 1
-      ? uniq[0] ?? 'hive: update'
-      : `${uniq[0]} (+${uniq.length - 1} more)`;
-    return { subject, body: uniq.length > 1 ? uniq.join('\n') : '' };
-  }
-
-  /**
-   * True when a staged path's blob is BYTE-IDENTICAL to the constant this class
-   * writes there — i.e. the harness authored it, not an agent.
-   *
-   * This exists because both hook shims embed the line
-   * `payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';` — source that
-   * READS a token, which redactSecrets pattern 5 matches on sight. Without this
-   * check every hive would unstage its own bootstrap on its very first commit,
-   * the shims would stay untracked so the next `add -A` would re-stage them, and
-   * the scrub would then shout on every commit forever. An alarm that fires
-   * constantly on the harness's own files is one an operator learns to skip,
-   * which costs more than it buys.
-   *
-   * It is byte-identity against a compiled-in constant, NOT a path allowlist:
-   * an agent that edits a shim to smuggle a key changes the bytes and the scrub
-   * fires on it like any other file. The comparison is against the INDEX blob
-   * (`git show :path`), not the working file — the index is what is about to be
-   * committed, and it is also the only form immune to core.autocrlf, which is
-   * `true` by default on Git for Windows and would otherwise make every
-   * comparison fail there and quietly restore the false positives.
-   */
-  private async harnessAuthored(root: string, rel: string): Promise<boolean> {
-    const generated: Record<string, string | undefined> = {
-      'bin/cth-hook.cjs': HOOK_SHIM,
-      'bin/hive-proxy.cjs': PROXY_BRIDGE_SHIM
-    };
-    const want = generated[rel];
-    if (want === undefined) return false;
-    const blob = await this.gitAsync(['show', `:${rel}`], root);
-    return blob.ok && blob.out === want;
-  }
-
-  /** Drop one path from the index, leaving it untouched on disk. `restore
-   *  --staged` is the modern spelling and restores from HEAD — which is exactly
-   *  why it needs the fallback: on a repo whose first commit has not landed yet
-   *  HEAD is unborn, and it exits 128 `could not resolve HEAD` having unstaged
-   *  NOTHING (measured). The hive's first commit stages the whole bootstrap, so
-   *  that is precisely the window an agent-planted secret would ride in on. */
-  private async unstagePath(root: string, rel: string): Promise<boolean> {
-    const restored = await this.gitAsync(['restore', '--staged', '--', rel], root);
-    if (restored.ok) return true;
-    const removed = await this.gitAsync(['rm', '--cached', '-q', '--ignore-unmatch', '--', rel], root);
-    return removed.ok;
-  }
-
-  /**
-   * FLOOR-04 (#10, defect 5): scrub secret-shaped content out of the staged set,
-   * between `git add -A` and `git commit`.
-   *
-   * WHY HERE AND NOWHERE ELSE. ADR-0004 makes this class the hive repo's single
-   * committer, so flushCommit is the ONE place every hive write reaches git
-   * through. A per-caller guard would have to be repeated at each of commit()'s
-   * callers and would be missed by the next one added. A `.git/hooks/pre-commit`
-   * would be both a second committer and unrunnable by construction, since the
-   * hive deliberately suppresses hooks with core.hooksPath so an agent cannot
-   * plant one (see git/gitAsync).
-   *
-   * THE SINGLE-COMMITTER PREMISE ABOVE IS FALSE AS WRITTEN, and this is the
-   * place to say so rather than the place to assume it. AGENT_DENY_RULES has no
-   * `git add` rule, no `git commit` rule and no `git -C` rule — measured — so an
-   * agent can run `git -C "$HIVE_ROOT" add -A && git -C "$HIVE_ROOT" commit -m x`
-   * and never reach flushCommit or this scrub at all. Closing it is a deny-rule
-   * change with a blast radius this comment cannot measure (agents legitimately
-   * commit in their OWN worktrees, and a deny rule that wedges every agent's git
-   * is a worse failure than the one it prevents), so it is RECORDED here and
-   * owned by the residual register, not silently patched.
-   *
-   * WHY redactSecrets AND NOT A SECOND MATCHER. The project trusts exactly one
-   * pattern set; the mail path already runs every subject and body through it.
-   * Two matchers that disagree is worse than one imperfect matcher, because the
-   * disagreement is silent — the commit path would accept what the mail path
-   * redacts. This call site does not change the battery, which is under a
-   * LOCKSTEP contract with test/voice-messages.test.cjs.
-   *
-   * THE CEILING — BOUNDED, MEASURED, AND NOT NEGOTIABLE DOWNWARD.
-   *
-   * FLOOR-04's own wording is *"so it never reaches git history"*. No regex
-   * delivers "never", and this control has now been measured twice proving it.
-   * WHAT IT DOES DELIVER, exactly: labelled `key=value` / `key: value` pairs,
-   * plus ten vendor prefixes (the eight in pattern 3 after the sk- split and
-   * the two underscore-spelled ones in pattern 6), matched on ADDED lines only,
-   * ON ONE LINE, under two size caps. Everything below is what that leaves open.
-   * Each item is pinned by a test in test/hive-durability.test.cjs and
-   * test/voice-messages.test.cjs rather than promised here.
-   *
-   * FIVE ACTIVE BYPASSES. Each is an ACTION AN AGENT TAKES, not a passive limit.
-   *
-   *  1. LINE-CHUNKING, and WHERE THE CUT FALLS DECIDES IT. addedLines joins `+`
-   *     lines with `\n`, so no pattern spans a line break. Measured, labelled:
-   *       `const KEY = "sk_live_EX_Hxxxxxxxxxxxxyyyyzzzzwwww";`     -> 1 hit here
-   *       `const A = "sk_live_" + "51Hxxxxxxxxxxxx";`              -> 0 hits
-   *     A cut INSIDE the vendor prefix is never scanned, at any size, on any
-   *     line count. A cut AFTER the prefix plus ten body characters is caught in
-   *     the head and leaks the tail. Closing this needs a whole-blob scanner,
-   *     which is a different design.
-   *  2. THE LINE CAP, disabled by one command. `seq 20001 > pad.txt` in the same
-   *     debounce window pushes --numstat past SECRET_SCAN_MAX_LINES and sends
-   *     the WHOLE commit, secret included, down the `committing UNSCANNED` path.
-   *  3. THE BYTE CAP. Past SECRET_SCAN_MAX_BYTES the diff is slice()d and
-   *     everything after the cut is never scanned. Same shape, one level up.
-   *  4. QUOTED-KEY JSON. `{"token": "…"}` and `obj["token"] = "…"` are both
-   *     unmatched — the closing quote and the `]` break key-to-delimiter
-   *     adjacency. An arm for it was BUILT, MEASURED and REJECTED ON ITS COST:
-   *     it gains 2 detections and costs 2 of the 12 demonstrated false positives
-   *     (`"api_key": "$OPENAI_API_KEY"` and `"secret": "REPLACE_ME"` — a config
-   *     template and a scaffold placeholder, both shapes agents write
-   *     constantly), and over 400 commits it costs 0 additional paths, so those
-   *     2 ARE the cost. +2 detections do not buy 2 permanent unstages. That is
-   *     the whole reason. It is NOT rejected because a value-shape predicate on
-   *     it would re-open the door that lost 15 detections — it would not; those
-   *     were lost to a predicate on PATTERN 5, the only arm covering labelled
-   *     key=value, where a predicate subtracts from live detections.
-   *  5. `printf '* -diff' > .gitattributes` — ONE LINE, PERSISTENT, AND THE ONLY
-   *     ONE THAT LOGS NOTHING AT ALL. Every diff then reads `Binary files …
-   *     differ`; --numstat reports `-`/`-`, so `Number('-') || 0` makes `changed`
-   *     0 and the SECRET_SCAN_MAX_LINES branch never fires; addedLines is empty
-   *     and this function returns true having scanned nothing. Both size caps at
-   *     least print `committing UNSCANNED` and append a log row; this one writes
-   *     no warning and no log row, and unlike `seq 20001 > pad.txt` it persists
-   *     for every future commit until a human reads .gitattributes. It is the
-   *     agent-controllable escalation of the sentence that follows.
-   *
-   * Binary blobs produce no `+` lines and are never scanned.
-   *
-   * DECLARED LOSS, carried here so it is not discoverable only by reading a
-   * regex: the \b on pattern 3's BARE sk- arm means a LEGACY bare sk-<alnum>
-   * OpenAI key glued to a preceding word character (`q=key%3Dsk-A1B2…`) is no
-   * longer redacted — 5 measured shapes, pinned as declared losses in
-   * test/voice-messages.test.cjs. `sk-ant-`, `sk-proj-` and `sk-svcacct-` are
-   * unbounded and keep matching in every one of those contexts. Separately,
-   * pattern 6's two arms redact ordinary identifiers of the form
-   * `sk_test_helper_function` / `rk_live_stream_handler`; measured over 481
-   * tracked text files and 400 commits that family unstages nothing here, which
-   * is a property of THIS corpus and not of the arms.
-   *
-   * THE FALSE-POSITIVE RATE, AS A NUMBER, AND IT IS THE BIGGER FACT. Replayed
-   * over the last 400 commits with this function's own algorithm — the window
-   * is COMMIT-RELATIVE, so the tip and the variant are part of the number:
-   * `git log -n 400 0b3d631`, with addedLines keeping the leading `+` exactly
-   * as it does above (strip it and the same data answers 67/66). Under the
-   * matcher this replaced, 50 of those commits (12.5%) would have had at least
-   * one path silently dropped, across 66 distinct paths. Under the matcher in
-   * this commit: 48 (12.0%) across 65. The DISTINCT-PATH count is the stable
-   * half; the percentage moves as the window rolls.
-   * The dominant shapes are `token: string):`, `secret: string` and
-   * `botToken: string` — ordinary TypeScript, not credentials. WHAT THAT COSTS:
-   * unstagePath drops the file from the commit, the `secret-scrubbed` log line
-   * is indistinguishable from a real credential catch, and the agent's work
-   * never reaches history. This commit rescues `desk-backend-engineer` and
-   * `desk-market-researcher` (four tracked files) and, in the replay window,
-   * `docs/blog/command-center-guide/index.html`. THE REST ARE OPEN, owned by the
-   * residual register, and NOT closable by tightening pattern 5 — that is the
-   * mechanism that lost 4 credential classes in one attempt and 11 in the next.
-   *
-   * This is defence in depth, not a guarantee, and no doc may claim more of it.
-   *
-   * ADDED LINES ONLY. A removed line is content git already has, so flagging it
-   * would mean unstaging a DELETION — which cannot unpublish anything and would
-   * wedge the committer permanently on any repo that ever held a secret.
-   *
-   * @returns false ONLY when a secret is staged and could not be unstaged, the
-   * single case where the caller must not commit. Every other failure returns
-   * true and degrades loudly: a scrub that throws or halts would take the hive's
-   * whole durability path down with it, which is a worse failure than the one it
-   * prevents, and nothing is lost by committing late — see commit(), git here is
-   * history and not storage.
-   */
-  private async scrubStagedSecrets(root: string): Promise<boolean> {
-    const addedLines = (s: string): string =>
-      s.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
-
-    // 1. Bound the work before it exists as a string.
-    const stat = await this.gitAsync(['diff', '--cached', '--numstat'], root);
-    if (!stat.ok) {
-      console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', stat.err.trim());
-      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
-      return true;
-    }
-    if (!stat.out.trim()) return true; // nothing staged — nothing to scan
-    let changed = 0;
-    for (const row of stat.out.split('\n')) {
-      const [added, deleted] = row.split('\t');
-      changed += (Number(added) || 0) + (Number(deleted) || 0); // '-' (binary) → 0
-    }
-    if (changed > SECRET_SCAN_MAX_LINES) {
-      console.warn(`[hive] FLOOR-04: staged diff is ${changed} lines, over the ${SECRET_SCAN_MAX_LINES} scan cap — committing UNSCANNED`);
-      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-too-large', lines: changed });
-      return true;
-    }
-
-    // 2. core.quotePath=false so a non-ASCII path comes back raw and can be
-    //    handed straight back to `restore --staged`; -U0 drops context lines,
-    //    which are unchanged content and so cannot be a NEW leak.
-    const diff = await this.gitAsync(
-      ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color', '--no-ext-diff'],
-      root
-    );
-    if (!diff.ok) {
-      console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', diff.err.trim());
-      this.appendLog({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
-      return true;
-    }
-    const text = diff.out.slice(0, SECRET_SCAN_MAX_BYTES);
-    if (text.length < diff.out.length) {
-      console.warn(`[hive] FLOOR-04: staged diff is ${diff.out.length} bytes — only the first ${SECRET_SCAN_MAX_BYTES} were scanned`);
-      this.appendLog({ kind: 'secret-scan-truncated', bytes: diff.out.length, scanned: text.length });
-    }
-
-    // 3. One pass over every added line in the whole diff. The common case is
-    //    clean and pays for a single regex battery, not a per-file split.
-    const all = addedLines(text);
-    if (!all || redactSecrets(all) === all) return true;
-
-    // 4. Something matched — split per file to name it. `^diff --git ` is the
-    //    per-file boundary; the b-side of `+++` is the path as it will be
-    //    committed (it survives renames, where the a-side does not).
-    let safe = true;
-    for (const section of text.split(/^diff --git /m).slice(1)) {
-      const plus = addedLines(section);
-      if (!plus || redactSecrets(plus) === plus) continue;
-      const rel = /^\+\+\+ b\/(.+)$/m.exec(section)?.[1];
-      if (!rel) {
-        console.warn('[hive] FLOOR-04: a secret-shaped value is staged under a path this scrub could not name — NOT committing');
-        this.appendLog({ kind: 'secret-blocked', reason: 'unresolved-path' });
-        safe = false;
-        continue;
-      }
-      if (await this.harnessAuthored(root, rel)) continue;
-      if (!(await this.unstagePath(root, rel))) {
-        console.warn(`[hive] FLOOR-04: ${rel} carries a secret-shaped value and could NOT be unstaged — NOT committing`);
-        this.appendLog({ kind: 'secret-blocked', reason: 'unstage-failed', path: rel });
-        safe = false;
-        continue;
-      }
-      console.warn(
-        `[hive] FLOOR-04: unstaged ${rel} — it carries a secret-shaped value, and it has been kept OUT of the hive's `
-        + 'git history. The file is untouched on disk; remove the credential from it, or it will be skipped again on every commit.'
-      );
-      this.appendLog({ kind: 'secret-scrubbed', path: rel });
-    }
-    return safe;
-  }
-
-  /** The debounced commit body — async end to end. Two attempts at a 2 s timeout,
-   *  with a TIMER backoff rather than a blocking sleep: a repo whose lock is held
-   *  by something outside this process is retried by the next mutation anyway, so
-   *  a long in-process fight buys nothing and costs the supervisor. */
-  private async flushCommit(root: string): Promise<void> {
-    // A flush is already running — fold this window into the next one rather
-    // than run two `add -A` passes against the same index.
-    if (this.committing) { this.scheduleCommit(root); return; }
-    this.committing = true;
-    try {
-      await this.untrackIgnored(root);
-      const { subject, body } = this.drainCommitMessages();
-      for (let attempt = 0; attempt < GIT_ATTEMPTS; attempt++) {
-        this.clearStaleLock(root);
-        const add = await this.gitAsync(['add', '-A'], root);
-        // FLOOR-04: the scrub sits INSIDE the retry loop, not above it, because
-        // every attempt re-runs `add -A` — a scrub hoisted out would be undone
-        // by the second attempt's staging and the secret would ride in on the
-        // retry. It returns false only when a secret is staged that it could not
-        // unstage; committing anyway would put it in history permanently, and
-        // the files are already durable on disk either way.
-        if (!(await this.scrubStagedSecrets(root))) return;
-        const commit = await this.gitAsync(
-          ['commit', '-q', '-m', subject, ...(body ? ['-m', body] : [])],
-          root
-        );
-        if (commit.ok) return;
-        if (/nothing to commit/i.test(commit.out + commit.err)) return;
-        if (!add.ok || /index\.lock/i.test(commit.err)) {
-          await new Promise((r) => setTimeout(r, GIT_RETRY_MS * (attempt + 1)));
-          continue;
-        }
-        return; // a non-lock failure — give up quietly, the next mutation retries
-      }
-    } finally {
-      this.committing = false;
-    }
-  }
-
-  /** Delete an ABANDONED `.git/index.lock` (a git that crashed leaves one behind
-   *  and every later commit fails on it). Never one of ours — gitInFlight — and
-   *  never one younger than STALE_LOCK_MS, which must stay well above our own git
-   *  timeout: the old 10 s was BELOW the old 8 s timeout, so a slow-but-alive git
-   *  (a large `add -A` behind Windows antivirus) could have its LIVE lock deleted. */
-  private clearStaleLock(root: string): void {
-    if (this.gitInFlight) return;
-    const lock = join(root, '.git', 'index.lock');
-    try {
-      if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock);
-    } catch { /* noop */ }
+  /** Delegates to {@link GitCommitter.flushCommit} — the real debounced
+   *  commit body now lives in gitCommitter.ts. Kept `private` here on
+   *  purpose: TypeScript's `private` is compile-time only, and
+   *  test/hive-durability.test.cjs and test/engine-parity.test.cjs call this
+   *  exact method, by this exact name, at runtime six times — driving "the
+   *  real debounced commit body, synchronously". Moving the visibility or
+   *  the name would break all six. */
+  private flushCommit(root: string): Promise<void> {
+    return this.committer.flushCommit(root);
   }
 }
 
@@ -3495,781 +2864,3 @@ function renderCommandsMd(): string {
   return lines.join('\n');
 }
 const COMMANDS_MD = renderCommandsMd();
-
-// ─── bin/task.cjs — the one-card ledger CLI (#17) ────────────────────────────
-// The ledger has several independent writers and agents were told to edit
-// tasks.json with their Write tool: read the file, think, write the whole thing
-// back — erasing the humanQA answer or webhook card that landed in between. This
-// CLI mutates ONE card under compare-and-swap on the ledger's `rev`, retrying
-// when it loses a race, so an agent can never clobber work it never saw.
-//
-// Mirrors HiveManager's own CAS (see mutateTasks) rather than sharing it: this
-// runs as a separate process from the agent's shell and has no access to main.
-const TASK_CLI = `#!/usr/bin/env node
-'use strict';
-// hive/bin/task.cjs — mutate ONE task card safely. See PROTOCOL.md.
-const fs = require('fs');
-const path = require('path');
-const ROOT = path.join(__dirname, '..');
-const LEDGER = path.join(ROOT, 'tasks.json');
-const STATUSES = ['todo', 'doing', 'blocked', 'done'];
-
-function die(msg) { process.stdout.write(JSON.stringify({ ok: false, error: msg }) + '\\n'); process.exit(1); }
-function ok(extra) { process.stdout.write(JSON.stringify(Object.assign({ ok: true }, extra)) + '\\n'); }
-
-function read() {
-  let raw;
-  try { raw = JSON.parse(fs.readFileSync(LEDGER, 'utf8')); } catch (e) { raw = {}; }
-  return {
-    tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
-    rev: typeof raw.rev === 'number' && raw.rev >= 0 ? raw.rev : 0
-  };
-}
-
-/** Write only if nobody else wrote since \`expectedRev\`. Atomic (tmp+rename). */
-function write(tasks, expectedRev) {
-  if (read().rev !== expectedRev) return false;
-  const tmp = LEDGER + '.tmp-' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify({ tasks: tasks, rev: expectedRev + 1, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
-  fs.renameSync(tmp, LEDGER);
-  return true;
-}
-
-/** Read → mutate one card → CAS. Retries a lost race a few times; never
- *  overwrites a ledger it has not just read. */
-function mutate(fn) {
-  for (let i = 0; i < 5; i++) {
-    const led = read();
-    const next = fn(led.tasks);
-    if (!next) return null;               // fn refused (not found / duplicate)
-    if (write(next.tasks, led.rev)) return next.card;
-  }
-  die('ledger too busy — 5 compare-and-swap attempts lost; retry');
-}
-
-function flags(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i].slice(0, 2) !== '--') continue;
-    const key = argv[i].slice(2);
-    const val = argv[i + 1] !== undefined && argv[i + 1].slice(0, 2) !== '--' ? argv[++i] : 'true';
-    out[key] = val;
-  }
-  return out;
-}
-function num(v) { const n = Number(v); return isFinite(n) ? n : undefined; }
-
-const [cmd, ...rest] = process.argv.slice(2);
-const f = flags(rest);
-const arg0 = rest[0] && rest[0].slice(0, 2) !== '--' ? rest[0] : null;
-
-if (cmd === 'add') {
-  const title = arg0 || f.title;
-  if (!title) die('usage: task.cjs add "<title>" [--assignee id] [--desc text] [--priority N] [--budget-tokens N] [--depends a,b]');
-  const card = {
-    id: 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
-    title: title,
-    status: STATUSES.indexOf(f.status) >= 0 ? f.status : 'todo',
-    dependsOn: f.depends ? String(f.depends).split(',').filter(Boolean) : [],
-    priority: num(f.priority) !== undefined ? num(f.priority) : 3,
-    createdAt: new Date().toISOString()
-  };
-  if (f.desc) card.description = f.desc;
-  if (f.assignee) card.assignee = f.assignee;
-  if (num(f['budget-tokens']) !== undefined) card.budgetTokens = num(f['budget-tokens']);
-  mutate(function (tasks) { return { tasks: tasks.concat([card]), card: card }; });
-  return ok({ task: card });
-}
-
-if (cmd === 'patch' || cmd === 'claim' || cmd === 'done') {
-  const id = arg0 || f.id;
-  if (!id) die('usage: task.cjs ' + cmd + ' <task-id> [flags]');
-  const patch = {};
-  if (cmd === 'claim') {
-    patch.assignee = f.assignee || process.env.AGENT_ID || die('claim needs --assignee (or AGENT_ID in the environment)');
-    patch.status = 'doing';
-  } else if (cmd === 'done') {
-    patch.status = 'done';
-    if (f.result) patch.result = f.result;
-  } else {
-    if (f.status) {
-      if (STATUSES.indexOf(f.status) < 0) die('status must be one of ' + STATUSES.join(', '));
-      patch.status = f.status;
-    }
-    for (const k of ['title', 'description', 'assignee', 'result']) if (f[k]) patch[k] = f[k];
-    if (num(f.priority) !== undefined) patch.priority = num(f.priority);
-    if (num(f['budget-tokens']) !== undefined) patch.budgetTokens = num(f['budget-tokens']);
-    if (f.q) patch.__q = f.q;
-  }
-  const card = mutate(function (tasks) {
-    const i = tasks.findIndex(function (t) { return t && t.id === id; });
-    if (i < 0) return null;
-    const merged = Object.assign({}, tasks[i], patch, { id: id });
-    // --q appends a human question and blocks the card, matching the humanQA
-    // contract in PROTOCOL.md (never replace the history — it IS the decision trail).
-    if (patch.__q) {
-      delete merged.__q;
-      merged.humanQA = (Array.isArray(tasks[i].humanQA) ? tasks[i].humanQA : []).concat([{ q: patch.__q, askedAt: new Date().toISOString() }]);
-      merged.status = 'blocked';
-    }
-    const next = tasks.slice();
-    next[i] = merged;
-    return { tasks: next, card: merged };
-  });
-  if (!card) die('no task with id ' + id);
-  return ok({ task: card });
-}
-
-die('usage: task.cjs {add|patch|claim|done} … — see PROTOCOL.md');
-`;
-
-const PROTOCOL_MD = `# Hive protocol
-
-You are one of several Claude agents sharing this hive. Coordination is entirely
-file-based; the harness (main process) is the only thing that runs git and the
-only thing that moves messages between agents.
-
-## Your workspace — \`agents/<your-id>/\`
-- \`identity.md\`  — who you are (read-only; the harness writes it).
-- \`memory.md\`    — your long-term memory. Read at the start of a task; append to it as you learn.
-- \`inbox/\`       — messages addressed to you. Read them at the start of a task.
-- \`inbox/.done/\` — move a message here once you've handled it.
-- \`outbox/\`      — drop messages here to send them. The harness delivers them.
-
-**Never write into another agent's folder.** Write to your own \`outbox/\`; the
-orchestrator routes it. This keeps every file single-writer.
-
-## Sending a message
-Write one JSON file into \`outbox/\` (any filename ending in \`.json\`):
-
-\`\`\`json
-{
-  "to": "<agent-id> | god | broadcast",
-  "act": "request | inform | propose | query | agree | refuse | done",
-  "subject": "one-line summary",
-  "body": "the details",
-  "conversation": "carry this across a thread (optional)",
-  "in_reply_to": "<message id you're replying to> (optional)"
-}
-\`\`\`
-
-The harness fills in \`id\`, \`from\`, \`hops\`, and timestamps.
-
-## Rules of the road
-- Only \`request\`, \`query\`, and \`propose\` expect a reply. \`inform\` and \`done\` are terminal —
-  don't reply to them, or two agents will loop forever.
-- A message that expects a reply has a **deadline**. If you don't answer within 15 minutes it is
-  re-delivered to you once; still unanswered 15 minutes later, it is escalated to \`god\` as
-  \`[unanswered]\` with your name on it. Answer, or say you can't — silence is now visible.
-- A thread that bounces more than 12 times is **escalated to \`god\`** (subject \`[hop-cap …]\`),
-  not dropped. If you receive one, break the loop: decide, or ask the human.
-- For anything ambiguous, cross-cutting, or needing sign-off, message \`god\` — the
-  god agent clarifies answers for you so you rarely need the human directly.
-- There is NO separate human-approval queue. Human-in-the-loop is native to Claude
-  Code: a tool you run that needs permission prompts in your own session (the human
-  can approve it remotely from their phone via \`/remote-control\`). If you genuinely
-  need a human decision, raise it with \`god\` (a message \`"to": "human"\` is routed to
-  the god/orchestrator, the human's proxy on the floor).
-- \`board.md\` is the shared plan. Don't edit it directly — \`propose\` changes to \`god\`,
-  who is its sole scribe.
-- Re-reading a message you already moved to \`.done/\` is a no-op. Don't reprocess.
-
-## The work: board.md vs tasks.json
-There are two shared surfaces, both in the hive root:
-- \`board.md\` — the freeform narrative plan. The god agent is its sole scribe; others \`propose\` edits.
-- \`tasks.json\` — the structured task ledger (a kanban: \`todo / doing / blocked / done\`, with title,
-  assignee, priority, deps). Keep the task you're working reflected in its status.
-
-### NEVER write tasks.json with your Write tool
-It has several writers at once — you, the harness, the kanban UI, inbound webhooks and Slack. If you
-read the file, think for thirty seconds, and write the whole thing back, you **erase** every card and
-every human answer that landed while you were thinking. That is not hypothetical; it is why this
-section exists.
-
-Mutate ONE card at a time through \`bin/task.cjs\` instead. It compare-and-swaps on the ledger's
-\`rev\` and retries when it loses a race, so it can never clobber work it never saw. Run it through the
-bundled node launcher — \`bin/hive-node\` on macOS/Linux, \`bin/hive-node.cmd\` on Windows; the
-absolute path is in your \`HIVE_NODE\` environment variable — e.g.
-\`<HIVE_NODE> <hive-root>/bin/task.cjs claim task-123\`:
-
-\`\`\`
-task.cjs add "<title>" [--desc <text>] [--assignee <agent-id>] [--priority N]
-                       [--depends id1,id2] [--budget-tokens N]
-task.cjs claim <task-id> [--assignee <agent-id>]     # → assignee + status doing (defaults to you)
-task.cjs patch <task-id> [--status todo|doing|blocked|done] [--title …] [--description …]
-                         [--assignee …] [--result …] [--priority N] [--budget-tokens N]
-                         [--q "<question for the human>"]   # appends humanQA + blocks the card
-task.cjs done  <task-id> [--result "<what you actually delivered>"]
-\`\`\`
-
-Each command prints one line of JSON (\`{"ok":true,"task":{…}}\`) so you can check the result.
-\`--budget-tokens\` is that card's token cap: cost-ledger rows carry the card's \`task_id\`, so spend is
-attributed per card, not just per agent.
-
-### A finished card gets reviewed
-\`done\` is no longer the end of the story. When a card reaches \`done\`, the harness mails the
-least-loaded idle agent that is NOT the assignee a \`query\` on conversation \`review-<task-id>\`.
-If that's you: check the work and reply on the same conversation with \`act:"agree"\` (it holds up) or
-\`act:"refuse"\` (it doesn't — say what is missing). A refusal puts the card back to \`doing\`.
-So write a real \`result\` on the card: someone else is about to read it.
-
-## Spawning a fresh worker (god)
-Beyond messaging existing agents, god can ask the harness for a brand-new ISOLATED worker by
-dropping one JSON file into \`spawn-requests/\` in the hive root. Main polls that queue on the same
-cadence as the router, spins up the worker (its own git worktree by default), dispatches the
-objective through the normal inbox path, then watches it: a terminal \`act:"done"\` releases it, and
-prolonged idleness reaps it. Teardown never removes a worktree that still holds unintegrated work.
-
-\`\`\`json
-{
-  "objective": "what the worker must accomplish — the whole brief, it starts with nothing else",
-  "cwd": "/absolute/path/to/the/repo it works in",
-  "name": "display name (optional)",
-  "command": "engine CLI (optional; defaults to the configured one)",
-  "model": "model override (optional, Claude)",
-  "isolate": true,
-  "tokenCap": 200000,
-  "slack": { "channel": "C…", "thread_ts": "…" }
-}
-\`\`\`
-
-\`objective\` and \`cwd\` are the only required fields. Processed requests move to
-\`spawn-requests/.done/\`; rejected ones to \`.failed/\`, and you are informed why. Prefer routing to an
-agent already on the floor — spawn only when nobody there fits.
-
-## Guardrails: circuit breaker & token budgets
-A circuit breaker watches every agent for runaway behavior (looping on the same tool, error storms,
-overspending). It escalates gently: \`steer\` → \`constrain\` → \`stop\`. If a \`Circuit breaker: steer\`
-or \`Circuit breaker: constrain\` message lands in your inbox, you ARE the problem it caught — stop
-repeating, summarize what you've tried, and do exactly what the message says (constrain = go read-only
-and get god's sign-off before more tool calls). Be **token-frugal**: the floor has a token budget and
-each agent can have its own token limit; crossing it trips the breaker. Prefer references over pasted
-content, and \`/compact\` your own session when context gets heavy.
-
-## Fleet monitoring (orchestrator)
-You (god) are responsible for situational awareness. To see the live state of every agent, read
-\`fleet.json\` in the hive root — it is refreshed continuously with each agent's tokens, cost, status,
-breaker level, last tool, last-active time, and inbox backlog. Pair it with \`registry.json\` (the roster)
-and \`log.jsonl\` (the event feed). IMPORTANT: \`claude agents\` will NOT show your hive's sibling
-sessions (they're spawned independently) — \`fleet.json\` is your source of truth for them. For a deeper
-look at one agent, read its \`agents/<id>/memory.md\` and \`inbox/\`, or send it a \`query\`. A full
-Claude Code command reference (slash = your own session only; CLI = your shell, can target the fleet)
-is in \`COMMANDS.md\` in the hive root.
-
-## Semantic memory (optional — when \`mempalace\` is installed)
-When \`MEMPALACE_PALACE_PATH\` is set in your environment, the hive shares a
-searchable MemPalace and you have the \`mempalace\` CLI:
-- \`mempalace search "<query>"\` — recall relevant past knowledge across the whole
-  team by meaning (not just keywords). Add \`--wing <agent-id>\` to scope to one
-  agent, \`--results N\` to widen.
-- \`mempalace wake-up\` — a short digest of what matters, good at the start of a task.
-
-Your \`memory.md\` is mined into the palace automatically, so the durable facts you
-write there become searchable by every agent. You don't run \`mine\` yourself.
-`;
-
-// ─── cth-hook shim (written to <hive>/bin/cth-hook.cjs) ──────────────────────
-// A minimal pipe: read the hook payload on stdin, tag it with this agent's id,
-// forward it to the hive's UDS, and relay the response back to `claude`. All the
-// real logic lives in the main process (HookServer). Never blocks a stop on error.
-const HOOK_SHIM = `#!/usr/bin/env node
-'use strict';
-const net = require('net');
-const isStatus = process.argv.includes('--status');
-let data = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (d) => { data += d; });
-process.stdin.on('end', () => {
-  let payload = {};
-  try { payload = JSON.parse(data || '{}'); } catch (_) {}
-  if (!payload.agent_id) payload.agent_id = process.env.AGENT_ID || null;
-  // The socket authenticates on possession of this value (hooks.ts authorized()).
-  // Without it EVERY hook is rejected and the whole floor goes quiet — no status,
-  // no cost, no idle detection. Set it from the env main puts on the agent PTY.
-  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-  const sock = process.env.HIVE_SOCK;
-  if (isStatus) {
-    // Status-line mode: Claude Code pipes the session status JSON (incl.
-    // context_window.total_input_tokens / .context_window_size) after every
-    // response. Print the in-terminal gauge IMMEDIATELY (the TUI is waiting),
-    // then forward the payload to the harness fire-and-forget so the agent
-    // card's context gauge updates push-based, with the EXACT window size.
-    payload.hook_event_name = 'Status';
-    const cw = payload.context_window || {};
-    const used = cw.total_input_tokens, size = cw.context_window_size;
-    if (typeof used === 'number' && typeof size === 'number' && size > 0) {
-      const pct = Math.round((used / size) * 100);
-      process.stdout.write('ctx ' + Math.round(used / 1000) + 'k/' + Math.round(size / 1000) + 'k (' + pct + '%)');
-    }
-    if (sock) {
-      try {
-        const c = net.createConnection(sock, () => { c.end(JSON.stringify(payload) + '\\n'); });
-        c.on('error', () => {});
-        c.on('close', () => process.exit(0));
-      } catch (_) { process.exit(0); }
-    } else {
-      process.exit(0);
-    }
-    setTimeout(() => process.exit(0), 1500).unref();
-    return;
-  }
-  if (!sock) { process.exit(0); }
-  let resp = '';
-  const done = (code) => { if (resp) process.stdout.write(resp); process.exit(code); };
-  const c = net.createConnection(sock, () => c.write(JSON.stringify(payload) + '\\n'));
-  c.setEncoding('utf8');
-  c.on('data', (d) => { resp += d; });
-  c.on('end', () => done(0));
-  c.on('error', () => process.exit(0));
-  setTimeout(() => process.exit(0), 5000).unref();
-});
-`;
-
-// ─── agy-hook shim (written to <hive>/bin/agy-hook.cjs) ──────────────────────
-// Antigravity's `agy` CLI fires lifecycle hooks (PreToolUse/PostToolUse/Stop/
-// PreInvocation/PostInvocation) but with a DIFFERENT stdin shape than Claude
-// (conversationId / toolCall{name,args} / workspacePaths, and no hook_event_name
-// — the event arrives as argv from the hooks.json command). This shim normalizes
-// that into the same HookPayload the HookServer already consumes, so status,
-// inbox-drain-on-Stop, and tool gating are reused UNCHANGED, then translates the
-// server's Claude-shaped response back into agy's stdout contract (decision:
-// allow|deny|block + a message). Scoped by AGENT_ID: a personal agy session
-// (no AGENT_ID in env) is a no-op, so the global hooks.json never disturbs the
-// user's own agy usage — only hive workers (spawned with AGENT_ID set) bridge.
-// NOTE (agy bug, antigravity-cli#49): the loader reads ~/.gemini/antigravity-cli/
-// hooks.json but the trigger reads ~/.gemini/config/hooks.json — we write BOTH.
-const AGY_HOOK_SHIM = `#!/usr/bin/env node
-'use strict';
-const net = require('net');
-const event = process.argv[2] || 'Unknown';
-const agentId = process.env.AGENT_ID || null;
-let data = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (d) => { data += d; });
-process.stdin.on('end', () => {
-  const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); } // not a hive worker → ignore
-  let agy = {};
-  try { agy = JSON.parse(data || '{}'); } catch (_) {}
-  const tc = agy.toolCall || {};
-  const payload = {
-    hook_event_name: event,
-    agent_id: agentId,
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    sock_token: process.env.HIVE_SOCK_TOKEN || '',
-    session_id: agy.conversationId,
-    transcript_path: agy.transcriptPath,
-    cwd: Array.isArray(agy.workspacePaths) ? agy.workspacePaths[0] : undefined,
-    tool_name: tc.name,
-    tool_input: tc.args
-  };
-  let resp = '';
-  const done = () => {
-    // Translate the HookServer's Claude-shaped reply into agy's contract. CRITICAL:
-    // agy treats ANY object written to stdout as a decision and FAIL-CLOSES (an
-    // empty/decision-less object = DENY). So emit JSON ONLY when there's a real
-    // directive (deny/block/steer); otherwise write NOTHING — no output = allow.
-    let out = null;
-    try {
-      const r = JSON.parse(resp || '{}');
-      if (r.decision === 'block') out = { decision: 'block', reason: r.reason, stopReason: r.reason, systemMessage: r.reason };
-      else if (r.hookSpecificOutput && r.hookSpecificOutput.permissionDecision === 'deny') out = { decision: 'deny', reason: r.hookSpecificOutput.permissionDecisionReason };
-      else if (r.continue === false) out = { decision: 'block', stopReason: r.stopReason };
-      else if (r.hookSpecificOutput && r.hookSpecificOutput.additionalContext) out = { systemMessage: r.hookSpecificOutput.additionalContext };
-    } catch (_) {}
-    if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
-    process.exit(0);
-  };
-  try {
-    const c = net.createConnection(sock, () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
-});
-`;
-
-// ─── pi bridge extension (written to <agentDir>/.pi-agent/extensions/) ───────
-// A bundled extension for Pi (earendil-works). Pi exposes a pi.on(event,…)
-// lifecycle; this posts cth-hook-shaped payloads to HIVE_SOCK on tool_call /
-// tool_result / agent_end and AUTO-APPROVES tool calls when the floor is in auto
-// mode (HIVE_AUTO_APPROVE, gated by config.autoMode — Pam guardrail #5). The
-// agent_end→Stop keeps the harness status in step (→ idle) so the renderer idle
-// inbox-wake nudge can deliver mail. Fully wrapped so a wrong API guess can never
-// break the spawn. LIVE-UNVERIFIED (Pi's exact extension surface needs BYOK keys).
-const PI_EXTENSION = `'use strict';
-var net = require('node:net');
-var SOCK = process.env.HIVE_SOCK;
-var AGENT = process.env.AGENT_ID || null;
-var AUTO = process.env.HIVE_AUTO_APPROVE === '1';
-function post(payload) {
-  try {
-    if (!SOCK) return;
-    payload.agent_id = payload.agent_id || AGENT;
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
-    c.on('error', function () {});
-  } catch (e) {}
-}
-function register(pi) {
-  if (!pi || typeof pi.on !== 'function') return false;
-  try {
-    pi.on('tool_call', function (ev) {
-      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });
-      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }
-      return undefined;
-    });
-    pi.on('tool_result', function (ev) { post({ hook_event_name: 'PostToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)) }); });
-    pi.on('agent_end', function () { post({ hook_event_name: 'Stop' }); });
-    return true;
-  } catch (e) { return false; }
-}
-try { if (typeof globalThis !== 'undefined' && globalThis.pi) register(globalThis.pi); } catch (e) {}
-module.exports = function (pi) { return register(pi); };
-module.exports.activate = function (pi) { return register(pi); };
-module.exports.default = module.exports;
-`;
-
-// ─── opencode bridge plugin (written to <agentDir>/.opencode/plugin/) ────────
-// A bundled plugin for OpenCode (anomalyco/opencode) — god Decision 1. OpenCode
-// has no Claude-shaped Stop hook but its plugin API exposes a real session.idle
-// event; this posts cth-hook-shaped payloads to HIVE_SOCK on tool.execute.before/
-// after + session.idle. The session.idle→Stop keeps status in step (→ idle) so the
-// renderer idle inbox-wake nudge delivers mail. ESM (OpenCode runs on Bun). Fully
-// wrapped. LIVE-UNVERIFIED (plugin auto-load + session.idle firing need BYOK keys).
-const OPENCODE_PLUGIN = `import { createConnection } from 'node:net';
-const SOCK = process.env.HIVE_SOCK;
-const AGENT = process.env.AGENT_ID || null;
-function post(payload) {
-  try {
-    if (!SOCK) return;
-    payload.agent_id = payload.agent_id || AGENT;
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
-    c.on('error', () => {});
-  } catch (e) {}
-}
-export const HiveBridge = async () => {
-  return {
-    event: async (input) => {
-      try { if (input && input.event && input.event.type === 'session.idle') post({ hook_event_name: 'Stop' }); } catch (e) {}
-    },
-    'tool.execute.before': async (input) => {
-      try { post({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}
-    },
-    'tool.execute.after': async (input) => {
-      try { post({ hook_event_name: 'PostToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}
-    }
-  };
-};
-export default HiveBridge;
-`;
-
-// ─── proxy-bridge sidecar (written to <hive>/bin/hive-proxy.cjs) ─────────────
-// One per proxy-tier agent (qwen). A dependency-free, loopback-only reverse
-// proxy: the agent's CLI is pointed at this (via ANTHROPIC_BASE_URL/OPENAI_BASE_URL),
-// and it forwards every request to the user's real upstream UNCHANGED (headers,
-// body, streaming). It TEES each response to synthesize the same HIVE_SOCK payloads
-// the hook shims emit — Status (context gauge), PostToolUse (breaker), Stop (idle
-// drain), and the new CostSample (cost ledger) — so a hookless CLI becomes a hive
-// citizen. NEVER logs bodies or keys; the captured body is parsed in-memory and
-// dropped. Idle is heuristic: a turn that ends with no tool call and no new request
-// within an ~800ms debounce → Stop (a new request cancels it).
-const PROXY_BRIDGE_SHIM = `#!/usr/bin/env node
-'use strict';
-const http = require('http');
-const https = require('https');
-const net = require('net');
-const { URL } = require('url');
-
-const SOCK = process.env.HIVE_SOCK;
-const AGENT_ID = process.env.AGENT_ID || null;
-const UPSTREAM = process.env.UPSTREAM_BASE_URL || '';
-const SESSION = process.env.HIVE_PROXY_SESSION || null;
-const API = process.env.HIVE_PROXY_API === 'anthropic' ? 'anthropic' : 'openai';
-
-function trimSlash(s) { while (s.length && s.charAt(s.length - 1) === '/') s = s.slice(0, -1); return s; }
-
-// Per-model context-window size for the Status gauge; fallback 200k.
-function ctxSize(model) {
-  const m = String(model || '').toLowerCase();
-  if (m.indexOf('[1m]') !== -1 || m.indexOf('-1m') !== -1) return 1000000;
-  if (m.indexOf('claude') !== -1) return 200000;
-  if (m.indexOf('gpt-4o') !== -1 || m.indexOf('gpt-4.1') !== -1 || m.indexOf('o1') !== -1 || m.indexOf('o3') !== -1) return 128000;
-  if (m.indexOf('qwen') !== -1) return 262144;
-  return 200000;
-}
-
-// Fire-and-forget emit of a shim-shaped payload to the hive socket. Never throws.
-function emit(payload) {
-  if (!SOCK) return;
-  // See HOOK_SHIM: without this the socket rejects every payload. Set HERE, in
-  // the one function every Status/CostSample/PostToolUse/Stop goes through,
-  // rather than at the five call sites.
-  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-  try {
-    const c = net.createConnection(SOCK, function () { c.end(JSON.stringify(payload) + '\\n'); });
-    c.on('error', function () {});
-  } catch (e) {}
-}
-
-let stopTimer = null;
-function armStop() {
-  if (stopTimer) clearTimeout(stopTimer);
-  stopTimer = setTimeout(function () {
-    stopTimer = null;
-    emit({ hook_event_name: 'Stop', agent_id: AGENT_ID, session_id: SESSION });
-  }, 800);
-  if (stopTimer.unref) stopTimer.unref();
-}
-function cancelStop() { if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; } }
-
-function safeArgs(s) {
-  if (s == null) return {};
-  if (typeof s === 'object') return s;
-  try { return JSON.parse(s); } catch (e) { return { _raw: String(s).slice(0, 500) }; }
-}
-
-// Parse a completed response (single JSON or an SSE stream) and synthesize events.
-function parseAndEmit(bodyStr, isSse) {
-  const objs = [];
-  if (isSse) {
-    const lines = bodyStr.split('\\n');
-    for (let i = 0; i < lines.length; i++) {
-      const ln = lines[i];
-      const idx = ln.indexOf('data:');
-      if (idx === -1) continue;
-      const data = ln.slice(idx + 5).trim();
-      if (!data || data === '[DONE]') continue;
-      try { objs.push(JSON.parse(data)); } catch (e) {}
-    }
-  } else {
-    try { objs.push(JSON.parse(bodyStr)); } catch (e) {}
-  }
-  if (!objs.length) { armStop(); return; }
-
-  let model = null, input = 0, output = 0, cacheRead = 0, cacheCreation = 0, sawUsage = false;
-  const toolCalls = [];
-  const oaiTools = {}; // accumulate streaming openai tool_calls by index
-
-  for (let i = 0; i < objs.length; i++) {
-    const o = objs[i];
-    if (!o || typeof o !== 'object') continue;
-    if (o.model) model = o.model;
-    if (API === 'anthropic') {
-      if (o.type === 'message_start' && o.message) {
-        if (o.message.model) model = o.message.model;
-        const u = o.message.usage || {};
-        input += u.input_tokens || 0;
-        cacheRead += u.cache_read_input_tokens || 0;
-        cacheCreation += u.cache_creation_input_tokens || 0;
-        sawUsage = true;
-      } else if (o.type === 'message_delta' && o.usage) {
-        output += o.usage.output_tokens || 0;
-        sawUsage = true;
-      } else if (o.type === 'content_block_start' && o.content_block && o.content_block.type === 'tool_use') {
-        toolCalls.push({ name: o.content_block.name, input: o.content_block.input || {} });
-      } else if (o.usage && !o.type) {
-        // non-streaming full message body
-        const u = o.usage;
-        input += u.input_tokens || 0;
-        output += u.output_tokens || 0;
-        cacheRead += u.cache_read_input_tokens || 0;
-        cacheCreation += u.cache_creation_input_tokens || 0;
-        sawUsage = true;
-      }
-      if (Array.isArray(o.content)) {
-        for (let j = 0; j < o.content.length; j++) {
-          const blk = o.content[j];
-          if (blk && blk.type === 'tool_use') toolCalls.push({ name: blk.name, input: blk.input || {} });
-        }
-      }
-    } else {
-      if (o.usage) {
-        const u = o.usage;
-        input += u.prompt_tokens || 0;
-        output += u.completion_tokens || 0;
-        if (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) cacheRead += u.prompt_tokens_details.cached_tokens;
-        sawUsage = true;
-      }
-      const choices = o.choices || [];
-      for (let c = 0; c < choices.length; c++) {
-        const ch = choices[c];
-        if (!ch) continue;
-        if (ch.message && Array.isArray(ch.message.tool_calls)) {
-          for (let t = 0; t < ch.message.tool_calls.length; t++) {
-            const tc = ch.message.tool_calls[t];
-            if (tc && tc.function) toolCalls.push({ name: tc.function.name, input: safeArgs(tc.function.arguments) });
-          }
-        }
-        if (ch.delta && Array.isArray(ch.delta.tool_calls)) {
-          for (let t = 0; t < ch.delta.tool_calls.length; t++) {
-            const tc = ch.delta.tool_calls[t];
-            if (!tc) continue;
-            const k = (tc.index != null ? tc.index : t);
-            if (!oaiTools[k]) oaiTools[k] = { name: null, args: '' };
-            if (tc.function) {
-              if (tc.function.name) oaiTools[k].name = tc.function.name;
-              if (tc.function.arguments) oaiTools[k].args += tc.function.arguments;
-            }
-          }
-        }
-      }
-    }
-  }
-  const keys = Object.keys(oaiTools);
-  for (let i = 0; i < keys.length; i++) {
-    const t = oaiTools[keys[i]];
-    if (t.name) toolCalls.push({ name: t.name, input: safeArgs(t.args) });
-  }
-
-  if (sawUsage) {
-    emit({ hook_event_name: 'Status', agent_id: AGENT_ID, context_window: { total_input_tokens: input + cacheRead + cacheCreation, context_window_size: ctxSize(model) } });
-    emit({ hook_event_name: 'CostSample', agent_id: AGENT_ID, session_id: SESSION, model: model, input: input, output: output, cache_read: cacheRead, cache_creation: cacheCreation });
-  }
-  if (toolCalls.length) {
-    cancelStop(); // a tool call means the turn continues
-    for (let i = 0; i < toolCalls.length; i++) {
-      emit({ hook_event_name: 'PostToolUse', agent_id: AGENT_ID, session_id: SESSION, tool_name: toolCalls[i].name, tool_input: toolCalls[i].input });
-    }
-  } else {
-    armStop();
-  }
-}
-
-let upstreamUrl = null;
-try { upstreamUrl = new URL(UPSTREAM); } catch (e) {}
-
-const server = http.createServer(function (req, res) {
-  cancelStop(); // a new request means the turn is still going
-  if (!upstreamUrl) { res.statusCode = 502; res.end('proxy: no upstream'); return; }
-  let target;
-  try { target = new URL(trimSlash(UPSTREAM) + req.url); } catch (e) { res.statusCode = 502; res.end('proxy: bad url'); return; }
-  const isHttps = target.protocol === 'https:';
-  const lib = isHttps ? https : http;
-  const headers = Object.assign({}, req.headers);
-  headers.host = target.host;
-  // Ask upstream for plaintext so the tee can parse SSE/JSON reliably; the client
-  // gets uncompressed bytes (loopback — negligible) and no content-encoding to undo.
-  delete headers['accept-encoding'];
-  const opts = {
-    protocol: target.protocol,
-    hostname: target.hostname,
-    port: target.port || (isHttps ? 443 : 80),
-    method: req.method,
-    path: target.pathname + target.search,
-    headers: headers
-  };
-  const upReq = lib.request(opts, function (upRes) {
-    res.writeHead(upRes.statusCode || 502, upRes.headers);
-    const ct = String((upRes.headers['content-type'] || ''));
-    const wantParse = ct.indexOf('json') !== -1 || ct.indexOf('event-stream') !== -1;
-    const isSse = ct.indexOf('event-stream') !== -1;
-    const chunks = [];
-    let total = 0;
-    upRes.on('data', function (chunk) {
-      res.write(chunk); // stream straight through to the CLI
-      if (wantParse && total < 4194304) { chunks.push(chunk); total += chunk.length; }
-    });
-    upRes.on('end', function () {
-      res.end();
-      if (wantParse && chunks.length) {
-        try { parseAndEmit(Buffer.concat(chunks).toString('utf8'), isSse); } catch (e) {}
-      }
-    });
-    upRes.on('error', function () { try { res.end(); } catch (e) {} });
-  });
-  upReq.on('error', function () { try { res.statusCode = 502; res.end('proxy: upstream error'); } catch (e) {} });
-  req.pipe(upReq);
-});
-
-server.on('error', function () {
-  try { process.stdout.write(JSON.stringify({ port: 0 }) + '\\n'); } catch (e) {}
-  process.exit(0);
-});
-server.listen(0, '127.0.0.1', function () {
-  const addr = server.address();
-  const port = (addr && typeof addr === 'object') ? addr.port : 0;
-  try { process.stdout.write(JSON.stringify({ port: port }) + '\\n'); } catch (e) {}
-});
-`;
-
-// ─── grok-hook shim (written to <hive>/bin/grok-hook.cjs) ───────────────────
-// Grok's lifecycle events and decisions are Claude-compatible, but the wire
-// payload is camelCase and uses snake_case event values. Normalize the input for
-// HookServer and translate its Claude-style permission denial into Grok's direct
-// decision form. Scoped by AGENT_ID so the trusted global hook is inert outside
-// harness-spawned workers.
-const GROK_HOOK_SHIM = `#!/usr/bin/env node
-'use strict';
-const net = require('net');
-const agentId = process.env.AGENT_ID || null;
-let data = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (d) => { data += d; });
-process.stdin.on('end', () => {
-  const sock = process.env.HIVE_SOCK;
-  if (!agentId || !sock) { process.exit(0); }
-  let grok = {};
-  try { grok = JSON.parse(data || '{}'); } catch (_) {}
-  const names = {
-    pre_tool_use: 'PreToolUse',
-    post_tool_use: 'PostToolUse',
-    post_tool_use_failure: 'PostToolUseFailure',
-    permission_denied: 'PermissionDenied',
-    stop: 'Stop',
-    stop_failure: 'StopFailure',
-    session_start: 'SessionStart',
-    session_end: 'SessionEnd',
-    user_prompt_submit: 'UserPromptSubmit',
-    notification: 'Notification',
-    subagent_start: 'SubagentStart',
-    subagent_stop: 'SubagentStop',
-    pre_compact: 'PreCompact',
-    post_compact: 'PostCompact'
-  };
-  const payload = {
-    hook_event_name: names[grok.hookEventName] || grok.hookEventName || 'Unknown',
-    agent_id: agentId,
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    sock_token: process.env.HIVE_SOCK_TOKEN || '',
-    session_id: grok.sessionId,
-    cwd: grok.cwd || grok.workspaceRoot,
-    tool_name: grok.toolName,
-    tool_input: grok.toolInput,
-    stop_hook_active: grok.stopHookActive,
-    prompt: grok.prompt,
-    source: grok.source,
-    notification_type: grok.notificationType,
-    message: grok.message
-  };
-  let resp = '';
-  const done = () => {
-    let out = null;
-    try {
-      const r = JSON.parse(resp || '{}');
-      if (r.continue === false) out = { continue: false, stopReason: r.stopReason };
-      else if (r.decision === 'block') out = { decision: 'block', reason: r.reason };
-      else if (r.hookSpecificOutput && r.hookSpecificOutput.permissionDecision === 'deny') {
-        out = { decision: 'deny', reason: r.hookSpecificOutput.permissionDecisionReason };
-      } else if (r.hookSpecificOutput && r.hookSpecificOutput.additionalContext) {
-        out = r;
-      }
-    } catch (_) {}
-    if (out) { try { process.stdout.write(JSON.stringify(out)); } catch (_) {} }
-    process.exit(0);
-  };
-  try {
-    const c = net.createConnection(sock, () => c.write(JSON.stringify(payload) + '\\n'));
-    c.setEncoding('utf8');
-    c.on('data', (d) => { resp += d; });
-    c.on('end', done);
-    c.on('error', () => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  } catch (_) { process.exit(0); }
-});
-`;

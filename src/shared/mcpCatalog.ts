@@ -1,7 +1,14 @@
 /**
  * Default MCP server catalog (Workstream 3). A dependency-free, importable-by-both
  * (main + renderer) registry of the MCP servers Hello MarkX can wire into each
- * agent's per-session `settings.json`. Keep it free of electron/UI/node imports.
+ * agent. Keep it free of electron/UI/node imports.
+ *
+ * MEASURED (scripts/mcp-live-probe.cjs, claude 2.1.236, plan 02-11): an
+ * `mcpServers` key inside a `--settings <file>.json` file is ignored — Claude
+ * Code never spawns that server. The bundle is written instead to
+ * `<agentDir>/mcp.json` and passed via `--mcp-config <file>` at hive.ts's
+ * bootstrap seam (DAEMON-04). Re-run the probe before ever trusting the
+ * `--settings` channel again.
  *
  * Tiers gate consent:
  *   - 'safe-readonly' → no secret, no destructive write OUTSIDE the agent cwd; shipped
@@ -169,4 +176,62 @@ export function defaultMcpDefaults(): Record<string, { enabled: boolean }> {
   const out: Record<string, { enabled: boolean }> = {};
   for (const e of MCP_CATALOG) out[e.id] = { enabled: e.defaultEnabled };
   return out;
+}
+
+/** The single derivation of an MCP grant's secret ref key, shared by
+ *  `mcp:grant`, `mcp:revoke` and `resetConfig`'s sweep (D-28) — so those three
+ *  call sites can never key an agent-server pair three slightly different
+ *  ways. Always used as `secretRefFor(mcpGrantKey(agentId, mcpId))`; nothing
+ *  else may construct one of these refs. */
+export function mcpGrantKey(agentId: string, mcpId: string): string {
+  return `mcp:${agentId}:${mcpId}`;
+}
+
+/** The prefix every MCP grant key shares — `secretRefFor(MCP_GRANT_PREFIX)` is
+ *  what `resetConfig` sweeps to drop the whole grant-secret family without
+ *  enumerating every agent/server pair that ever existed. */
+export const MCP_GRANT_PREFIX = 'mcp:';
+
+/** Providers whose spawn path actually writes `<agentDir>/mcp.json` and passes
+ *  `--mcp-config` — the one channel `scripts/mcp-live-probe.cjs` live-verified
+ *  (D-25). D-26: nine other engines have a DOCUMENTED per-agent MCP surface
+ *  and NONE of them are wired here. This answers "does this build write this
+ *  engine's channel" — a different question from Rule C-1b's `supportsMcp` on
+ *  the provider preset (`src/shared/agentProvider.ts`, plan 02-07's file, not
+ *  this one), which answers "can this engine take MCP at all". Conflating the
+ *  two is how a capability card starts lying about a channel nothing writes. */
+export const MCP_WIRED_PROVIDERS: readonly string[] = ['claude'];
+
+/** Whether `provider`'s spawn path is one of the wired channels above. Typed
+ *  as a bare `string` (not `AgentProvider`) so this module never imports
+ *  `agentProvider.ts` and stays dependency-free. */
+export function mcpWiredFor(provider: string): boolean {
+  return MCP_WIRED_PROVIDERS.includes(provider);
+}
+
+/** MAIN-02. `agentId` reaches `mcp:agentState`/`mcp:grant`/`mcp:revoke` from the
+ *  RENDERER — the less-trusted side of that boundary by design — and then selects
+ *  both a secret-store namespace (`mcpGrantKey`) and a filesystem path
+ *  (`HiveManager.agentDir` = `join(root, 'agents', id)`). A bare
+ *  `typeof id === 'string'` check defends neither: `'../agents/someone-else'` is a
+ *  perfectly good string, and was MEASURED returning another agent's armed server
+ *  list before this guard existed.
+ *
+ *  Deliberately a SHAPE guard, NOT a membership guard. Membership was tried first
+ *  and was wrong: `hive.registry()` is not the agent roster. `spawnAgentCore` only
+ *  calls `hive.ensureAgent` under `if (opts.hive && hive.enabled())`, and its
+ *  missing-CLI installer rung returns earlier still, while the renderer persists
+ *  the agent card either way — so a registry test rejects real, working, non-hive
+ *  agents and breaks DAEMON-04's consent modal for them.
+ *
+ *  The charset is a superset of everything `uniqueId()` can emit
+ *  (`pty-<name-slug>-<base36>`, i.e. `[a-z0-9-]`), so it cannot reject a
+ *  legitimate id, while excluding every separator and traversal form. `..` is
+ *  refused explicitly because `.` is otherwise a legal character in the class.
+ *
+ *  Lives here rather than in `index.ts` so it has a testable seam — `index.ts`
+ *  imports `electron` at module scope and cannot be loaded by `node --test`. */
+const SAFE_AGENT_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+export function isSafeAgentId(id: unknown): id is string {
+  return typeof id === 'string' && SAFE_AGENT_ID_RE.test(id) && !id.includes('..');
 }

@@ -409,13 +409,17 @@ test('the Stop-drain wiring HIVE.md now describes is still there (#5, FLOOR-02)'
   // correcting the docs — and a deletion would make every removed denial
   // retroactively true. Pin the positive direction in the same file so that
   // refactor fails the suite instead of quietly winning the argument.
-  const index = readStripped('src/main/index.ts');
+  //
+  // 02-02 moved the composition root (the DeliveryService/HookServer wiring)
+  // out of index.ts into src/main/floor/boot.ts's bootFloor(); the wiring text
+  // itself is unchanged, only its file.
+  const boot = readStripped('src/main/floor/boot.ts');
   const hooks = readStripped('src/main/hooks.ts');
   const delivery = readStripped('src/main/delivery.ts');
 
   assert.ok(
-    /drainForStop\(/.test(index) && /delivery\.drainAtStop\(/.test(index),
-    'src/main/index.ts no longer wires the Stop-drain (hive.drainForStop into DeliveryService.deps.drain, '
+    /drainForStop\(/.test(boot) && /delivery\.drainAtStop\(/.test(boot),
+    'src/main/floor/boot.ts no longer wires the Stop-drain (hive.drainForStop into DeliveryService.deps.drain, '
     + 'and delivery.drainAtStop into HookServer). HIVE.md §2.5/§3/§5/§7/§8 now all say it runs'
   );
   assert.ok(
@@ -1040,17 +1044,21 @@ test('both composition-root seams are still fed — FLOOR-09 and FLOOR-10 are no
   // and plan 10 fed the breaker beat in wave 5. A handoff that is written but
   // never applied leaves a requirement closed on paper with dead code beneath it,
   // and BOTH greps read 0 when this plan was written.
-  const index = readStripped('src/main/index.ts');
+  //
+  // 02-02 moved both feed sites (the HookServer construction and the breaker
+  // beat) out of index.ts into src/main/floor/boot.ts's bootFloor()/
+  // runBreakerBeat(); the wiring itself is unchanged, only its file.
+  const boot = readStripped('src/main/floor/boot.ts');
 
   assert.ok(
-    index.includes('recordCostSample'),
-    'src/main/index.ts never calls recordCostSample. The HookServer sink exists and is unit-tested, '
+    boot.includes('recordCostSample'),
+    'src/main/floor/boot.ts never calls recordCostSample. The HookServer sink exists and is unit-tested, '
     + 'but nothing in production feeds it: proxy-tier spend stops reaching getAgentUsage and the '
     + 'budget cap becomes a false cap (#19, FLOOR-09).'
   );
   assert.ok(
-    index.includes('budgetForAgent'),
-    'src/main/index.ts never calls hive.budgetForAgent. The accessor exists and is unit-tested, '
+    boot.includes('budgetForAgent'),
+    'src/main/floor/boot.ts never calls hive.budgetForAgent. The accessor exists and is unit-tested, '
     + 'but the breaker beat is never handed a budget: BreakerInput.budget becomes an optional '
     + 'field nothing ever sets, and the FLOOR-10 arm is dead code behind a green suite (#34).'
   );
@@ -1097,3 +1105,537 @@ function jsxElements(src, tag) {
   }
   return out;
 }
+
+// ─── STRUCT-02 (phase 2 plan 02-01): ADR-0004 survives the git-committer split ──
+
+/** Comment-stripped source of every .ts/.tsx under src/, joined with a single
+ *  space so a construction or declaration wrapped across lines by a
+ *  formatter cannot defeat either clause below — same joined-text discipline
+ *  the plan's own shell criteria use, applied here in plain JS. */
+function joinedSrcText() {
+  return sourceFiles(path.join(root, 'src'))
+    .map((rel) => readStripped(rel))
+    .join(' ')
+    .replace(/\s+/g, ' ');
+}
+
+test('ADR-0004: exactly one GitCommitter is ever constructed, and hive.ts owns it (02-01)', () => {
+  const joined = joinedSrcText();
+  const total = (joined.match(/new GitCommitter\(/g) || []).length;
+  assert.equal(
+    total, 1,
+    `found ${total} \`new GitCommitter(\` construction(s) across src/**. ADR-0004 is a single- `
+    + 'committer model — a second construction races the first on the same git index, which is '
+    + 'index corruption plus a bypassed FLOOR-04 secret scrub. This must stay exactly 1.'
+  );
+
+  const hive = readStripped('src/main/hive.ts').replace(/\s+/g, ' ');
+  const inHive = (hive.match(/new GitCommitter\(/g) || []).length;
+  assert.ok(
+    inHive >= 1,
+    "src/main/hive.ts no longer constructs a GitCommitter. The negative half of this clause "
+    + '(exactly one, above) is satisfiable by deleting the committer outright — this positive '
+    + 'half fails that case: HiveManager must be the one owner.'
+  );
+});
+
+test('HiveManager still exposes commit()/flushCommit() as delegations, not the old inline git state (02-01)', () => {
+  const hive = readStripped('src/main/hive.ts');
+
+  // Positive half: the public API six tests and every hive-mutating method
+  // call did not move away.
+  assert.ok(
+    // The type annotation is required to distinguish the DECLARATION from an
+    // internal call site (`this.committer.commit(message)` has no `: string`)
+    // — a bare `commit(message` matches both and can never go red.
+    /\bcommit\(message: string/.test(hive),
+    'src/main/hive.ts no longer declares commit(message: string...) — every hive mutation (router '
+    + 'tick, writeTasks(), ensureAgent(), setArchived(), …) calls this by name'
+  );
+  assert.ok(
+    /\bflushCommit\(root: string/.test(hive),
+    'src/main/hive.ts no longer declares flushCommit(root: string...) — test/hive-durability.test.cjs '
+    + 'and test/engine-parity.test.cjs call this exact method, by this exact name, at runtime'
+  );
+
+  // Negative half: the debounce/retry state that used to live on HiveManager
+  // is gone from here — proving these are delegations, not a second copy of
+  // GitCommitter's internals sitting alongside the real one.
+  for (const moved of ['gitInFlight', 'committing']) {
+    assert.equal(
+      hive.includes(moved), false,
+      `src/main/hive.ts still contains "${moved}" — this field moved to GitCommitter `
+      + '(src/main/gitCommitter.ts) in plan 02-01. Its presence here means either the move was '
+      + 'incomplete or a second copy of the committer\'s internal state has been reintroduced.'
+    );
+  }
+});
+
+// ─── 02-02: bootFloor's module-scope discipline (T-P02-02-01, D-03) ─────────
+//
+// D-02's whole rationale: a file under src/main/floor/** that constructs at
+// MODULE SCOPE, or installs a process-global handler there, produces a boot
+// test that is green on a crashed boot — the exact repudiation threat
+// T-P02-02-01 names. Both clauses below were driven RED before being trusted
+// (planted violation / deleted call / deleted directory) — see the commit
+// message for the pasted runs; this file only carries the clauses themselves.
+//
+// This tree is CRLF (`core.autocrlf=true`, no `.gitattributes`) and
+// `readStripped` reads raw utf8 with no newline normalisation, so a wrapped
+// construction on disk is `=\r\n  new` — every pattern below is written with
+// `\r?` for that reason, not decoration.
+
+/** Every .ts file under src/main/floor/, as repo-relative POSIX paths. */
+function floorSourceFiles() {
+  const dir = path.join(root, 'src', 'main', 'floor');
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile() && /\.tsx?$/.test(e.name))
+    .map((e) => `src/main/floor/${e.name}`);
+}
+
+test('no module-scope construction or process handler under src/main/floor/** (T-P02-02-01)', () => {
+  const files = floorSourceFiles();
+  // Positive half first: D-40's exact trap. Deleting src/main/floor/ entirely
+  // must FAIL this clause, not satisfy it — a directory with nothing in it
+  // trivially has zero matches for every negative pattern below.
+  assert.ok(files.length > 0,
+    'src/main/floor/ has no .ts files — either it was deleted or bootFloor never shipped. '
+    + 'A missing directory must fail this clause, not satisfy its negative half.');
+
+  const bareConstruction = /^(export )?(const|let|var) [A-Za-z_$][\w$]* *(:[^=\r\n]*)? *= *new /m;
+  const wrappedConstruction = /^(export )?(const|let|var) [A-Za-z_$][\w$]* *(:[^=\r\n]*)? *=\r?\n\s*new /m;
+  const processOrAppOn = /(^|[^.\w$])(process|app)\.on\(/;
+
+  for (const rel of files) {
+    const raw = fs.readFileSync(path.join(root, rel), 'utf8');
+    const stripped = stripComments(raw);
+    assert.doesNotMatch(stripped, bareConstruction,
+      `${rel} constructs at module scope (\`const x = new X(...)\` outside any function) — `
+      + 'bootFloor must construct every subsystem INSIDE the function, or a boot test\'s import '
+      + 'alone would run the side effect D-02 exists to keep out');
+    assert.doesNotMatch(stripped, wrappedConstruction,
+      `${rel} constructs at module scope in WRAPPED form (\`const x: T =\\n  new X(...)\`) — `
+      + 'the bare-form check above cannot see a construction split across lines');
+    assert.doesNotMatch(stripped, processOrAppOn,
+      `${rel} installs a process-global or Electron app-global handler `
+      + '(process.on(/app.on() — T-P02-02-01: a crashed boot would report green because the '
+      + 'handler that would have surfaced the throw is exactly what this file is not allowed to install');
+  }
+
+  // Positive half for the construction check: boot.ts DOES construct, just
+  // inside bootFloor — at least 20 `new X(...)` sites (D-01: the 14 subsystems
+  // plus their Maps), so the negative checks above are proven non-vacuous.
+  const bootStripped = stripComments(fs.readFileSync(path.join(root, 'src/main/floor/boot.ts'), 'utf8'));
+  const newCount = (bootStripped.match(/\bnew [A-Za-z_$]/g) ?? []).length;
+  assert.ok(newCount >= 20,
+    `src/main/floor/boot.ts has only ${newCount} \`new X(...)\` sites (comment-stripped) — expected `
+    + 'at least 20 (the ~14 subsystems bootFloor constructs, plus their Maps). Fewer than that means '
+    + 'either bootFloor stopped constructing something, or the file was gutted.');
+});
+
+test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => {
+  const index = readStripped('src/main/index.ts');
+  assert.match(index, /bootFloor\(/,
+    'src/main/index.ts no longer calls bootFloor(...) — the composition root was extracted into '
+    + 'src/main/floor/boot.ts specifically so whenReady could inject it; a floor that never boots '
+    + 'this way is dead code behind a passing typecheck');
+  assert.doesNotMatch(index, /SHUTDOWN_STEPS/,
+    'src/main/index.ts still declares SHUTDOWN_STEPS — the declarative shutdown list moved to '
+    + 'src/main/floor/boot.ts\'s Floor.shutdown(); a second copy here is exactly the two-hand-'
+    + 'maintained-teardown-paths drift #34 exists to prevent'
+  );
+});
+
+// ─── 02-12 (wave 9): PARITY-03's LIVE-UNVERIFIED marker pin, re-measured ────
+// after the whole phase (D-33, D-35, D-40) ────────────────────────────────
+//
+// THIS CLAUSE IS THE FILE'S ONE DELIBERATE EXCEPTION TO COMMENT-STRIPPING.
+// `LIVE-UNVERIFIED` lives INSIDE comments — every marker below is a comment
+// line, by construction (it is how a bridge is marked as unverified) — so a
+// `readStripped` read would delete every single one and this clause would
+// count zero forever, passing green against any ledger whatsoever (D-40).
+// `readRaw`, defined beside `readStripped` below, is the required read path
+// for anything in this clause; the file's mandatory comment-stripping and
+// this clause's mandatory raw read are both deliberate, not in tension.
+//
+// Plan 02-07 (wave 4) wrote the first version of this pin. Read at execution
+// time: it already called `fs.readFileSync` directly rather than routing
+// through `readStripped` — so it was never the vacuous "collapses to zero"
+// case D-40 warns about, and RED run 4 below re-proves that rather than
+// finding a bug. What wave 4's version did NOT have is a named `readRaw`
+// counterpart to `readStripped`, a per-engine lower bound, or a committed
+// file-set assertion — all three land here, and this task's fix commit
+// (02779b9) also closed a genuine gap wave 4's pin did not catch: `qwen` had
+// ZERO raw markers despite being exactly as unverified as pi/opencode/crush
+// (02-VALIDATION.md's own operator-account table lists all four together).
+// A per-file-and-total pin cannot see a missing per-engine attribution; only
+// asserting the attribution itself can, which is the whole reason this task
+// adds it rather than trusting wave 4's shape to still be sufficient.
+//
+// Pinned in BOTH directions — tighter than D-35's one-directional marker
+// rule, per D-40 (#39): unmarking a bridge (the count drops) and silently
+// shipping a new unverified one (the count rises) both go red, AND unmarking
+// one engine while leaving the total untouched (renaming it inside its own
+// block) goes red too — RED run 3 below is the proof a count-only pin cannot
+// see that case. There is no `live-unverified` field anywhere in the
+// provider table (D-35) — this comment-and-regex pin is the only thing that
+// can catch any of the three.
+
+/** Every file under `src/` that carries at least one `LIVE-UNVERIFIED`
+ *  marker, mapped to its EXACT occurrence count. Re-measure with:
+ *  `grep -ro 'LIVE-UNVERIFIED' src/ | cut -d: -f1 | sort | uniq -c`
+ *  Measured in THIS session at `02779b9` (2026-08-24, after this plan's own
+ *  fix commit added qwen's missing marker) — never copied from a plan file
+ *  or a prior SUMMARY. */
+const MARKER_LEDGER = {
+  'src/main/hive.ts': 3,
+  'src/main/hiveProvisioning.ts': 5,
+  'src/main/hiveTemplates.ts': 3,
+  'src/main/index.ts': 1,
+  'src/main/webhook.ts': 3,
+  'src/shared/agentProvider.ts': 3
+};
+
+/** The repo-wide EXACT total of raw `LIVE-UNVERIFIED` occurrences under
+ *  `src/` — the sum of MARKER_LEDGER's values, re-measured in THIS session
+ *  at `02779b9` (2026-08-24) with
+ *  `grep -rc 'LIVE-UNVERIFIED' src --include=*.ts | grep -v ':0' | awk -F: '{s+=$2} END {print s}'`.
+ *  The ONLY reason this number is allowed to change is a real marker being
+ *  added or removed in source — never a refactor, a rename, or a change to
+ *  how this file strips comments. */
+const LIVE_UNVERIFIED_TOTAL = 18;
+
+/** The five engines this phase built bridges for and never live-verified
+ *  (D-33, D-35): none of these four CLIs is installed on this machine
+ *  (`pi`, `opencode`, `crush`, `qwen`), and `kimi`'s bridge is new and
+ *  unverified by construction. Committed here rather than derived from
+ *  `agentProvider.ts`'s preset table, because the whole point of the
+ *  per-engine assertion below is to catch a bridge that shipped with NO
+ *  marker at all — deriving the expected set from the same table the
+ *  markers are supposed to describe would let a missing marker hide behind
+ *  a missing list entry too. */
+const LIVE_UNVERIFIED_ENGINES = ['pi', 'opencode', 'crush', 'qwen', 'kimi'];
+
+/** Raw (un-stripped) contents of a repo-relative file. The required read
+ *  path for anything counting `LIVE-UNVERIFIED`: the marker IS a comment,
+ *  and `readStripped` (above) would erase the very thing being counted. */
+const readRaw = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+
+/** Occurrence count of `needle` in the RAW file at `rel` — comments
+ *  included, counted per OCCURRENCE (global regex), never per LINE
+ *  (`grep -c` counts matching lines, so two markers sharing one line would
+ *  silently score as one). */
+function rawOccurrences(rel, needle) {
+  return (readRaw(rel).match(new RegExp(needle, 'g')) || []).length;
+}
+
+/** For every `LIVE-UNVERIFIED` occurrence in the RAW text of `rel`, the
+ *  comment block it sits in — bounded by the block's own structure, never
+ *  by a character count: the smallest enclosing `/* ... *\/` (or `/**` doc)
+ *  block, or, when the marker sits in `//` comments instead, the maximal
+ *  contiguous run of `//` lines touching it. Two markers in the same block
+ *  yield the same block text twice — attribution must not silently drop
+ *  the second occurrence because its neighbour already answered. */
+function markerBlocks(rel) {
+  const text = readRaw(rel);
+  const blockRanges = [];
+  const blockRe = /\/\*[\s\S]*?\*\//g;
+  let bm;
+  while ((bm = blockRe.exec(text))) blockRanges.push([bm.index, bm.index + bm[0].length]);
+
+  const lines = text.split('\n');
+  const lineStart = [0];
+  for (const l of lines) lineStart.push(lineStart[lineStart.length - 1] + l.length + 1);
+  const lineOf = (idx) => lineStart.findIndex((s, i) => idx >= s && idx < lineStart[i + 1]);
+
+  const blocks = [];
+  const markerRe = /LIVE-UNVERIFIED/g;
+  let mm;
+  while ((mm = markerRe.exec(text))) {
+    const enclosing = blockRanges.find(([s, e]) => mm.index >= s && mm.index < e);
+    if (enclosing) { blocks.push(text.slice(enclosing[0], enclosing[1])); continue; }
+    const lineNo = lineOf(mm.index);
+    let start = lineNo;
+    while (start > 0 && /^\s*\/\//.test(lines[start - 1])) start--;
+    let end = lineNo;
+    while (end < lines.length - 1 && /^\s*\/\//.test(lines[end + 1])) end++;
+    blocks.push(lines.slice(start, end + 1).join('\n'));
+  }
+  return blocks;
+}
+
+test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned per file, repo-wide, per engine and by file set (D-33/D-35/D-40)', () => {
+  let ledgerSum = 0;
+  for (const [rel, expected] of Object.entries(MARKER_LEDGER)) {
+    const full = path.join(root, rel);
+    assert.ok(
+      fs.existsSync(full) && fs.statSync(full).isFile() && readRaw(rel).length > 0,
+      `${rel} is listed in MARKER_LEDGER but is missing or empty — deleting the bridges (or `
+      + 'deleting the file) must FAIL this clause, not satisfy it by removing every match'
+    );
+    const found = rawOccurrences(rel, 'LIVE-UNVERIFIED');
+    assert.equal(
+      found, expected,
+      `${rel}: expected exactly ${expected} LIVE-UNVERIFIED marker(s), found ${found}. A bridge `
+      + 'in this file was unmarked (fewer) or a new unverified one shipped (more) without this '
+      + 'ledger being updated to match.'
+    );
+    ledgerSum += expected;
+  }
+  assert.equal(
+    ledgerSum, LIVE_UNVERIFIED_TOTAL,
+    `MARKER_LEDGER sums to ${ledgerSum}, but the committed LIVE_UNVERIFIED_TOTAL is `
+    + `${LIVE_UNVERIFIED_TOTAL}. Both are supposed to be the same number measured two ways.`
+  );
+
+  // Repo-wide total, over EVERY .ts/.tsx under src/ via the file's own
+  // sourceFiles() walker — not a hardcoded file list. This is the check that
+  // catches a marker moved INTO (or newly created in) a file MARKER_LEDGER
+  // does not mention: every per-file entry above can still balance exactly
+  // while this total drifts.
+  const allSrcFiles = sourceFiles(path.join(root, 'src'));
+  let repoTotal = 0;
+  const filesWithMarkers = [];
+  for (const rel of allSrcFiles) {
+    const n = rawOccurrences(rel, 'LIVE-UNVERIFIED');
+    repoTotal += n;
+    if (n > 0) filesWithMarkers.push(rel);
+  }
+
+  assert.ok(
+    repoTotal >= 1,
+    'zero LIVE-UNVERIFIED markers anywhere in src/ — either every bridge this project ships is '
+    + 'now genuinely live-verified (in which case replace this whole clause with the real '
+    + 'evidence) or the markers were silently deleted. An empty ledger must not read as "clean".'
+  );
+
+  // The committed FILE SET carrying markers, so a future split that moves
+  // them again (as plan 02-01 already did once) shows up in a diff rather
+  // than in nobody's head. Checked BEFORE the total-equality assertion below
+  // on purpose: a marker added to (or moved into) a file MARKER_LEDGER does
+  // not list changes this set without necessarily changing repoTotal (a move
+  // nets to zero), so file-set drift needs its own assertion, reachable on
+  // its own rather than only as a side effect of the total going stale.
+  assert.deepEqual(
+    filesWithMarkers.slice().sort(),
+    Object.keys(MARKER_LEDGER).slice().sort(),
+    `the files actually carrying a LIVE-UNVERIFIED marker (${filesWithMarkers.sort().join(', ')}) `
+    + `do not match MARKER_LEDGER's keys (${Object.keys(MARKER_LEDGER).sort().join(', ')}). A `
+    + 'marker moved to a file this ledger does not name.'
+  );
+
+  assert.equal(
+    repoTotal, LIVE_UNVERIFIED_TOTAL,
+    `src/ carries ${repoTotal} LIVE-UNVERIFIED marker(s) total (every .ts/.tsx file, enumerated `
+    + `via sourceFiles()), but the committed LIVE_UNVERIFIED_TOTAL is ${LIVE_UNVERIFIED_TOTAL}. A `
+    + 'marker moved into, or a new one was added in, a file this ledger does not list. Unmarking '
+    + 'a bridge is a claim that a real session ran against a real account — which account? '
+    + 'Reconcile MARKER_LEDGER and LIVE_UNVERIFIED_TOTAL against a '
+    + '`grep -ro \'LIVE-UNVERIFIED\' src/ | cut -d: -f1 | sort | uniq -c` re-measurement before '
+    + 'trusting any of the three.'
+  );
+
+  // Per-engine: which of the five is named inside each marker's own comment
+  // block, attributed structurally (never by character count). A total
+  // alone is satisfied by unmarking crush and adding a marker elsewhere —
+  // this is the positive half that catches exactly that.
+  const engineCounts = Object.fromEntries(LIVE_UNVERIFIED_ENGINES.map((e) => [e, 0]));
+  for (const rel of allSrcFiles) {
+    for (const block of markerBlocks(rel)) {
+      for (const engine of LIVE_UNVERIFIED_ENGINES) {
+        if (new RegExp(`\\b${engine}\\b`, 'i').test(block)) engineCounts[engine]++;
+      }
+    }
+  }
+  for (const engine of LIVE_UNVERIFIED_ENGINES) {
+    assert.ok(
+      engineCounts[engine] >= 1,
+      `${engine} has ${engineCounts[engine]} attributed LIVE-UNVERIFIED marker(s), expected >= 1. `
+      + `Under the zero-recurring-cost rule the honest answer is normally "none, and it stays `
+      + `marked" — which account was ${engine}'s bridge verified against, by whom, on what date? `
+      + 'If the answer is a real one, replace the marker with the evidence; if not, put the '
+      + 'marker back.'
+    );
+  }
+});
+
+// ─── 02-12 task 2: all three copies of ADR-0001's one-gate sentence agree ──
+// (D-02, D-12) ───────────────────────────────────────────────────────────
+//
+// `HIVE.md`, `docs/message-queue.md` and `docs/adr/0001-one-gate-for-pty-
+// writes.md` each carry their own copy of "the one gate allowed to type into
+// a live PTY". A single-site fix leaves the other two stale, which is worse
+// than leaving all three stale — the disagreement makes every copy
+// untrustworthy. This clause asserts over JOINED text (`tr`-style, in plain
+// JS) so a claim wrapped mid-sentence by the file's own formatter cannot
+// hide from a line-oriented grep, and pins the ADR's continued existence as
+// a positive lower bound so deleting it does not satisfy the negative half.
+// The ADR itself belongs to plan 02-03 — asserted here, never edited.
+
+/** repo-relative doc path -> its raw text, joined to one line and squeezed,
+ *  same discipline as `joinedSrcText()` above but over a single doc file
+ *  rather than the whole source tree (docs are not source; this is the
+ *  file-level joiner the `<interfaces>` style note describes). */
+function joinedDocText(rel) {
+  return readRaw(rel).replace(/\r/g, '').replace(/\n/g, ' ').replace(/ +/g, ' ');
+}
+
+const ONE_GATE_DOCS = ['HIVE.md', 'docs/message-queue.md', 'docs/adr/0001-one-gate-for-pty-writes.md'];
+
+test('ADR-0001: all three one-gate copies name the drain, none still hands the title to the deleted useHive.ts effect #4 (D-02/D-12)', () => {
+  assert.ok(
+    fs.existsSync(path.join(root, 'docs/adr/0001-one-gate-for-pty-writes.md'))
+    && readRaw('docs/adr/0001-one-gate-for-pty-writes.md').length > 0,
+    'docs/adr/0001-one-gate-for-pty-writes.md is missing or empty — deleting the ADR must FAIL '
+    + 'this clause, not satisfy the negative half by removing the stale claim along with it. It '
+    + 'belongs to plan 02-03; this clause asserts over it, never edits it.'
+  );
+
+  for (const rel of ONE_GATE_DOCS) {
+    const joined = joinedDocText(rel);
+    const stillClaimsEffect4 =
+      /(one place types|the one gate|the one writer).{0,200}useHive\.ts/i.test(joined)
+      || /useHive\.ts.{0,200}(the one gate|the one writer)/i.test(joined);
+    assert.ok(
+      !stillClaimsEffect4,
+      `${rel} still hands the one-gate title to useHive.ts's effect #4, which FLOOR-02/D-02 `
+      + 'deleted — main\'s DeliveryService.drainQueue() is the one gate now. Matching the bare '
+      + 'string "effect #4" is not this assertion: that phrase legitimately survives as history '
+      + '(e.g. "the drain used to be useHive.ts effect #4"); this one matches the CLAIM that it '
+      + 'still is the gate.'
+    );
+
+    const namesMainDrain =
+      /(one place types|the one gate|the one writer|single writer).{0,200}(delivery\.ts|drainQueue)/i.test(joined)
+      || /(delivery\.ts|drainQueue).{0,200}(the one gate|the one writer|one place types)/i.test(joined);
+    assert.ok(
+      namesMainDrain,
+      `${rel} does not name main's drain (delivery.ts / drainQueue) as the one gate. All three `
+      + 'copies of this sentence must describe the same mechanism.'
+    );
+  }
+
+  assert.ok(
+    /drainQueue\(/.test(readRaw('src/main/delivery.ts')),
+    'src/main/delivery.ts no longer contains drainQueue( — the three docs above all point at a '
+    + 'function that no longer exists.'
+  );
+});
+
+// ─── 02-12 task 3: README's engine table describes a channel that renders, ─
+// and PARITY-02 is stated as what shipped (D-30, D-33, D-34) ──────────────
+//
+// Both directions, over README.md's joined+squeezed text (a claim wrapped
+// mid-sentence by the file's own line width cannot hide from a line grep).
+// The renderer-consumer half does NOT duplicate
+// test/capability-surface.test.cjs's 'providerCapabilities has >= 1
+// production consumer' clause (plan 02-06) — that clause is a pure
+// code-surface check with no README involvement. This one pins the
+// DOCUMENTATION-TO-RENDERER link: the table exists AND something under
+// src/renderer imports the channel, so deleting either half (the doc or the
+// consumer) fails, independent of whether the other test file's own clause
+// also still passes.
+
+test('README: the engine table documents a channel that renders, and "all eleven" never appears as a cost claim (D-30/D-34)', () => {
+  const readme = readRaw('README.md');
+  const joined = readme.replace(/\r/g, '').replace(/\n/g, ' ').replace(/ +/g, ' ');
+
+  // Positive half 1: the table exists, counted by its own |-delimited
+  // structure (a header separator row `|---|---|` plus >= 5 data rows —
+  // never a fixed line-count slice, which silently measures the wrong thing
+  // once the table grows or shrinks by a row).
+  const tableRows = readme
+    .split('\n')
+    .filter((line) => /^\|.*\|\s*$/.test(line) && !/^\|\s*---/.test(line) && line.includes('|'));
+  assert.ok(
+    tableRows.length >= 5,
+    `README.md's engine-limitation table has ${tableRows.length} data row(s) (counted by its own `
+    + '|-delimited structure), expected >= 5. The table documenting per-engine gaps is gone or '
+    + 'collapsed.'
+  );
+
+  // Positive half 2: at least one renderer file imports the capability
+  // channel — the D-30 headline (zero production consumers before this
+  // phase).
+  const rendererConsumers = sourceFiles(rendererRoot).filter((rel) =>
+    /providerCapabilities|capabilityLine/.test(readStripped(rel))
+  );
+  assert.ok(
+    rendererConsumers.length >= 1,
+    'no file under src/renderer imports providerCapabilities or capabilityLine — README documents '
+    + 'a channel with zero renderer consumers, exactly D-30\'s defect.'
+  );
+
+  // Negative half: no claim that all eleven engines report cost.
+  assert.ok(
+    !/all eleven[^.]*cost/i.test(joined) && !/eleven engines[^.]*(cost|ledger|breaker)/i.test(joined),
+    'README.md still claims "all eleven" engines report cost — PARITY-02 as originally written is '
+    + 'unachievable for copilot and custom by construction (D-34); the README must say what shipped, '
+    + 'never the unachievable original.'
+  );
+
+  // Negative half, pinned to source: copilot and custom still declare
+  // costTracking: 'none'. This is D-40's deliberately-fails-on-improvement
+  // pin — if a future change gives either one a real cost path, THIS
+  // assertion goes red and forces the README paragraph naming them to be
+  // rewritten in the same diff, rather than drifting silently true-again.
+  const providerSrc = readStripped('src/shared/agentProvider.ts').replace(/\s+/g, ' ');
+  for (const engine of ['copilot', 'custom']) {
+    const idBlock = providerSrc.slice(providerSrc.indexOf(`id: '${engine}'`), providerSrc.indexOf(`id: '${engine}'`) + 300);
+    assert.ok(
+      /costTracking: 'none'/.test(idBlock),
+      `${engine}'s preset no longer declares costTracking: 'none' — if this is a real new cost `
+      + 'path, README.md\'s copilot/custom cost paragraph (task 3, this plan) must be rewritten in '
+      + 'the same diff, not left claiming an impossibility that source just disproved.'
+    );
+  }
+});
+
+// ─── 02-12 task 4: SECURITY.md's tunnel entry corrected in the direction ───
+// the phase actually moved it (D-13/D-16) ──────────────────────────────────
+//
+// Both directions, over joined+squeezed text. Negative: the doc no longer
+// claims the tunnel cannot be closed. Positive (>= 1 each): the doc names
+// the global-lockout caveat; src/main/tunnel.ts still contains the kill
+// path (hardKillTree) plan 02-04 delivered; and neither webhook.ts nor
+// slack.ts retains its own openTunnel body while both still reference the
+// shared helper — asserted over comment-stripped, joined source, with the
+// helper reference as the lower bound so deleting the tunnel outright
+// (rather than re-inlining it) also fails.
+
+test('SECURITY.md: the tunnel-close claim is corrected, and the three new exposures are named (D-13/D-16/D-23)', () => {
+  const joined = readRaw('SECURITY.md').replace(/\r/g, '').replace(/\n/g, ' ').replace(/ +/g, ' ');
+
+  assert.ok(
+    !/does not close its tunnel|no handle and no disposer/i.test(joined),
+    'SECURITY.md still claims the tunnel cannot be closed. Plan 02-04 made stop() kill the '
+    + 'cloudflared child process (hardKillTree) — this is now false in the app\'s favour, which is '
+    + 'the harder direction to notice.'
+  );
+
+  assert.ok(
+    /(lockout|locked out)[\s\S]{0,160}(global|globally|every client|remotely)|(global|globally|remotely)[\s\S]{0,160}(lockout|locked out)/i.test(joined),
+    'SECURITY.md does not name the global, remotely-triggerable lockout (D-23) — every caller '
+    + 'behind the tunnel presents the tunnel\'s own IP, so per-IP limiting is meaningless.'
+  );
+
+  assert.ok(
+    /hardKillTree/.test(readStripped('src/main/tunnel.ts')),
+    'src/main/tunnel.ts no longer contains hardKillTree — SECURITY.md\'s corrected tunnel-close '
+    + 'claim points at a kill path that no longer exists.'
+  );
+
+  for (const rel of ['src/main/webhook.ts', 'src/main/slack.ts']) {
+    const stripped = readStripped(rel).replace(/\s+/g, ' ');
+    assert.ok(
+      !/function openTunnel\(/.test(stripped) && !/\bopenTunnel\s*=\s*(async\s*)?\(/.test(stripped),
+      `${rel} retains its own openTunnel body — the shared helper in tunnel.ts exists precisely `
+      + 'so no server owns a second copy of tunnel-acquisition logic.'
+    );
+    assert.ok(
+      /TunnelHandle|TunnelOpener/.test(stripped),
+      `${rel} no longer references the shared tunnel helper's types (TunnelHandle/TunnelOpener) — `
+      + 'deleting the tunnel outright must fail this clause too, not just re-inlining it.'
+    );
+  }
+});

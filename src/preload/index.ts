@@ -1221,6 +1221,28 @@ const api = {
   hiveSetArchived: (id: string, archived: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('hive:setArchived', id, archived),
 
+  // ─── Per-agent MCP grants (DAEMON-04) ────────────────────────────────────────
+  /** This agent's MCP state: which engine channel is wired, the floor-wide
+   *  safe-readonly ids, this agent's write/secret grants (with a `hasSecret`
+   *  boolean only — never the secret or its ref), and what a running session
+   *  actually has armed on disk right now. `pending · restart` is `granted \
+   *  armed`, computed here in the renderer — main never claims a live
+   *  connection (D-29). */
+  mcpAgentState: (agentId: string): Promise<
+    | { ok: true; wired: boolean; safe: string[]; granted: { id: string; tier: string; hasSecret: boolean }[]; armed: string[] }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('mcp:agentState', agentId),
+  /** Grant a write/secret MCP server to one agent. `secret` is passed once and
+   *  is never readable back — main stores it encrypted and returns only
+   *  success/failure, never the value or its ref. */
+  mcpGrant: (opts: { agentId: string; mcpId: string; secret?: string }): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('mcp:grant', opts),
+  /** Revoke a granted server: drops the config entry AND deletes the stored
+   *  encrypted secret — a revoke that leaves a live credential behind is not
+   *  a revoke (D-28). */
+  mcpRevoke: (opts: { agentId: string; mcpId: string }): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('mcp:revoke', opts),
+
   // ─── Slack integration (Slack message → Michael's queue) ─────────────────────
   /** Register a listener for inbound Slack messages; returns an unsubscribe fn.
    *  The message carries the thread coordinates needed to reply in-thread. */
@@ -1274,6 +1296,38 @@ const api = {
     secret?: string; port?: number; enabled?: boolean;
   }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('webhook:setConfig', patch),
+
+  // ─── Public tunnel (cloudflared) — DAEMON-05 ────────────────────────────────
+  /** Turn the public tunnel on: ensures the webhook local server is listening,
+   *  then opens a cloudflared tunnel over it (and over Slack's server too, if
+   *  Slack is already running — a separate child, a separate hostname).
+   *  Resolves to the webhook server's URL, the phone's origin (D-18, D-23). */
+  tunnelStart: (): Promise<{ ok: boolean; url?: string; error?: string }> =>
+    ipcRenderer.invoke('tunnel:start'),
+  /** Turn the public tunnel off: closes it on every server it was opened on. */
+  tunnelStop: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('tunnel:stop'),
+  /** `{ enabled, running, url }` for the current session — `url` is the
+   *  webhook server's public URL specifically. */
+  tunnelStatus: (): Promise<{ enabled: boolean; running: boolean; url: string | null }> =>
+    ipcRenderer.invoke('tunnel:status'),
+  /** Pushed whenever `tunnelStart`/`tunnelStop` change the state, so the
+   *  titlebar chip does not poll. Returns an unsubscribe fn. */
+  onTunnelChanged: (cb: (status: { enabled: boolean; running: boolean; url: string | null }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, status: { enabled: boolean; running: boolean; url: string | null }) => cb(status);
+    ipcRenderer.on('tunnel:changed', listener);
+    return () => ipcRenderer.removeListener('tunnel:changed', listener);
+  },
+
+  // ─── Phone pairing (DAEMON-02/DAEMON-05) ────────────────────────────────────
+  /** Mint a fresh phone pairing: arms the phone (a single-use enrollment
+   *  token), starts-or-reuses the local webhook server, and returns the QR's
+   *  whole payload. `{ ok:false }` (no `url`) when no public tunnel is up —
+   *  plan 02-10 renders `url` as a QR and must not draw a stale one on a
+   *  failure. The enrollment token rides in `url`'s fragment, never a query
+   *  param (D-19). */
+  phonePairing: (): Promise<{ ok: boolean; url?: string; host?: string; token?: string; expiresAt?: number; error?: string }> =>
+    ipcRenderer.invoke('phone:pairing'),
 
   // ─── Triggers: context (auto-compact / auto-clear) ──────────────────────────
   /** The two context rules (cadence + pressure gate + message), deep-filled. */
@@ -1532,7 +1586,18 @@ const api = {
     notes?: string;
     /** Preview the centered release page using the default drop template. */
     drop?: boolean;
-  }): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('update:simulate', opts)
+  }): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('update:simulate', opts),
+
+  /** UI-SPEC Rule C-1a step 2 — a plain string on the bridge so
+   *  `providerCapabilities(provider, platform)` never has to evaluate
+   *  `process.platform` in the renderer, where `process` is a ReferenceError
+   *  rather than `undefined`. Synchronous and available on first paint, so a
+   *  capability card never flickers from "no gaps" to e.g. `NO REMOTE` a tick
+   *  later once some async platform probe resolves. Step 1
+   *  (`providerCapabilities`'s optional `platform?` param) is plan 02-07's;
+   *  the two-argument renderer call sites are plan 02-06's (wave 6) — this
+   *  field has no consumer yet and is scheduled, not dead. */
+  platform: process.platform
 };
 
 contextBridge.exposeInMainWorld('cth', api);

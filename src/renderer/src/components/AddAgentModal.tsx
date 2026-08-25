@@ -28,7 +28,8 @@ import {
   modelsForProvider,
   inferAgentProvider,
   providerPreset,
-  isClaudeProvider
+  isClaudeProvider,
+  capabilityGaps
 } from '@/store/config';
 
 const ACCENTS: AccentColorName[] = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'];
@@ -802,6 +803,43 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                         })}
                       </div>
                     </Row>
+
+                    {/* S1b — D-31's cheapest surface: the operator inherits an
+                        engine's limits before any agent exists. One ranked
+                        derivation (capabilityGaps), never a second read of
+                        what an engine can do (D-32/T-P02-06-08). Renders
+                        nothing when the preset has no gaps — "a card with no
+                        gap chip means no gap" applies here too. */}
+                    {(() => {
+                      const gaps = capabilityGaps(provider, window.cth.platform, `a ${preset.label} worker`);
+                      if (gaps.length === 0) return null;
+                      return (
+                        <div style={{
+                          display: 'flex', flexDirection: 'column', gap: 4,
+                          background: 'var(--cth-paper-100)',
+                          boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+                          padding: 'var(--cth-space-2)'
+                        }}>
+                          <span style={{
+                            fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                            lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)',
+                            textTransform: 'uppercase'
+                          }}>
+                            LIMITS OF THIS ENGINE
+                          </span>
+                          {gaps.map((gap) => (
+                            <span key={gap.key} style={{
+                              display: 'flex', gap: 4, alignItems: 'baseline',
+                              fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                              lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
+                            }}>
+                              <span aria-hidden="true" style={{ fontSize: 'var(--cth-text-body-md)' }}>⚠</span>
+                              {gap.sentence}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
 
                     {preset.supportsModel && <Row label="Model">
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

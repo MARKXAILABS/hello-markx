@@ -319,9 +319,29 @@ export class DeliveryService {
     this.timer = null;
   }
 
-  /** Hold the typers off a freshly (re)spawned PTY while its TUI boots. */
-  noteSpawn(ptyId: string): void {
+  /**
+   * Hold the typers off a freshly (re)spawned PTY while its TUI boots, and —
+   * D-11 gap 2 — when the spawn produced a protocol seed (crush's
+   * `seedDelivery:'type-into-tui'` preset), park it in THIS queue instead of
+   * a renderer `setInterval` typing it directly. The boot grace this call
+   * already sets is the mechanism that keeps the seed from landing before the
+   * TUI has painted: `drainQueue` gates on boot grace, `idleMs >= IDLE_MS`,
+   * `paused`, `vetoed()` and the per-agent flush cooldown — every one of
+   * which a queued message already rides, so no second timer is written.
+   *
+   * NOT reproduced: the renderer's old `waiting`/`blocked` re-park (a
+   * permission prompt would eat the seed's trailing Enter) — main has no view
+   * of that status, it is derived client-side from stream events. The
+   * replacement is the same boot-grace + idle + veto gate every other queued
+   * message rides; that is a real, deliberate reduction in guard coverage for
+   * this one case, not an oversight.
+   */
+  noteSpawn(ptyId: string, seed?: { agentId: string; text: string }): void {
     this.bootGraceUntil.set(ptyId, this.now() + BOOT_GRACE_MS);
+    if (seed) {
+      const r = this.enqueue({ agentId: seed.agentId, text: seed.text });
+      if (!r.ok) this.log('protocol seed refused:', seed.agentId, r.error);
+    }
   }
 
   /** Drop everything remembered about a PTY that is gone (teardown). */
@@ -468,9 +488,13 @@ export class DeliveryService {
   /**
    * Park a message for an agent. THE one way anything reaches the drain.
    *
-   * Validates at this boundary rather than trusting its caller: the renderer's
-   * producers reach it over IPC, and text accepted here is text that will be
-   * typed into a live terminal (T-P08-01/05).
+   * Validates at this boundary rather than trusting its caller. The
+   * renderer's producers reach it over IPC — but that is no longer the whole
+   * truth: main now has two internal producers of its own, `HiveManager`'s
+   * `handoff` dep (D-11 gap 1, a terminal work order) and `noteSpawn`'s
+   * `seed` param (D-11 gap 2, a fresh Crush worker's protocol seed) — and
+   * text accepted here, from any producer, is text that will be typed into a
+   * live terminal (T-P08-01/05).
    */
   enqueue(req: EnqueueRequest): QueueResult {
     const agentId = typeof req?.agentId === 'string' ? req.agentId.trim() : '';

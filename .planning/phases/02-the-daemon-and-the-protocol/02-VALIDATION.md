@@ -1,10 +1,12 @@
 ---
 phase: 2
 slug: the-daemon-and-the-protocol
-status: draft
+status: approved
 nyquist_compliant: false
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-08-21
+signed_off: 2026-08-23 — 54/54 tasks carry <automated> verify; all 11 Wave 0 surfaces owned by plans; no watch-mode flags; full suite 18.5s
+revalidated: 2026-08-25 — post-execution audit; 19/19 mapped selectors re-executed exit 0 (345 passing assertions); wave_0_complete true; nyquist_compliant CORRECTED true->false because Manual-Only items remain open
 ---
 
 # Phase 2 — Validation Strategy
@@ -129,12 +131,107 @@ account?" — mechanically, in a diff, rather than by remembering to.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all ❌ references above
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 19s
-- [ ] Every skipped live test announces its skip; none skips silently
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or a Wave 0 dependency — **54 tasks, 54 `<automated>` blocks**, measured across all twelve plans
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify — satisfied trivially, every task carries one
+- [x] Wave 0 covers all ❌ references above — all 11 surfaces (`boot-floor`, `agent-lifecycle`, `hive-router`, `tunnel`, `mcp-per-agent`, plus the six extensions) appear in some plan's `files_modified`, sequenced across waves with zero same-wave collisions
+- [x] No watch-mode flags — grep for `--watch` / `nodemon` / `jest --watch` across the plan set returns nothing
+- [x] Feedback latency < 19s — full suite measured at **18.5s** (515 tests) this session
+- [x] Every skipped live test announces its skip; none skips silently — bound in the plans via the `test/net-binding.test.cjs` announced-skip pattern
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-08-23 at plan time.
+
+**What this sign-off does NOT claim.** `wave_0_complete` stays `false` — nothing has executed yet;
+this certifies the validation *architecture*, not its results. The manual-only and
+operator-supplied rows above are unchanged and remain the honest ceiling: DAEMON-01's live headless
+run, DAEMON-05's tunnel close, the Android device, the Telegram/Discord tokens, and the four
+`LIVE-UNVERIFIED` bridges are not automatable here and must be recorded as such rather than ticked.
+
+
+---
+
+## Validation Audit 2026-08-25 (post-execution)
+
+State A audit, run after all 12 plans landed and after the code-review fix rounds.
+The 2026-08-23 sign-off above was a **planning-time** sign-off — its own text says
+"`wave_0_complete` stays `false` — nothing has executed yet." This audit replaces its
+claims with measured ones.
+
+| Metric | Count |
+|--------|-------|
+| Mapped selectors re-executed | 19 |
+| Selectors exit 0 | 19 |
+| Selectors non-zero | 0 |
+| Passing assertions across mapped selectors | 345 |
+| Gaps found (MISSING) | 0 |
+| Requirements demoted COVERED→PARTIAL by re-run | 0 |
+| Manual-Only items still open | 5 |
+
+### Step 3.5 — live re-execution exit-code table
+
+Every selector re-executed in THIS run (`node --test <file>`), 2026-08-25T00:26Z.
+Static cross-reference was NOT accepted as evidence for any row.
+
+| Selector | Exit | Pass | Fail |
+|---|---|---|---|
+| test/agent-lifecycle.test.cjs | 0 | 12 | 0 |
+| test/boot-floor.test.cjs | 0 | 19 | 0 |
+| test/boot-order.test.cjs | 0 | 4 | 0 |
+| test/build-assets.test.cjs | 0 | 5 | 0 |
+| test/capability-surface.test.cjs | 0 | 14 | 0 |
+| test/delivery-main.test.cjs | 0 | 39 | 0 |
+| test/engine-parity.test.cjs | 0 | 41 | 0 |
+| test/hive-durability.test.cjs | 0 | 10 | 0 |
+| test/hive-roster-injection.test.cjs | 0 | 8 | 0 |
+| test/hive-router.test.cjs | 0 | 4 | 0 |
+| test/hive-task-mutation.test.cjs | 0 | 13 | 0 |
+| test/mcp-per-agent.test.cjs | 0 | 22 | 0 |
+| test/net-binding.test.cjs | 0 | 43 | 0 |
+| test/push-vapid.test.cjs | 0 | 12 | 0 |
+| test/qr-vendor.test.cjs | 0 | 11 | 0 |
+| test/queue-delivery.test.cjs | 0 | 4 | 0 |
+| test/repo-claims.test.cjs | 0 | 31 | 0 |
+| test/tunnel.test.cjs | 0 | 13 | 0 |
+| test/webhook-endpoints.test.cjs | 0 | 40 | 0 |
+
+Six of these (`boot-order`, `capability-surface`, `hive-roster-injection`, `push-vapid`,
+`qr-vendor`, plus the extended `mcp-per-agent`) did not exist when the 2026-08-23 map was
+written — they were created by this phase's plans and its two code-review fix rounds, and
+are included here because the map is meant to cover what shipped, not what was foreseen.
+
+Whole-suite figure at audit time: **824 tests / 817 pass / 0 fail / 7 skipped**,
+`npm run typecheck` exit 0, `npm run build` exit 0.
+
+### Frontmatter corrections made by this audit
+
+**`wave_0_complete: false → true`.** All 11 Wave 0 surfaces now exist and their selectors
+exit 0 in the table above. The original `false` was correct at the time and is now stale.
+
+**`nyquist_compliant: true → FALSE`.** This is a correction in the honest direction, and it
+is the finding of this audit. The `true` was written on 2026-08-23 *before any plan executed*
+— it recorded an intention that every task would carry automated verification, not a measured
+outcome. This workflow's own compliance rule states:
+
+> A phase with zero automated coverage, **or with Manual-Only items still open**, keeps
+> `nyquist_compliant: false`.
+
+Five Manual-Only items remain open, none of them closeable on this machine or this network:
+
+| Open item | Requirement | Blocker |
+|---|---|---|
+| Headless floor: spawn + mail + failover with no window | DAEMON-01 | Needs a live Electron process with real PTYs and real agent CLIs. The unit half is green; the doc itself says unit evidence alone is "**not a pass**" for criterion 2. |
+| The cloudflared close (D-16) + multi-hour soak | DAEMON-05 | `scripts/tunnel-live-check.cjs` exits 3 (announced skip) on three separate runs including outside the tool sandbox. Root cause is environmental, not code: the LAN resolver (JioFiber router at 192.168.31.1) returns NXDOMAIN for freshly-minted `*.trycloudflare.com` subdomains while the apex resolves and general egress works. A public resolver (8.8.8.8 / 1.1.1.1) would likely let it pass. |
+| WebAPK install, `display:standalone`, Web Push while asleep | DAEMON-02 | A physical Android phone. The localhost-verified auth path exists and is real, and the requirement names it as "the honest fallback" — to be recorded as such, **never as completion**. |
+| Telegram / Discord live round-trip | DAEMON-03 | An operator-supplied bot token and Discord application public key. |
+| pi / opencode / crush / qwen / kimi bridges | PARITY-03, PARITY-01a | A real paid account per engine; none of the five CLIs is installed here. Expected outcome under the zero-recurring-cost rule, not a failure. |
+
+`DAEMON-04`'s live `/mcp` item is the one Manual-Only row that **did** close: plan 02-11 ran
+the marker-file probe for real against the authenticated `claude` CLI 2.1.236 and recorded
+`CHANNEL RE-CONFIRMED`, exit 0 — `--settings`' `mcpServers` spawned nothing, `--mcp-config`
+spawned the marker server.
+
+**Verdict: PARTIAL, not compliant.** Every automated selector this phase owns passes, and
+there are zero MISSING gaps to fill — so no auditor was spawned, because there is nothing an
+auditor could generate. What remains is not missing tests; it is five verifications that
+require hardware, accounts, or a network this machine does not have. Generating more unit
+tests would not move any of them, and marking the phase compliant would misrepresent all five.

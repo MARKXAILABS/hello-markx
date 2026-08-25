@@ -26,7 +26,10 @@ test('Kimi is a first-class inferred provider with autonomous defaults', () => {
   assert.equal(preset.defaultCommand, 'kimi');
   assert.equal(preset.autoFlag, '--auto');
   assert.equal(preset.supportsModel, true);
-  assert.equal(preset.canReceiveInbox, false);
+  // PARITY-01a (02-07): kimi now has a per-agent hook bridge (installKimiConfig,
+  // hiveProvisioning.ts), so routed mail is delivered instead of bouncing.
+  // Ships LIVE-UNVERIFIED — no Moonshot account exists to run a live session.
+  assert.equal(preset.canReceiveInbox, true);
   assert.equal(preset.positionalInitialPrompt, undefined);
 });
 
@@ -101,11 +104,15 @@ test('Command Center model choices round-trip provider and model', () => {
 });
 
 test('God only sees providers that can drain hive inbox messages', () => {
-  // God-eligible = supportsModel && canReceiveInbox: kimi and copilot are
-  // excluded (no inbox drain path), custom is excluded (no model picker).
+  // God-eligible = supportsModel && canReceiveInbox. As of PARITY-01a (02-07),
+  // kimi has a hook bridge and is now god-eligible too — D-33's ruled-on
+  // consequence: a kimi god has no interactive initial-prompt form and spawns
+  // unoriented (ensureAgent's 'protocol-not-seeded' log records exactly that).
+  // Only copilot (no inbox drain path) and custom (no model picker) remain
+  // excluded.
   assert.deepEqual(
     modelProvidersForAgent(true).map((preset) => preset.id),
-    ['claude', 'codex', 'grok', 'antigravity', 'qwen', 'opencode', 'crush', 'pi']
+    ['claude', 'codex', 'grok', 'kimi', 'antigravity', 'qwen', 'opencode', 'crush', 'pi']
   );
   assert.deepEqual(
     modelProvidersForAgent(false).map((preset) => preset.id),

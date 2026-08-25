@@ -23,3 +23,8 @@ build/AuthKey_*.p8
 
 # local CodeFlow session snapshots
 .codeflow/
+
+# a 333 KB Public Suffix List dump left by the discuss phase — never tracked
+# (git ls-files psl.dat is empty); named narrowly so a future *.dat fixture
+# (e.g. test/fixtures/sample.dat) is never silently swallowed
+/psl.dat

@@ -3,6 +3,7 @@
 const assert = require('assert');
 const { shouldTrigger, ActivatedThreads, SeenEvents, dedupKey, ACTIVATED_THREADS_MAX, SEEN_EVENTS_MAX, MAX_FILES_PER_MESSAGE } =
   require('../src/main/slack-trigger.cjs');
+const loadTs = require('./load-ts.cjs');
 
 let failures = 0;
 async function test(name, fn) {
@@ -405,6 +406,42 @@ function ev(overrides = {}) {
     ingest(ev({ type: 'message',     text: `<@${BOT_ID}> one`, ts: '1900.0001' })); // dup
     ingest(ev({ type: 'app_mention', text: `<@${BOT_ID}> two`, ts: '1900.0002' })); // new
     assert.strictEqual(fires, 2, 'distinct ts values each fire once');
+  });
+
+  // ─── DAEMON-05: SlackWebhookServer's own start()/startTunnel()/stop() ───────
+  // Loaded through loadTs (not the raw `require`/`slack-trigger.cjs` path above)
+  // because SlackWebhookServer lives in slack.ts, TypeScript, unlike the pure
+  // .cjs trigger module every other test in this file drives.
+
+  await test('start() opens no tunnel (DAEMON-05 off-by-default, made structural)', async () => {
+    const { SlackWebhookServer } = loadTs('src/main/slack.ts');
+    const server = new SlackWebhookServer({ port: 0, signingSecret: 'x'.repeat(32), onMessage: () => {} });
+    try {
+      const res = await server.start();
+      assert.strictEqual(res.ok, true);
+      // `tunnel` is TS-`private` only — erased at runtime, same access net-binding.test.cjs
+      // already relies on for `tunnelUrl` — so this reads the real instance state
+      // rather than trusting a getter that could itself be wrong.
+      assert.strictEqual(server.tunnel, null, 'start() must not have opened a tunnel as a side effect');
+    } finally {
+      server.stop();
+    }
+  });
+
+  await test('stop() closes the tunnel handle startTunnel() opened', async () => {
+    const { SlackWebhookServer } = loadTs('src/main/slack.ts');
+    const server = new SlackWebhookServer({ port: 0, signingSecret: 'x'.repeat(32), onMessage: () => {} });
+    await server.start();
+    const stopCalls = [];
+    const fakeHandle = { url: 'https://adams-medical-meeting-enormous.trycloudflare.com', stop: () => stopCalls.push(1) };
+    const res = await server.startTunnel(async () => fakeHandle);
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.url, fakeHandle.url);
+    server.stop();
+    assert.strictEqual(stopCalls.length, 1, 'stop() must call the tunnel handle\'s own stop()');
+    // Idempotent: a second stop() must not re-close.
+    server.stop();
+    assert.strictEqual(stopCalls.length, 1);
   });
 
   console.log(failures === 0 ? '\nall passed' : `\n${failures} failure(s)`);

@@ -249,6 +249,11 @@ export interface ProviderCapabilities {
   provider: AgentProvider;
   /** The router may deliver hive mail here; false = it bounces back to the god. */
   mail: boolean;
+  /** This engine accepts MCP servers at the CLI level (AgentProviderPreset.
+   *  supportsMcp, UI-SPEC Rule C-1b). Does NOT mean Hello MarkX delivers one
+   *  today — D-25 live-verified the current `--settings` bundle path is a
+   *  no-op for every engine; plan 02-11 owns the channel that would make it. */
+  mcp: boolean;
   /** Where this engine's spend comes from — 'none' means no cap can see it. */
   spend: CostTracking;
   /** The compaction verb we can type, or null when nothing typed reaches it. */
@@ -290,14 +295,22 @@ export function remoteControlAvailability(
   return platform === 'win32' ? 'windows' : 'ok';
 }
 
-export function providerCapabilities(provider: AgentProvider): ProviderCapabilities {
+/**
+ * `platform` is optional and forwarded with `??` (UI-SPEC Rule C-1a step 1): a
+ * renderer call passes `window.cth.platform` explicitly, so the right-hand
+ * `process.platform` operand is never evaluated and no renderer call touches
+ * `process`. Every existing main-side and test-side caller that omits the
+ * argument keeps today's behaviour unchanged.
+ */
+export function providerCapabilities(provider: AgentProvider, platform?: string): ProviderCapabilities {
   const preset = providerPreset(provider);
   return {
     provider,
     mail: preset.canReceiveInbox,
+    mcp: preset.supportsMcp,
     spend: preset.costTracking,
     compact: contextCommandsForProvider(provider).compact,
-    remote: remoteControlAvailability(provider) === 'ok'
+    remote: remoteControlAvailability(provider, platform ?? process.platform) === 'ok'
   };
 }
 
@@ -328,6 +341,19 @@ export function providerCapabilities(provider: AgentProvider): ProviderCapabilit
  * (D-40): a caller free to pass a varying platform is exactly how a stable
  * prefix turns volatile, and the signature is asserted on by
  * `test/engine-parity.test.cjs`.
+ *
+ * AMENDMENT (UI-SPEC Rule C-1a): that ruling stands, unweakened, for
+ * `capabilityLine` — it stays exactly one argument and forwards no platform to
+ * anything, so the roster line it produces is still byte-identical on every
+ * turn of every agent on a given host. What changed is `providerCapabilities`,
+ * which is a DIFFERENT function with a different job: it is not a prompt
+ * string and never reaches a prompt. It now takes an OPTIONAL `platform`
+ * parameter, forwarded to `remoteControlAvailability(provider, platform ??
+ * process.platform)`, purely for the RENDERER's benefit — a card can pass
+ * `window.cth.platform` and read a capability set without touching `process`
+ * at all. Both arities are pinned by test (`providerCapabilities.length ===
+ * 2`, `capabilityLine.length === 1`) so the parameter cannot creep from the
+ * record into the prompt.
  */
 export function capabilityLine(provider: AgentProvider): string {
   const c = providerCapabilities(provider);

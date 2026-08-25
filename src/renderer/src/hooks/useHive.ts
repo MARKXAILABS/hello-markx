@@ -23,7 +23,6 @@ import {
   terminalAutomationBlockFor,
   disposeOrphanedTerminals
 } from '@/components/terminalPool';
-import { deliverWithAcknowledgement } from '@shared/queueDelivery';
 import { OFFICE_CAST, DEFAULT_CHARACTER } from '@/scene/office/cast';
 
 const GOD_ID = 'god';
@@ -51,10 +50,6 @@ const PTY_QUIET_MS = 8_000;
 // How often orphaned pooled terminals are swept (#20). A leaked terminal costs
 // memory, not correctness, so reclaiming it a few seconds late is free.
 const TERMINAL_REAP_MS = 30_000;
-// Delay before typing a one-time TUI protocol seed into a fresh worker (3b) —
-// long enough for the TUI to finish painting and surface any permission prompt.
-// submitToPty additionally waits for the terminal's readiness handshake.
-const SEED_BOOT_MS = 12_000;
 
 // The first thing Michael (god) is told on a fresh spawn — orient him and put
 // him to work running the floor. Kept terse and action-oriented.
@@ -270,32 +265,6 @@ function enrichTaskPrompt(text: string): string {
   ].join('\n');
 }
 
-function terminalWorkOrderPrompt(msg: {
-  id: string;
-  from: string;
-  act: string;
-  subject: string;
-  body: string;
-  requiresReply: boolean;
-  createdAt: string;
-}): string {
-  return [
-    'WORK ORDER FROM HIVE',
-    `Message: ${msg.id}`,
-    `From: ${msg.from}`,
-    `Subject: ${msg.subject}`,
-    `Act: ${msg.act}${msg.requiresReply ? ' (reply expected)' : ''}`,
-    `Issued: ${msg.createdAt}`,
-    '',
-    msg.body,
-    '',
-    'Notes:',
-    '- This arrived through your terminal because this provider does not support hive inbox.',
-    '- Work in your current cwd.',
-    '- When done, report changes, validation, blockers, and next step in this terminal.'
-  ].join('\n');
-}
-
 /** Tool name → where the avatar walks + what it carries. */
 const TOOL_STATION: Record<string, { station: StationKind; carry?: ToolKind }> = {
   Read: { station: 'shelf', carry: 'Read' },
@@ -402,10 +371,6 @@ export function useHive(config: HarnessConfig | null): void {
   // must leave the agent alone — set while its boot sequence is typing so nothing
   // collides with /remote-control + the orientation prompt.
   const bootGraceUntil = useRef<Record<string, number>>({});
-  // Agents whose one-time TUI protocol seed (Crush, seedDelivery:'type-into-tui')
-  // has already been typed — guards effect #3b against re-seeding. (ondev-b)
-  const seeded = useRef<Set<string>>(new Set());
-  const seenTerminalHandoffs = useRef<Set<string>>(new Set());
   // Per-pty timestamp guarding auto-revive (effect #7) against a double-respawn
   // when power-resume + screen-unlock arrive back-to-back: an id revived (or
   // mid-revive) within REVIVE_DEBOUNCE_MS is skipped. Set BEFORE the async spawn
@@ -702,33 +667,25 @@ export function useHive(config: HarnessConfig | null): void {
     });
   }, []);
 
-  // 2e) Non-Claude providers cannot drain hive inbox. Direct hive mail to them
-  //     arrives here as a terminal work order and is queued through the same
-  //     idle-only PTY drain as human-composed messages.
-  useEffect(() => {
-    if (!config?.onboardingComplete) return;
-    return window.cth.onHiveTerminalHandoff((msg) => {
-      if (seenTerminalHandoffs.current.has(msg.id)) return;
-      const { agents, enqueueMessage, messageQueues } = useStore.getState();
-      const target = agents.find((a) => a.id === msg.to);
-      if (target?.ptyId) {
-        const marker = `Message: ${msg.id}`;
-        if ((messageQueues[target.id] ?? []).some((queued) => queued.text.includes(marker))) return;
-        seenTerminalHandoffs.current.add(msg.id);
-        enqueueMessage(target.id, terminalWorkOrderPrompt(msg));
-        return;
-      }
-      seenTerminalHandoffs.current.add(msg.id);
-      enqueueMessage(
-        GOD_ID,
-        [
-          `Terminal handoff failed for ${msg.to}: ${msg.subject}`,
-          '',
-          `Message ${msg.id} from ${msg.from} could not be queued because ${msg.to} has no live PTY. Route it manually or respawn the agent.`
-        ].join('\n')
-      );
-    });
-  }, [config?.onboardingComplete]);
+  // 2e) THE TERMINAL HANDOFF IS MAIN'S NOW (D-11 gap 1). About 25 lines stood
+  //     here: a hive-terminal-handoff IPC subscription that queued a hive
+  //     message addressed to a non-Claude (hookless or proxy-tier) agent as a
+  //     work-order prompt, deduped through an "already handled" id set that
+  //     existed because this subscription re-fires every window reload. It
+  //     died with the window — a headless floor (DAEMON-01) has no renderer
+  //     to hear that event at all, so every one of those messages silently
+  //     bounced to god with a subject blaming "renderer unavailable", which
+  //     was never the true cause once main had no window to ask.
+  //
+  //     `HiveManager`'s injected `handoff` dep (`src/main/floor/boot.ts`) is
+  //     the replacement: it formats the same work-order text (moved
+  //     byte-identical into `src/shared/queueDelivery.ts`) and calls
+  //     `delivery.enqueue()` — the SAME main-owned queue this file's queue
+  //     view (effect 4, below) already reads. No id-dedup set needed there:
+  //     the hive-side handoff method has exactly two call sites, both inside
+  //     one `hive.ts` `send()` pass, so main is called once per routed
+  //     message — the renderer's re-subscribe-on-reload problem does not
+  //     exist in main.
 
   // 2e) THE PTY-quiescence IDLE BACKSTOP IS MAIN'S NOW (#5). It used to be a 4 s
   //     setInterval here that listed every PTY over IPC and flipped any 'working'
@@ -751,47 +708,29 @@ export function useHive(config: HarnessConfig | null): void {
   //    it when this window is closed, reloading or crashed — which is the whole
   //    point of #5.
 
-  // 3b) Seed a fresh "type-into-tui" worker (Crush) with the hive protocol. Its
-  //     bare TUI rejects a positional seed (Cobra reads it as a subcommand →
-  //     `Unknown command`), so the main process spawns it bare and hands the
-  //     protocol back as `seedPrompt`; we TYPE it as the worker's first turn after a
-  //     boot-grace (TUI finished painting), ONCE per agent. Routed through the SAME
-  //     per-pty submit chain + boot-grace as the boot sequence, so the seed and any
-  //     other write can never jam onto one line. (god-as-Crush is seeded in its own
-  //     boot sequence above; this covers workers.) (ondev-b)
-  useEffect(() => {
-    if (!config?.onboardingComplete) return;
-    const iv = setInterval(() => {
-      const { agents, updateAgent } = useStore.getState();
-      for (const a of agents) {
-        if (!a.ptyId || a.isGod || !a.seedPrompt || seeded.current.has(a.id)) continue;
-        seeded.current.add(a.id);
-        const ptyId = a.ptyId;
-        const seed = a.seedPrompt;
-        // Hold the nudge/quiesce typers off this agent until the seed lands + settles.
-        bootGraceUntil.current[a.id] = Date.now() + BOOT_GRACE_MS;
-        // Clear the record now so it isn't re-seen (the ref also guards) or persisted.
-        updateAgent(a.id, { seedPrompt: undefined });
-        setTimeout(() => {
-          // Permission-prompt safety (#5): if the worker surfaced an approval /
-          // needs-human prompt while its TUI booted ('waiting'/'blocked'), the
-          // seed's trailing Enter would confirm it. Put the seed back and let a
-          // later tick retry once the prompt clears; if the agent vanished
-          // (killed mid-boot), don't type into its orphaned pty at all.
-          const live = useStore.getState().agents.find((x) => x.id === a.id);
-          if (!live) return;
-          if (live.status === 'waiting' || live.status === 'blocked') {
-            seeded.current.delete(a.id);
-            useStore.getState().updateAgent(a.id, { seedPrompt: seed });
-            return;
-          }
-          submitToPty(ptyId, seed, inferAgentProvider(live.command, live.provider))
-            .catch(() => { /* pty may have died */ });
-        }, SEED_BOOT_MS);
-      }
-    }, 1500);
-    return () => clearInterval(iv);
-  }, [config?.onboardingComplete]);
+  // 3b) THE PROTOCOL SEED IS MAIN'S NOW (D-11 gap 2), for WORKERS. About 35
+  //     lines stood here: a 1.5 s setInterval scanning every agent for an
+  //     unconsumed `seedPrompt` (Crush's bare TUI rejects a positional seed —
+  //     Cobra reads it as a subcommand, "Unknown command" — so main hands the
+  //     protocol back this way instead), a `seeded` ref guarding against
+  //     re-typing it, and a SEED_BOOT_MS setTimeout that re-parked the seed
+  //     if the worker was `waiting`/`blocked` when the timer fired (a
+  //     permission prompt would eat the seed's trailing Enter). It died with
+  //     the window — a headless floor spawns Crush workers with no renderer
+  //     to run this interval at all.
+  //
+  //     `DeliveryService.noteSpawn`'s `seed` param (`src/main/index.ts`'s
+  //     spawn call site) is the replacement: main enqueues the seed through
+  //     the SAME queue this file's queue view (effect 4, below) already
+  //     reads, gated by the SAME boot grace + idle + veto policy every other
+  //     queued message rides. The one guard NOT reproduced: the
+  //     `waiting`/`blocked` re-park has no main-side view (that status is
+  //     renderer-derived from stream events) — stated here and in
+  //     `delivery.ts`'s `noteSpawn` doc comment, not silently dropped.
+  //
+  //     god-as-Crush still seeds from ITS OWN boot sequence above (the
+  //     ordered remote-control-command → seed → orientation-prompt chain) —
+  //     only the worker path this effect used to own moved.
 
   // 4a) WHAT MAIN DELIVERED (#5). Main owns the inbox wake, the Stop-hook drain
   //     and the failover respawn now — all three used to run here and all three

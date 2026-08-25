@@ -24,6 +24,7 @@ const { spawn } = require('node:child_process');
 const loadTs = require('./load-ts.cjs');
 
 const { HiveManager } = loadTs('src/main/hive.ts');
+const { installAgyHooks, installGrokHooks, installCodexHooks } = loadTs('src/main/hiveProvisioning.ts');
 
 const POSIX = process.platform !== 'win32';
 const STRIPPED_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
@@ -134,9 +135,13 @@ test('every hook installer routes through the launcher — none left on bare nod
   });
   assert.equal(os.homedir(), home, 'home redirect failed — aborting before touching the real home');
 
-  hive.installAgyHooks();
-  hive.installGrokHooks();
-  hive.installCodexHooks(path.join(home, 'hive/agents/a1'));
+  // installAgyHooks/installGrokHooks/installCodexHooks moved to free functions
+  // in hiveProvisioning.ts (STRUCT-02, plan 02-01) — nodeRun/nodeRunUnquoted
+  // are the one piece of hive state they need, bound from the live instance.
+  const hiveRoot = path.join(home, 'hive');
+  installAgyHooks(hiveRoot, hive.nodeRunUnquoted.bind(hive));
+  installGrokHooks(hiveRoot, hive.nodeRun.bind(hive));
+  installCodexHooks(path.join(home, 'hive/agents/a1'), hive.shimPath(), hive.nodeRunUnquoted.bind(hive));
 
   const launcher = launcherIn(home);
   const commands = hookCommandsUnder(home);

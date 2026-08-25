@@ -38,18 +38,37 @@ export type AgentProvider =
  *  events (live status + Stop→inbox-drain + cost), introduced alongside the legacy
  *  `hookBridge` so call sites can switch on `bridge.kind` without a big-bang
  *  rewrite. Two kinds:
- *   - 'hooks'  → a config-file hook shim is installed (agy/codex). Derived from the
- *               legacy `hookBridge` by `bridgeOf`, so agy/codex keep working with no
- *               preset change.
- *   - 'proxy'  → the CLI has NO hook surface (qwen), so a loopback reverse-proxy
- *               sidecar observes its LLM traffic and SYNTHESIZES the same HIVE_SOCK
- *               payloads the shims emit. `api` selects the usage/tool-call shape
- *               (OpenAI vs Anthropic), `baseUrlEnv` is the env var the CLI reads for
- *               its upstream base URL (the sidecar's loopback URL is injected there),
- *               and `inboxDelivery` is how mail reaches it ('terminal' work-order
- *               handoff today; 'serve' reserved for a future HTTP push path). */
+ *   - 'hooks'  → a config-file hook shim is installed (agy/codex/pi/opencode/
+ *               grok/kimi). Derived from the legacy `hookBridge` by `bridgeOf`
+ *               for agy/codex/grok/kimi, so those keep working with no preset
+ *               change; pi/opencode set the structured `bridge` directly.
+ *   - 'proxy'  → the CLI has NO hook surface (qwen, crush), so a loopback
+ *               reverse-proxy sidecar observes its LLM traffic and SYNTHESIZES
+ *               the same HIVE_SOCK payloads the shims emit. `api` selects the
+ *               usage/tool-call shape (OpenAI vs Anthropic), `baseUrlEnv` is
+ *               the env var the CLI reads for its upstream base URL (the
+ *               sidecar's loopback URL is injected there), and `inboxDelivery`
+ *               is how mail reaches it ('terminal' work-order handoff today;
+ *               'serve' reserved for a future HTTP push path).
+ *
+ *  MEASURED CONSTRAINT (D-34, PARITY-02): `bridgeOf` returns EXACTLY ONE
+ *  descriptor per engine — `preset.bridge` wins over `hookBridge` — and
+ *  hive.ts's `ensureAgent` dispatch is `hooks` XOR `proxy` (an `if`/`else if`
+ *  pair, never both). So converting a HOOKS engine to `bridge:{kind:'proxy'}`
+ *  to gain a cost number DELETES that engine's mail bridge — there is no
+ *  "just add proxy cost alongside the existing bridge". This rules out
+ *  **grok, kimi and opencode** (all hooks-bridged) as zero-code proxy
+ *  candidates; **antigravity** would additionally need a `gemini` api mode in
+ *  the proxy sidecar, which this phase does not deliver; and **copilot**
+ *  (spend sits on the user's Copilot plan) and **custom** (unknown binary)
+ *  have no number to report under ANY bridge. Zero engines were converted by
+ *  plan 02-07 — `test/engine-parity.test.cjs` pins both the mutual-exclusivity
+ *  (no preset sets both `bridge` and `hookBridge`) and the declaration-matches-
+ *  wiring invariant (`costTracking === 'proxy'` iff `bridgeOf(p)?.kind ===
+ *  'proxy'`) so a future edit that tries this anyway goes red instead of
+ *  silently deleting a mail path. */
 export type BridgeDescriptor =
-  | { kind: 'hooks'; shim: 'agy' | 'codex' | 'pi' | 'opencode' | 'grok' }
+  | { kind: 'hooks'; shim: 'agy' | 'codex' | 'pi' | 'opencode' | 'grok' | 'kimi' }
   | {
       kind: 'proxy';
       api: 'openai' | 'anthropic';
@@ -97,10 +116,15 @@ export interface AgentProviderPreset {
    *                + response contract are already Claude-shaped).
    *    - 'grok'  → installGrokHooks() installs an AGENT_ID-scoped adapter for
    *                Grok's camelCase lifecycle payloads.
+   *    - 'kimi'  → installKimiConfig() writes a per-agent kimi config file
+   *                (`--config-file`) and reuses the Claude `cth-hook` shim
+   *                verbatim (Kimi's hook payload is already Claude-shaped
+   *                snake_case) — the CODEX case, not the grok case; its own
+   *                flat `[[hooks]]` TOML shape, not codex's nested one.
    *  Claude leaves this undefined (it uses its native `--settings` path, gated by
    *  hiveAware); `custom` leaves it undefined (no bridge → no hooks). This is the
    *  single switch hive.ensureAgent dispatches on to wire the bridge. */
-  hookBridge?: 'agy' | 'codex' | 'grok';
+  hookBridge?: 'agy' | 'codex' | 'grok' | 'kimi';
   /** Structured bridge descriptor (the forward-looking replacement for the legacy
    *  `hookBridge`). Set explicitly only for PROXY-tier providers (qwen) that
    *  have no hook file to install; agy/codex leave it undefined and `bridgeOf`
@@ -125,8 +149,28 @@ export interface AgentProviderPreset {
    *                     under-counts by however much they burn. Say so out loud
    *                     in the god's capability line rather than implying parity.
    *  Required, deliberately: a new provider must state its answer instead of
-   *  inheriting a flattering default. */
+   *  inheriting a flattering default.
+   *  LANDMINE 3 (measured): this field's ONLY consumer anywhere in `src/` is
+   *  `providerCapabilities` in `providerAutomation.ts` (`spend:
+   *  preset.costTracking`) — nothing in the actual spend path reads it. It is
+   *  a DECLARATION, in the same class as `capabilityLine` (D-30), kept honest
+   *  by a test rather than by a wire: `test/engine-parity.test.cjs` asserts
+   *  `costTracking === 'proxy'` iff `bridgeOf(provider)?.kind === 'proxy'`,
+   *  for every preset, in both directions — the one assertion that can go red
+   *  the day this label and the real spawn dispatch drift apart. */
   costTracking: CostTracking;
+  /** Whether this ENGINE accepts MCP servers at all (the CLI-level capability —
+   *  can it be pointed at an MCP server config, at all).
+   *  This does NOT mean Hello MarkX actually DELIVERS an MCP server to it today:
+   *  D-25 live-verified, across three runs against a real `claude` binary, that
+   *  today's `mcpServers` bundle inside a `--settings` file is a complete no-op
+   *  for every engine — plan 02-11 owns the `--mcp-config` channel that would
+   *  make this bit mean something operationally. This field only answers the
+   *  CLI's own capability, surfaced to the UI as `ProviderCapabilities.mcp`
+   *  (UI-SPEC Rule C-1b).
+   *  Required, deliberately, for the same reason `costTracking` above is: a new
+   *  provider must state its answer instead of inheriting a flattering default. */
+  supportsMcp: boolean;
   /** Whether the router may DELIVER inbox mail to this provider (vs bouncing it
    *  to the god). Requires lifecycle status so the renderer can deliver only at a
    *  safe idle prompt: Claude natively, Antigravity/Codex/Grok via hook bridges.
@@ -184,6 +228,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'claude',
     costTracking: 'otel', // live OTel + the ~/.claude/projects transcript fallback
+    supportsMcp: true, // D-26: claude has native, documented, production MCP support
     label: 'Claude Code',
     defaultCommand: 'claude',
     commandGroups: CLAUDE_COMMAND_GROUPS,
@@ -210,6 +255,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'codex',
     costTracking: 'transcript', // rollouts under the per-agent CODEX_HOME (readCodexUsage)
+    supportsMcp: true, // D-26: codex documents MCP server support
     label: 'Codex · GPT',
     defaultCommand: 'codex',
     commandGroups: CODEX_COMMAND_GROUPS,
@@ -259,6 +305,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'grok',
     costTracking: 'none', // hook bridge carries lifecycle only, no usage
+    supportsMcp: true, // D-26: grok documents MCP server support
     label: 'Grok · xAI',
     defaultCommand: 'grok',
     commandGroups: GROK_COMMAND_GROUPS,
@@ -281,24 +328,44 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'kimi',
     costTracking: 'none',
+    supportsMcp: true, // D-26: kimi documents MCP server support
     label: 'Kimi Code',
     defaultCommand: 'kimi',
     commandGroups: [],
-    // Kimi --auto handles every approval and does not stop to ask questions,
-    // matching Hello MarkX's autonomous Claude/Codex default.
+    // LIVE-UNVERIFIED: `kimi` is not installed on this machine (task 1, this
+    // plan), so `--auto` has never been confirmed against a real
+    // `kimi --help`. Moonshot's docs also list `--yolo`/`-y`, `--yes`,
+    // `--auto-approve` and `--afk` as auto-approval spellings (RESEARCH §6.5).
+    // Left byte-identical rather than guessed at — swapping to a documentation-
+    // only alternate risks breaking a value that may well already be correct.
+    // One command settles it: `kimi --help`.
     autoModeFlag: '--auto',
     autoFlag: '--auto',
     supportsModel: true,
     modelFlag: '--model',
     hiveAware: false,
-    // Kimi's interactive TUI has no positional initial-prompt form. It supports
-    // lifecycle hooks, but Hello MarkX does not yet install a Kimi hook bridge,
-    // so mail must bounce rather than being delivered with no drain path.
-    canReceiveInbox: false
+    // Kimi's interactive TUI has no positional initial-prompt form (unlike
+    // codex/grok) — it is bridged as the CODEX case, not the grok case: a
+    // per-agent `--config-file` (installKimiConfig, hiveProvisioning.ts) seeds
+    // ~/.kimi/config.toml with a flat [[hooks]] table per event; HOOK_SHIM is
+    // reused VERBATIM because kimi's hook payload is already Claude-shaped
+    // snake_case, same as codex. LIVE-UNVERIFIED — no Moonshot account exists
+    // on this machine to run a live kimi session against it (D-33).
+    // CONSEQUENCE (D-33, ruled on here, not discovered): flipping
+    // canReceiveInbox also makes kimi GOD-eligible in the two pickers that
+    // filter on it (CommandCenterPanel.tsx, OnboardingWizard.tsx) even though
+    // it has no interactive initial-prompt form — a kimi god would spawn
+    // unoriented. It does NOT get seedDelivery:'type-into-tui' (unverifiable
+    // TUI-typing behaviour); ensureAgent's bare-spawn fall-through now records
+    // 'protocol-not-seeded' instead of silently dropping the protocol. The two
+    // picker surfaces themselves are handed to plan 02-06 by name.
+    hookBridge: 'kimi',
+    canReceiveInbox: true
   },
   {
     id: 'antigravity',
     costTracking: 'none', // agy's hooks carry no usage; ~/.gemini has no token ledger we read
+    supportsMcp: true, // D-26: antigravity documents MCP support; per-agent surface UNVERIFIED (plan 02-11)
     label: 'Antigravity · Gemini',
     defaultCommand: 'agy',
     commandGroups: [],
@@ -319,6 +386,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // bridge (bridge.kind==='proxy'), with the OpenAI usage/tool-call shape.
     id: 'qwen',
     costTracking: 'proxy', // sidecar CostSample → telemetry.recordCostSample
+    supportsMcp: true, // D-26: qwen (gemini-cli fork) documents MCP server support
     label: 'Qwen (local available)',
     defaultCommand: 'qwen',
     commandGroups: [],
@@ -328,6 +396,9 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     modelFlag: '--model',
     autoFlag: '--yolo',
     hiveAware: false,
+    // LIVE-UNVERIFIED: `qwen` is not installed on this machine and no account
+    // exists to run it against, so the proxy-bridge routing below has never
+    // round-tripped a live qwen-code session (D-33/D-35 — PARITY-03).
     // SPIKE/TODO-verify: confirm qwen-code reads OPENAI_BASE_URL for its upstream
     // ('serve' inboxDelivery is reserved for a later qwen-serve HTTP push path).
     bridge: { kind: 'proxy', api: 'openai', baseUrlEnv: 'OPENAI_BASE_URL', inboxDelivery: 'terminal' },
@@ -344,6 +415,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // its interactive TUI in a PTY (like codex), oriented by --prompt.
     id: 'opencode',
     costTracking: 'none', // the plugin bridge posts lifecycle events only
+    supportsMcp: true, // D-26: opencode documents MCP server support
     label: 'OpenCode',
     defaultCommand: 'opencode',
     commandGroups: [],
@@ -416,6 +488,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // loopback sidecar observes its LLM traffic and SYNTHESIZES the Stop→drain.
     id: 'crush',
     costTracking: 'proxy', // same sidecar path as qwen
+    supportsMcp: true, // D-26: crush documents MCP server support
     label: 'Crush · Charm',
     defaultCommand: 'crush',
     commandGroups: [],
@@ -435,8 +508,8 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // Do NOT "fix" this to a real env var — it would have no effect.
     bridge: { kind: 'proxy', api: 'openai', baseUrlEnv: 'CRUSH_PROXY_BASE_URL', inboxDelivery: 'terminal' },
     // OpenAI-WIRE default so the out-of-box Crush god routes through the proxy
-    // cleanly (the proxy serves one wire-shape; an anthropic/* default would route to
-    // the wrong upstream — Dwight verify-crush MF1). Advisory/editable; non-OpenAI-wire
+    // cleanly (the proxy serves one wire-shape; an anthropic-wire default would route
+    // to the wrong upstream — Dwight verify-crush MF1). Advisory/editable; non-OpenAI-wire
     // Crush-via-proxy is on-device live-verify. // exact long-context id humanQA
     recommendedOrchestratorModel: 'openai/gpt-4o',
     // god-eligible via the proxy bridge (terminal inbox delivery on synthesized idle).
@@ -462,6 +535,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // and auto-approves tools — a `hooks` bridge with a new `pi` shim.
     id: 'pi',
     costTracking: 'none', // the extension posts lifecycle events only
+    supportsMcp: false, // D-26: pi has no native MCP support — needs a third-party adapter
     label: 'Pi',
     defaultCommand: 'pi',
     commandGroups: [],
@@ -499,6 +573,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // hive identity+protocol rides in as the initial prompt via `-p`.
     id: 'copilot',
     costTracking: 'none', // spend sits on the user's Copilot plan; nothing per-agent reaches us
+    supportsMcp: true, // D-26: the GitHub Copilot CLI documents MCP server support
     label: 'Copilot',
     defaultCommand: 'copilot',
     commandGroups: [],
@@ -525,6 +600,7 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
   {
     id: 'custom',
     costTracking: 'none', // unknown binary — nothing to read
+    supportsMcp: false, // D-26: arbitrary binary — no known MCP surface to claim
     label: 'Custom',
     defaultCommand: '',
     commandGroups: [],

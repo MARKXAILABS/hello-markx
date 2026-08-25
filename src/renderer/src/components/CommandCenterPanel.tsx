@@ -16,6 +16,7 @@ import { acquireTerminal, disposeTerminal, resetTerminal } from './terminalPool'
 import { terminalInstanceKey } from './terminalRecovery';
 import { Icon } from './Icon';
 import { MemoryGraphPanel } from './MemoryGraphPanel';
+import { McpConsentModal } from './McpConsentModal';
 import { useFleetTelemetry, type AgentUsageSample } from '@/hooks/useTelemetry';
 import { useClaudeAccountPool } from '@/hooks/useClaudeAccountPool';
 import { COMMAND_GROUPS } from '@shared/claudeCommands';
@@ -40,6 +41,7 @@ import {
   encodeAccountChoice,
   decodeAccountChoice,
   fmtCountdown,
+  capabilityGaps,
   type AgentProvider,
   type ClaudeAccount,
   type PoolSnapshot
@@ -372,6 +374,10 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
   // Per-agent token limit (overrides the floor budget for that agent), keyed by id.
   const [agentTokenCaps, setAgentTokenCaps] = useState<Record<string, number>>({});
   const [restarting, setRestarting] = useState<string | null>(null);
+  // DAEMON-04 — which agent's consent modal is open, by id. Every agent
+  // (including the god) is reachable from this roster, unlike the model
+  // picker / restart-and-continue block below, which is `!a.isGod`-gated.
+  const [mcpModalAgentId, setMcpModalAgentId] = useState<string | null>(null);
   const [engineProvider, setEngineProvider] = useState<AgentProvider>('claude');
   const [engineModel, setEngineModel] = useState<string | undefined>(undefined);
   // Claude account pool: the pool metadata + Michael's pin ('' = /login account).
@@ -669,7 +675,10 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
   }
   const fleetCachePct = sumInput > 0 ? Math.round((sumCacheRead / sumInput) * 100) : 0;
 
+  const mcpModalAgent = mcpModalAgentId ? agents.find((a) => a.id === mcpModalAgentId) : undefined;
+
   return (
+    <>
     <Scroll>
       <Section title="DISPATCH — VIA MICHAEL">
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
@@ -683,6 +692,32 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
             ))}
           </Select>
         </div>
+        {(() => {
+          // S1c — informs, never vetoes: the picker is a SUGGESTION the god
+          // may decline (this file's own dispatch() comment), so this line
+          // never disables the <Select> or the dispatch button below. The
+          // sentence comes from capabilityGaps' own 'mail' entry — never a
+          // second hand-written copy of it (D-32).
+          const suggested = dispatchTo ? agents.find((a) => a.id === dispatchTo) : undefined;
+          if (!suggested) return null;
+          const suggestedProvider = inferAgentProvider(suggested.command, suggested.provider);
+          const gaps = capabilityGaps(suggestedProvider, window.cth.platform, suggested.name);
+          const mailGap = gaps.find((g) => g.key === 'mail');
+          if (!mailGap) return null;
+          return (
+            <div
+              role="status"
+              style={{
+                display: 'flex', gap: 4, alignItems: 'baseline', marginBottom: 6,
+                fontFamily: 'var(--cth-font-ui)', fontSize: 'var(--cth-text-body-md)',
+                lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-700)'
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: 'var(--cth-text-body-md)' }}>⚠</span>
+              {mailGap.sentence}
+            </div>
+          );
+        })()}
         <textarea
           value={dispatchText}
           onChange={(e) => setDispatchText(e.target.value)}
@@ -771,6 +806,12 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                 >${sample.usd.toFixed(2)}</span>
               )}
               <TokenLimitEditor value={agentCap} onSet={(t) => setAgentCap(a.id, t)} />
+              {/* DAEMON-04 — every agent, including the god, is reachable
+                  here (unlike the restart-and-continue block below, which is
+                  !a.isGod-gated). */}
+              <PixelButton variant="ghost" size="sm" onClick={() => setMcpModalAgentId(a.id)}>
+                MCP
+              </PixelButton>
             </div>
             <PathLine path={a.cwd} style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }} />
             {/* Live telemetry (folded in from the old Fleet tab) */}
@@ -1123,6 +1164,14 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
         )}
       </Section>
     </Scroll>
+    {mcpModalAgent && (
+      <McpConsentModal
+        agent={mcpModalAgent}
+        onClose={() => setMcpModalAgentId(null)}
+        onRestart={() => restartWithModel(mcpModalAgent, mcpModalAgent.model, { resume: true })}
+      />
+    )}
+    </>
   );
 }
 

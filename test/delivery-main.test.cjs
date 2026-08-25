@@ -520,6 +520,58 @@ test('the enqueue boundary refuses what it cannot trust', () => {
   });
 });
 
+// ─── D-11 gap 2: noteSpawn's seed param — a Crush worker's protocol seed,
+//     enqueued by main at spawn instead of typed by a renderer setInterval ──
+
+test('noteSpawn with a seed parks it in the queue main owns', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc } = harness({ queuePath: () => queuePath, emit: () => {} });
+    svc.noteSpawn('pty1', { agentId: 'dev1', text: '<protocol>' });
+    const snap = svc.queueSnapshot();
+    assert.ok((snap.dev1 ?? []).some((m) => m.text === '<protocol>'),
+      'noteSpawn\'s seed was never enqueued');
+  });
+});
+
+test('a tick INSIDE the boot grace does not deliver a spawned seed', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = []; // isolate: no unread mail, so the wake nudge cannot be the writer
+    svc.noteSpawn('pty1', { agentId: 'dev1', text: '<protocol>' });
+
+    await svc.tick(); // no clock movement — still inside BOOT_GRACE_MS (35 s)
+
+    assert.equal(writes.length, 0,
+      'a freshly spawned worker\'s protocol seed landed before its TUI had painted');
+  });
+});
+
+test('a tick AFTER the boot grace and past IDLE_MS delivers the seed through submit()', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, state, writes, bump } = harness({ queuePath: () => queuePath, emit: () => {} });
+    state.inbox.dev1 = [];
+    svc.noteSpawn('pty1', { agentId: 'dev1', text: '<protocol>' });
+
+    bump(35_000 + 1); // past BOOT_GRACE_MS; state.agents[0].idleMs (30_000) already clears IDLE_MS
+    await svc.tick();
+
+    assert.match(typed(writes), /<protocol>/, 'the seed was never delivered once the boot grace elapsed');
+    assert.equal(writes.at(-1).data, '\r', 'the seed was typed but never submitted');
+  });
+});
+
+test('noteSpawn with NO seed still sets the boot grace and enqueues nothing', async () => {
+  await withQueueDir(async ({ queuePath }) => {
+    const { svc, writes } = harness({ queuePath: () => queuePath, emit: () => {} });
+
+    svc.noteSpawn('pty1'); // no second argument — the ordinary respawn/boot-grace-only call
+
+    assert.deepEqual(svc.queueSnapshot(), {}, 'a plain noteSpawn(ptyId) with no seed enqueued something anyway');
+    await svc.tick();
+    assert.equal(writes.length, 0, 'the boot grace noteSpawn(ptyId) sets was not honored');
+  });
+});
+
 test('a message enqueued and not yet delivered survives a REAL process restart', () => {
   withQueueDir(({ dir, queuePath }) => {
     // 1. Parent: park a message and hold it (the floor is paused, so nothing

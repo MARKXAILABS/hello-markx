@@ -1,34 +1,584 @@
 {
-  "scoreBefore": 63,
-  "scoreAfter": 63,
-  "drop": 0,
+  "scoreBefore": 62,
+  "scoreAfter": 61,
+  "drop": 1,
   "securityDiff": {
     "added": [
       {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 552,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackSigningSecret: 'cfg:slackSigningSecret',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 553,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackBotToken: 'cfg:slackBotToken',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 554,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "webhookSecret: 'cfg:webhookSecret',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 555,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "groqApiKey: 'cfg:groqApiKey'"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 100,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackSigningSecret: 'a-very-long-slack-signing-secret-0123456789',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 101,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackBotToken: 'xoxb-1',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 102,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "webhookSecret: 'wh-shared-secret',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 103,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "groqApiKey: 'gsk_live_abcdefghijklmnop'"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 105,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "const TRIGGER_SECRET = 'per-endpoint-secret-value';"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "engine-parity.test.cjs",
+        "path": "test/engine-parity.test.cjs",
+        "line": 669,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "const sentinel = 'oauth_token = \"SENTINEL-CREDENTIAL-abc123\"';"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "hive-durability.test.cjs",
+        "path": "test/hive-durability.test.cjs",
+        "line": 234,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "const CAUGHT_SECRET = 'sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "hive-durability.test.cjs",
+        "path": "test/hive-durability.test.cjs",
+        "line": 246,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "const MISSED_SECRET = 'sk_ant_api03_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';"
+      },
+      {
+        "severity": "high",
+        "title": "SQL Injection Risk",
+        "file": "net-binding.test.cjs",
+        "path": "test/net-binding.test.cjs",
+        "desc": "String concatenation in SQL queries. Use parameterized queries instead.",
+        "code": "const good = 'v0=' + createHmac('sha256', SECRET).update(`v0:${ts}:${body}`).dig"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "telemetry-auth.test.cjs",
+        "path": "test/telemetry-auth.test.cjs",
+        "line": 467,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "HIVE_SOCK_TOKEN: 'stolen'"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "voice-messages.test.cjs",
+        "path": "test/voice-messages.test.cjs",
+        "line": 203,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "['bot_token assignment', 'env bot_token=\"xoxb-keepme-but-strip\" set', 'xoxb-keep"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "webhook-endpoints.test.cjs",
+        "path": "test/webhook-endpoints.test.cjs",
+        "line": 56,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "if (overrides.pending) return { token: 'tok-pending', pending: true };"
+      },
+      {
         "severity": "medium",
         "title": "Command Execution",
-        "file": "hook-auth-roundtrip.test.cjs",
-        "path": "test/hook-auth-roundtrip.test.cjs",
+        "file": "mcp-live-probe.cjs",
+        "path": "scripts/mcp-live-probe.cjs",
         "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "cloudflared.ts",
+        "path": "src/main/cloudflared.ts",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "gitCommitter.ts",
+        "path": "src/main/gitCommitter.ts",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "tunnel.ts",
+        "path": "src/main/tunnel.ts",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "agent-lifecycle.test.cjs",
+        "path": "test/agent-lifecycle.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "hive-proxy-token.test.cjs",
+        "path": "test/hive-proxy-token.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "mcp-per-agent.test.cjs",
+        "path": "test/mcp-per-agent.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "net-binding.test.cjs",
+        "path": "test/net-binding.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "renderer-components.test.cjs",
+        "path": "test/renderer-components.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "renderer-runstate.test.cjs",
+        "path": "test/renderer-runstate.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "suite-integrity.test.cjs",
+        "path": "test/suite-integrity.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Command Execution",
+        "file": "tunnel.test.cjs",
+        "path": "test/tunnel.test.cjs",
+        "desc": "Shell command execution detected. Ensure input is sanitized to prevent injection.",
+        "code": ""
+      },
+      {
+        "severity": "medium",
+        "title": "Function Constructor",
+        "file": "voice-messages.test.cjs",
+        "path": "test/voice-messages.test.cjs",
+        "desc": "Function constructor is similar to eval(). Consider alternatives.",
+        "code": ""
+      },
+      {
+        "severity": "low",
+        "title": "Debug Statements",
+        "file": "tunnel-live-check.cjs",
+        "path": "scripts/tunnel-live-check.cjs",
+        "desc": "13 console statements found. Remove before production.",
+        "code": ""
+      },
+      {
+        "severity": "low",
+        "title": "Debug Statements",
+        "file": "boot.ts",
+        "path": "src/main/floor/boot.ts",
+        "desc": "8 console statements found. Remove before production.",
         "code": ""
       }
     ],
-    "removed": []
+    "removed": [
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 523,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackSigningSecret: 'cfg:slackSigningSecret',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 524,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackBotToken: 'cfg:slackBotToken',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 525,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "webhookSecret: 'cfg:webhookSecret',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config.ts",
+        "path": "src/main/config.ts",
+        "line": 526,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "groqApiKey: 'cfg:groqApiKey'"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 94,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackSigningSecret: 'a-very-long-slack-signing-secret-0123456789',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 95,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "slackBotToken: 'xoxb-1',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 96,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "webhookSecret: 'wh-shared-secret',"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 97,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "groqApiKey: 'gsk_live_abcdefghijklmnop'"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "config-secrets.test.cjs",
+        "path": "test/config-secrets.test.cjs",
+        "line": 99,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "const TRIGGER_SECRET = 'per-endpoint-secret-value';"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "hive-durability.test.cjs",
+        "path": "test/hive-durability.test.cjs",
+        "line": 233,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "const CAUGHT_SECRET = 'sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "hive-durability.test.cjs",
+        "path": "test/hive-durability.test.cjs",
+        "line": 241,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "const MISSED_SECRET = 'sk_ant_api03_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "voice-messages.test.cjs",
+        "path": "test/voice-messages.test.cjs",
+        "line": 194,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "['bot_token assignment', 'env bot_token=\"xoxb-keepme-but-strip\" set', 'xoxb-keep"
+      },
+      {
+        "severity": "high",
+        "title": "Hardcoded Secret",
+        "file": "webhook-endpoints.test.cjs",
+        "path": "test/webhook-endpoints.test.cjs",
+        "line": 53,
+        "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+        "code": "if (overrides.pending) return { token: 'tok-pending', pending: true };"
+      },
+      {
+        "severity": "low",
+        "title": "Code Comments",
+        "file": "slack.ts",
+        "path": "src/main/slack.ts",
+        "desc": "1 TODO/FIXME comments found. Address before release.",
+        "code": ""
+      },
+      {
+        "severity": "low",
+        "title": "Code Comments",
+        "file": "webhook.ts",
+        "path": "src/main/webhook.ts",
+        "desc": "1 TODO/FIXME comments found. Address before release.",
+        "code": ""
+      }
+    ]
   },
-  "newSecurityHigh": [],
+  "newSecurityHigh": [
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config.ts",
+      "path": "src/main/config.ts",
+      "line": 552,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "slackSigningSecret: 'cfg:slackSigningSecret',"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config.ts",
+      "path": "src/main/config.ts",
+      "line": 553,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "slackBotToken: 'cfg:slackBotToken',"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config.ts",
+      "path": "src/main/config.ts",
+      "line": 554,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "webhookSecret: 'cfg:webhookSecret',"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config.ts",
+      "path": "src/main/config.ts",
+      "line": 555,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "groqApiKey: 'cfg:groqApiKey'"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config-secrets.test.cjs",
+      "path": "test/config-secrets.test.cjs",
+      "line": 100,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "slackSigningSecret: 'a-very-long-slack-signing-secret-0123456789',"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config-secrets.test.cjs",
+      "path": "test/config-secrets.test.cjs",
+      "line": 101,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "slackBotToken: 'xoxb-1',"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config-secrets.test.cjs",
+      "path": "test/config-secrets.test.cjs",
+      "line": 102,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "webhookSecret: 'wh-shared-secret',"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config-secrets.test.cjs",
+      "path": "test/config-secrets.test.cjs",
+      "line": 103,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "groqApiKey: 'gsk_live_abcdefghijklmnop'"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "config-secrets.test.cjs",
+      "path": "test/config-secrets.test.cjs",
+      "line": 105,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "const TRIGGER_SECRET = 'per-endpoint-secret-value';"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "engine-parity.test.cjs",
+      "path": "test/engine-parity.test.cjs",
+      "line": 669,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "const sentinel = 'oauth_token = \"SENTINEL-CREDENTIAL-abc123\"';"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "hive-durability.test.cjs",
+      "path": "test/hive-durability.test.cjs",
+      "line": 234,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "const CAUGHT_SECRET = 'sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "hive-durability.test.cjs",
+      "path": "test/hive-durability.test.cjs",
+      "line": 246,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "const MISSED_SECRET = 'sk_ant_api03_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJ';"
+    },
+    {
+      "severity": "high",
+      "title": "SQL Injection Risk",
+      "file": "net-binding.test.cjs",
+      "path": "test/net-binding.test.cjs",
+      "desc": "String concatenation in SQL queries. Use parameterized queries instead.",
+      "code": "const good = 'v0=' + createHmac('sha256', SECRET).update(`v0:${ts}:${body}`).dig"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "telemetry-auth.test.cjs",
+      "path": "test/telemetry-auth.test.cjs",
+      "line": 467,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "HIVE_SOCK_TOKEN: 'stolen'"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "voice-messages.test.cjs",
+      "path": "test/voice-messages.test.cjs",
+      "line": 203,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "['bot_token assignment', 'env bot_token=\"xoxb-keepme-but-strip\" set', 'xoxb-keep"
+    },
+    {
+      "severity": "high",
+      "title": "Hardcoded Secret",
+      "file": "webhook-endpoints.test.cjs",
+      "path": "test/webhook-endpoints.test.cjs",
+      "line": 56,
+      "desc": "Credentials should never be hardcoded. Use environment variables or a secrets manager.",
+      "code": "if (overrides.pending) return { token: 'tok-pending', pending: true };"
+    }
+  ],
   "circDiff": {
     "added": [],
     "removed": []
   },
   "layerViolations": {
-    "before": 255,
-    "after": 255,
-    "delta": 0
+    "before": 274,
+    "after": 282,
+    "delta": 8
   },
   "unused": {
     "before": 15,
-    "after": 15,
-    "delta": 0
+    "after": 16,
+    "delta": 1
   },
-  "flags": []
+  "flags": [
+    {
+      "severity": "WARN",
+      "text": "Health score dropped by 1 (62 → 61)"
+    },
+    {
+      "severity": "HIGH",
+      "text": "16 new HIGH-severity security finding(s)"
+    },
+    {
+      "severity": "WARN",
+      "text": "Layer violations increased by 8 (274 → 282)"
+    },
+    {
+      "severity": "WARN",
+      "text": "Unused functions increased by 1"
+    }
+  ]
 }

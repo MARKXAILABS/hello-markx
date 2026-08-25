@@ -48,21 +48,51 @@ in order to get things done.
   when it grows — plus an optional semantic index if you install the MemPalace CLI. Agents
   remember across sessions with or without it.
 
-**Engines are not interchangeable, and the app says so out loud.** Every engine gets one
-capability line, and the orchestrator is handed the same words you see here — a gap is stated,
-never quietly worked around. Missing capabilities SHOUT; present ones stay quiet.
+**Engines are not interchangeable, and the app says so out loud.** Every engine's gaps are
+computed from one shared record (`providerCapabilities`) and shown twice: to the orchestrator,
+as one roster line per agent (`capabilityLine` — mail ok / spend tracked / compacts / remote
+control, in that order), and to the operator, on the agent card, in the "add agent" limits block,
+and in the assignment flow — the same underlying facts, re-derived for a UI reader rather than
+copied verbatim, so a gap is stated in both places rather than quietly worked around. Missing
+capabilities SHOUT; present ones stay quiet.
 
 | Engine | What it cannot do |
 |---|---|
 | `codex` **on Windows** | `REMOTE CONTROL unavailable on Windows`. Codex's remote control *is* its app-server daemon, and that daemon's lifecycle is Unix-only upstream — a pidfile plus Unix process/file-locking primitives ([openai/codex#30372](https://github.com/openai/codex/issues/30372)). Codex itself runs completely normally on Windows; only driving it from outside the app is unavailable, and the app does not attempt it rather than failing at it. |
 | every engine except `claude` and `codex` | `NO REMOTE CONTROL`, on every platform — these CLIs expose no remote-control affordance at all. |
-| `kimi`, `copilot`, custom commands | `NO MAIL` — hive mail routed to them bounces back to the orchestrator instead of vanishing. |
+| `copilot`, custom commands | `NO MAIL` — hive mail routed to them bounces back to the orchestrator instead of vanishing. |
 | `antigravity`, `crush`, `copilot`, custom commands | `NO COMPACT` — no typeable compaction verb, so their context cannot be reclaimed in place. |
-| `antigravity`, `grok`, `kimi`, `opencode`, `pi`, `copilot`, custom commands | `spend UNTRACKED` — invisible to every budget and to the floor's cost total. |
+| `antigravity`, `grok`, `kimi`, `opencode`, `pi`, `copilot`, custom commands | `spend UNTRACKED` — invisible to every budget and to the floor's cost total. Of these, only **copilot** and **custom** commands are structurally unfixable — see the cost paragraph below. |
+| `pi`, custom commands | `NO MCP` — these two presets declare no MCP server support (`supportsMcp: false`); every other engine, including engines with every other gap above, accepts MCP servers at the CLI level. |
 
-Several engine bridges are additionally marked `LIVE-UNVERIFIED` in `src/main/hive.ts` — they have
-never been run against a live account, because doing so needs a paid subscription this project does
-not have. They stay marked until someone runs them.
+`kimi` no longer carries a `NO MAIL` gap: PARITY-01a gave it a hooks bridge, so it can now receive
+hive mail — unverified against a live account (see the marker paragraph below), but no longer
+bounced.
+
+**Cost tracking covers what can be measured, not "all eleven."** `claude` and `codex` report
+through their own usage/transcript telemetry. `qwen` and `crush` have no hook surface, so their
+spend rides the loopback proxy-bridge sidecar (`bridge.kind === 'proxy'`) instead — real numbers,
+routed a different way. That leaves **copilot** and **custom** commands with no cost path by
+construction: copilot's spend sits on the user's Copilot plan and nothing per-agent reaches this
+app, and a custom command is an unknown binary with nothing to read. No amount of engineering
+makes either one emit a number it does not have. The other five untracked engines (`grok`, `kimi`,
+`antigravity`, `opencode`, `pi`) have no telemetry and no proxy route either — the honest state is
+four engines tracked, seven not — never "all eleven."
+
+18 `LIVE-UNVERIFIED` markers are spread across `src/main/hive.ts`, `hiveProvisioning.ts`,
+`hiveTemplates.ts`, `index.ts`, `webhook.ts` and `agentProvider.ts` — of which 5 name an engine:
+`pi`, `opencode`, `crush`, `qwen` and `kimi`. None of those five has ever been run against a live
+account — the first four because the CLI is not installed on this machine, `kimi` because its
+bridge is new and no Moonshot account exists here either.
+They stay marked because no account exists to run them against, and unmarking one requires editing
+a committed number in `test/repo-claims.test.cjs` — a diff a reviewer has to ask "verified against
+which account?" about, mechanically, rather than by remembering to.
+
+**The public tunnel's URL is visible whenever the tunnel is up, but not always at full length.**
+At the narrowest supported width (≈800px) the titlebar chip degrades to `PUBLIC` alone; the
+untruncated URL is one click away, in the panel the chip opens. Presence — the chip itself — is
+the signal, and the tunnel can never be up without the operator seeing it; only the literal text
+degrades under width pressure.
 
 ## How it works
 

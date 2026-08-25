@@ -3,14 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 01-31-PLAN.md — the CLOSER of the gap-closure wave. ALL EIGHT gap plans (01-24 .. 01-31) have landed and the PHASE IS STILL PARTIAL: 10 of 23 requirements close, 13 do not, and NO box was ticked ([x]=10 / [ ]=61 before and after; traceability 10 Complete / 61 Pending unchanged). ANCHORS: all THIRTEEN doc anchors re-derived at wave-4 HEAD with sed -n <n>p pasted, and THIRTEEN OF THIRTEEN are stale - including the four the plan table certified correct, because 01-24 inserts into hooks.ts, 01-25 into index.ts, 01-26 into hive.ts and 01-27/01-28 both edit delivery.ts. Rewritten as <file>.ts <symbol>() (hive.ts drainForStop(), delivery.ts drainAtStop(), index.ts appendCostLedger()) and frozen by STALE_ANCHORS, a content-located denial table run RED 6/6 against the pre-fix blobs at 76dc4dc; it can never go red for a refactor reason because it names strings that were wrong in the PAST. adr/0005 was 108 lines off, not 89. adr/0001 delivery.ts:518 is NOW stale too and is REPORTED (register A6), not edited - 01-31 does not own that file. NAMING: six sites renamed to kg-core.cjs own words over a NEW shippedTextFiles() walker - explicit roots + extension allow-list, 315 files, dist/out/.planning outside by CONSTRUCTION - deliberately NOT sourceFiles(), which is .ts/.tsx only and would never have read SKILL.md while dropping README.md. DEMONSTRATED RED against resources/skills/capabilities/SKILL.md SPECIFICALLY, then GREEN: that file ships into every agent skills dir, so until this commit the agents were told a RETIRED capability (V2-05) was available. The file-set gate now names EXACTLY the two deliberate exclusions. 1280 cross-check over the 43-file doc slice returns 0 - 01-25 DESIGN.md hand-off IS discharged - with an inline pre-fix fixture so a broken matcher stays distinguishable from a clean tree. REQUIREMENTS: every restated row verified AT SOURCE with command AND output. GATE-01 ADJUDICATED DOWN against 01-25 requirements-completed - clause 2 is still false on Linux via /proc/<pid>/environ and the source says so at hooks.ts:29 and telemetry.ts:40; 01-24 declined it for the same reason. FLOOR-04 restated from 01-26 LANDED SUMMARY, which WITHDREW the value widening and ships a PASSING test that a quoted-key JSON token survives git log -p; five ACTIVE bypasses named, caps cited BY NAME, owner re-homed because 'a plan that widens the matcher' resolves to nobody. FLOOR-13 recorded the OPPOSITE of the tree. FLOOR-02/09/10 own anchors had expired a THIRD time and are now symbols. SKIP CEILING derived from the TAP at 7 (not the expected 6 - the 7th is an ENVIRONMENT skip, EPERM on symlinkSync), all seven named by title, reconciled with 01-30 title for title, re-frozen at <= never >=, move justified: pass went DOWN by exactly 2 because two win32 non-runs node:test counted as PASSES became real skips. AUTHORITATIVE SUITE 634/627/0/7; identity pass = 531 - 2 + 98 = 627; vs the 535/531/0/4 pre-gap baseline +99/+96/0/+3. typecheck 0, eslint 0, verify artifacts 0/5 -> 5/5, key-links 0/2 -> 2/2, no file deleted, exactly the 8 declared files. REGISTER: 48 rows (35 code A1-A35, 5 recorded behaviour changes B1-B5, 8 operator-blocked C1-C8) DERIVED by sweeping all seven landed SUMMARYs with the per-SUMMARY audit trail pasted; NINE owners re-homed off already-landed plans or off a role; one seeded row RESOLVED and DELETED (01-25 fourth sink shipped); THREE rows the seed did not carry (adr/0001 anchor; DESIGN.md:686 off by one with two live citations, which 01-29 deliberately left unverified; and the deterministic STATE.md clobber that 01-25/01-27/01-29 each hand-edited around with NO owner named). nyquist_compliant: false and status: draft are BYTE-IDENTICAL - correctly. NEXT: re-run /gsd:verify-work 1; the verdict is the verifier. STILL BLOCKED ON THE OPERATOR: merging PR #77 (origin/main still pins electron ^32.2.0, so 0 of 20 issues are honestly closable), D-09 plus the missing 01-01-SUMMARY.md, a v* tag for gh attestation verify, and ~9 further human_verification items."
-last_updated: "2026-08-22T18:40:00.000Z"
-last_activity: 2026-08-22
+stopped_at: Phase 2 (the-daemon-and-the-protocol) COMPLETE -- plan 02-12 (the honesty ledger) landed, all 12 plans done. Phase 4 context gathering already ran concurrently (see 04-CONTEXT.md); the auto-advance hold on 02-12 is now clear.
+last_updated: "2026-08-24T18:15:00.000Z"
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 43
-  completed_plans: 30
+  completed_plans: 42
   percent: 0
 ---
 
@@ -21,141 +20,198 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-20)
 
 **Core value:** You can leave it running and trust it.
-**Current focus:** Phase 01 — finish-the-floor
+**Current focus:** Phase 02 — the-daemon-and-the-protocol
 
 ## Current Position
 
-Phase: 01 (finish-the-floor) — **PARTIAL, not complete**; GAP-CLOSURE WAVE 24-31 **COMPLETE**
-Plan: 30 of 31 with a SUMMARY, counted off disk (`ls …/*-SUMMARY.md | wc -l` = 30; 01-01 has
-      none — its D-09 gate is unrun). The counter is NOT a cursor: this was a PARALLEL
-      gap-closure wave, so plan numbers did not advance in order.
-      **ALL EIGHT gap-closure plans have landed:** 01-24, 01-26, 01-27 (wave 1), 01-25, 01-28,
-      01-30 (wave 2), 01-29 (wave 3) and **01-31 (wave 4)**. Nothing is outstanding in the wave.
-      **The PHASE is still PARTIAL and this line must not be flipped.** The wave changed how much
-      is left inside each open requirement row, not how many rows are open: **10 of 23 close, 13
-      do not**, exactly as 01-23 adjudicated, and **no box was ticked** (`[x]`=10 / `[ ]`=61 before
-      and after 01-31, traceability 10 Complete / 61 Pending unchanged). **0 of 20** non-epic
-      floor-inspection issues are closable while `origin/main` still pins `electron ^32.2.0` and
-      the whole phase sits behind draft PR #77. Next action: **re-run `/gsd:verify-work 1`** — the
-      verdict is the verifier's, not any executor's.
-      01-31 (wave 4, the closer) re-derived ALL THIRTEEN doc anchors at wave-4 HEAD and found
-      **thirteen of thirteen stale** — including the four an earlier sweep certified correct,
-      because 01-24 inserts into hooks.ts, 01-25 into index.ts, 01-26 into hive.ts and 01-27/01-28
-      both edit delivery.ts. They are now written as `<file>.ts <symbol>()` and frozen by a
-      `STALE_ANCHORS` content-located denial table proven RED 6/6 against the pre-fix blobs, which
-      can never go red for a refactor reason because it names strings that were wrong in the PAST.
-      The last six "Enterprise Knowledge Graph" sites are renamed to kg-core.cjs's own words over a
-      NEW `shippedTextFiles()` walker — explicit roots plus an extension allow-list, 315 files,
-      with `dist/`/`out/`/`.planning/` outside by CONSTRUCTION — and DEMONSTRATED RED against
-      `resources/skills/capabilities/SKILL.md` specifically, the one file the `.ts`-only renderer
-      walker could never have read and the one that ships into every agent's skills directory, so
-      until this commit the agents themselves were told a RETIRED capability (V2-05) was available.
-      The gate now names EXACTLY the two deliberate exclusions (the audit record quoting the defect,
-      and the pin's own needle). A 1280 cross-check over the 43-file doc slice returns 0, confirming
-      01-25's DESIGN.md hand-off IS discharged; it carries its own inline pre-fix fixture so a
-      silently-broken matcher stays distinguishable from a clean tree. REQUIREMENTS.md rows restated
-      AT SOURCE with command and output pasted, and **GATE-01 ADJUDICATED DOWN** against 01-25's
-      `requirements-completed`: clause 2 ("the token … is not readable from any agent's shell") is
-      still false on Linux via `/proc/<pid>/environ`, the source says so at hooks.ts:29 and
-      telemetry.ts:40, and 01-24 declined it for the same reason. FLOOR-04 restated from 01-26's
-      LANDED SUMMARY — revision 4 WITHDREW the value widening and ships a PASSING test that a
-      quoted-key JSON token survives `git log -p`, so the old "covers JSON value position" sentence
-      would have been a ledger claim a green test contradicts; five ACTIVE bypasses named, caps
-      cited BY NAME, owner re-homed because "a plan that widens the matcher" resolves to nobody.
-      FLOOR-13 recorded the OPPOSITE of the tree and is corrected. FLOOR-02/09/10's own anchors had
-      expired a THIRD time and are now symbols. The win32 skip ceiling is DERIVED from the TAP at
-      **7** (not the 6 expected — the 7th is an ENVIRONMENT skip, EPERM on symlinkSync, which will
-      not appear on a runner with symlink permission), all seven named by title, reconciled with
-      01-30 title for title, and re-frozen at `≤`, never `>=`, with the move justified: `# pass`
-      went DOWN by exactly 2 because two win32 non-runs that node:test counted as PASSES became
-      real skips. AUTHORITATIVE whole-suite figure: **634 / 627 / 0 fail / 7 skipped**, identity
-      `pass = 531 − 2 + 98 = 627`; vs the 535/531/0/4 pre-gap baseline that is +99 tests, +96 pass,
-      +3 skipped. And ONE residual register now holds **48 rows** (35 code, 5 recorded behaviour
-      changes, 8 operator-blocked), DERIVED by sweeping all seven landed SUMMARYs rather than copied
-      from the seed: nine owners re-homed off already-landed plans or off a role ("hive maintainer"
-      is not an owner for something measurable from source), one seeded row RESOLVED and deleted
-      (01-25's fourth sink shipped — SPAWN_SAFE_SESSION_ID is in hooks.ts), and THREE rows the seed
-      did not carry — docs/adr/0001's delivery.ts:518 anchor (now stale too, reported not edited
-      because 01-31 does not own that file), DESIGN.md:686 being off by one with two live source
-      comments citing it (01-29 left it unverified on purpose; 01-31 checked it), and the
-      deterministic STATE.md clobber that 01-25/01-27/01-29 each hand-edited around with no owner
-      named. `nyquist_compliant: false` and `status: draft` in 01-VALIDATION.md are BYTE-IDENTICAL
-      — correctly; flipping either follows the verifier.
-      01-29 landed the last renderer half: the AUTO chip now reads the bypass the OPERATOR typed on
-      a custom agent (config.ts spawns that command verbatim), through one tokenized matcher shared
-      by every arm — whole argv tokens, both sides of an `=`, with an explicit empty-flag guard —
-      so `--auto` stops painting `--auto-compact` and `--permission-mode=bypassPermissions` starts
-      matching. Measured 6 of 12 table rows failing before, 0 of 12 after; the enshrining assertion
-      at the old `:138` was INVERTED. The model chip is bounded behind a named MODEL_CHIP_MAX_W with
-      its gate anchored on the chip’s OWN title, because the card emits four other elements already
-      carrying all three guards. The three-constant pin (MIN_WIN / SIDEBAR_COLLAPSE_WIDTH /
-      DESIGN.md’s two sentences) has been SEEN failing — against an INLINE FIXTURE of the pre-fix
-      declaration, never a `git show`, because every checkout in ci.yml is a depth-1 clone and that
-      object is absent on all three runners. `git status --porcelain src/main/index.ts DESIGN.md` is
-      empty before and after. And the 1024–1279 band 01-25 opened no longer eats the sidebar width:
-      `splitterReachableMax` bounds the RESIZE effect while the DRAG still clamps to `clampMax`,
-      taking 236 persisting writes for a stored 900 down to 0, with #38’s rescue (1100 → 976) and the
-      664 drag bound intact. Suite 626/619/0/7 → 632/625/0/7; e2e 2/2 against real Electron 43.
-      **01-31 must add FOUR residuals from 01-29’s register**, under the exact heading
-      `## Residuals — named, with anchors and owners` in 01-29-SUMMARY.md: (a) opencode’s chip still
-      lies in both directions; (b) `autoModeFlagForProvider` reads `autoModeFlag` while
-      `buildSpawnCommand` writes `autoFlag` (now guarded by an all-preset equality assertion);
-      (c) the splitter’s rescue path still writes through the persisting setter, whose complete fix
-      is a non-persisting setter in `store.ts`; (d) `b/WR-08`. FLOOR-01 and FLOOR-13 are recorded in
-      01-29-SUMMARY.md’s `requirements-completed` for 01-31 to close — REQUIREMENTS.md was NOT
-      touched.
-      01-30 landed the verification-surface half: two win32 non-runs are now CONDITIONAL runner
-      skips (one converted, one SPLIT — it RUNS on win32 and skips on POSIX), the shim
-      `sock_token` pin is comment-stripped and assignment-shaped and red for all six templates
-      against the real hive.ts, `npm test` is pinned byte-exact, and `latest*.yml` +
-      `*.blockmap` are inside the attestation with the built-nothing tripwire re-split so a
-      feed with no installers fails the job. Its headline number DROPS by design: suite went
-      623/617/0/6 → 626/619/0/7 on this win32 host, `# pass` +2 because one previously-false
-      pass became a skip. **01-31 must add THREE residuals from 01-30's register**, recorded
-      under the exact heading `## Residuals handed to plan 01-31's register — BY NAME` in
-      01-30-SUMMARY.md: (a) `test/proc-kill.test.cjs` — FIVE cases invisible to the TAP
-      counters on EVERY platform, owner a follow-up plan holding that file AND
-      `test/repo-claims.test.cjs`; (b) `test/engine-parity.test.cjs` — the byte-level drive for
-      the five shims that now have only a source-text pin; (c) NEW — `win-cmd-shim`'s converted
-      case pins the OUTCOME and not the REASON its title names (deleting `src/main/pty.ts:573`'s
-      guard does not turn it red), owner a follow-up plan with a POSIX runner. 01-31 also owns
-      `01-VALIDATION.md`'s `# skipped 4` (untouched by 01-30, by instruction) and must derive
-      the authoritative whole-suite figure from the TAP counter on its own host, not from any
-      plan's prose. 01-28 landed against 01-27 as planned: it verified 01-27's
-      loadQueue/queueReadError block and the harness() helper intact (34/34 green before
-      editing), re-derived quiesce's emit from :671 to :717, and renders 01-27's
-      'queue temporarily unreadable (EISDIR) — …' string verbatim in an asserted case.
-      01-31 must add TWO residuals from 01-28's register, recorded under the exact heading
-      `## Quiesce residuals — ACCEPTED, not fixed` in 01-28-SUMMARY.md: (a) a false `blocked`
-      landing AFTER the last real Stop is unrecoverable, because quiesce suppresses the repeat
-      per spell and useHive's Stop arm is the only clearer of breakerLevel; (b) quiesce's
-      DURABLE half still calls setStatus(id,'idle') unconditionally — the synthesized
-      discriminator reaches the renderer arm only. 01-29 inherited two things from 01-25, both now DISCHARGED: the splitter
-      re-clamp that persists a shrunken sidebar width across the newly reachable 1024-1279
-      band (fixed by splitterReachableMax), and the DESIGN.md line citations — 01-25 kept that file's line count identical
-      (numstat 2/2) precisely so 01-29's corrections stay valid, and all five were made. 01-31 must add one residual
-      to its register: hive.recordSession (hive.ts:1143-1156) still validates only
-      `!root || !sessionId`; both of its callers are now guarded, so it is defence in depth,
-      not an open hole.
-Status: BLOCKED on the operator for the PHASE verdict. 10 of 23 requirements close; 13 do not;
-        0 of 20 non-epic floor-inspection issues could be closed, because main is at 19dbdfb
-        and still pins electron ^32.2.0 while all Phase-1 commits sit behind draft PR #77. See
-        01-23-SUMMARY.md § THE VERDICT for the ten outstanding items and their owners.
-        SEPARATELY, the gap-closure wave opened by 01-VERIFICATION.md is now COMPLETE — all eight
-        plans (01-24 … 01-31) have landed. It did NOT change the verdict: 10 of 23 still close,
-        13 still do not, and no requirement box was ticked by any plan in the wave. The phase is
-        READY FOR RE-VERIFICATION (`/gsd:verify-work 1`) but this line must not be flipped to
-        "complete" by any executor — the verdict is the verifier's, and the operator items above
-        must clear regardless. `gsd-tools state advance-plan` tried to flip it on an earlier run
-        and was reverted, because it counts SUMMARYs where 31 plans exist and increments blindly in
-        a wave that does not run in plan order. **Every executor from 01-25 onward has therefore
-        edited this file BY HAND; 01-27 measured the corruption twice with a backup-and-diff and it
-        is deterministic (the multi-line `Status:` paragraph below becomes an unquoted, truncated
-        YAML `status:` scalar). That defect is now register row A35 with a named owner.**
-Last activity: 2026-08-22
-prerequisites pulled forward into Phases 1 and 2; traceability filled in for all 71
+Phase: 02 (the-daemon-and-the-protocol) — **COMPLETE, all 12 plans landed**
+Plans complete: **12 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
+      Landed: **02-01, 02-02, 02-03, 02-04, 02-05, 02-06, 02-07, 02-08, 02-09, 02-10, 02-11, 02-12**.
+      Wave 9 closed: **02-12** (the honesty ledger, the phase's last plan). Re-measured every claim
+      this phase touched against the tree at wave 9's end, not carried forward from any prior
+      SUMMARY: PARITY-03's marker ledger (18 raw `LIVE-UNVERIFIED` markers across 6 files, per-engine
+      attributed via structural comment-block bounding — found and fixed a genuine gap in the same
+      motion, `qwen` had ZERO markers despite being as unverified as pi/opencode/crush); all three
+      copies of ADR-0001's one-gate sentence made to agree (`docs/message-queue.md` was already fixed
+      by 01-23; `HIVE.md` was not); README's engine table re-derived from source (kimi off the NO MAIL
+      row, a new NO MCP row, PARITY-02 restated to what shipped); SECURITY.md's tunnel-close claim
+      corrected in the app's favour (the old "cannot be closed" limitation is false since 02-04) and
+      three real exposures named (global remotely-triggerable lockout, the self-identifying `/phone/`
+      shell, Discord's buffer-before-verify inversion); TESTING.md/CONCERNS.md re-measured (73 test
+      files, 863 cases, 803 TAP tests); `.planning/ROADMAP.md`'s own four disproved Success Criteria
+      and the god-file figures corrected in place, marked with date+D-id, no checkbox moved;
+      `.planning/REQUIREMENTS.md`'s PARITY-02 restated in the requirement itself, checkbox left as
+      found (already `[x]` from an earlier plan, against text that was false until this correction).
+      **Also fixed, handed over from 02-10 and root-caused precisely**: the fresh-install
+      `tunnel:start`/`phone:pairing` circular dependency (a zero-webhook-trigger install could never
+      open the public tunnel at all, because the only thing that arms the phone route was never
+      invoked before the tunnel refused) — `tunnel:start` now arms the phone as part of its own
+      explicit operator action when nothing else is configured, proven by two new tests against the
+      real `WebhookServer.start()` bind (index.ts's IPC handler itself is still untestable directly,
+      D-02). See `02-12-SUMMARY.md` for the full ledger, all RED-drive runs, and two findings recorded
+      rather than silently reconciled: the marker-count criterion undercounted to 8 where 10 was
+      structurally required, and the god-file figures use this session's own re-measurement (4,967 /
+      2,822 / 160) rather than the plan's own stale 2026-08-21 pointer (nine further waves moved it).
 
-Progress: [███████░░░] 70%
+Execution facts as of this line:
+
+- Branch `gsd/v1.0-floor-closure`; NOT `gsd/v1.0-milestone` (that branch is content-behind and would
+  regress two phase-1 source fixes plus all 12 phase-2 plans). Nothing is pushed — `gh pr checks` is
+  therefore MEASUREMENT UNAVAILABLE for every plan so far, recorded as such, never faked. (`gh pr
+  checks` DOES return rows for PR #78, but its head sha `bb1ad70` is `origin`'s current tip — 53
+  commits behind this session's `HEAD` and every unpushed 02-01..02-11 commit too. Stale, not fresh.)
+
+- `workflow.use_worktrees=false`, so every plan runs sequentially on the main tree. No worktree
+  merges, no post-merge reconciliation.
+
+- Whole-suite figure re-measured after every plan, never SUMMARY-trusted:
+  638/631/0 fail/7 skipped at phase start (commit 90a6cc9) -> 728/721/0/7 after 02-11 -> 753/746/0/7
+  after 02-05 -> 762/755/0/7 after 02-06 -> 777/770/0/7 after 02-08 (+13 cases: 5 in
+  task 1, 4 in task 2, 4 in task 3), matching the orchestrator's own pre-dispatch baseline of
+  757/0/7 plus this plan's additions exactly -> **789/782/0 fail/7 skipped** after 02-09 (+12 cases: 4
+  in `build-assets.test.cjs`, 8 in the new `push-vapid.test.cjs`) -> **800/793/0 fail/7 skipped** after
+  02-10 (+11 cases across all 5 tasks in `test/qr-vendor.test.cjs`, the only test file this plan
+  touched) -> **805/798/0 fail/7 skipped** after 02-12 (+5 cases: 1 new PARITY-03 clause, 1 new
+  ADR-0001 clause, 1 new README clause, 1 new SECURITY.md clause in `test/repo-claims.test.cjs`, and 2
+  new tests in `test/webhook-endpoints.test.cjs` for the fresh-install tunnel fix — 5 declared but
+  actual delta was +5 tests exactly, confirmed by direct TAP diff, not arithmetic). `npm run
+  typecheck`, `npm run build` and `npm run lint` (`--max-warnings 0`) all exit 0 at every checkpoint.
+  0 failures is the bar; there is no pre-existing-failure allowance on this phase. **Phase 2 closes at
+  0 failures, every checkpoint, all 12 plans** — 638 -> 805 tests, +167, zero regressions the whole
+  way.
+
+- **02-05 landed the phone's whole server-side door.** `/phone/**` routed ahead of `readEndpointId`
+  off a five-file exact-filename allowlist; a single-use enrollment token (burned before its
+  response) exchanged for a generated 192-bit bearer; a shared auth bucket + lockout across
+  `/phone/api/**` that engages and provably clears; and a per-endpoint verifier dispatch admitting
+  Telegram's header compare and Discord's Ed25519 signature (live-verified this session through
+  `node:crypto` alone, zero new dependencies). `webhook.ts` still imports nothing from `electron`.
+  Curl-verified for real on loopback with the tunnel off (`scripts/phone-curl-check.cjs`, 6/6 OK).
+  **None of DAEMON-02/03/05 marked complete** — DAEMON-02/05 are shared with 02-09 (landed,
+  localhost-verified, see below) and 02-10 (pairing UI, not yet landed); DAEMON-03's live half is
+  operator-supplied (no bot token, no Discord application tested) and its own stated purpose has no
+  phone UI to exercise until 02-10 lands.
+
+- **02-11 landed DAEMON-04's mechanism for claude only.** `scripts/mcp-live-probe.cjs` live-reconfirmed
+  `--mcp-config` spawns a server and `--settings`' `mcpServers` key does not (claude 2.1.236, run twice
+  this session). `<agentDir>/mcp.json` (0600, git-ignored), per-agent write/secret grants
+  (`mcpAgentGrants`, a latched migration dropping the old floor-wide consent), and three IPC channels
+  are real.
+
+- **02-06 closed DAEMON-04 and PARITY-01b (both flipped `[x]` in REQUIREMENTS.md).** `McpConsentModal.tsx`
+  (the consent step 02-11 only built a data contract for) plus the agent card's `⚿`/`⚠`/`↻` MCP element
+  complete DAEMON-04's operator-facing half. `capabilityGaps()` — one derivation over
+  `providerCapabilities(provider, platform)` — now renders on the agent card, the provider picker
+  (`AddAgentModal.tsx`) and the dispatch flow (`CommandCenterPanel.tsx`), closing PARITY-01b. This was a
+  **recovery closeout**: a prior session landed all 5 task commits and was killed before writing
+  SUMMARY.md; every claim was independently re-verified against the real tree (fresh greps, fresh
+  containment diff against the correct base `5832c5e`, fresh `npm test`/`build`/`typecheck`/`lint`/`e2e`
+  runs) before the requirements were flipped. One genuine STOP is on record and was independently
+  re-confirmed rather than waved through: S2a's `maxWidth` cannot hold ≥80px in the scenario its own
+  pass condition is written against (a capability gap chip AND a fully-populated MCP element on the same
+  row) without growing the frozen 322×86 card — not forced, carried forward as a stated limitation,
+  confirmed unreachable in the shipped app today because claude is the only MCP-wired engine and it
+  carries zero capability gaps.
+
+- **02-08 closed GSD-06 (flipped `[x]` in REQUIREMENTS.md).** `AskMeTab.tsx:92`'s hardcoded `to: 'god'`
+  is gone; a `recipientOf(task)` resolver — one function, shared by the mail `to:` field and the
+  header badge — routes the human's answer to whichever agent's `AGENT_ID` asked (via a new
+  `askedBy` field on the humanQA entry, written by `task.cjs`'s `--q` branch from the environment
+  only, never a flag). The god always gets a copy first and is still the one that unblocks the card;
+  the asker's copy tells it to continue its own work. `capabilityLine()` — a tested pure function
+  with **zero production consumers anywhere in this repo before this plan** — gets its first one, on
+  `rosterContext()`'s per-row output, gated on an actual capability gap so a fully-capable floor
+  renders byte-for-byte what it rendered before (measured: 469 content-only characters, identical
+  before/after). `godLine`'s prompt-cached sentence that this phase made false (*"arrives as an inbox
+  message to you"*) is rewritten with zero interpolated values, so ADR-0002 holds. D-01 correction:
+  kimi is no longer the NO-MAIL example the plan's own text named — 02-07's bridge landed first — so
+  copilot is used instead, live-verified. See `02-08-SUMMARY.md` for all 8 RED-drive runs, the
+  measured roster lengths, and the honest statement that the answer reaches the asker's **inbox**
+  (D-38), not its terminal (ROADMAP:221 is corrected there, not here).
+
+- **02-09 landed the phone PWA bundle + `src/main/push.ts`, DAEMON-02's client half.**
+  `resources/phone/{index.html,sw.js,manifest.webmanifest,icon-192.png,icon-512.png}` — two screens,
+  no framework, packaged via a real `dist/win-unpacked` build (sha256-identical to the committed
+  source). `src/main/push.ts` implements VAPID (RFC 8292) + `aes128gcm` (RFC 8291/8188) from
+  `node:crypto` alone; the DER-vs-raw-signature bug and a CEK-derivation bug were both reproduced live
+  and fixed under test. A real `WebhookServer` on a real loopback socket, driven by real `curl`,
+  against the real committed bundle (not a fixture) passed all 12 auth-path checks — full transcript
+  in `02-09-SUMMARY.md`. **R-push is ABSENT from the merged `webhook.ts`** (no VAPID-key route, no
+  subscription intake), so `push.ts` ships unit-verified but wired to no route — named for 02-12.
+  `phoneRootPath()`/the zero-endpoint guard were already plan 02-05's (commit `8577748`); this plan
+  changed neither. **DAEMON-02 is NOT flipped `[x]`** — no physical Android device was used.
+
+- **02-10 landed the pairing UI/QR — DAEMON-05's UI half, live-loop-verified end to end except one
+  environmental step.** A vendored, digest-pinned QR encoder (Project Nayuki, MIT, pinned commit
+  `2d0d3c9276cda321a206d6b48dd3c060f18d8e16`) with a purity gate that goes red on a hostile edit or a
+  silent drift; `QrCode.tsx` renders + executes it under `node --test`; the tunnel panel in
+  Settings → Connections (armed-then-confirm expose, untruncated URL, permanent re-minting QR, pairing
+  link never rendered as text); the titlebar `PUBLIC` chip with two degradation widths measured live
+  and pinpointed exactly (833px / 783px — **corrects** the plan's own 800px estimate: the full host is
+  actually still shown at 800px, only auto-mode text hides there). The full live loop ran through the
+  real app/real IPC/real cloudflared: tunnel opened, chip + panel + QR all correct, pairing minted,
+  stop closed it, restart minted a genuinely new host + token — but the public-origin fetch step failed
+  at the DNS layer, the same environmental blocker 02-04 found, re-confirmed live twice more this
+  session. A second, independent, non-environmental gap was ALSO found live and left unpatched (outside
+  02-10's declared files): `tunnel:start` refuses on a zero-webhook-trigger install because
+  `phone:pairing` requires the tunnel already open — see the DAEMON-05 entry below. **DAEMON-05 is NOT
+  flipped `[x]`.**
+
+Requirements deliberately still OPEN, with the reason (none of these is an oversight):
+
+- **DAEMON-01** — unit half green (02-03). `02-VALIDATION.md` requires BOTH `node --test` AND a live
+  Electron run with real PTYs; the live run has not happened. Tracked as a phase-close gate.
+
+- **DAEMON-02** — 02-05 landed the server's auth path, curl-verified on loopback; 02-09 landed the
+  client half (the phone bundle + push.ts), also localhost-verified; 02-10 landed the pairing UI and
+  ran the live loop end to end except the public-origin fetch (DNS-layer environmental blocker). Still
+  not device-verified — DAEMON-02's own text names a real Android device as the honest completion bar,
+  not yet attempted. **The `tunnel:start`/`phone:pairing` circular-dependency gap 02-10 found is FIXED
+  by 02-12**: `tunnel:start` now arms the phone route itself when zero webhook triggers are
+  configured, the same mint-then-start order `phone:pairing` already used, so the one operator control
+  the shipped UI exposes is self-sufficient on a fresh install. Proven against the real
+  `WebhookServer.start()` bind in `test/webhook-endpoints.test.cjs` (index.ts's own IPC handler is
+  still untestable directly, D-02) — device-level pairing itself remains unattempted.
+
+- **DAEMON-03** — the verifier + payload-adapter mechanism is real and localhost-verified (02-05); the
+  live half (a real Telegram bot token, a real Discord application) is operator-supplied and was not
+  available this session.
+
+- **DAEMON-05** — spans 02-04/02-05/02-10/02-12. 02-05 closed two of its five bullets (generated
+  token, rate limiting + lockout on the auth endpoint) — both re-proven live again in 02-10 (38/38 and
+  13/13 test runs, this session). Live close attempted for real across two sessions now: 02-04 twice,
+  02-10 once more via `scripts/tunnel-live-check.cjs` (re-run once, per authorization) AND via the full
+  UI-driven live loop (`scripts/p10-live-loop.cjs`, real app, real button, real cloudflared) — every
+  attempt: exit 3 / DNS-layer `fetch failed`, ANNOUNCED skip, never a claimed pass. Root cause remains
+  ENVIRONMENTAL, not code — the LAN resolver returns NXDOMAIN for freshly-minted
+  `*.trycloudflare.com` subdomains while the apex resolves and general egress is fine. A public
+  resolver (8.8.8.8 / 1.1.1.1) would likely let this verification actually pass.
+  **02-10's SECOND, independent, non-environmental gap is FIXED by 02-12** (see the DAEMON-02 entry
+  above for the fix) — root-caused precisely: `tunnel:start`'s own comment premise ("a phone route
+  family becomes servable in plan 02-05") was true but never wired through to the one path an operator
+  can actually reach, since `phone:pairing` is only ever renderer-invoked AFTER a tunnel is already
+  reported running.
+
+- **STRUCT-01** — 02-02 and 02-03 closed the boot and agent-lifecycle seams; `spawnAgentCore`
+  (~480 lines, imports electron at module scope) and ~160 IPC handlers remain in `index.ts` (measured
+  by 02-12: `index.ts` 4,967 lines, `hive.ts` 2,822 lines — two further extractions past 02-02's own
+  split moved more out since).
+
+- **PARITY-03** — pinned by 02-12 as a ledger, not closed by verification. 18 raw `LIVE-UNVERIFIED`
+  markers across 6 files, per-engine attributed and file-set pinned in `test/repo-claims.test.cjs`; 5
+  bridges (pi, opencode, crush, qwen, kimi) stay marked, none run against a real account. Correctly
+  never flipped — the honest outcome under the zero-recurring-cost rule, not a gap 02-12 failed to
+  close.
+
+Parity ledger after 02-12 (re-measured, not carried forward from 02-07): engines that can receive mail
+**8 -> 9** (unchanged since 02-07); live-verified bridges **unchanged at zero**; LIVE-UNVERIFIED
+bridges **4 -> 5** (kimi joins pi, opencode, crush, qwen, per PARITY-01a — the sign is stated
+explicitly: PARITY-01a raised the can-receive-mail count while raising the unverified count too, not a
+pure win). None of those five CLIs is installed on this machine, so this is the expected outcome under
+the zero-recurring-cost rule. PARITY-02 restated (not "all eleven report cost"): claude/codex via
+native telemetry, qwen/crush via the proxy-bridge sidecar — four tracked, seven not (grok, kimi,
+antigravity, opencode, pi, plus copilot/custom which are structurally unfixable) — same words in
+README.md, ROADMAP.md and REQUIREMENTS.md.
 
 ## Performance Metrics
 
@@ -207,6 +263,17 @@ Progress: [███████░░░] 70%
 | Phase 01 P29 | 21m | 3 tasks | 6 files |
 | Phase 01 P30 | 21m | 3 tasks | 6 files |
 | Phase 01 P31 | 48m | 3 tasks | 8 files |
+| Phase 02 P01 | 50min | 3 tasks | 8 files |
+| Phase 02 P02 | 70min | 3 tasks | 11 files |
+| Phase 02 P03 | 3h40m | 5 tasks | 16 files |
+| Phase 02 P04 | 55min | 5 tasks | 14 files |
+| Phase 02 P07 | 50min | 4 tasks | 12 files |
+| Phase 02 P11 | 55min | 4 tasks | 9 files |
+| Phase 02 P05 | 57min | 5 tasks | 8 files |
+| Phase 02 P06 | 58min | 5 tasks | 8 files |
+| Phase 02 P08 | 45min | 3 tasks | 5 files |
+| Phase 02 P09 | ~5h | 5 tasks | 10 files |
+| Phase 02 P10 | 75min | 5 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -214,6 +281,18 @@ Progress: [███████░░░] 70%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+- [02-11]: DAEMON-04 is left OFF `requirements-completed` in 02-11's own SUMMARY, deliberately, even
+  though 02-11's own plan frontmatter declares it. 02-06-PLAN.md (wave 6) also declares
+  `requirements: [DAEMON-04]` and has not executed — it owns the consent-modal UI. `requirements
+  mark-complete` must not be called for DAEMON-04 until 02-06 lands too; two plans in the same phase
+  both claiming a requirement is exactly the STRUCT-01/PARITY-03 trap the production-stress mandate
+  names.
+
+- [02-11]: `spawnSync('claude', …)` needs `shell: process.platform === 'win32'` — `claude` resolves to
+  an npm-global `claude.cmd` shim on Windows, and Node's non-shell `spawnSync` does not append `.cmd`
+  via PATHEXT. Same fix `pty.ts`/`shellEnv.ts` already use for their `where` probe. Node's `shell:true`
+  no longer auto-quotes array args (DEP0190) — manual quoting is now required alongside it.
 
 - [01-29]: A safety indicator errs toward OVER-reporting, and the direction is written into the
   source comment and pinned as a case. `isAutoModeAgent` returned `false` for every `custom` agent
@@ -469,6 +548,29 @@ Recent decisions affecting current work:
 - [Phase ?]: [01-26]: C-1 resolved by MEASUREMENT, not the directive's letter — (a) restores 10 of C-1's 15 shapes, not all 15, so the ship is (a) plus (b)'s declaration discipline: sk-ant-/sk-proj-/sk-svcacct- unbounded, only the bare sk- residue carrying the word boundary, and the residual 5 shapes DECLARED in truths[0], in a pinned C1_DECLARED_LOSS block and in the source ceiling. Pure (b) measured strictly worse (15 lost) with identical false-positive behaviour.
 - [Phase ?]: [01-26]: Pattern 5 is byte-frozen against a constant, and non-subtraction is a property of STATEMENT ORDER — the two sk_/rk_ arms run as their own statements AFTER pattern 5. Measured: appended inside pattern 3's alternation they lose 5 of 38 rows and leak 20 bytes of a following sk-ant- key; the same prefix fix with an in-alternation append still loses the swallow row.
 - [Phase ?]: [01-26]: A security control that trades a detection must declare the trade in three places — the plan's truths, a pinned test, and the source ceiling. An undeclared trade is the defect class this phase exists to remove; a declared one is a legitimate engineering choice.
+- [Phase 02-01]: hive.ts split for the seam PARITY-01a/02 and DAEMON-04 need, not for testability (D-07) -- five test files already loaded it under node --test — STRUCT-02's real justification is that later plans must touch the router/installers/templates and this phase opens that seam regardless
+- [Phase 02-01]: GitCommitter extracted by composition (ADR-0004 shape A), never free functions — six runtime call sites (test/hive-durability.test.cjs, test/engine-parity.test.cjs) call HiveManager.flushCommit(root) directly; free functions would break all six and violate the single-committer invariant the moment a second caller imports them
+- [Phase 02-01]: GitCommitterDeps injects root/log/redactSecrets as plain functions rather than importing back from hive.ts — keeps gitCommitter.ts electron-free with zero circular-import risk, mirroring DeliveryDeps' style
+- [Phase ?]: FloorDeps needs focus/syncKeepAwake/respawnCore/startWorkerWatcher beyond the plan's 7 named fields
+- [Phase ?]: bootstrapHiveServices() ran from 3 places (whenReady, config:update onboarding transition, config:changeHome failure recovery) against the ALREADY-CONSTRUCTED floor; split bootFloor's tail into a separately-exported startHiveServices() so re-invocation re-arms instead of leaking the old listeners/timers
+- [Phase ?]: 01-21 lint-gate precondition verified against HEAD's own ancestry (git merge-base --is-ancestor), not literal main:eslint.config.js -- this project's milestone branching strategy keeps main 203 commits behind for the whole milestone
+- [Phase ?]: Fixed a real pre-existing race condition in IntegrationBroker/TelemetryCollector: server was assigned inside the async listening callback, so stop() racing an in-flight bind leaked the socket forever -- now assigned before listen()
+- [Phase 02]: DAEMON-01 and STRUCT-01 left Pending in REQUIREMENTS.md after 02-03 — DAEMON-01's own 02-VALIDATION.md manual-verification row states unit/composed evidence alone is not a pass for criterion 2, and no live Electron GUI session was available this session; STRUCT-01 names five seams and 02-03 closes only agent-lifecycle -- workers and IPC remain fully inside index.ts
+- [Phase 02]: Task 5's lifecycle.ts extraction was real work, not a no-op — 02-02 had already relocated the four teardown functions into boot.ts, but as private closures over module state, not the AgentTeardownDeps-injected shape STRUCT-01's tests require -- the dependency-injection extraction itself was still the whole task
+- [Phase 02]: terminalWorkOrderPrompt moved into the EXISTING src/shared/queueDelivery.ts, not a new file — deliberate deviation from 02-PATTERNS.md:35 -- queueDelivery.ts already owns every way a renderer may touch the main-owned queue, and a terminal work order is exactly that kind of object
+- [Phase 02]: DAEMON-05: the tunnel closes via a spawned cloudflared child + procKill.hardKillTree, not the deleted tunnelmole library call — tunnelmole exposed no process handle to close; running the tunnel as a child process makes the OS process handle the disposer the library never gave
+- [Phase 02]: DAEMON-05's off-by-default clause is structural, not a config check: start() opens no tunnel at all — a tunnel exists only where an operator action passes an opener into startTunnel(), so no other feature can bring the public origin up as a side effect
+- [Phase 02]: PARITY-01a's kimi bridge ships LIVE-UNVERIFIED (no Moonshot account on this machine); zero engines converted for PARITY-02 (BridgeDescriptor is mutually exclusive, hooks XOR proxy dispatch); PARITY-03's marker ledger pinned exactly at 14 sites across 5 files, driven red four ways. — D-33/D-34/D-35/D-40 all required the ruling and the pin to be written in source and driven red before being trusted, not merely asserted in the plan.
+- [Phase 02-05]: phoneArmed()/mintEnrollment() landed in task 2's commit (not task 3's) — task 2's own acceptance criteria need an armed state to test the 200/dark-404 split, and the plan's own action text already says task 2's branch reads phoneArmed().
+- [Phase 02-05]: The /phone/api/** auth lockout is one shared counter across enroll+asks+answer, not scoped to /enroll alone — a brute-force attacker can guess bearers exactly as cheaply as enrollment tokens.
+- [Phase 02-05]: None of DAEMON-02/03/05 marked complete in REQUIREMENTS.md: DAEMON-02/05 are shared with 02-09/02-10 (not landed); DAEMON-03's live half is operator-supplied and its stated purpose has no phone UI to exercise until 02-09/02-10 land.
+- [Phase ?]: PARITY-01b and DAEMON-04 flipped complete after 02-06's closeout (last declarer of both)
+- [Phase 02-08]: kimi is no longer this plan's NO-MAIL roster example — 02-07's inbox bridge landed first, so copilot is used instead for the capabilityLine() gap-carrying test case (canReceiveInbox permanently false, D-32/D-33/D-34)
+- [Phase 02-08]: an absolute roster-length assertion in a test embeds os.tmpdir()'s path length, which varies by machine/CI runner — strip the volatile preamble before comparing, or measure the SAME reused home directory for both before/after loads, never hardcode a raw byte count
+- [Phase 02]: 02-09: DAEMON-02 lands as a localhost-verified auth path, deliberately not flipped [x] — no physical Android device was used this session, and the requirement's own text names a real device as the honest completion bar.
+- [Phase 02]: 02-09: R-push (a VAPID-key route + subscription-intake callback) is ABSENT from src/main/webhook.ts. push.ts ships fully unit-verified (VAPID + RFC 8291 aes128gcm, node:crypto only) but is wired to no route — named for plan 02-12's honesty ledger, not silently dropped.
+- [Phase 02]: 02-09: plan 02-05 already added the packaged/dev static-root resolver (as phoneRootPath(), not the phoneStaticDir() name this plan's own draft text used) and already widened the zero-endpoint guard for the phone in three places (traced to commit 8577748). This plan changes neither and does not rename the working symbol to match its own draft.
+- [Phase 02]: [02-10]: DAEMON-05 left OPEN -- environmental DNS blocker (LAN resolver cannot resolve freshly-minted *.trycloudflare.com hostnames) re-confirmed live this session, plus a newly-discovered tunnel:start/phone:pairing circular dependency for zero-webhook-trigger installs (tunnel:start refuses with 'no enabled webhook endpoints' because phone:pairing itself requires the tunnel already open) -- documented, not patched (outside this plan's declared files, a genuine trust-boundary design question).
 
 ### Pending Todos
 
@@ -590,8 +692,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-22T18:40:00.000Z
-Stopped at: Completed 01-31-PLAN.md - the CLOSER. ALL EIGHT gap-closure plans (01-24 .. 01-31) have landed and the PHASE IS STILL PARTIAL: 10 of 23 requirements close, 13 do not, NO box ticked. Thirteen doc anchors re-derived at wave-4 HEAD and THIRTEEN found stale (the four the plan certified correct had expired too), rewritten as symbols and frozen by STALE_ANCHORS, RED 6/6 against the pre-fix blobs. The naming pin widened to a 315-file shipped-surface walker - NOT the .ts-only one, which would never have read SKILL.md - and demonstrated RED against SKILL.md specifically before the last rename. GATE-01 ADJUDICATED DOWN against 01-25 requirements-completed: clause 2 is still false via /proc/<pid>/environ. FLOOR-04 restated from 01-26 LANDED SUMMARY (which WITHDREW the value widening), five ACTIVE bypasses named, owner re-homed. Skip ceiling DERIVED at 7 and re-frozen at <=. AUTHORITATIVE suite 634/627/0/7, identity pass = 531 - 2 + 98. One register, 48 rows, derived by sweeping all seven landed SUMMARYs; nine owners re-homed, three rows the seed did not carry. verify artifacts 5/5, key-links 2/2, typecheck 0, eslint 0. NEXT: re-run /gsd:verify-work 1 - the verdict is the verifier. STILL OPERATOR-BLOCKED: PR #77 unmerged (origin/main still pins electron ^32.2.0, so 0 of 20 issues are closable), D-09 and the missing 01-01-SUMMARY.md, a v* tag, and ~9 human_verification items.
+Last session: 2026-08-24T12:06:12.976Z
+Stopped at: Phase 4 context gathered (04-CONTEXT.md + 04-DISCUSSION-LOG.md, 37 decisions); auto-advance to plan-phase HELD -- plan 02-12 still in flight, see D-37
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
@@ -601,4 +703,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: None
+Resume file: .planning/phases/04-overnight-on-a-repo-that-matters/04-CONTEXT.md
