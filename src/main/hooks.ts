@@ -1410,6 +1410,25 @@ export class HookServer {
     if (event === 'PreToolUse') {
       const denial = this.protectedPathDenial(agentId, p);
       if (denial) {
+        // A DENY MUST BE DIAGNOSABLE. Before this line the gate refused silently:
+        // the agent saw a reason, the operator saw a banner, and the main log had
+        // NOTHING — so "why was THIS command denied" could not be answered after
+        // the fact, and a false positive was indistinguishable from a true one.
+        // Measured: the god was denied on the floor's own kanban CLI repeatedly,
+        // and a full grep of main.log produced zero deny lines to work from.
+        //
+        // Truncated on purpose — a tool_input can carry a whole heredoc, and the
+        // point is identifying WHICH command, not archiving it.
+        const denyTi = (p.tool_input && typeof p.tool_input === 'object')
+          ? p.tool_input as Record<string, unknown>
+          : {};
+        const denyWhat = typeof denyTi.command === 'string' ? denyTi.command
+          : typeof denyTi.file_path === 'string' ? denyTi.file_path : '';
+        console.warn(
+          '[hive] PreToolUse DENIED agent=' + agentId + ' tool=' + String(p.tool_name)
+          + ': ' + denial.slice(0, 90)
+          + ' | target: ' + String(denyWhat).slice(0, 200)
+        );
         this.emitControl(agentId, p.tool_name, denial);
         this.emit(agentId, event, p, true);
         return {
