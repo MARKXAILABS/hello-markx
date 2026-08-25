@@ -64,11 +64,17 @@ export class KnowledgeManager {
     return readConfig().knowledgeGraph?.enabled === true;
   }
 
-  /** The store directory (config override or <userData>/knowledge). */
+  /** The store directory: explicit config override, else `<harnessHome>/knowledge`,
+   *  else `<userData>/knowledge` for a fresh install before onboarding.
+   *
+   *  SCALE-01: the userData default was ONE knowledge store shared by every
+   *  project on the machine. Computed fresh on every call (no caching anywhere in
+   *  this class), so a `harnessHome` change is picked up on the next call and no
+   *  repoint plumbing is needed here — unlike PersistStore, which holds a handle. */
   root(): string {
     const override = readConfig().knowledgeGraph?.rootPath;
     if (override && override.trim()) return override;
-    return join(app.getPath('userData'), 'knowledge');
+    return join(readConfig().harnessHome ?? app.getPath('userData'), 'knowledge');
   }
 
   /** Absolute path to the agent CLI (dev: repo resources/; packaged: resourcesPath). */

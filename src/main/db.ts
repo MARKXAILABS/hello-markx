@@ -208,8 +208,16 @@ export class PersistStore {
   private insToolCall: Database.Statement | null = null;
   private insEvent: Database.Statement | null = null;
 
-  /** @param dbPath  Override the DB location (tests). Defaults to userData/harness.db. */
-  constructor(private dbPath?: string) {}
+  /**
+   * @param dbPath   Override the DB location (tests). Wins over everything below.
+   * @param getHome  The active `harnessHome`, read fresh on every open() —
+   *   SCALE-01. An INJECTED closure (same shape as `hive.ts`'s), never a config
+   *   read from inside this file: config.ts imports PersistStore FROM here, so
+   *   importing it back would cycle — and this file must stay import-free of
+   *   `./config` for that reason. Absent, or returning null (a fresh install
+   *   before onboarding), keeps the historical userData path exactly.
+   */
+  constructor(private dbPath?: string, private getHome?: () => string | null) {}
 
   /** Open (creating if needed) and migrate the DB. Idempotent — a second call is
    *  a no-op. A corrupt file is quarantined and re-created once (see below);
@@ -217,7 +225,7 @@ export class PersistStore {
    *  throws, and callers guard so a DB failure can't crash app startup. */
   open(): void {
     if (this.db) return;
-    const path = this.dbPath ?? join(app.getPath('userData'), 'harness.db');
+    const path = this.dbPath ?? join(this.getHome?.() ?? app.getPath('userData'), 'harness.db');
     try {
       this.db = this.openOnce(path);
     } catch (e) {
@@ -265,6 +273,23 @@ export class PersistStore {
     this.insEvent = null;
     try { this.db?.close(); } catch { /* best-effort on shutdown */ }
     this.db = null;
+  }
+
+  /**
+   * Reopen at whatever the default path resolves to NOW (SCALE-01).
+   *
+   * Onboarding sets `harnessHome` through `config:update`, which is the one
+   * transition that does NOT relaunch — so without this the module-level handle
+   * stays bound to the pre-onboarding file for the rest of the session and every
+   * kv write (including `missionLastFiredAt`) lands in the wrong project's DB.
+   *
+   * `dbPath` is deliberately left alone: the default branch is re-evaluated
+   * inside open(), so close-then-reopen is the whole job, and a genuine test
+   * override must keep pointing where the test put it.
+   */
+  repoint(): void {
+    this.close();
+    this.open();
   }
 
   get isOpen(): boolean { return this.db !== null; }
