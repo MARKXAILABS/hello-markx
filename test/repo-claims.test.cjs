@@ -2307,3 +2307,55 @@ test('04-19 clause 4: TELEMETRY.md states the durability level it has, and the w
     'the ToolSpan comment in telemetry.ts was rewritten. It is comment-stripped here on purpose: '
     + 'this clause pins the CODE, and TELEMETRY.md is where that sentence is explained');
 });
+
+/* ── SCALE-05 / D-33: ONE context-pressure threshold, in all three renderings ──
+ *
+ * FLOOR-13 is the measured precedent and the reason this pin exists rather than a
+ * comment. That plan unified two things: the AUTO chip THROUGH a shared module, and
+ * cost BY COPYING an expression into three files. Only the copied half drifted, and
+ * it drifted into three different answers to one question — is this agent about to
+ * compact? — shipping as:
+ *
+ *   FullscreenTerminal.tsx   pct  >= 85 / 65     (the only pair with a written reason)
+ *   CommandCenterPanel.tsx   cpct >= 88 / 75
+ *   AgentCard.tsx            progress >= 7 / 6 over a 0..8 int, i.e. 87.5 / 75
+ *
+ * so the same agent read "about to compact" on one surface and comfortable on
+ * another. Plan 03-08 moved the pair into store/agentView.ts. This clause is the
+ * thing that notices if a future edit copies it back out.
+ *
+ * PER FILE, never a total: a `>= 3` across all three would be satisfied by three
+ * calls in one file while the other two re-derived locally, which is the exact state
+ * this replaced.
+ */
+test('SCALE-05: all three context renderings call the ONE shared threshold, and none re-derives it', () => {
+  for (const rel of [
+    'src/renderer/src/components/AgentCard.tsx',
+    'src/renderer/src/components/FullscreenTerminal.tsx',
+    'src/renderer/src/components/CommandCenterPanel.tsx'
+  ]) {
+    assert.ok(strippedHits(rel, 'deriveContextColor(') >= 1,
+      `${rel} no longer calls deriveContextColor — the colour step has been re-derived locally, `
+      + 'which is exactly how 85/65, 88/75 and 87.5/75 came to coexist in the first place');
+
+    // The negative half. A file may call the shared derivation AND keep a stale local
+    // copy beside it, and the positive clause alone would pass on that.
+    const src = readStripped(rel);
+    assert.doesNotMatch(src, />=\s*88\s*\?/,
+      `${rel} still contains a \`>= 88 ?\` colour step — the drifted CommandCenterPanel pair is back`);
+    assert.doesNotMatch(src, />=\s*75\s*\?\s*'var\(--cth-lemon\)'/,
+      `${rel} still contains a \`>= 75 ? lemon\` colour step — the drifted lemon threshold is back`);
+    assert.doesNotMatch(src, /progress\s*>=\s*7\s*\?\s*'var\(--cth-coral\)'/,
+      `${rel} still colours its gauge from the 0..8 integer — that is the 87.5/75 pair wearing `
+      + 'a different notation');
+  }
+
+  // ...and the pair itself lives in exactly one place, as named constants. A literal
+  // 85/65 re-inlined into a component is the same drift with the numbers agreeing
+  // today and nothing stopping them from disagreeing tomorrow.
+  const view = readStripped('src/renderer/src/store/agentView.ts');
+  assert.match(view, /CONTEXT_PRESSURE_HIGH\s*=\s*85/,
+    'agentView.ts no longer declares the 85 compaction threshold as a named constant');
+  assert.match(view, /CONTEXT_PRESSURE_WARN\s*=\s*65/,
+    'agentView.ts no longer declares the 65 warning threshold as a named constant');
+});

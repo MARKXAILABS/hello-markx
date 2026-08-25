@@ -108,7 +108,7 @@ Module._load = function (request, ...rest) {
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
 let PixelButton, blockReasonFromApproval, rosterBadgeStatus, formatRemaining, askOutcomeText;
-let DayBandTab;
+let DayBandTab, AgentStatCard, mergeAgentViews, resetAgentViews, deriveCost;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
@@ -142,6 +142,24 @@ try {
   // `try { … } catch {}` around this line is how a component that stopped
   // existing turns every assertion below it into a vacuous pass.
   ({ DayBandTab } = loadTs('src/renderer/src/components/DayBandTab.tsx'));
+  // SCALE-05's consolidated stat card. `AgentDetailPanel.tsx` LOADS cleanly under this
+  // shim — measured, not assumed — so the card below is the REAL shipped component and
+  // every assertion on it is on real `renderToStaticMarkup` output, not on source text.
+  //
+  // What is NOT loaded, and why: the whole `AgentDetailPanel` cannot be server-rendered
+  // at all. It reaches `PtyTerminalView` → `useAppTheme` (`src/renderer/src/design/
+  // theme.ts:57`), which calls `useSyncExternalStore` with TWO arguments, and React 18
+  // throws "Missing getServerSnapshot" for a two-arg call on the server. Two more
+  // shipped call sites have the same shape (`realtime/costStore.ts:117`,
+  // `realtime/session.ts:536`). None of those three files belongs to plan 03-08, so the
+  // defect is REPORTED rather than patched here — and the consequence is stated rather
+  // than papered over: these cases prove the CARD renders every branch; they do not
+  // prove the panel mounts it. The mount is pinned structurally, separately, below.
+  ({ AgentStatCard } = loadTs('src/renderer/src/components/AgentDetailPanel.tsx'));
+  // The SAME module instance the card resolved through `@/store/agentView` — loadTs
+  // caches by absolute path, so seeding through this reference is seeding the singleton
+  // the component is about to read.
+  ({ mergeAgentViews, resetAgentViews, deriveCost } = loadTs('src/renderer/src/store/agentView.ts'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -155,7 +173,7 @@ try {
 // default exports "per convention (implied by React/Vite tooling)"; measured 2026-08-21,
 // `grep -rl "export default" src/renderer/src --include=*.tsx` matches 0 of 63 files, so
 // a harness reaching for `.default` would get `undefined` from every one of them.
-for (const [name, value] of Object.entries({ PixelBadge, PixelButton, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks })) {
+for (const [name, value] of Object.entries({ PixelBadge, PixelButton, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks, AgentStatCard, mergeAgentViews })) {
   assert.equal(typeof value, 'function',
     `${name} did not come back from loadTs as a function — the component tests below would all render undefined`);
 }
@@ -373,6 +391,239 @@ test('FLOOR-13: the model chip is bounded, so it cannot drop the card\'s project
   // `renderToStaticMarkup` is a server render with NO LAYOUT. This proves the
   // guards are PRESENT. Whether the row actually composes without clipping at
   // 322px is an operator observation and is not claimed here.
+});
+
+test('SCALE-05: an agent at 7/8 with NO reported context limit still renders the coral compaction warning', (t) => {
+  // The regression the threshold rewire could silently cause, and the reason
+  // `deriveContextColor` has ONE signature and it is percentage-based.
+  //
+  // This card colours its gauge from the `progress` 0..8 INTEGER, not from a token
+  // count: `contextLimit` reaches only the tooltip. A `deriveContextColor(tokens,
+  // limit)` signature would therefore have been fed `undefined` here, returned the
+  // neutral accent, and deleted the "about to compact" warning for every agent whose
+  // limit was never reported — a safety indicator going dark with no test failing.
+  //
+  // This case asserts on an inline `style=` attribute, which the file header at :43
+  // otherwise forbids. The exception is deliberate and narrow: the colour IS the
+  // signal here, there is no text or accessible name carrying it, and the element is
+  // located by its own `title` rather than by counting styles document-wide.
+  seedServerSnapshot(t, { agents: [agentRow()] });
+  const gaugeFill = (markup) => {
+    const i = markup.indexOf('title="Context gauge');
+    assert.ok(i > 0,
+      'the gauge\'s own title is gone, so this case can no longer find the element it measures');
+    const hit = /background:([^;"]*)/.exec(markup.slice(markup.indexOf('<div style="width:', i)));
+    assert.ok(hit, 'the gauge fill element rendered no background — the bar has no colour at all');
+    return hit[1].trim();
+  };
+
+  assert.equal(
+    gaugeFill(html(React.createElement(AgentCard, cardProps({ progress: 7, contextLimit: undefined })))),
+    'var(--cth-coral)',
+    'an agent at 7/8 context with no reported limit lost its coral compaction warning');
+
+  // The two controls, so the case above cannot pass by the gauge being coral always.
+  assert.equal(
+    gaugeFill(html(React.createElement(AgentCard, cardProps({ progress: 6, contextLimit: undefined })))),
+    'var(--cth-lemon)', 'the 6/8 step no longer warns');
+  assert.equal(
+    gaugeFill(html(React.createElement(AgentCard, cardProps({ progress: 2, contextLimit: undefined })))),
+    'var(--cth-blue)', 'a comfortable agent is being coloured as though it were under pressure');
+});
+
+// ─── SCALE-05 — the consolidated stat card, on real markup ───────────────────────────
+//
+// COVERAGE STATEMENT, so no future reader mistakes these for grep checks: every
+// assertion below is on `renderToStaticMarkup` output from the REAL shipped
+// `AgentStatCard` exported by `src/renderer/src/components/AgentDetailPanel.tsx`. The
+// component is loaded, mounted and rendered; a card that stopped rendering a branch
+// fails here. The ceiling is stated at the loader above: the surrounding
+// `AgentDetailPanel` cannot be server-rendered (a two-arg `useSyncExternalStore` in
+// `design/theme.ts`), so THAT the panel mounts this card is pinned structurally in the
+// last case of this block, not proven by render.
+
+/** An agent row shaped as the card's `agent` prop. */
+const statAgent = (extra = {}) => ({
+  id: 'a1', name: 'Ada', accent: 'blue', command: 'claude', provider: 'claude', ...extra
+});
+
+/** Render the card with the agentView singleton seeded for this agent id. */
+function statCard(t, { agent = {}, view = undefined, accountLabel } = {}) {
+  resetAgentViews();
+  t.after(() => resetAgentViews());
+  if (view) mergeAgentViews({ [agent.id ?? 'a1']: view });
+  return html(React.createElement(AgentStatCard, { agent: statAgent(agent), accountLabel }));
+}
+
+test('SCALE-05: all five labels render, in the contract order', (t) => {
+  const markup = statCard(t, { view: { usd: 1, spawnedAt: Date.now() - 5000 } });
+
+  // Read the LABEL elements, not the card's visible text. A `text.includes('account')`
+  // check is worthless here and was measured to be: the account cell's VALUE is
+  // `Login account`, so the substring survives the label being renamed or dropped
+  // entirely — a mutant that renamed it passed. `--cth-text-body-sm` is the label
+  // element's own size token and nothing else in this card uses it.
+  const labels = [...markup.matchAll(/<div style="[^"]*--cth-text-body-sm[^"]*">([^<]*)<\/div>/g)]
+    .map((m) => m[1]);
+  assert.deepEqual(labels, ['cost', 'up', 'context', 'account', 'state'],
+    `the card's five labels are wrong, reordered or missing (rendered: ${JSON.stringify(labels)})`);
+});
+
+test("SCALE-05: a costTracking:'none' engine renders `no cost meter` with NO $ anywhere", (t) => {
+  // grok is a 'none'-tier preset — pinned against the real table rather than assumed,
+  // so this case says so instead of quietly asserting nothing if the tiers move.
+  assert.equal(AGENT_PROVIDER_PRESETS.find((p) => p.id === 'grok')?.costTracking, 'none',
+    'grok is no longer a costTracking:\'none\' engine — re-derive which preset is before trusting this case');
+
+  // THE PREMISE, pinned rather than assumed: this fixture must actually take the
+  // unmeasured branch. Without it, a `deriveCost` that started returning a measured
+  // value for a 'none' engine would make the `$`-free assertion below pass for the
+  // wrong reason — the cell would be rendering nothing at all, not a declared gap.
+  const grokPreset = AGENT_PROVIDER_PRESETS.find((p) => p.id === 'grok');
+  assert.partialDeepStrictEqual(
+    deriveCost({ usd: 0, costUnattributed: false }, grokPreset.costTracking, grokPreset.label, 'Ada'),
+    { kind: 'unmeasured', reasonKind: 'no-meter' },
+    'the fixture below no longer produces an unmeasured cost, so its no-$ assertion proves nothing');
+
+  const markup = statCard(t, {
+    agent: { provider: 'grok', command: 'grok' },
+    view: { usd: 0, costUnattributed: false }
+  });
+  const text = visibleText(markup);
+  assert.ok(text.includes('no cost meter'),
+    'an engine that cannot report spend renders no declared gap — the cell reads as a measurement');
+  // T-03-08b's claimed mitigation, made real: the whole rendered card carries no `$`.
+  assert.ok(!markup.includes('$'),
+    'the card rendered a `$` for an engine with no cost meter — a $0.00 that reads as "cheap" is the faked zero D-35 forbids');
+});
+
+test("SCALE-05: an unattributable CLAUDE agent is NOT told its engine has no meter", (t) => {
+  // The round-9 defect, on markup. `costUnattributed: true` is 03-02's common case
+  // (`!u && !own`), and claude HAS a meter — so the engine-level sentence here would be
+  // a false capability claim on the path most agents take.
+  // Same premise pin as the no-meter case: claude is an 'otel' engine, so the ONLY
+  // thing that can make this unmeasured is `costUnattributed`.
+  assert.partialDeepStrictEqual(
+    deriveCost({ usd: 0, costUnattributed: true }, 'otel', 'Claude', 'Ada'),
+    { kind: 'unmeasured', reasonKind: 'unattributed' },
+    'costUnattributed no longer produces its own gap — the card would print a measured $0.00 for an agent whose spend is unknown');
+
+  const markup = statCard(t, { view: { usd: 0, costUnattributed: true } });
+  const text = visibleText(markup);
+  assert.ok(!text.includes('no cost meter'),
+    'an unattributable Claude agent is told its engine reports no cost — it does; what is missing is the per-agent attribution, and naming the wrong gap sends the operator to the wrong fix');
+  assert.ok(text.includes('spend not attributable'),
+    'the unattributed gap renders no words of its own');
+  assert.ok(!markup.includes('$'),
+    'a `$` rendered for an agent whose spend cannot be attributed — that is precisely the faked zero');
+});
+
+test('SCALE-05: a measured engine that spent nothing DOES render $0.00', (t) => {
+  // The other direction, and it is the control that stops the three cases above from
+  // passing by the card simply never printing a dollar sign.
+  const text = visibleText(statCard(t, { view: { usd: 0, costUnattributed: false } }));
+  assert.ok(text.includes('$0.00'),
+    'a metered engine that has genuinely spent nothing no longer shows $0.00 — the gap branch has swallowed a real measurement');
+});
+
+test('SCALE-05: an all-time transcript total renders labelled, never as this session', (t) => {
+  const markup = statCard(t, { view: { usd: 1.23, costLifetime: true, costUnattributed: false } });
+  assert.match(visibleText(markup), /\$1\.23 \(lifetime\)/,
+    'a cumulative all-time figure renders as a bare dollar amount beside an `up` clock that resets every respawn — it claims a window it never had');
+  assert.match(markup, /title="[^"]*ALL-TIME[^"]*"/,
+    'the lifetime figure carries no explanation of what window it covers');
+
+  const session = visibleText(statCard(t, { view: { usd: 1.23, costLifetime: false, costUnattributed: false } }));
+  assert.ok(session.includes('$1.23') && !session.includes('lifetime'),
+    'an ordinary session figure is being labelled lifetime — the discriminator is not reaching the render');
+});
+
+test('SCALE-05: an agent with no spawnedAt renders `not recorded`, never 0s', (t) => {
+  const text = visibleText(statCard(t, { view: { usd: 0, costUnattributed: false } }));
+  assert.ok(text.includes('not recorded'),
+    'an agent with no spawn stamp renders no declared gap in the `up` cell');
+  assert.ok(!/\b0s\b/.test(text),
+    '`0s` rendered for an agent whose spawn time was never recorded — that reads as "it just started", the opposite of the truth for an agent up for days');
+
+  // The control: a real stamp still produces a real clock.
+  const up = visibleText(statCard(t, { view: { spawnedAt: Date.now() - 4 * 60_000 } }));
+  assert.ok(up.includes('4m'), 'a recorded spawn stamp no longer renders an uptime');
+  assert.ok(!up.includes('not recorded'), 'the gap string renders even when the stamp is present');
+});
+
+test('SCALE-05: an agent with no context pair renders `not reported`, never 0% and no rail', (t) => {
+  // Round-3 #27: UI-SPEC S2b mandates this branch and, until this plan, nothing in the
+  // plan set implemented it — `context` was the one of five cells with no gap path.
+  const markup = statCard(t, { view: { usd: 0, costUnattributed: false } });
+  const text = visibleText(markup);
+  assert.ok(text.includes('not reported'),
+    'an agent with no reported context window renders no declared gap');
+  assert.ok(!text.includes('%'),
+    'a percentage rendered for an agent that reported no context window — `0%` reads as "empty context", which is a measurement nobody took');
+  // `not recorded` and `not reported` are DIFFERENT strings for DIFFERENT facts, and
+  // neither may stand in for the other.
+  assert.ok(text.includes('not recorded') && text.includes('not reported'),
+    'the two gap strings have been merged — `not recorded` is the missing spawn stamp and `not reported` is the missing token/limit pair');
+
+  const measured = visibleText(statCard(t, {
+    agent: { contextTokens: 50_000, contextLimit: 200_000 },
+    view: { usd: 0, costUnattributed: false }
+  }));
+  assert.ok(measured.includes('50k / 200k (25%)'),
+    'a fully reported context window no longer renders its numbers');
+  assert.ok(!measured.includes('not reported'), 'the gap string renders over a real measurement');
+});
+
+test('SCALE-05: block state reads `unknown` before the breaker resolves, never `healthy`', (t) => {
+  // D-36, on markup. `onBreakerState` only fires on the next ~30s beat, so a card that
+  // defaulted to healthy would call a STOPPED agent safe for a full beat after every
+  // window reload.
+  const text = visibleText(statCard(t, { view: { usd: 0, costUnattributed: false } }));
+  assert.ok(text.includes('unknown'),
+    'a card whose breaker snapshot has not resolved renders no state at all');
+  assert.ok(!text.includes('healthy'),
+    'the state cell defaulted to `healthy` for an agent the breaker has never reported on — that is failing safe in the wrong direction');
+
+  const stopped = statCard(t, { view: { breaker: { level: 'stopped', reason: 'budget exhausted' } } });
+  assert.ok(visibleText(stopped).includes('stopped'), 'a resolved breaker level no longer renders');
+  assert.match(stopped, /title="[^"]*budget exhausted[^"]*"/,
+    "an armed breaker renders without its reason, so the operator sees that an agent was cut off and not why");
+});
+
+test('SCALE-05: the account cell names the login account rather than rendering blank', (t) => {
+  assert.ok(visibleText(statCard(t, { view: { usd: 0 } })).includes('Login account'),
+    'an agent with no pool pin renders an empty account cell — "no pin" has a real, shipped name');
+  assert.ok(visibleText(statCard(t, { view: { usd: 0 }, accountLabel: 'work' })).includes('work'),
+    'a pinned account label is not reaching the cell');
+});
+
+test('SCALE-05: the card reflows rather than pinning five fixed columns', (t) => {
+  // The container is the only layout claim this harness can make — a server render has
+  // no layout, so the COLUMN COUNT at a given width is an operator measurement (plan
+  // 03-08 Task 4) and is not claimed here. What IS checked is that the declaration
+  // which makes reflow possible is present, because a fixed five-column row is the
+  // "one unshrinkable sibling" shape that once drove this app's agent name to 0 width.
+  const markup = statCard(t, { view: { usd: 0 } });
+  assert.match(markup, /grid-template-columns:repeat\(auto-fit,\s*minmax\(120px,\s*1fr\)\)/,
+    'the stat card no longer declares an auto-fit/minmax grid — it cannot reflow in the docked rail');
+});
+
+test('SCALE-05: AgentDetailPanel actually MOUNTS the card, and the god deliberately does not', () => {
+  // STRUCTURAL, and labelled as such: the panel cannot be server-rendered (see the
+  // loader comment), so "the card is on screen for a worker" is asserted on source.
+  // Without this clause every case above could pass against a component nothing renders
+  // — the producer-with-no-consumer shape this plan exists to close in the first place.
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/AgentDetailPanel.tsx'), 'utf8');
+  assert.match(src, /<AgentStatCard\b/,
+    'AgentDetailPanel no longer renders AgentStatCard — the card exists and nothing shows it');
+  assert.ok(src.indexOf('<AgentStatCard') < src.indexOf('<BlockedBanner'),
+    'the stat card moved below the BlockedBanner — :216-221 records that the banner sits directly above the tabs on purpose, because a prompt waiting on a human outranks whichever tab is open');
+
+  // S2d's residual, declared where the code makes it.
+  const godReturn = src.indexOf('if (agent.isGod)');
+  assert.ok(godReturn > 0, 'the god early-return is gone — S2d\'s residual no longer describes this file');
+  assert.match(src.slice(Math.max(0, godReturn - 900), godReturn), /neither duration\s*\n?\s*\/\/\s*nor account|NEITHER DURATION[\s\S]{0,40}NOR ACCOUNT/i,
+    'the god-coverage gap is no longer stated at the early return that causes it — S2d requires it be declared out loud, not implied');
 });
 
 // ─── relAge — VIGIL-04's one shared formatter (04-UI-SPEC § S5 rule A-1) ──────────────

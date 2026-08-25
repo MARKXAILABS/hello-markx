@@ -9,6 +9,7 @@ import { AccentColorName } from '@/design/tokens';
 import { OfficeCharacterName } from '@/scene/office/cast';
 import { useStore } from '@/store/store';
 import { agentRowForCard, isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
+import { deriveContextColor } from '@/store/agentView';
 import { shortModel } from './FullscreenTerminal';
 import {
   inferAgentProvider,
@@ -159,12 +160,24 @@ export function AgentCard({
   // over whatever accent the card already carries.
   const selectionRing = selected ? '0 0 0 2px var(--cth-ink-900)' : '';
 
-  // Context gauge as ONE clean fill (0..8 → 0..100%). Colour escalates as the
-  // window fills: accent while comfortable, amber from 6/8, coral from 7/8.
+  // Context gauge as ONE clean fill (0..8 → 0..100%). The GEOMETRY stays a 0..8
+  // bucket — it is a rendering detail of a 322px card and D-34 keeps the card's box
+  // exactly as it is — but the COLOUR now comes from the shared 85/65 threshold in
+  // `store/agentView.ts` instead of this file's own `progress >= 7`/`>= 6` steps.
+  //
+  // Those steps were 87.5/75 in disguise, and they were one of three different
+  // answers this app gave to "is this agent about to compact?" (85/65 in
+  // FullscreenTerminal, 88/75 in CommandCenterPanel, 87.5/75 here). Fed the `pct`
+  // already computed on the line above, the rendered colour is UNCHANGED at every
+  // integer bucket — 7 -> 87.5 -> coral, 6 -> 75 -> lemon — so this is a change of
+  // source, not of appearance.
+  //
+  // `pct`, never `(contextTokens, contextLimit)`: this card has no measured limit in
+  // its colour path at all (`contextLimit` reaches `gaugeTitle` below and nothing
+  // else), so a tokens/limit call would go neutral and silently drop the compaction
+  // warning for every agent whose limit was never reported.
   const pct = Math.min(8, Math.max(0, progress)) / 8 * 100;
-  const gaugeColor = progress >= 7 ? 'var(--cth-coral)'
-    : progress >= 6 ? 'var(--cth-lemon)'
-      : `var(--cth-${accent})`;
+  const gaugeColor = deriveContextColor(pct, accent);
   const gaugeTitle = contextTokens !== undefined && contextLimit
     ? `Context: ${fmtK(contextTokens)} / ${fmtK(contextLimit)} tokens (${Math.round((contextTokens / contextLimit) * 100)}%)`
     : 'Context gauge — fills once the agent reports activity';

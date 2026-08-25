@@ -21,6 +21,7 @@ import { useHasTerminalDraft, disposeTerminal } from './terminalPool';
 import { useAppTheme, toggleAppTheme } from '@/design/theme';
 import { basename, groupKey, useAgentGroups } from './agentGroups';
 import { isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
+import { deriveContextColor } from '@/store/agentView';
 import type { HarnessConfig } from '@/store/config';
 
 /** Roster rail width. A fixed 232px is right on a 14" laptop but reads as a
@@ -526,11 +527,17 @@ export function shortModel(model?: string): string | null {
 }
 
 /** Context fullness as a 3px rail. Colour tracks pressure rather than identity —
- *  an agent at 85% is about to compact, and that matters more than its accent. */
+ *  an agent at 85% is about to compact, and that matters more than its accent.
+ *
+ *  That sentence is why 85/65 is the pair the whole app now shares: it was the only
+ *  one of the three shipped thresholds with a written reason, and a real mechanism
+ *  (the compaction boundary) outranks two numbers nobody documented. The pair moved
+ *  to `store/agentView.ts` unchanged, so every colour this rail renders is identical
+ *  to before — only its SOURCE moved. */
 function ContextBar({ tokens, limit, accent }: { tokens?: number; limit?: number; accent: string }) {
   if (tokens === undefined || !limit) return null;
   const pct = Math.max(0, Math.min(100, Math.round((tokens / limit) * 100)));
-  const color = pct >= 85 ? 'var(--cth-coral)' : pct >= 65 ? 'var(--cth-lemon)' : `var(--cth-${accent})`;
+  const color = deriveContextColor(pct, accent);
   const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
   return (
     <div

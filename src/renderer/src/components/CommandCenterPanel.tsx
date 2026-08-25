@@ -48,6 +48,7 @@ import {
   type ClaudeAccount,
   type PoolSnapshot
 } from '@/store/config';
+import { deriveContextColor } from '@/store/agentView';
 import { canReceiveInbox } from '@shared/agentProvider';
 import { isAutoModeAgent, getLiveAutoMode, subscribeLiveAutoMode } from '@/store/autoMode';
 
@@ -911,7 +912,11 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
               <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-300)', flexShrink: 0 }}>ctx</span>
               {a.contextTokens !== undefined && a.contextLimit ? (() => {
                 const cpct = Math.min(100, Math.round((a.contextTokens! / a.contextLimit!) * 100));
-                const ccolor = cpct >= 88 ? 'var(--cth-coral)' : cpct >= 75 ? 'var(--cth-lemon)' : `var(--cth-${a.accent})`;
+                // The ONE shared 85/65 threshold (store/agentView.ts). This row used to
+                // carry its own 88/75 pair with no written reason for either number, so
+                // an agent at 86% read "about to compact" on the fullscreen roster and
+                // comfortable here — the same agent, two answers, one screen apart.
+                const ccolor = deriveContextColor(cpct, a.accent);
                 return (
                   <>
                     <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', color: 'var(--cth-ink-900)', width: 56, textAlign: 'right' }}>
