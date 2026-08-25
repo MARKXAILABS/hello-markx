@@ -7,6 +7,12 @@ preset: none
 created: 2026-08-25
 mode: auto — every gray area resolved to its researched recommendation and logged in §Auto-Mode Decision Log
 measured_at: worktree gsd-plan-phase-04, base gsd/v1.0-floor-closure, HEAD e504735
+revised: 2026-08-25 — rev 2, after gsd-ui-checker returned BLOCKED. Fixes B1 (the
+  `PixelBadge` enumeration was wrong and hid an override that swallows `blocked`),
+  B2 (D-25's phone channel was dropped without a recorded deviation), B3 (focus
+  placement on a timed destructive prompt was unspecified), plus four citation
+  corrections. Every contrast figure in rev 1 was independently recomputed and
+  confirmed — none changed.
 ---
 
 # Phase 4 — UI Design Contract
@@ -39,7 +45,7 @@ restore-point browser.
 | Tool | **none** — `DESIGN.md` (719 lines) + `src/renderer/src/design/tokens.css` (175 lines) are the system |
 | Preset | not applicable |
 | Component library | in-house: `PixelPanel`, `PixelButton` (`PixelButton.tsx:3` — `primary`/`secondary`/`ghost`/`destructive`), `PixelBadge` (`PixelBadge.tsx:3-12` — ten `StatusKind`s), `Modal` (`Modal.tsx:151-153` — `role="dialog"`, `aria-modal`, focus trap, focus restore), `BlockedBanner`, `Icon`, `SpritePortrait` |
-| Icon library | in-house 16×16 pixel paths — `Icon.tsx:6-10`, eighteen names. **`clock` and `bell` already exist**; this phase adds no icon |
+| Icon library | in-house 16×16 pixel paths — `Icon.tsx:6-10`, **22** names (union re-counted this session; rev 1 said eighteen). **`clock` and `bell` already exist**; this phase adds no icon |
 | Font (desktop) | `--cth-font-display` Press Start 2P · `--cth-font-ui` Inter · `--cth-font-mono` JetBrains Mono (`tokens.css:55-57`) |
 | Font (phone) | system stack only, no webfont (`resources/phone/index.html:33-34`) — 02-UI-SPEC §Typography — phone |
 | Styling mechanism | **CSS custom properties + inline `style={{}}`.** No CSS modules, no Tailwind, no styled-components, no PostCSS. Only two `.css` files exist in `src/`: `design/tokens.css` and `design/global.css` (verified by `find src -name "*.css"`, this session) |
@@ -67,7 +73,7 @@ Existing, unchanged. `tokens.css:41-50`. Base unit 4px (`DESIGN.md:151-155`).
 |-------|-------|-------|
 | `--cth-space-1` | 4px | icon gaps, chip padding |
 | `--cth-space-2` | 8px | compact element spacing |
-| `--cth-space-3` | 12px | row gaps, banner padding (`BlockedBanner.tsx:15`) |
+| `--cth-space-3` | 12px | row gaps. *(`BlockedBanner.tsx:15` is the numeric literal `padding: 12,` — the same 12px, **not** this token. Recorded under Known Drift; not corrected here.)* |
 | `--cth-space-4` | 16px | default element spacing |
 | `--cth-space-5` | 24px | section padding |
 | `--cth-space-6` | 32px | layout gaps |
@@ -168,9 +174,10 @@ Nothing else. **This phase adds no new hue and no new token.**
 ### The one addition, justified
 
 **Coral for the `QUIET` chip is "destructive" in Phase 1's plain sense, and it cannot collide with a
-status badge.** Phase 2's §S4a argument transfers verbatim and was re-verified this session: **no
-`PixelBadge` is rendered anywhere in the titlebar** — the three `PixelBadge` sites are
-`AgentCard.tsx:446`, `FullscreenTerminal.tsx:710` and `:956`. The positional half of
+status badge.** Phase 2's §S4a argument transfers verbatim, but rev 1's evidence for it was wrong
+and is replaced. **Re-measured this session: there are nine `PixelBadge` render sites, and none of
+them is in the titlebar.** `App.tsx:411-440` — the entire titlebar chip strip — renders no
+`PixelBadge` at all. Full enumeration in §S4 rule V-1. The positional half of
 `DESIGN.md:707` ("colour + icon + position … never colour alone") is therefore satisfied by
 construction, and the chip additionally carries a word (`QUIET`) and, at the wide step, a duration.
 
@@ -234,7 +241,7 @@ Thirteen existing properties (`resources/phone/index.html:12-24`), **plus exactl
 
 | New phone property | Value | Copies | Usage |
 |---|---|---|---|
-| `--p-warn-fill` | `#3B2724` | `--cth-coral-light` (dark, `tokens.css:152`) | **the `kind:'tool'` ask card's header band, and nothing else** |
+| `--p-warn-fill` | `#3B2724` | `--cth-coral-light` (dark, `tokens.css:152`) | **two surfaces, both in the warn register, and nothing else:** the `kind:'tool'` ask card's header band (§S1b) and the floor-quiet strip (§S6a rule Q-1b) |
 
 **Why it exists.** `--p-accent-fill` (#2B2740 = `--cth-lilac-light` dark) is the header band under
 `--p-accent`. A tool-approval card needs the *same construction* in the warn register, and
@@ -346,6 +353,15 @@ ignored. `The floor has stopped / is waiting on you` and `Michael is gone / is w
 both still truthful under that reading. A title like `Floor` or `Alert` would not be. See §S6 for
 the forward/backward-compatible push payload.
 
+**The phone's persistent strip** (§S6a rule Q-1b) uses the same three cases in one sentence, since
+it has no title/body split:
+
+| Case | Strip copy |
+|---|---|
+| Floor quiet | `The floor has stopped. Nothing has moved for 32m. 2 cards were in flight.` |
+| Floor quiet, nothing in flight | `The floor has stopped. Nothing has moved for 32m. No cards were in flight.` |
+| The god died | `Michael is gone. The floor has no orchestrator, and nothing has moved for 32m.` |
+
 **No exclamation mark.** `DESIGN.md:652` reserves them for completions; a stall is not one.
 
 ### Error / race states
@@ -434,6 +450,57 @@ model-controlled process.
    unbounded model-controlled string into a fixed-width row.
 3. Same rule for the GATE-03/GATE-05 `command` field: **cap at 512 characters in main**.
 
+### A9 — focus survives resolution *(new, this phase)*
+
+A1–A8 cover accessible **names**, roles, the focus **ring** (`global.css:93-95`) and target size.
+**None of them covers where focus goes.** Two rules in this contract destroy the element the
+operator is standing on, so this rule is not optional and is not a nicety: §S1a rule 4 **replaces**
+the desktop action row on resolution, and §S1b **disables** both phone decision buttons at
+`expired`. In both cases the node holding focus is overwhelmingly `approve` or `deny` — the
+operator just pressed one — and losing it drops focus to `<body>`, stranding a keyboard or AT
+operator at the top of the document at the exact moment they answered a destructive prompt.
+
+**A9.1 — the banner does NOT take focus on arrival.** §S1a rule 5 and decision #29 stand: no
+autofocus, no `.focus()` on mount, no `Modal`-style trap. An ask that arrives while the operator is
+mid-sentence in another agent's terminal moves nothing. Arrival is announced by A7 clause 4's
+assertive region and by nothing else. *(Stated explicitly so an executor reading rule 5 does not
+read A9 as a licence to focus the banner.)*
+
+**A9.2 — when the focused control unmounts or disables, focus moves in the SAME render.** Guarded,
+in both cases, on focus having been inside the surface that is changing:
+
+```ts
+// desktop — in the same effect/render that swaps the action row
+if (bannerRef.current?.contains(document.activeElement)) dismissRef.current?.focus();
+```
+
+- Focus was elsewhere (a terminal, another panel) → **nothing moves.** A9.1 holds; the guard is what
+  makes A9 and rule 5 compatible rather than contradictory.
+- Focus was on `approve` / `deny` → it lands on `dismiss`, one key from done, at the point in
+  document order the operator already occupied.
+
+**A9.3 — the target, named per surface. Never `<body>`, never implicit.**
+
+| Surface | Trigger | Focus moves to |
+|---|---|---|
+| Desktop banner | §S1a rule 4 replaces the action row | the `dismiss` button (`BlockedBanner.tsx:78-80`) |
+| Desktop banner, no dismissable control rendered | any | the banner container itself, `tabIndex={-1}` |
+| Phone screen 2 | countdown hits `expired`, both buttons `disabled` | the existing `‹ back` button (`index.html:379`, `.p-back` at `:154`) — the only interactive element left on the screen once the two decision buttons disable, and the operator's way out |
+
+> **This costs almost no code.** `BlockedBanner.tsx:78-80` **already** renders a `dismiss` button
+> whenever `reason.actions.length === 0`. §S1a rule 4's "replace the action row" is therefore
+> literally *set `actions: []` and set the outcome line* — the dismiss button appears with no new
+> JSX, and A9 only has to add a `ref` and one guarded `.focus()`.
+
+**A9.4 — focus moves BEFORE A7 clause 3 announces.** `Approved.` / `Denied.` spoken into a polite
+region while focus sits on `<body>` tells the AT operator the outcome and simultaneously loses them
+their place. Move first, announce second; a polite region will not interrupt the focus move.
+
+**Why not reuse `Modal`'s machinery.** `Modal.tsx:104` restores focus to the opener and `:126-132`
+traps it inside. Both are correct for a consent dialog the operator opened deliberately and both are
+wrong for a timed interrupt that arrives unbidden (§S1a, decision #2). A9 takes `Modal`'s *restore*
+instinct without its *trap* and without its *seize-on-open*.
+
 ---
 
 ## Containment Protocol — how the plan proves it did not break the layout
@@ -516,6 +583,8 @@ export interface PhoneAsk {
   askedAt?: string;
   kind?: 'card' | 'tool';  // NEW. Absent === 'card' — every existing producer stays valid.
   expiresInMs?: number;    // NEW, kind:'tool' only. A DURATION, never a deadline. See G-3.
+  // NO THIRD KIND. The floor-quiet alarm reaches the phone on the SAME response
+  // as a sibling field, not as an ask — §S6a rule Q-1b states the reason.
 }
 ```
 
@@ -636,11 +705,20 @@ an **ask** that is a defect with teeth: `git push origin +main --force` truncate
   `overflowY: 'auto'`. It wraps and scrolls. It never ellipsises.
 - `askId` absent (a GATE-03 notice) → today's ellipsis is retained. That command already did not run.
 
-**Rule 4 — resolution never makes the banner vanish.** When the ask resolves (answered here,
-answered on the phone, or expired) the action row is **replaced** by a one-line outcome from the
-Copywriting Contract plus a `dismiss` button. A banner that silently disappears leaves the operator
-unable to tell whether they approved something. It persists until dismissed; the next ask for that
-agent overwrites it (`blockReason` is singular per agent, `store.ts:56`).
+**Rule 4 — resolution never makes the banner vanish, and it never drops focus.** When the ask
+resolves (answered here, answered on the phone, or expired) the action row (`BlockedBanner.tsx:60-82`)
+is **replaced** by a one-line outcome from the Copywriting Contract plus a `dismiss` button. A banner
+that silently disappears leaves the operator unable to tell whether they approved something. It
+persists until dismissed; the next ask for that agent overwrites it (`blockReason` is singular per
+agent, `store.ts:56`).
+
+Mechanically this is *set `actions: []` and set the outcome* — `BlockedBanner.tsx:77-80` already
+renders the `dismiss` button on exactly that condition, so the swap needs no new JSX.
+
+> **⚠ This rule unmounts the node the operator is standing on.** They just clicked `approve` or
+> `deny`; that button is gone in the next render and focus falls to `<body>`. **Rule A9.2 is
+> mandatory here, not optional** — focus moves to `dismiss` in the same render, guarded on focus
+> having been inside the banner.
 
 **Rule 5 — an ask never steals selection.** The banner only renders for the selected agent. For an
 unselected agent the roster signal is the existing `PixelBadge status="blocked"` → `needs you`
@@ -720,6 +798,10 @@ counts *up*, and the countdown takes a duration and counts *down*.
 - **The command is never truncated on screen 2** (`white-space: pre-wrap; word-break: break-all`),
   same rule and same reason as §S1a rule 3.
 - Both buttons `disabled` while a POST is in flight and once the countdown reaches `expired`.
+  **A9.2/A9.3 apply at `expired`**: disabling the focused button strands focus on `<body>`, so focus
+  moves to the `‹ back` button (`index.html:379`) in the same render, guarded on focus having been
+  on one of the two decision buttons. *(The in-flight case needs no move — `sending…` resolves in
+  under a second and the button remounts enabled or replaced.)*
 
 **Send semantics.** POST `/phone/api/answer` with `{ taskId: <askId>, answer: 'approve' | 'deny' }`.
 `answer` must be non-empty to pass `webhook.ts:670`; these two literals do. Main maps them to the
@@ -878,19 +960,86 @@ out at the moment they are reading the way in.
 
 ### S4 — VIGIL-03: blocked is a visible state
 
-#### Rule V-1 — the renderer renders a state main owns. It draws nothing new.
+#### Rule V-1 — nine badge sites, seven of them agent-status, and exactly one of them is broken
 
-Verified this session: **all three roster surfaces already render `agent.status` through the same
-component** — `AgentCard.tsx:446`, `FullscreenTerminal.tsx:710` and `FullscreenTerminal.tsx:956`,
-each `<PixelBadge status={typing ? 'typing' : status} />`. `PixelBadge.tsx` (colour map `:20-31`, label map `:36-49`) already maps
-`blocked` to `--cth-status-blocked` **plus** the label `needs you`, and `idle` to
-`--cth-status-idle` plus `idle`.
+> **⚠ REV 2 — this rule replaces a false claim.** Rev 1 said "all three roster surfaces" and named
+> three sites. There are **nine** `PixelBadge` render sites. The miscount hid a real VIGIL-03
+> defect, so the full enumeration is now part of the contract rather than a sample of it.
 
-**Therefore the blocked/idle distinction is already non-colour-only and already correct on every
-surface.** VIGIL-03's fix is entirely in *where the state comes from* — `delivery.ts:740`'s
-unguarded `setStatus(…, 'idle')` and main-side `BLOCK_HINTS` (RESEARCH §Pattern 9) — and requires
-**zero component changes and zero new tokens**. This contract exists here to say so explicitly,
-because "make blocked visible" reads like a design task and is not one.
+`grep -rn "<PixelBadge" src/`, this session — **nine sites, all nine listed**:
+
+| # | Site | `status` expression | Agent status? | `blocked` reaches the badge? |
+|---|---|---|---|---|
+| 1 | `AgentCard.tsx:446` | `typing ? 'typing' : status` | yes | **yes** |
+| 2 | `AgentDetailPanel.tsx:139` | `agent.status` | yes | **yes** |
+| 3 | `CommandCenterPanel.tsx:190` | `agent.status` | yes | **yes** |
+| 4 | **`CommandCenterPanel.tsx:795`** | **`armed ? 'looping' : a.status`** | yes | **NO — see rule V-1b** |
+| 5 | `FullscreenTerminal.tsx:710` | `typing ? 'typing' : agent.status` | yes | **yes** |
+| 6 | `FullscreenTerminal.tsx:956` | `typing ? 'typing' : agent.status` | yes | **yes** |
+| 7 | `MemoryGraphPanel.tsx:378` | `node.status` — `AgentNode.status: StatusKind` (`memoryGraph/buildGraph.ts:18`) | yes | yes — but it is a **hover tooltip** (`NodeTip`, `:370`), not a persistent surface |
+| 8 | `AskMeTab.tsx:231` | `status="blocked"` **literal**, `label={recipient}` | no | n/a — the badge is a coloured label chip, the status is decoration |
+| 9 | `TasksKanban.tsx:342` | `status="working"` **literal**, `label={assigneeName}` | no | n/a — same, a label chip |
+
+**Seven carry an agent status** (1–7); two (8, 9) are the badge used as a label chip with a
+hard-coded status and are irrelevant to VIGIL-03. *(The checker's report counted six; the seventh is
+`MemoryGraphPanel.tsx:378`, confirmed agent-status-typed at `buildGraph.ts:18` this session. It is
+listed for completeness — it maps `blocked` correctly and needs no change.)*
+
+`PixelBadge.tsx` maps the state on **two** channels: colour (`:20-31` — `blocked` →
+`--cth-status-blocked`) **plus** a word (`:36-49` — `blocked` → `needs you`, `idle` → `idle`). So on
+sites 1, 2, 3, 5, 6 and 7 the blocked/idle distinction is already non-colour-only and already
+correct, and VIGIL-03 needs **zero component changes and zero new tokens** on them. Its fix there is
+entirely in *where the state comes from* — `delivery.ts:740`'s unguarded `setStatus(…, 'idle')` and
+main-side `BLOCK_HINTS` (RESEARCH §Pattern 9).
+
+**Site 4 is the exception, and it is a real defect, not a note.**
+
+#### Rule V-1b — the `armed` override may NOT swallow `blocked`. Binding.
+
+`CommandCenterPanel.tsx:795` renders:
+
+```tsx
+<PixelBadge status={armed ? 'looping' : a.status} />
+```
+
+`armed` is the Lane-A circuit breaker (`:742`: `!!breaker && (breaker.level === 'constrained' ||
+breaker.level === 'stopped')`). While it is set, **a blocked agent reads `looping` on this roster.**
+VIGIL-03's requirement is *"an agent blocked on a prompt is visibly blocked"*; on this surface,
+under a tripped breaker, it is not — the badge is that row's only blocked signal and the override
+takes it.
+
+**Mandated shape:**
+
+```tsx
+<PixelBadge status={a.status === 'blocked' ? 'blocked' : armed ? 'looping' : a.status} />
+```
+
+**Why `blocked` wins, and why this is not a coin-toss.** `blocked` means *a human must act*;
+`looping` means *the breaker tripped and the floor is already handling it*. At 3am the operator can
+only act on the first. But the deciding evidence is that **the armed state loses nothing**, because
+it already has two other channels on this exact row:
+
+| Armed channel | Location | Survives the fix |
+|---|---|---|
+| row fill → `--cth-coral-light` | `CommandCenterPanel.tsx:760` | yes, untouched |
+| `⚠` glyph with `title={breaker?.reason}` | `CommandCenterPanel.tsx:796` | yes, untouched |
+| the badge reading `looping` | `:795` | surrendered **only** when the agent is `blocked` |
+
+So the fix costs `armed` one of three signals in one narrow case, and gives `blocked` its only
+signal back. That is not a trade, it is a strict improvement. `DESIGN.md:707` ("colour + icon +
+position … never colour alone") stays satisfied for both states.
+
+**One accessibility clause rides with it.** `:796`'s `⚠` is `aria-hidden="true"`, and a `title` on
+an `aria-hidden` span is not announced — so for an AT operator the badge is *also* that row's only
+armed signal. When both conditions are true the badge says `needs you`, which would leave the
+breaker silent. **Therefore: when `armed && a.status === 'blocked'`, the `⚠` span drops
+`aria-hidden` and takes `role="img"` + ``aria-label={`circuit breaker: ${breaker?.reason}`}``** —
+A2's shipped pattern (`TasksKanban.tsx:262`), applied where it is now load-bearing. Both truths
+reach both kinds of operator; neither state is silent.
+
+**Scope.** This is one expression and one conditional `aria` swap in a file this phase already
+touches. It is not an opportunistic fix (decision #30): it is the literal text of VIGIL-03's
+acceptance criterion failing on a shipped surface.
 
 | State | Swatch | Label | Distinguished by |
 |---|---|---|---|
@@ -1004,9 +1153,15 @@ always renders:
 
 **No new row, no height change.** The row already exists; it becomes unconditional.
 
-**ASK ME card (`AskMeTab.tsx:212-222`).** The header row is
-`[title button flex:1] [recipient PixelBadge] [dismiss ✕]`. Insert the age **before** the badge,
-`flexShrink: 0`, same treatment. The header's `gap: 8` absorbs it.
+**ASK ME card (`AskMeTab.tsx:210-234`).** Re-read this session — rev 1's `212-222` did not contain
+the insertion point. The header `<div>` opens at **`:210`** (`display: 'flex', alignItems: 'center',
+gap: 8, padding: '6px 9px'` at `:211`) and holds, in order: the title `<button>` (`:214-224`,
+`flex: 1`), the recipient badge wrapped in a `title` span (`:230-232`, the `PixelBadge` itself at
+**`:231`**), and the dismiss `<button>` (from `:234`).
+
+**Insert the age immediately before the badge's wrapper span — that is, before `:230`** —
+`flexShrink: 0`, same treatment as the kanban card. The header's existing `gap: 8` absorbs it and
+the title button's `flex: 1, minWidth: 0` gives up the width.
 
 **Per A4, the agent card is untouched** — it carries no task age.
 
@@ -1016,15 +1171,25 @@ always renders:
 
 #### S6a — the once-only alarm (VIGIL-01)
 
-**Three channels, one edge, no repeats.**
+**D-25's three channels, plus one persistent surface on each platform. One edge, no repeats.**
 
-| Channel | Mechanism | Fires |
-|---|---|---|
-| Desktop toast | `deps.notify({title, body})` (`index.ts:4780`), gated on `readConfig().notifications` like every other toast (`boot.ts:411-413`) | **once** per quiet edge |
-| Web Push | `src/main/push.ts` → `sw.js` | **once** per quiet edge |
-| In-app | **titlebar `QUIET` chip** | persists while the latch is set |
+`04-CONTEXT.md:351-353` locks the channel set verbatim: *"Route the alarm through the same three
+channels as D-09 (desktop `Notification`, the phone ask list, Web Push) so 'the operator is told'
+does not mean 'a window was open'."* All three are here. **Rev 1 substituted the titlebar chip for
+the phone ask list; that was a silent deviation from a locked decision and is corrected below** —
+the chip is an *addition*, not a replacement, and the phone gets its own persistent surface.
 
-**Rule Q-1 — the chip is the in-app affordance, and there is no panel.** A notification is transient:
+| # | Channel | Mechanism | Fires |
+|---|---|---|---|
+| D-25 ① | Desktop `Notification` | `deps.notify({title, body})` (`index.ts:4780`), gated on `readConfig().notifications` like every other toast (`boot.ts:411-413`) | **once** per quiet edge |
+| D-25 ② | **Phone ask list** | a `floorQuiet` **sibling field** on `GET /phone/api/asks` (`webhook.ts:640`), rendered as a pinned strip above the list — **rule Q-1b** | persists while the latch is set |
+| D-25 ③ | Web Push | `src/main/push.ts` → `sw.js` | **once** per quiet edge |
+| *(added)* | Desktop in-app | **titlebar `QUIET` chip** — rule Q-1 | persists while the latch is set |
+
+Channels ① and ③ are **transient**; ② and the chip are **persistent**. Each platform now has exactly
+one of each, which is the whole point of Q-1's argument — applied to both platforms instead of one.
+
+**Rule Q-1 — the chip is the desktop in-app affordance, and there is no panel.** A notification is transient:
 an operator who was away comes back to an app that shows nothing. The alarm must be findable after
 the fact. The titlebar is the app's established always-visible slot (`App.tsx:411-440`, the `PUBLIC`
 chip), so the alarm goes there. **No new panel, no new modal, no toast centre.**
@@ -1038,6 +1203,85 @@ boxShadow: inset 0 0 0 1px var(--cth-ink-900)
 padding: '1px 4px 0'
 font: var(--cth-font-display) / var(--cth-text-display-md) / var(--cth-lh-display-md)
 ```
+
+**Rule Q-1b — the phone's persistent surface is a pinned strip, NOT a third ask kind.**
+
+The same argument, on the surface the operator actually has at 3am. Miss or swipe the push and an
+alarm with no persistent surface leaves the phone showing nothing — the exact failure Q-1 names.
+
+**Wire shape — additive, and it does not touch `PhoneAsk`:**
+
+```ts
+// webhook.ts:640, today:            json(res, 200, { ok: true, asks });
+// with the alarm:                   json(res, 200, { ok: true, asks, floorQuiet });
+//   floorQuiet?: { sinceMs: number; inFlight: number; agent?: string; card?: string }
+```
+
+`floorQuiet` is a **duration** (`sinceMs`), never a timestamp — §S1 rule G-3's reason applies
+unchanged. Absent === the floor is moving.
+
+**Rendering.** The list screen already has this exact slot: `screenListHtml` renders
+`state.banner` as `<p class="p-offline-bar">` **above** the `<ol>` (`index.html:356-357`, CSS at
+`:86-94`). The alarm is a second strip in that slot, in the warn register:
+
+```
+┌─────────────────────────────────┐
+│ ▌ The floor has stopped.        │  --p-warn-fill band, 2px --p-warn left rule
+│   Nothing has moved for 32m.    │  --p-text, --p-text-sm
+│   2 cards were in flight.       │  --p-text-2
+├─────────────────────────────────┤
+│ Nothing needs you right now.    │  the EXISTING empty state, still correct
+└─────────────────────────────────┘
+```
+
+| Property | Value |
+|---|---|
+| container | `<p class="p-quiet-bar" role="status">` — a **new class copying `.p-offline-bar`** (`:86-94`) with `background: var(--p-warn-fill)`, `color: var(--p-text)`, `box-shadow: inset 2px 0 0 var(--p-warn)` |
+| **not** `state.banner` | a **new** `state.floorQuiet`. The offline banner and the quiet alarm are different facts and can co-occur; overloading one slot would make one of them invisible |
+| position | directly **below** the offline banner, **above** the `<ol>` — a floor-wide condition outranks any single ask |
+| accessible name | the visible text is the name (A1). `role="status"` is polite: it is announced when it appears and never interrupts |
+| contrast | **no new measurement needed.** All three pairings are already in §Color — phone: `--p-text` on `--p-warn-fill` **10.13:1**, `--p-text-2` on `--p-warn-fill` **6.47:1**, `--p-warn` 2px rule on `--p-warn-fill` **4.99:1** (bar 3.0). No new property, no new hue |
+| **tap** | **none. It is not interactive and it does not pretend to be.** No `<button>`, no `data-action`, no cursor change. There is nothing to answer and, unlike the desktop, no task board to open — A6's "no `div` with a click handler" is satisfied by there being no handler at all |
+| dismissal | **none, by design.** It is server state, not client state: it appears when the latch sets and disappears when the poll (`index.html:249`, `:465`) stops returning `floorQuiet`. Identical lifecycle to the desktop chip (Q-3), and it cannot be swiped away while the floor is still stopped |
+
+**Copy** — one new `COPY` entry with three cases, formatted client-side from `floorQuiet`'s fields
+(the strip never renders a server-authored sentence — same discipline as §S2 rule D-1 in reverse:
+the *data* is main's, the *wording* is the surface's):
+
+> `The floor has stopped. Nothing has moved for 32m. 2 cards were in flight.`
+> *(nothing in flight)* `The floor has stopped. Nothing has moved for 32m. No cards were in flight.`
+> *(the god died)* `Michael is gone. The floor has no orchestrator, and nothing has moved for 32m.`
+
+**Why not a third `kind: 'alarm'` on `PhoneAsk`** — the shape the checker suggested first, rejected
+for three measured reasons, not for effort:
+
+1. **It would lie in the heading.** `screenListHtml:352-354` computes `count = state.asks.length`
+   and picks `count > 0 ? 'NEEDS YOU' : COPY.emptyHeading`. An alarm in the array renders
+   **`NEEDS YOU 1`** and suppresses the empty state — when in fact *nothing* is asking. "The floor
+   has stopped" and "one agent needs an answer" are opposite facts; the count badge would report the
+   second while the first is true.
+2. **It would force a tappable item to be un-answerable.** Every `<li>` in that list is a
+   `<button class="p-ask" data-task-id=…>` (`askItemHtml:338-350`) whose tap opens the answer
+   screen. An entry that opens a textarea for a question nobody asked is worse than no entry.
+3. **It needs three special cases on the answerable path** (count, heading, tap) versus **one new
+   CSS class and one `if`** in a slot that already exists. Rung 2 of the ladder: the pattern is
+   already in the file.
+
+D-25 says *"the phone ask list"*, and this is on the ask-list screen, delivered on the ask-list
+response, persistent across a missed push. What it is **not** is an *ask* — because it is not one.
+
+**L-12 re-verified against this shape, and it is untouched by it.** `PhoneAsk` gains **no** field
+here, `taskId` is neither renamed nor reused, and `PHONE_TASK_ID_RE` (`webhook.ts:231`, enforced at
+`:670`) is not in the path at all — the strip has no id and posts nothing. The 21 `taskId`
+occurrences in `index.html` and the 10 in `sw.js` are all still valid. *(The push channel's
+`taskId: 'floor-quiet'` in rule Q-4 is unchanged and does satisfy the regex — that is the push tag,
+a separate thing.)*
+
+**Two build contracts ride this, both already stated, both binding here:** the new CSS class lives
+inside the hash-pinned `<style>` block, so `test/build-assets.test.cjs:149-170` must be re-run in
+the **same** commit (§Color — phone); and `index.html` is served fresh off disk on every GET
+(`webhook.ts:710`), so unlike `sw.js` there is **no installed-old-client case** for the renderer —
+the strip and the server that emits it always ship together.
 
 **Rule Q-2 — the chip is a `<button>` and it opens the task board.** "What was in flight when it
 stopped" is exactly the `DOING` column, and with §S5's age on every card the operator sees at a
@@ -1090,7 +1334,8 @@ line of `sw.js`, and must not change `taskId`'s name anywhere** (Rule G-1).
 **Two writes. The card must be correct after the first and merely richer after the second.**
 
 `HiveTask` gains one optional field, following the `HumanQA` / `review` convention of optional ISO
-strings already present at `hive.ts:111-117` and `:147`:
+strings already present at `hive.ts:111-117` (`HumanQA`) and `hive.ts:149` (`review?`) — both
+re-opened this session; rev 1 cited `:147` for `review?`, which is a comment line:
 
 ```ts
 released?: {
@@ -1163,6 +1408,8 @@ the signal to re-read the ladder.
 | `openPhoneAsks` sends `ask.agent = t.assignee` — the raw **agent id**, not the display name (`index.ts:1230`) | read this session | The phone renders an id where a name belongs. Out of Phase 4's requirement list; a one-line `nameFor` lookup whenever someone owns that file |
 | Numeric `fontSize` sites still below the 14px floor (`AgentControlStrip.tsx:60`, `CodeEditor.tsx:160` and others) | 02-UI-SPEC §Typography rule 1 | Phase 1 plan 23's sweep. **This phase adds none and removes none** |
 | `BlockedBanner.tsx:31` writes `fontSize: 16` as a numeric rather than `var(--cth-text-body-lg)` | read this session | Pre-existing in a file this phase edits. **Do not opportunistically fix it** — an unrelated token swap inside a security-surface diff is noise in the review |
+| `BlockedBanner.tsx:15` writes `padding: 12` as a numeric rather than `var(--cth-space-3)` | read this session | Same file, same reason, same ruling as the row above. The value is on-scale; only the spelling drifts |
+| `CommandCenterPanel.tsx:796`'s `⚠` is `aria-hidden="true"` with a `title`, so the breaker reason is announced to nobody | read this session | Pre-existing. §S4 rule V-1b fixes it **only** for the `armed && blocked` case, where VIGIL-03 makes it load-bearing. The general case is not this phase's |
 
 ---
 
@@ -1221,7 +1468,7 @@ Every gray area, the option taken, and why.
 | 16 | VIGIL-04 stale threshold? | **The unit boundary — `h` or `d` is stale, ≥ 60 min** | One rule instead of a magic constant, and it makes the unit letter and the emphasis change together, which is what makes 9h and 4m separable at 14px |
 | 17 | Stale emphasis on `done` cards? | **No** | A card finished three days ago is not a problem; lighting it up is alarm fatigue on the board |
 | 18 | Extract a shared age formatter, or refactor all four copies? | **Extract one; leave the four alone** | Rewriting four working call sites is churn with a regression surface and no requirement behind it |
-| 19 | VIGIL-03: new blocked affordance? | **None — the badge is already correct on all three surfaces** | `PixelBadge` already maps `blocked` → coral **+ the words "needs you"**; the bug is where the state comes from, not what is drawn |
+| 19 | VIGIL-03: new blocked affordance? | **No new component, but one shipped surface IS broken** *(rev 2 — rev 1's answer was "none, all three surfaces are already correct", built on a wrong enumeration)* | `PixelBadge` maps `blocked` → coral **+ the words "needs you"** on two channels, so no new pixels are needed. But there are **nine** render sites, **seven** agent-status, and `CommandCenterPanel.tsx:795` overrides `blocked` → `looping` whenever the breaker is armed. On that roster VIGIL-03's criterion fails today. §S4 rules V-1 and V-1b |
 | 20 | How does an off-screen blocked agent show *what* it is blocked on? | **`action` carries the matched prompt line into the existing `infoLine` row** | Zero geometry cost on a card frozen at 322×86 with ~3px of slack |
 | 21 | VIGIL-01 in-app affordance? | **A titlebar `QUIET` chip; no panel** | A toast is transient; the titlebar is the app's established always-visible slot and already hosts `PUBLIC` |
 | 22 | What does the `QUIET` chip do on click? | **Opens the task board** | "What was in flight" *is* the `DOING` column, and §S5's age makes the stall self-evident. VIGIL-01 composes with VIGIL-04 |
@@ -1234,21 +1481,56 @@ Every gray area, the option taken, and why.
 | 29 | Steal focus when an ask arrives? | **No** | The desktop toast already click-to-focuses (`hooks.ts:1499`); stealing an operator's caret mid-task is worse than the delay |
 | 30 | Fix `BlockedBanner.tsx:31`'s numeric `fontSize: 16` while editing the file? | **No** | An unrelated token swap inside a security-surface diff is noise in the review |
 | 31 | Fix `PixelButton.tsx:74`'s `destructive` label colour? | **Yes — mandated, own atomic commit** | Measured **1.85:1** in dark mode on the very button `deny` uses. Unlike #30 this is not cosmetic: it is an invisible label on the approval gate's refuse control. `--cth-on-accent` makes light mode byte-identical and dark mode 7.12:1 |
+| 32 *(rev 2)* | `CommandCenterPanel.tsx:795`'s `armed ? 'looping' : a.status` — in VIGIL-03's scope, or out? | **In scope. `blocked` wins the badge:** `status={a.status === 'blocked' ? 'blocked' : armed ? 'looping' : a.status}` | `blocked` means *a human must act*; `looping` means *the breaker tripped and the floor is handling it*. Only the first is actionable at 3am. Decisive evidence: `armed` **keeps two other channels on the same row** (`:760` coral row fill, `:796` `⚠` glyph) while `blocked` has only the badge — so the fix costs `armed` one of three signals in one narrow case and gives `blocked` its only signal back. Not a trade, a strict improvement. §S4 rule V-1b |
+| 33 *(rev 2)* | When `armed && blocked`, the `⚠` is `aria-hidden` — does AT lose the breaker? | **Yes, so the `⚠` conditionally takes `role="img"` + `aria-label`** | A `title` on an `aria-hidden` span is announced to nobody. Once the badge is surrendered to `blocked`, the badge was AT's only armed signal too. A2's shipped pattern (`TasksKanban.tsx:262`) applied exactly where it becomes load-bearing — narrowest possible scope, not a general `aria-hidden` sweep |
+| 34 *(rev 2)* | D-25's phone channel: a third `PhoneAsk.kind: 'alarm'`, or a deviation? | **Neither — a `floorQuiet` sibling field on the asks response, rendered as a non-interactive pinned strip.** D-25's three channels are all present | Rev 1 silently substituted the titlebar chip for the phone ask list, leaving the phone **push-only** — miss the push and it shows nothing, the exact failure Q-1 identifies for the desktop. A third `kind` was rejected on measured grounds, not effort: it renders **`NEEDS YOU 1`** and suppresses the empty state (`screenListHtml:352-354` counts `state.asks.length`) when in fact *nothing* is asking, and it forces a tappable `<button class="p-ask">` (`askItemHtml:338-350`) to be un-answerable. The sibling field reuses the `p-offline-bar` slot that is already in the file, touches `PhoneAsk` not at all, and keeps L-12 untouched. §S6a rule Q-1b |
+| 35 *(rev 2)* | Can the phone alarm strip be dismissed? | **No — it is server state, not client state** | It appears when the latch sets and disappears when the 10s poll (`POLL_MS`, `index.html:249`) stops returning `floorQuiet`. Same lifecycle as the desktop chip (Q-3). A dismiss control would let the operator clear an alarm while the floor is still stopped, which is the one thing it must not be able to say |
+| 36 *(rev 2)* | Where does focus go when a timed prompt resolves? | **A9: to `dismiss` (desktop) / `‹ back` (phone), in the same render, guarded on focus having been inside the surface** | Rev 1 specified the ring (A5) and never specified placement, while rule 4 unmounts the action row and §S1b disables both buttons — dropping focus to `<body>` at the exact moment the operator answered a destructive prompt, with A7 then politely announcing `Approved.` into the void. The guard is what keeps A9 compatible with rule 5 / #29: focus elsewhere → nothing moves. Accessibility is on this project's never-simplify list |
+| 37 *(rev 2)* | Does the banner take focus when an ask arrives? | **No — stated explicitly as A9.1** | Unchanged from #29; written down because A9.2 moves focus and an executor reading only A9 could reasonably infer autofocus on arrival. The rule now says both halves out loud |
 
 ---
 
 ## Checker Sign-Off
 
+Rev 1 was returned **BLOCKED** with three blocking issues and four citation corrections. Dimensions
+1, 3, 4 and 6 passed and are untouched by rev 2; every contrast figure was independently recomputed
+by the checker and confirmed, including the **1.845:1** dark-mode `destructive` defect and the
+**2.4254:1** coral pairing. Dimension 5 was FLAG-only and accepted as declared.
+
+| Dimension | Rev 1 | Rev 2 |
+|---|---|---|
+| 1 Copywriting | PASS | unchanged, + the phone strip's three cases (§Copywriting, alarm copy) |
+| 2 Visuals | **BLOCKED** ×3 | B1 → §S4 V-1/V-1b · B2 → §S6a Q-1b · B3 → §Accessibility A9 |
+| 3 Color | PASS | unchanged; `--p-warn-fill`'s reserved-for widened to two named surfaces |
+| 4 Typography | PASS | unchanged |
+| 5 Spacing | FLAG, accepted | unchanged; `BlockedBanner.tsx:15`'s numeric now cited correctly and recorded as drift |
+| 6 Registry Safety | PASS | unchanged — no registry, no block, nothing to view |
+
+**Rev 2 changes, in full:**
+
+| Issue | Resolution |
+|---|---|
+| **B1** — "all three roster surfaces" was false | §S4 rule V-1 now enumerates **all nine** `PixelBadge` sites with their `status` expressions and marks the **seven** that are agent-status. §Color's repeat of the false evidence is restated as "nine sites, none in the titlebar (`App.tsx:411-440`)" — the *conclusion* survives |
+| **B1.2** — `CommandCenterPanel.tsx:795` swallows `blocked` | New rule **V-1b**, binding: `blocked` wins the badge; `armed` keeps its row fill and `⚠`; the `⚠` gains an accessible name in the one case where AT would otherwise lose the breaker. Decisions #32, #33 |
+| **B2** — D-25's phone channel dropped | New rule **Q-1b**: a `floorQuiet` sibling field on `GET /phone/api/asks`, rendered as a non-interactive pinned strip in the existing `p-offline-bar` slot. Third `kind` rejected on measured grounds (count badge lies, tap is un-answerable). L-12 re-verified: `PhoneAsk` unchanged, `PHONE_TASK_ID_RE` not in the path. Decisions #34, #35 |
+| **B3** — focus placement unspecified | New rule **A9** (.1–.4): the banner never takes focus on arrival; when the focused control unmounts or disables, focus moves in the same render, guarded on containment; targets named per surface; move precedes the A7 announcement. Hooked into §S1a rule 4 and §S1b. Decisions #36, #37 |
+| **C1** | `Icon.tsx:6-10` — eighteen → **22** names. The `clock`/`bell` point is unaffected |
+| **C2** | `hive.ts` `review?` — `:147` → **`:149`**. `HumanQA` at `:111-117` confirmed |
+| **C3** | ASK ME card — `AskMeTab.tsx:212-222` → **`:210-234`**, with the insertion point named as "before `:230`", the badge being at `:231` |
+| **C4** | `--cth-space-3` no longer claims `BlockedBanner.tsx:15`; that line is the numeric literal `padding: 12,` and is now recorded under Known Drift |
+
 - [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
+- [ ] Dimension 2 Visuals: re-verify B1 / B2 / B3
 - [ ] Dimension 3 Color: PASS
 - [ ] Dimension 4 Typography: PASS
 - [ ] Dimension 5 Spacing: PASS
 - [ ] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** pending re-check
 
 ---
 
 *Phase: 4 — Overnight on a Repo That Matters*
 *Contract written: 2026-08-25, against HEAD `e504735` in worktree `gsd-plan-phase-04`*
+*Rev 2: 2026-08-25, against HEAD `7969c58`. Every line number newly written in rev 2 was opened in
+the same session; nothing was adjusted to fit.*
