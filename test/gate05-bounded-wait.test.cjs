@@ -57,6 +57,10 @@ const { withHookServer, runShim } = require('./gate-harness.cjs');
  *  04-VALIDATION.md § Sampling Rate budgets the full suite at 90 s. */
 const FILE_BUDGET_MS = 15_000;
 
+/** The file's own wall clock, started at load — which is also when the two slow
+ *  cases below start, so this measures everything. */
+const FILE_START = Date.now();
+
 /** No SINGLE shim run may take this long. Comfortably above case 6's ~6.5 s and
  *  a thirteenth of the production TTL, so a shim that starts really waiting out
  *  a two-minute ask fails here rather than in an operator's suite. */
@@ -410,8 +414,9 @@ test('5 — a MID-ask dead socket DENIES: killing the floor cannot turn a pendin
 
 // ─── 6 ───────────────────────────────────────────────────────────────────────
 
-test('6 (R2-BL2) — an ask outliving the shim\'s 5 s boot timer still DENIES', async () => {
+test('6 (R2-BL2) — an ask outliving the shim\'s 5 s boot timer still DENIES', async (t) => {
   const { ttlMs, run } = await bootTimerCase;
+  t.diagnostic(`case 6: TTL=${ttlMs}ms shim elapsed=${run.elapsedMs}ms (both must exceed ${SHIM_TIMER_MS}ms)`);
 
   assert.ok(
     ttlMs > SHIM_TIMER_MS,
@@ -479,8 +484,14 @@ test('7 — the UNCHANGED GROK_HOOK_SHIM reads the ask reply as the deny it also
 
 // ─── 8 ───────────────────────────────────────────────────────────────────────
 
-test('8 (T-04-ASK-47) — a poll that OPENS and is never answered DENIES on the per-poll timer', async () => {
+test('8 (T-04-ASK-47) — a poll that OPENS and is never answered DENIES on the per-poll timer', async (t) => {
   const { run, polls } = await silentPollCase;
+  t.diagnostic(`case 8: shim elapsed=${run.elapsedMs}ms after ${polls} unanswered poll(s)`);
+  // Test BODIES only — the runner's own `duration_ms` is the number to hold
+  // against the budget, because it also carries module load and the tmpdir
+  // teardown every `withHookServer` does. Measured 2026-08-25 on win32:
+  // bodies 6 785ms, runner duration_ms 10 866ms, budget 15 000ms.
+  t.diagnostic(`test bodies: ${Date.now() - FILE_START}ms; the runner's duration_ms is the figure to hold against ${FILE_BUDGET_MS}ms`);
 
   assert.ok(polls >= 1, 'the shim never sent the poll this case exists to leave unanswered');
   assertBounded(run, 'silent poll');
