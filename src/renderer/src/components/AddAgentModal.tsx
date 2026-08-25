@@ -132,6 +132,44 @@ function uniqueId(name: string): string {
   return `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`;
 }
 
+/** What `team:export` can come back with. */
+export interface TeamExportResult {
+  ok: boolean;
+  members?: number;
+  skipped?: number;
+  error?: string;
+}
+
+/**
+ * The message an export outcome deserves — error banner, status line, or neither.
+ *
+ * Exported as a pure function for the measured reason `formatRemaining` and
+ * `blockReasonFromApproval` are (see `test/renderer-components.test.cjs`): this rule
+ * table lives inside a click handler, and `renderToStaticMarkup` fires no events, so
+ * left inline it would be provable only by a grep over the source. Pulled out, every
+ * outcome is an assertion.
+ *
+ * The rule that matters: NEITHER "nothing was written" NOR "something was left out"
+ * may be silent. An export that quietly loses agents is worse than one that refuses,
+ * because the operator only finds out when the file fails to re-import.
+ */
+export function exportOutcomeText(res: TeamExportResult): { error?: string; notice?: string } {
+  if (!res.ok) {
+    // The operator closing the save dialog is not a failure. Every other error —
+    // including 'no roster to export' — flows through the existing error banner.
+    if (!res.error || res.error === 'cancelled') return {};
+    return { error: res.error };
+  }
+  const members = res.members ?? 0;
+  const skipped = res.skipped ?? 0;
+  const agents = (n: number): string => `${n} agent${n === 1 ? '' : 's'}`;
+  if (members === 0 && skipped === 0) return { notice: 'no agents to export' };
+  if (skipped > 0) {
+    return { notice: `Exported ${agents(members)} — ${agents(skipped)} left out (this app could not re-import them).` };
+  }
+  return { notice: `Exported ${agents(members)}.` };
+}
+
 export interface AddAgentModalProps {
   onClose: () => void;
   config: HarnessConfig;
@@ -237,6 +275,11 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   // Note shown when the folder was auto-filled from the pasted session id.
   const [folderNote, setFolderNote] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
+  /** Non-error feedback. The modal had only `error` (a coral banner), and an
+   *  export that succeeded-but-left-members-out is not an error — showing it in
+   *  red would be as wrong as showing it nowhere. One line of state rather than a
+   *  second modal or a toast. */
+  const [notice, setNotice] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   // Which config section the left sidebar index is showing.
   const [section, setSection] = useState<SectionKey>('identity');
@@ -320,9 +363,18 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
 
   const importHire = async () => {
     setError(undefined);
+    setNotice(undefined);
     const res = await window.cth.importHireFile();
     if (res.ok && res.manifest) applyManifest(res.manifest);
     else if (res.error && res.error !== 'cancelled') setError(res.error);
+  };
+
+  /** Write the floor out as a team@1 file. The outcome's copy is
+   *  `exportOutcomeText` above — a pure function, so every branch is testable. */
+  const exportTeam = async () => {
+    const out = exportOutcomeText(await window.cth.exportTeam());
+    setError(out.error);
+    setNotice(out.notice);
   };
 
   const submit = async () => {
@@ -1054,6 +1106,18 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               </div>
             )}
 
+            {notice && (
+              <div style={{
+                padding: '6px 10px',
+                background: 'var(--cth-cream-100)',
+                boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                color: 'var(--cth-ink-900)'
+              }}>
+                {notice}
+              </div>
+            )}
+
             {/* Import-hire explainer + AI prompt generator (item 7) */}
             <div style={{
               padding: '8px 10px',
@@ -1106,15 +1170,31 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-              <PixelButton variant="secondary" size="md" onClick={importHire} disabled={busy} title="Import a hire manifest (.json)">
-                import hire…
-              </PixelButton>
-              <div style={{ flex: 1 }} />
-              <PixelButton variant="ghost" size="md" onClick={onClose} disabled={busy}>cancel</PixelButton>
-              <PixelButton variant="primary" size="md" onClick={submit} disabled={busy}>
-                {busy ? 'spawning...' : 'spawn'}
-              </PixelButton>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                {/* Paired with import so the two file actions read as one affordance
+                    (UI-SPEC S3b). Settings would have buried it beside resetAll —
+                    this repo already has one hiring feature nobody can find. */}
+                <PixelButton variant="secondary" size="md" onClick={exportTeam} disabled={busy} title="Export this floor as a team file (.json)">
+                  export team…
+                </PixelButton>
+                <PixelButton variant="secondary" size="md" onClick={importHire} disabled={busy} title="Import a hire manifest (.json)">
+                  import hire…
+                </PixelButton>
+                <div style={{ flex: 1 }} />
+                <PixelButton variant="ghost" size="md" onClick={onClose} disabled={busy}>cancel</PixelButton>
+                <PixelButton variant="primary" size="md" onClick={submit} disabled={busy}>
+                  {busy ? 'spawning...' : 'spawn'}
+                </PixelButton>
+              </div>
+              {/* D-16's operator-facing half: the lossiness is declared in the UI,
+                  not only in the file's doc comment. */}
+              <span style={{
+                fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)',
+                color: 'var(--cth-ink-500)'
+              }}>
+                A team file carries names, engines, models and goals. Folders, accounts and command flags stay on this machine.
+              </span>
             </div>
           </div>
     </Modal>
