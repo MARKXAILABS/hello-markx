@@ -459,18 +459,66 @@ test('mcpArmed answers [] rather than THROWING when there is no harness home', (
   assert.deepEqual(hive.mcpArmed('a1'), []);
 });
 
-test("index.ts's mcp:agentState fails closed on an agentId the registry does not know, before any path is built", () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
-  const start = src.indexOf("ipcMain.handle('mcp:agentState'");
-  assert.ok(start > 0, 'sanity: the mcp:agentState handler must exist');
-  const body = src.slice(start, src.indexOf("ipcMain.handle('mcp:grant'", start));
-  const beforePath = body.slice(0, body.indexOf('hive.mcpArmed('));
-  assert.ok(beforePath.length > 0, 'sanity: the handler must still read armed state off disk');
+/* ───────────────── MAIN-02: the agentId guard is a SHAPE guard ─────────────────
+ *
+ * History, because it is the point of these cases. The first MAIN-02 fix guarded
+ * `mcp:agentState` with `hive.registry().agents[agentId]` and returned
+ * `{ok:false, error:'unknown agent'}` on a miss. That closed the traversal but
+ * broke DAEMON-04: `hive.registry()` is NOT the agent roster (`spawnAgentCore`
+ * only calls `hive.ensureAgent` under `if (opts.hive && hive.enabled())`, and its
+ * missing-CLI installer rung returns before even that), so the consent modal
+ * rendered a load error for every real non-hive agent.
+ *
+ * The pin that guarded it was itself vacuous: it asserted the SUBSTRING
+ * `registry().agents[agentId]` appeared before path construction, which a mere
+ * `registry().agents[agentId]?.provider` lookup also satisfies. It passed while
+ * pinning nothing. Both cases below are behavioural instead. */
 
-  const failClosed = beforePath.match(/return \{ ok: false/g) || [];
-  assert.ok(failClosed.length >= 2,
-    'mcp:agentState must refuse an agentId the live registry does not know (MAIN-02) — the '
-    + '`typeof agentId === "string"` shape check alone is not a membership check');
-  assert.ok(/registry\(\)\.agents\[agentId\]/.test(beforePath),
-    'the membership check must be made against the live registry, ahead of path construction');
+test('MAIN-02: isSafeAgentId refuses every traversal and separator shape, and accepts every id uniqueId() can emit', () => {
+  const { isSafeAgentId } = loadTs('src/shared/mcpCatalog.ts');
+
+  // Must be REFUSED — each of these is a plausible renderer-supplied attack shape.
+  // '../agents/a1' is not hypothetical: it was MEASURED returning another agent's
+  // armed server list before any guard existed.
+  for (const bad of [
+    '../agents/a1', '..', '../..', 'a/../../b', 'pty-a/../pty-b',
+    'a/b', 'a\\b', '/etc/passwd', 'C:\\Windows', '.\\x', './x',
+    '', 'a\u0000b', 'a b', 'a\nb', 'x'.repeat(129),
+    null, undefined, 42, {}, [],
+  ]) {
+    assert.equal(isSafeAgentId(bad), false, `must refuse ${JSON.stringify(bad)}`);
+  }
+
+  // Must be ACCEPTED — a guard that rejects a legitimate id is the DAEMON-04 break.
+  // `uniqueId(name)` emits `${slug}-${Date.now().toString(36)}` and the caller
+  // prefixes `pty-`, so the real charset is [a-z0-9-]; the rest are defensive.
+  for (const good of [
+    'pty-researcher-m4k2p1', 'pty-a-0', 'a', 'A', '0',
+    'pty-my-agent-name-abc123', 'agent_1', 'agent.1', 'x'.repeat(128),
+  ]) {
+    assert.equal(isSafeAgentId(good), true, `must accept ${JSON.stringify(good)}`);
+  }
+});
+
+test('MAIN-02: all three MCP handlers gate agentId on isSafeAgentId, and none hard-rejects an unknown agent', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
+
+  for (const channel of ['mcp:agentState', 'mcp:grant', 'mcp:revoke']) {
+    const start = src.indexOf(`ipcMain.handle('${channel}'`);
+    assert.ok(start > 0, `sanity: the ${channel} handler must exist`);
+    const body = src.slice(start, start + 1200);
+    assert.ok(/isSafeAgentId\(/.test(body),
+      `${channel} takes a renderer-supplied agentId that selects a secret namespace and a `
+      + 'filesystem path — it must gate on isSafeAgentId. Guarding only one of the three '
+      + 'handlers is what the first MAIN-02 fix did.');
+  }
+
+  // The regression itself: a registry MISS must not be an error. If this string
+  // comes back, the DAEMON-04 consent modal is broken for non-hive agents again.
+  const stateStart = src.indexOf("ipcMain.handle('mcp:agentState'");
+  const stateBody = src.slice(stateStart, src.indexOf("ipcMain.handle('mcp:grant'", stateStart));
+  assert.ok(!/'unknown agent'/.test(stateBody),
+    "mcp:agentState must NOT reject an id the hive registry does not know — a non-hive agent "
+    + 'is a real, working agent with no hive dir, and mcpArmed() already answers [] for it. '
+    + 'Rejecting it renders a load error in McpConsentModal for every such agent.');
 });

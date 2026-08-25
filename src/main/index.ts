@@ -72,7 +72,7 @@ import { analytics } from './analytics';
 import { IntegrationBroker } from './integrationBroker';
 import * as integrations from './integrations';
 import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES } from '../shared/integrations';
-import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor } from '../shared/mcpCatalog';
+import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { RosterStore } from './roster';
 import { ControlRegistry } from './control';
 import { fetchHireManifest, readHireManifestFile } from './hire';
@@ -3054,14 +3054,15 @@ function mcpGrantHasSecret(agentId: string, mcpId: string): boolean {
 
 ipcMain.handle('mcp:agentState', (_evt, agentId: unknown) => {
   if (typeof agentId !== 'string' || !agentId) return { ok: false, error: 'invalid agentId' };
-  // MAIN-02: the id comes from the renderer — the less-trusted side of this
-  // boundary by design — and is about to select both a secret-store namespace
-  // and (via hive.mcpArmed) a filesystem path. The shape check above is not a
-  // membership check, so fail CLOSED on an agent the live roster does not know
-  // rather than answering with a fabricated state for it.
-  const agent = hive.registry().agents[agentId];
-  if (!agent) return { ok: false, error: 'unknown agent' };
-  const provider = agent.provider ?? 'claude';
+  // MAIN-02 shape guard (see `isSafeAgentId` in shared/mcpCatalog.ts for why this
+  // is a shape check and NOT a registry-membership check — membership rejects real
+  // non-hive agents and breaks DAEMON-04's consent modal for them). Traversal is
+  // still blocked twice: here, and again inside `hive.mcpArmed`.
+  if (!isSafeAgentId(agentId)) return { ok: false, error: 'invalid agentId' };
+  // An id the hive registry never issued is NOT an error — a non-hive agent is a
+  // real, working agent with no hive dir, and `mcpArmed` answers [] for it. The
+  // modal must render its (empty) state, not a load failure.
+  const provider = hive.registry().agents[agentId]?.provider ?? 'claude';
   const wired = mcpWiredFor(provider);
   const cfg = readConfig();
   const safe = MCP_CATALOG
@@ -3078,6 +3079,7 @@ ipcMain.handle('mcp:agentState', (_evt, agentId: unknown) => {
 ipcMain.handle('mcp:grant', (_evt, opts: unknown) => {
   const p = (opts ?? {}) as { agentId?: unknown; mcpId?: unknown; secret?: unknown };
   if (typeof p.agentId !== 'string' || !p.agentId) return { ok: false, error: 'invalid agentId' };
+  if (!isSafeAgentId(p.agentId)) return { ok: false, error: 'invalid agentId' };
   if (typeof p.mcpId !== 'string' || !p.mcpId) return { ok: false, error: 'invalid mcpId' };
   const entry = mcpCatalogEntry(p.mcpId);
   if (!entry) return { ok: false, error: `unknown MCP server: ${p.mcpId}` };
@@ -3108,6 +3110,7 @@ ipcMain.handle('mcp:grant', (_evt, opts: unknown) => {
 ipcMain.handle('mcp:revoke', (_evt, opts: unknown) => {
   const p = (opts ?? {}) as { agentId?: unknown; mcpId?: unknown };
   if (typeof p.agentId !== 'string' || !p.agentId) return { ok: false, error: 'invalid agentId' };
+  if (!isSafeAgentId(p.agentId)) return { ok: false, error: 'invalid agentId' };
   if (typeof p.mcpId !== 'string' || !p.mcpId) return { ok: false, error: 'invalid mcpId' };
   const entry = mcpCatalogEntry(p.mcpId);
   if (!entry) return { ok: false, error: `unknown MCP server: ${p.mcpId}` };
