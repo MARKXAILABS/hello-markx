@@ -1639,3 +1639,52 @@ test('SECURITY.md: the tunnel-close claim is corrected, and the three new exposu
     );
   }
 });
+
+/* ── FLOOR-04: one padded file must not disable the scanner for the rest ──
+ *
+ * gitCommitter's own header documented this as ACTIVE BYPASS 2:
+ *
+ *   "seq 20001 > pad.txt in the same debounce window pushes --numstat past
+ *    SECRET_SCAN_MAX_LINES and sends the WHOLE commit, secret included, down
+ *    the `committing UNSCANNED` path."
+ *
+ * i.e. a single agent-controllable command walked a credential into history by
+ * making the commit merely LARGE. Not theoretical — it fired twice on an
+ * operator's machine (105,089 and 106,609 lines) before anyone looked at the log.
+ *
+ * The cap now applies PER FILE. A genuinely enormous single file is still
+ * skipped, and named; it can no longer take its neighbours with it. */
+test('FLOOR-04: the line cap is applied per file, not to the whole staged diff', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'gitCommitter.ts'), 'utf8');
+  const fn = src.slice(src.indexOf('private async scrubStagedSecrets'));
+
+  // The whole-diff early return is what made one pad file fatal. It must be gone.
+  assert.ok(!/reason: 'diff-too-large'/.test(fn),
+    "the whole-commit 'diff-too-large' skip must not exist: it let one padded file send every "
+    + 'other file in the commit, secret included, into history unscanned');
+
+  // Over-cap commits must now take a per-file path that still scans what it can.
+  assert.ok(/secret-scan-chunked/.test(fn),
+    'an over-cap commit must fall back to per-file scanning, not to skipping everything');
+  assert.ok(/scanned \$\{parts\.length\}\/\$\{rows\.length\} files individually/.test(fn),
+    'the operator must be told how many files were actually scanned');
+
+  // And the files it could NOT scan must be named — "which file went unscanned"
+  // is the question an operator actually has, and the old message could not answer it.
+  assert.ok(/UNSCANNED: \$\{skipped\.join/.test(fn),
+    'skipped files must be named individually, not summarised as a line count');
+
+  // The per-file cap comparison must be against that file's own line count.
+  assert.ok(/lines > SECRET_SCAN_MAX_LINES/.test(fn),
+    'the cap must be compared against each FILE\'s line count, not the commit total');
+});
+
+test('FLOOR-04: the bypass register does not claim a bypass that is now closed', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'gitCommitter.ts'), 'utf8');
+  const header = src.slice(0, src.indexOf('private async scrubStagedSecrets'));
+  const two = header.slice(header.indexOf('2. THE LINE CAP'), header.indexOf('3. THE BYTE CAP'));
+  assert.ok(/CLOSED/.test(two),
+    'bypass 2 is closed in code, so the register must say so. A source comment that documents '
+    + 'a bypass which no longer exists is the same defect class as one that documents a '
+    + 'mitigation it does not enforce — the next reader trusts it either way.');
+});

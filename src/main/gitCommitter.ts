@@ -309,11 +309,20 @@ export class GitCommitter {
    *     line count. A cut AFTER the prefix plus ten body characters is caught in
    *     the head and leaks the tail. Closing this needs a whole-blob scanner,
    *     which is a different design.
-   *  2. THE LINE CAP, disabled by one command. `seq 20001 > pad.txt` in the same
-   *     debounce window pushes --numstat past SECRET_SCAN_MAX_LINES and sends
-   *     the WHOLE commit, secret included, down the `committing UNSCANNED` path.
+   *  2. THE LINE CAP — CLOSED 2026-08-25, kept here because the shape is worth
+   *     remembering. It used to read: `seq 20001 > pad.txt` in the same debounce
+   *     window pushes --numstat past SECRET_SCAN_MAX_LINES and sends the WHOLE
+   *     commit, secret included, down the `committing UNSCANNED` path. One
+   *     padded file disabled the scanner for every OTHER file in the commit.
+   *     Not theoretical: it fired twice on an operator's machine (105,089 and
+   *     106,609 lines) before anyone looked. The cap now applies PER FILE — an
+   *     enormous single file is still skipped, and named, but it can no longer
+   *     take its neighbours with it.
    *  3. THE BYTE CAP. Past SECRET_SCAN_MAX_BYTES the diff is slice()d and
    *     everything after the cut is never scanned. Same shape, one level up.
+   *     Narrowed by the same change — the byte budget is now spent file by file
+   *     and each exhausting file is named — but NOT closed: a commit past the
+   *     total byte budget still leaves later files unscanned.
    *  4. QUOTED-KEY JSON. `{"token": "…"}` and `obj["token"] = "…"` are both
    *     unmatched — the closing quote and the `]` break key-to-delimiter
    *     adjacency. An arm for it was BUILT, MEASURED and REJECTED ON ITS COST:
@@ -394,32 +403,71 @@ export class GitCommitter {
     }
     if (!stat.out.trim()) return true; // nothing staged — nothing to scan
     let changed = 0;
+    const rows: { path: string; lines: number }[] = [];
     for (const row of stat.out.split('\n')) {
-      const [added, deleted] = row.split('\t');
-      changed += (Number(added) || 0) + (Number(deleted) || 0); // '-' (binary) → 0
-    }
-    if (changed > SECRET_SCAN_MAX_LINES) {
-      console.warn(`[hive] FLOOR-04: staged diff is ${changed} lines, over the ${SECRET_SCAN_MAX_LINES} scan cap — committing UNSCANNED`);
-      this.deps.log({ kind: 'secret-scan-skipped', reason: 'diff-too-large', lines: changed });
-      return true;
+      const [added, deleted, ...rest] = row.split('\t');
+      const n = (Number(added) || 0) + (Number(deleted) || 0); // '-' (binary) → 0
+      changed += n;
+      const p = rest.join('\t').trim();
+      if (p) rows.push({ path: p, lines: n });
     }
 
     // 2. core.quotePath=false so a non-ASCII path comes back raw and can be
     //    handed straight back to `restore --staged`; -U0 drops context lines,
     //    which are unchanged content and so cannot be a NEW leak.
-    const diff = await this.gitAsync(
-      ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color', '--no-ext-diff'],
-      root
-    );
-    if (!diff.ok) {
-      console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', diff.err.trim());
-      this.deps.log({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
-      return true;
-    }
-    const text = diff.out.slice(0, SECRET_SCAN_MAX_BYTES);
-    if (text.length < diff.out.length) {
-      console.warn(`[hive] FLOOR-04: staged diff is ${diff.out.length} bytes — only the first ${SECRET_SCAN_MAX_BYTES} were scanned`);
-      this.deps.log({ kind: 'secret-scan-truncated', bytes: diff.out.length, scanned: text.length });
+    const DIFF_ARGS = ['-c', 'core.quotePath=false', 'diff', '--cached', '--unified=0', '--no-color', '--no-ext-diff'];
+
+    let text: string;
+    if (changed <= SECRET_SCAN_MAX_LINES) {
+      // Common case: one diff, one regex battery. Unchanged.
+      const diff = await this.gitAsync(DIFF_ARGS, root);
+      if (!diff.ok) {
+        console.warn('[hive] FLOOR-04: could not read the staged diff — committing UNSCANNED:', diff.err.trim());
+        this.deps.log({ kind: 'secret-scan-skipped', reason: 'diff-failed' });
+        return true;
+      }
+      text = diff.out.slice(0, SECRET_SCAN_MAX_BYTES);
+      if (text.length < diff.out.length) {
+        console.warn(`[hive] FLOOR-04: staged diff is ${diff.out.length} bytes — only the first ${SECRET_SCAN_MAX_BYTES} were scanned`);
+        this.deps.log({ kind: 'secret-scan-truncated', bytes: diff.out.length, scanned: text.length });
+      }
+    } else {
+      // OVER THE CAP — SCAN PER FILE INSTEAD OF SKIPPING EVERYTHING.
+      //
+      // This closes ACTIVE BYPASS 2 documented above. The cap used to apply to
+      // the TOTAL, so `seq 20001 > pad.txt` in the same debounce window sent the
+      // whole commit — secret included — down the `committing UNSCANNED` path.
+      // One padded file disabled the scanner for every OTHER file in the commit,
+      // which is a one-command, agent-controllable way to walk a credential into
+      // history. Observed twice on the operator's own machine (105,089 and
+      // 106,609 lines), so this is not theoretical.
+      //
+      // Per file, the cap still bounds the work — a genuinely enormous single
+      // file is still skipped — but it can no longer take its neighbours with it.
+      // Skipped files are NAMED, because "which file went unscanned" is the
+      // question an operator actually has, and the old message could not answer it.
+      const parts: string[] = [];
+      const skipped: string[] = [];
+      let budget = SECRET_SCAN_MAX_BYTES;
+      for (const { path: rel, lines } of rows) {
+        if (lines > SECRET_SCAN_MAX_LINES) { skipped.push(`${rel} (${lines} lines)`); continue; }
+        if (budget <= 0) { skipped.push(`${rel} (byte budget exhausted)`); continue; }
+        const one = await this.gitAsync([...DIFF_ARGS, '--', rel], root);
+        if (!one.ok) { skipped.push(`${rel} (diff failed)`); continue; }
+        const slice = one.out.slice(0, budget);
+        budget -= slice.length;
+        parts.push(slice);
+      }
+      text = parts.join('\n');
+      console.warn(
+        `[hive] FLOOR-04: staged diff is ${changed} lines, over the ${SECRET_SCAN_MAX_LINES} cap — `
+        + `scanned ${parts.length}/${rows.length} files individually`
+        + (skipped.length ? `; UNSCANNED: ${skipped.join(', ')}` : '; none skipped')
+      );
+      this.deps.log({
+        kind: 'secret-scan-chunked', lines: changed,
+        scanned: parts.length, total: rows.length, skipped
+      });
     }
 
     // 3. One pass over every added line in the whole diff. The common case is
