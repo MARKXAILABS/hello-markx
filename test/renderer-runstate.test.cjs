@@ -475,3 +475,251 @@ test('a window resize never persists a shrunken sidebar across the newly reachab
   assert.match(splitter, /if \(width > reachableMax\) onChange\(reachableMax\)/,
     'the resize effect does not use the reachability bound — a resize is once again allowed to persist a layout preference');
 });
+
+// ─── SCALE-05 / D-33: agentView.ts, the ONE derivation the card reads ───────
+//
+// FLOOR-13 shipped the proof this module exists for: the AUTO chip was unified
+// THROUGH a shared module and stayed correct, while cost was unified by copying
+// an expression into three files and drifted (85/65 vs 88/75 vs 87.5/75). These
+// cases own the rules; test/renderer-components.test.cjs owns whether the markup
+// actually shows them.
+const {
+  deriveCost, deriveDuration, deriveContext, deriveContextColor, deriveState, deriveAccount,
+  getAgentViews, mergeAgentViews, resetAgentViews, subscribeAgentViews,
+  CONTEXT_PRESSURE_HIGH, CONTEXT_PRESSURE_WARN
+} = loadTs('src/renderer/src/store/agentView.ts');
+
+test("deriveCost: a costTracking:'none' engine never renders a dollar figure", () => {
+  const v = deriveCost({ usd: 0 }, 'none', 'Grok', 'Grace');
+  assert.equal(v.kind, 'unmeasured');
+  assert.equal(v.reasonKind, 'no-meter');
+  // The EXISTING gap-sentence vocabulary (store/config.ts capabilityGaps 'spend'),
+  // not a second wording for the same fact.
+  assert.equal(v.reason,
+    "Grok reports no cost — Grace's spend is invisible to every budget and to the breaker.");
+  assert.ok(!JSON.stringify(v).includes('$'),
+    'the unmeasured value carries a `$` — D-35 forbids any dollar character on this branch');
+});
+
+test('deriveCost: costUnattributed is its OWN gap, and it outranks the measured branch', () => {
+  // 03-02's producer: `costUnattributed: !u && !own` (src/main/index.ts:3757). It
+  // is true for a CLAUDE agent with no live sample — an engine that HAS a meter —
+  // so rendering the engine-level `no cost meter` here would be a false capability
+  // claim on the common path. Different fact, different discriminant.
+  const v = deriveCost({ usd: 0, costUnattributed: true }, 'otel', 'Claude', 'Ada');
+  assert.equal(v.kind, 'unmeasured');
+  assert.equal(v.reasonKind, 'unattributed');
+  assert.match(v.reason, /cannot be attributed/);
+  assert.ok(!JSON.stringify(v).includes('$'));
+
+  // ...and it does NOT swallow the no-meter branch: a 'none' engine that is also
+  // unattributable is still, first and foremost, an engine with no meter.
+  assert.equal(deriveCost({ costUnattributed: true }, 'none', 'Grok', 'Grace').reasonKind, 'no-meter');
+});
+
+test('deriveCost: a metered engine that has genuinely spent nothing still reports $0', () => {
+  assert.deepEqual(deriveCost({ usd: 0 }, 'otel', 'Claude', 'Ada'),
+    { kind: 'measured', usd: 0, lifetime: false });
+});
+
+test('deriveCost: an all-time transcript total is flagged, never passed off as this session', () => {
+  // 03-02's `costLifetime: u ? u.sessionId === '' : false` — a transcript-fallback
+  // sample is stamped at READ time and its total is cumulative. Beside an `up`
+  // clock that resets per spawn, an unlabelled figure claims a window it never had.
+  assert.deepEqual(deriveCost({ usd: 1.23, costLifetime: true }, 'transcript', 'Codex', 'Cody'),
+    { kind: 'measured', usd: 1.23, lifetime: true });
+  assert.deepEqual(deriveCost({ usd: 1.23, costLifetime: false }, 'transcript', 'Codex', 'Cody'),
+    { kind: 'measured', usd: 1.23, lifetime: false });
+});
+
+test('deriveContextColor is pct-based and steps at exactly 85/65', () => {
+  assert.equal(deriveContextColor(87, 'lagoon'), 'var(--cth-coral)');
+  assert.equal(deriveContextColor(70, 'lagoon'), 'var(--cth-lemon)');
+  assert.equal(deriveContextColor(50, 'lagoon'), 'var(--cth-lagoon)');
+  // The boundaries themselves, both inclusive — the drifted pairs this replaces
+  // were 88/75 (CommandCenterPanel) and 87.5/75 (AgentCard's 0..8 integer steps).
+  assert.equal(deriveContextColor(85, 'blue'), 'var(--cth-coral)');
+  assert.equal(deriveContextColor(84.9, 'blue'), 'var(--cth-lemon)');
+  assert.equal(deriveContextColor(65, 'blue'), 'var(--cth-lemon)');
+  assert.equal(deriveContextColor(64.9, 'blue'), 'var(--cth-blue)');
+  assert.equal(CONTEXT_PRESSURE_HIGH, 85);
+  assert.equal(CONTEXT_PRESSURE_WARN, 65);
+  // AgentCard's compaction warning, expressed the way the card will call it: an
+  // agent at 7/8 with NO reported limit is 87.5% and must still read coral. A
+  // (tokens, limit) signature would have returned the neutral accent here and
+  // silently deleted the warning for every inferred-limit agent.
+  assert.equal(deriveContextColor(7 / 8 * 100, 'blue'), 'var(--cth-coral)');
+});
+
+test('deriveContext owns the `not reported` gap — a missing pair is never 0%', () => {
+  assert.deepEqual(deriveContext(undefined, 200000), { kind: 'unmeasured' });
+  assert.deepEqual(deriveContext(50000, undefined), { kind: 'unmeasured' });
+  assert.deepEqual(deriveContext(50000, 0), { kind: 'unmeasured' });
+  assert.deepEqual(deriveContext(50000, 200000),
+    { kind: 'measured', tokens: 50000, limit: 200000, pct: 25 });
+  // Clamped, not wrapped: a limit under-reported by the parser must not render 140%.
+  assert.equal(deriveContext(280000, 200000).pct, 100);
+});
+
+test('deriveDuration reads `not recorded` for an unstamped agent, never 0s', () => {
+  assert.equal(deriveDuration(undefined), 'not recorded');
+  assert.equal(deriveDuration(null), 'not recorded');
+  const now = 1_700_000_000_000;
+  assert.equal(deriveDuration(now - 41_000, now), '41s');
+  assert.equal(deriveDuration(now - 4 * 60_000, now), '4m');
+  assert.equal(deriveDuration(now - (2 * 3600 + 14 * 60) * 1000, now), '2h 14m');
+  // A clock that ran backwards (registry written on another host, a DST step) is
+  // not a negative uptime — it is no uptime.
+  assert.equal(deriveDuration(now + 5000, now), '0s');
+});
+
+test('deriveState reads `unknown` until the breaker snapshot resolves — never `healthy`', () => {
+  // D-36: `onBreakerState` only fires on the next ~30s beat, so a card that
+  // defaulted to healthy would call a STOPPED agent healthy for a full beat after
+  // every window reload. That is failing safe in the wrong direction.
+  assert.equal(deriveState(undefined), 'unknown');
+  assert.equal(deriveState({ level: 'stopped', reason: 'budget' }), 'stopped');
+  assert.equal(deriveState({ level: 'healthy', reason: '' }), 'healthy');
+});
+
+test('deriveAccount falls back to the shipped Login-account label, not an empty cell', () => {
+  assert.equal(deriveAccount(undefined), 'Login account');
+  assert.equal(deriveAccount(''), 'Login account');
+  assert.equal(deriveAccount('work'), 'work');
+});
+
+test('agentView publishes a NEW snapshot object and notifies every subscriber once', (t) => {
+  t.after(() => resetAgentViews());
+  resetAgentViews();
+  const seen = [];
+  const off = subscribeAgentViews(() => seen.push(getAgentViews()));
+  const before = getAgentViews();
+  mergeAgentViews({ a1: { usd: 0.5 } });
+  const after = getAgentViews();
+
+  assert.equal(seen.length, 1, 'the subscriber was not notified exactly once');
+  assert.notEqual(before, after,
+    'the snapshot object was mutated in place — useSyncExternalStore compares by reference and would never re-render');
+  assert.deepEqual(after.a1, { usd: 0.5 });
+  // A per-agent merge, not a whole-map replace: the breaker pull and the directory
+  // poll write different fields for the same agent and must not erase each other.
+  mergeAgentViews({ a1: { breaker: { level: 'stopped', reason: 'budget' } } });
+  assert.deepEqual(getAgentViews().a1, { usd: 0.5, breaker: { level: 'stopped', reason: 'budget' } });
+  off();
+  mergeAgentViews({ a1: { usd: 9 } });
+  assert.equal(seen.length, 1, 'unsubscribing did not stop the notifications');
+});
+
+test('the first subscriber pulls control:breakerSnapshot AND hive:agentDirectory', async (t) => {
+  // Both IPCs were built and left caller-less: round-2 #11 measured that
+  // `control:breakerSnapshot` had no caller anywhere in the plan set, and #29/#32
+  // that `hive:agentDirectory` had zero renderer callers — so 03-02's spawnedAt and
+  // costLifetime never reached a screen. This is the production caller.
+  resetAgentViews();
+  const calls = { breaker: 0, directory: 0 };
+  const prev = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  globalThis.window = {
+    cth: {
+      getBreakerSnapshot: () => {
+        calls.breaker++;
+        return Promise.resolve({ a1: { agentId: 'a1', level: 'constrained', reason: 'tokens', ts: 1 } });
+      },
+      hiveAgentDirectory: () => {
+        calls.directory++;
+        return Promise.resolve({ godId: 'god', agents: [
+          { id: 'a1', usd: 2.5, costLifetime: true, costUnattributed: false, spawnedAt: 1_699_000_000_000 }
+        ] });
+      }
+    }
+  };
+  t.after(() => {
+    if (prev) Object.defineProperty(globalThis, 'window', prev); else delete globalThis.window;
+    resetAgentViews();
+  });
+
+  const off1 = subscribeAgentViews(() => {});
+  const off2 = subscribeAgentViews(() => {});
+  await new Promise((r) => setImmediate(r));
+
+  assert.deepEqual(calls, { breaker: 1, directory: 1 },
+    'the pull fired per subscriber instead of once — four mounts would be four round trips per beat');
+  assert.deepEqual(getAgentViews().a1, {
+    breaker: { level: 'constrained', reason: 'tokens' },
+    usd: 2.5, costLifetime: true, costUnattributed: false, spawnedAt: 1_699_000_000_000
+  });
+  // The whole point of the join: the three main-process reads land on ONE entry,
+  // so the card asks one thing for all five cells.
+  assert.equal(deriveState(getAgentViews().a1.breaker), 'constrained');
+  assert.equal(deriveDuration(getAgentViews().a1.spawnedAt, 1_699_000_060_000), '1m');
+  off1(); off2();
+});
+
+test('useFleetTelemetry is ONE subscription, however many components mount it', (t) => {
+  // Four independent mounts (AgentStrip, CommandCenterPanel, FullscreenTerminal,
+  // ToolWaterfall) each ran their own snapshot backfill and their own pair of IPC
+  // listeners. The public signature is unchanged; this asserts the collapse.
+  const { subscribeFleetTelemetry, getFleetTelemetry, resetFleetTelemetry } =
+    loadTs('src/renderer/src/hooks/useTelemetry.ts');
+  const registered = { event: 0, breaker: 0, snapshot: 0 };
+  let pushEvent, pushBreaker;
+  const prev = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  globalThis.window = {
+    cth: {
+      telemetrySnapshot: () => { registered.snapshot++; return Promise.resolve({ usage: [], spans: {} }); },
+      onTelemetryEvent: (cb) => { registered.event++; pushEvent = cb; return () => {}; },
+      onBreakerState: (cb) => { registered.breaker++; pushBreaker = cb; return () => {}; }
+    }
+  };
+  t.after(() => {
+    if (prev) Object.defineProperty(globalThis, 'window', prev); else delete globalThis.window;
+    resetFleetTelemetry();
+    resetAgentViews();
+  });
+  resetFleetTelemetry();
+  resetAgentViews();
+
+  const seen = [];
+  const offs = [0, 1, 2, 3].map((i) => subscribeFleetTelemetry(() => seen.push(i)));
+  assert.deepEqual(registered, { event: 1, breaker: 1, snapshot: 1 },
+    'four mounts registered more than one subscription — this is the collapse the task exists for');
+
+  const before = getFleetTelemetry();
+  pushEvent({ kind: 'usage', sample: { agentId: 'a1', sessionId: 's', ts: 1, input: 10, output: 5, cacheRead: 0, cacheCreation: 0, model: 'm', usd: 0.25 } });
+  const after = getFleetTelemetry();
+  assert.notEqual(before, after,
+    'the fleet snapshot was mutated in place — useSyncExternalStore would never see the change');
+  assert.equal(after.samples.a1.usd, 0.25);
+  assert.deepEqual(seen, [0, 1, 2, 3], 'not every mount was notified of the shared fold');
+
+  pushBreaker({ agentId: 'a1', level: 'stopped', reason: 'budget', ts: 2 });
+  assert.equal(getFleetTelemetry().breakers.a1.level, 'stopped');
+  // The breaker PUSH also lands in agentView's cache, so a mid-beat trip reaches
+  // the card without waiting out the 30s pull. Cost deliberately does NOT: a
+  // dollar figure 30s stale is fine, a breaker state 30s stale is D-36's bug.
+  assert.equal(deriveState(getAgentViews().a1 && getAgentViews().a1.breaker), 'stopped');
+  for (const off of offs) off();
+});
+
+test('the four useFleetTelemetry call sites were not touched by the collapse', () => {
+  // Structural, and labelled as such: the conversion is entirely internal to
+  // useTelemetry.ts, so the proof is that the hook's body holds no useState and
+  // that useAgentSpans — a DIFFERENT hook in the same file — kept both of its own.
+  const src = read('src/renderer/src/hooks/useTelemetry.ts');
+  const i = src.indexOf('export function useFleetTelemetry');
+  assert.ok(i > 0, 'useFleetTelemetry is gone from useTelemetry.ts — this check would be vacuous');
+  let j = src.indexOf('\nexport ', i + 1);
+  if (j < 0) j = src.length;
+  assert.equal((src.slice(i, j).match(/useState/g) || []).length, 0,
+    'useFleetTelemetry still owns useState — it was not converted to the module singleton');
+  assert.equal((src.match(/useState/g) || []).length, 2,
+    'the file-wide useState count is not 2 — useAgentSpans was touched, or the collapse removed the wrong hook');
+  for (const rel of [
+    'src/renderer/src/components/AgentStrip.tsx',
+    'src/renderer/src/components/ToolWaterfall.tsx',
+    'src/renderer/src/components/CommandCenterPanel.tsx',
+    'src/renderer/src/components/FullscreenTerminal.tsx'
+  ]) {
+    assert.match(read(rel), /useFleetTelemetry\(\)/,
+      `${rel} no longer calls useFleetTelemetry() — the collapse was supposed to need zero caller-side edits`);
+  }
+});
