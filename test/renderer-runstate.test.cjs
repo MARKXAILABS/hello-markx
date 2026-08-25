@@ -587,6 +587,22 @@ test('deriveContextColor is pct-based and steps at exactly 85/65', () => {
   assert.equal(deriveContextColor(7 / 8 * 100, 'blue'), 'var(--cth-coral)');
 });
 
+test('the CommandCenter row flips at 86 and is unchanged at 80 — the two named cases', () => {
+  // The exact behaviour claim for CommandCenterPanel's rewire, stated against the
+  // pair it replaced. 86 is the FLIP (coral now, lemon under 88/75); 80 is the
+  // CONTROL (lemon under both), and without it the case could pass by the new
+  // threshold colouring everything coral.
+  const old = (pct, accent) => (pct >= 88 ? 'var(--cth-coral)' : pct >= 75 ? 'var(--cth-lemon)' : `var(--cth-${accent})`);
+
+  assert.equal(old(86, 'blue'), 'var(--cth-lemon)');
+  assert.equal(deriveContextColor(86, 'blue'), 'var(--cth-coral)',
+    'an agent at 86% context still reads "comfortable" on the command-centre row — the drifted 88 threshold is back');
+
+  assert.equal(old(80, 'blue'), 'var(--cth-lemon)');
+  assert.equal(deriveContextColor(80, 'blue'), 'var(--cth-lemon)',
+    'the control case moved: 80% must read the same under both thresholds, or this comparison is measuring something else');
+});
+
 test('deriveContext owns the `not reported` gap — a missing pair is never 0%', () => {
   assert.deepEqual(deriveContext(undefined, 200000), { kind: 'unmeasured' });
   assert.deepEqual(deriveContext(50000, undefined), { kind: 'unmeasured' });
