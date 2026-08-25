@@ -86,7 +86,7 @@ require.cache[electronId] = {
 };
 
 const loadTs = require('./load-ts.cjs');
-const { PersistStore } = loadTs('src/main/db.ts');
+const { PersistStore, EVENT_RETENTION_MS } = loadTs('src/main/db.ts');
 
 /** An opened store on its own throwaway file. `dbPath` is a real constructor
  *  parameter ("Override the DB location (tests)"), so no `app.getPath` fake is
@@ -436,5 +436,131 @@ test('repoint() moves a LIVE handle from the pre-onboarding path to the new home
     );
   } finally {
     verify.close();
+  }
+});
+
+// ── SCALE-03 — the events table, read as a TIME RANGE ────────────────────────
+//
+// Plan 03-03 was written expecting to CREATE this table as migration #3, with a
+// `(id, floor_id, ts, kind, agent_id, task_id, session_id, payload)` schema.
+// Phase 4's RECORD-01/RECORD-02 landed migration #3 first, with a narrower
+// `(id, ts, kind, json)` — `json` being the whole event verbatim, which is a
+// SUPERSET of the columns the plan wanted to split out. Appending the plan's
+// version as a fourth migration is not merely redundant, it is FATAL: measured
+// this session against the real better-sqlite3 that ships here, the
+// `CREATE TABLE IF NOT EXISTS events` silently no-ops on an already-migrated DB
+// and the very next statement, `CREATE INDEX ... ON events(floor_id, ts)`,
+// throws `SqliteError: no such column: floor_id`. db.ts's own migrate() comment
+// spells out what that costs — a throw inside a migration escapes the
+// quarantine path and leaves the store PERMANENTLY UNOPENABLE on every install
+// that already ran RECORD-02. So SCALE-03 reads the table that is there.
+//
+// What is genuinely new here is `earliestEventTs()`, which `hive:timeline`
+// reports as `firstTs`. Its contract is the earliest timestamp STILL STORED,
+// not "the first event ever" — pruneEvents moves MIN(ts) forward every day, and
+// a UI that says "no record before 09:14" must be telling the truth about the
+// store as it is now, not about a row that was deleted a month ago.
+
+const SCALE03_DAY_MS = 24 * 60 * 60 * 1000;
+
+test('SCALE-03: events is real schema on disk, at or past user_version 3', () => {
+  const dbPath = path.join(tempDir(), 'harness.db');
+  const store = openStore(dbPath);
+  store.close(); // checkpoints the WAL, so the schema is readable from the file
+
+  // A SECOND, independent handle — the same discipline the memory_fts case at
+  // the top of this file applies, and for the same reason: a driver that stores
+  // a version number and swallows the DDL cannot satisfy it.
+  const raw = new Database(dbPath, { readonly: true });
+  try {
+    const version = raw.pragma('user_version', { simple: true });
+    assert.ok(
+      version >= 3,
+      `user_version is ${version}; the events table lands at 3. The rail is APPEND-ONLY and this `
+      + 'is a lower bound on purpose — a later migration must never make this go red.'
+    );
+    const cols = raw.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
+    assert.deepEqual(
+      cols, ['id', 'ts', 'kind', 'json'],
+      'the events table on disk does not have the shipped RECORD-02 columns. If a migration widened '
+      + 'it, widen this list in the same commit — and check that appendEvent still binds every '
+      + 'NOT NULL column, because a mismatch here throws on every single append and appendLog '
+      + 'swallows it, which is a silent floor-wide record outage.'
+    );
+    const idx = raw
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events'")
+      .all().map((r) => r.name);
+    assert.ok(
+      idx.includes('idx_ev_ts'),
+      `events has no idx_ev_ts (indexes: ${idx.join(', ') || 'none'}). Without it a DAY is a full `
+      + 'table scan, and this table takes on the order of hundreds of thousands of rows a day.'
+    );
+    assert.ok(idx.includes('idx_ev_kind_ts'), `events has no idx_ev_kind_ts (indexes: ${idx.join(', ')})`);
+  } finally {
+    raw.close();
+  }
+});
+
+test('SCALE-03: earliestEventTs() is null on an empty events table', () => {
+  const store = openStore();
+  try {
+    assert.equal(
+      store.earliestEventTs(), null,
+      'an empty events table must report null, not 0 — hive:timeline hands this through as firstTs '
+      + 'and 0 is a real epoch timestamp the UI would happily render as "records began in 1970"'
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('SCALE-03: earliestEventTs() reports the earliest ts STILL STORED, and follows the prune', () => {
+  const dbPath = path.join(tempDir(), 'harness.db');
+  const store = openStore(dbPath);
+  const now = Date.now();
+  // Expired against the SHIPPED window, computed FROM the exported constant —
+  // never a hardcoded 30 — so moving EVENT_RETENTION_MS cannot leave this case
+  // silently asserting a window the product no longer has.
+  const expiredTs = now - EVENT_RETENTION_MS - SCALE03_DAY_MS;
+  const freshTs = now;
+  store.appendEvent('hive_event', JSON.stringify({ marker: 'expired' }), expiredTs);
+  store.appendEvent('hive_event', JSON.stringify({ marker: 'fresh' }), freshTs);
+  assert.equal(
+    store.earliestEventTs(), expiredTs,
+    'earliestEventTs() did not return MIN(ts) over the stored rows'
+  );
+  store.close();
+
+  // Reopened as a SECOND, independent handle on the same file: the rows are on
+  // disk, not in one process's memory, and the prune below is the real
+  // `DELETE FROM events WHERE ts < ?` boot.ts runs at boot and once a day.
+  const second = new PersistStore(dbPath);
+  second.open();
+  try {
+    assert.equal(second.earliestEventTs(), expiredTs, 'the events did not survive the handle close');
+    const gone = second.pruneEvents(Date.now() - EVENT_RETENTION_MS);
+    assert.equal(
+      gone, 1,
+      `the retention delete removed ${gone} rows, not 1. At 0 the table is unbounded and this `
+      + 'whole window is decorative; at 2 it just ate a row inside the window it promised to keep.'
+    );
+    assert.equal(
+      second.eventsBetween(expiredTs - 1, expiredTs + 1).length, 0,
+      'the expired row is still readable after the prune — a retention statement that is built but '
+      + 'never run, or run with the wrong units, looks exactly like this'
+    );
+    assert.equal(
+      second.eventsBetween(freshTs, freshTs + 1).length, 1,
+      'the FRESH row was deleted too — an inverted comparison passes the "expired row is gone" half '
+      + 'of this test while destroying the record it exists to keep'
+    );
+    assert.equal(
+      second.earliestEventTs(), freshTs,
+      'earliestEventTs() still reports the DELETED row\'s timestamp. It is the earliest ts STILL '
+      + 'STORED, not the first event ever — 03-07 draws its "no record before {HH:mm}" marker from '
+      + 'this number, and a stale one claims coverage the store cannot deliver.'
+    );
+  } finally {
+    second.close();
   }
 });
