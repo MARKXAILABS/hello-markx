@@ -337,6 +337,13 @@ export interface HarnessConfig {
   slackChannelId?: string;
   slackPort?: number;
   slackProactivePosting?: boolean;
+  /** SCALE-04's daily digest. Mirrors main + renderer HarnessConfig.
+   *  `dailyDigest` gates the toast and Slack arms only — the file arm is
+   *  unconditional. `digestHour` absent = DIGEST_DEFAULT_HOUR in
+   *  src/main/floor/boot.ts, the single source of that number. */
+  dailyDigest?: boolean;
+  slackDigestChannelId?: string;
+  digestHour?: number;
   webhookEnabled?: boolean;
   webhookSecret?: string;
   webhookPort?: number;

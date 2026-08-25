@@ -318,6 +318,19 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
   // App/voice-initiated proactive posting (the "queued" ack). Default OFF —
   // the Slack-origin done-reply round-trip is unaffected by this toggle.
   const [slackProactivePosting, setSlackProactivePosting] = useState(config.slackProactivePosting ?? false);
+  // SCALE-04. Written through updateConfig, not through slackSetConfig: these
+  // two are HarnessConfig fields the digest reads at fire time, not part of the
+  // webhook server's start-up patch. `dailyDigest` gates the toast and Slack
+  // arms only — the file arm always writes, which is why the sub-label below
+  // talks about the process being alive rather than about this switch.
+  const [dailyDigest, setDailyDigest] = useState(config.dailyDigest ?? false);
+  const [digestChannel, setDigestChannel] = useState(config.slackDigestChannelId ?? '');
+  const toggleDailyDigest = async (): Promise<void> => {
+    const next = !dailyDigest;
+    setDailyDigest(next); // optimistic
+    try { await window.cth.updateConfig({ dailyDigest: next }); }
+    catch { setDailyDigest(!next); /* revert on failure */ }
+  };
   const [tunnelUrl, setTunnelUrl] = useState('');
   const [slackBusy, setSlackBusy] = useState(false);
   const [slackNote, setSlackNote] = useState('');
@@ -499,6 +512,8 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
       setSlackChannel(cc.slackChannelId ?? '');
       setSlackPort(String(cc.slackPort ?? 3847));
       setSlackProactivePosting(cc.slackProactivePosting ?? false);
+      setDailyDigest(cc.dailyDigest ?? false);
+      setDigestChannel(cc.slackDigestChannelId ?? '');
       const kgOn = (cc as { knowledgeGraph?: { enabled?: boolean } }).knowledgeGraph?.enabled === true;
       setKgEnabled(kgOn);
       setFreeflowEnabled(cc.freeflowEnabled !== false);
@@ -1788,6 +1803,21 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                               </PixelButton>
                             </div>
 
+                            {/* SCALE-04's digest channel. Inside the slackEnabled
+                                block because it is only meaningful with Slack on —
+                                the digest TOGGLE itself sits outside, since the file
+                                and toast arms have nothing to do with Slack. */}
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={slackLabelStyle}>Daily digest channel id</span>
+                              <input
+                                value={digestChannel}
+                                onChange={(e) => setDigestChannel(e.target.value)}
+                                onBlur={() => { void window.cth.updateConfig({ slackDigestChannelId: digestChannel.trim() || undefined }); }}
+                                placeholder="C0123... — blank means the digest never posts to Slack"
+                                style={{ ...slackInputStyle, fontFamily: 'var(--cth-font-mono)' }}
+                              />
+                            </label>
+
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                               {/* Start disabled once connected; Stop only when running. */}
                               <PixelButton variant="primary" size="sm" onClick={startSlack} disabled={slackBusy || !slackSecret.trim() || running}>
@@ -1834,6 +1864,48 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                             </span>
                           </div>
                         )}
+                      </div>
+
+                      <div style={{ height: 2, background: 'var(--cth-ink-300)' }} />
+
+                      {/* SCALE-04 — the daily digest. OUTSIDE the slackEnabled
+                          block on purpose: two of its three arms (a file in the
+                          hive folder, an OS toast) never touch Slack, so a floor
+                          with Slack off must still be able to turn this on.
+                          The limitation sentence renders unconditionally, not only
+                          when the switch is on — it is what the operator needs
+                          BEFORE flipping it, and the app cannot deliver a 9am
+                          report from a process that is not running. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{
+                          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+                          color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 2
+                        }}>
+                          Daily digest
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
+                              Daily digest — yesterday&apos;s spend, board and open questions
+                            </span>
+                            <span style={{ fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)', color: 'var(--cth-ink-500)' }}>
+                              Requires Open at login, which is set during onboarding and is not yet
+                              changeable here. Closing the window on Windows ends the process, and a
+                              closed process sends nothing.
+                            </span>
+                            <span style={{ fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)', color: 'var(--cth-ink-500)' }}>
+                              A copy is always written to your hive folder either way; this switch
+                              controls the desktop toast and the Slack post.
+                            </span>
+                          </div>
+                          <PixelButton
+                            variant={dailyDigest ? 'primary' : 'secondary'}
+                            size="sm"
+                            onClick={toggleDailyDigest}
+                          >
+                            {dailyDigest ? 'on' : 'off'}
+                          </PixelButton>
+                        </div>
                       </div>
 
                       <div style={{ height: 2, background: 'var(--cth-ink-300)' }} />

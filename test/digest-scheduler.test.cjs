@@ -459,6 +459,15 @@ test('SCALE-04 / T-03-05f: the Slack arm is dispatched from the REAL fire path, 
     harnessHome: env.harnessHome, webhookTriggers: [], notifications: false, dailyDigest: true, ...extra
   });
 
+  // ORDER MATTERS, and not for a test-hygiene reason. `slackBotToken` is a
+  // SECRET_FIELDS entry: the first readConfig that sees it in plaintext moves it
+  // into the secret broker and `withSecrets` puts it back on every later read.
+  // So a token cannot be un-set by dropping it from config.json, and the
+  // no-token case has to run BEFORE any token has ever been written here.
+  cfg({ slackEnabled: true, slackDigestChannelId: 'C-DIGEST' }); // no bot token yet
+  await fireDigest();
+  assert.equal(posts.length, 0, 'the digest posted with no bot token');
+
   // The off-state that matters (T-03-05f): the Slack master switch is off, and
   // BOTH Slack credentials are present and valid.
   cfg({ slackEnabled: false, slackBotToken: 'xoxb-fixture', slackDigestChannelId: 'C-DIGEST' });
@@ -467,13 +476,9 @@ test('SCALE-04 / T-03-05f: the Slack arm is dispatched from the REAL fire path, 
     `the digest posted to Slack with slackEnabled OFF: ${JSON.stringify(posts)}. An operator who `
     + 'flips that switch reasonably believes nothing reaches Slack');
 
-  cfg({ slackEnabled: true, slackBotToken: 'xoxb-fixture', slackDigestChannelId: undefined });
+  cfg({ slackEnabled: true, slackDigestChannelId: undefined });
   await fireDigest();
   assert.equal(posts.length, 0, 'the digest posted with no channel id configured');
-
-  cfg({ slackEnabled: true, slackDigestChannelId: 'C-DIGEST' }); // no bot token
-  await fireDigest();
-  assert.equal(posts.length, 0, 'the digest posted with no bot token');
 
   // ...and the ON state, so every negative above is contrasted against a
   // PROVEN positive rather than against a path that never worked.

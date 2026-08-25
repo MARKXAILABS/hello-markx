@@ -129,6 +129,13 @@ export interface HarnessConfig {
   /** Opt-in app/voice-initiated proactive Slack posting (default OFF). Mirrors
    *  src/main/config.ts; the Slack-origin done-reply round-trip is never gated. */
   slackProactivePosting?: boolean;
+  /** SCALE-04's daily digest (mirrors src/main/config.ts). `dailyDigest` gates
+   *  the toast and Slack arms; the file arm is unconditional, so a floor with
+   *  this off still leaves yesterday's digest in the hive folder. `digestHour`
+   *  absent = DIGEST_DEFAULT_HOUR in src/main/floor/boot.ts. */
+  dailyDigest?: boolean;
+  slackDigestChannelId?: string;
+  digestHour?: number;
   /** Free Flow voice dictation (mirrors src/main/config.ts). */
   freeflowEnabled?: boolean;
   groqApiKey?: string;

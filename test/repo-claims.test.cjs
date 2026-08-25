@@ -1126,9 +1126,22 @@ test('SCALE-04: the Settings digest toggle writes config, and names the control 
   const settings = readStripped('src/renderer/src/components/SettingsModal.tsx');
   const raw = readRaw('src/renderer/src/components/SettingsModal.tsx');
 
-  assert.match(settings, /updateConfig\(\s*\{\s*dailyDigest/,
-    'the digest toggle never calls window.cth.updateConfig({ dailyDigest: ... }) — a switch that '
-    + 'renders and writes nothing is a decoration, and the operator finds out a day later');
+  // FOLLOW THE WIRE, do not just grep for the writer. A file-wide
+  // `updateConfig({ dailyDigest` match is satisfied by a handler nothing calls:
+  // driven RED both ways, the naive grep passed while the button's onClick was
+  // a bare setState. So: read the handler NAME off the digest button's own
+  // onClick, then require THAT handler's body to be the thing that writes.
+  const wired = settings.match(/variant=\{dailyDigest[\s\S]{0,200}?onClick=\{(\w+)\}/);
+  assert.ok(wired,
+    'no PixelButton in Settings is driven by `dailyDigest` with a named onClick handler — the '
+    + 'digest switch is missing, or its click does something this pin cannot follow');
+  const handlerStart = settings.indexOf(`const ${wired[1]}`);
+  assert.ok(handlerStart >= 0, `${wired[1]} is bound to the digest button but never declared`);
+  const handlerBody = settings.slice(handlerStart, settings.indexOf('\n  const ', handlerStart + 1));
+  assert.match(handlerBody, /updateConfig\(\s*\{\s*dailyDigest/,
+    `${wired[1]} is what the digest switch calls, and it never writes dailyDigest to config. A `
+    + 'switch that flips a pixel and persists nothing is a decoration, and the operator finds '
+    + 'out a day later when no digest arrives.');
   assert.match(settings, /slackDigestChannelId/,
     'Settings has no input for slackDigestChannelId, so the Slack arm can never be turned on '
     + 'from the UI that offers the toggle');

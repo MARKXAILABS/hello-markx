@@ -26,8 +26,10 @@ import { randomBytes } from 'node:crypto';
 import { PtyManager, type SpawnOptions } from '../pty';
 import {
   readConfig, writeConfig,
-  OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type ScheduledMission
+  OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION,
+  type ScheduledMission, type HarnessConfig
 } from '../config';
+import { postSlackDigest } from '../slack';
 import { HiveManager, redactSecrets, hasOwnCostSource, type AgentMeta, type HiveTask } from '../hive';
 import { AccountPoolManager } from '../accountPool';
 import {
@@ -1004,6 +1006,27 @@ function digestHour(): number {
   return typeof h === 'number' && Number.isInteger(h) && h >= 0 && h <= 23 ? h : DIGEST_DEFAULT_HOUR;
 }
 
+/**
+ * Where the digest's Slack arm may post — or `null`, which means it may not.
+ *
+ * FOUR switches, all of them required (T-03-05f). Gating on the presence of a
+ * bot token and a channel id alone was the defect: an operator who flips the
+ * Slack master switch off, or who never turned the digest on, reasonably
+ * believes nothing reaches Slack, and a daily post kept arriving. Both of the
+ * switches they can actually SEE now genuinely stop the egress they appear to.
+ *
+ * A pure function of the config it is handed, and exported, so every off-state
+ * can be driven from test/slack.test.cjs without booting a floor or opening a
+ * socket — a gate whose only proof is "the arm did not fire in one scenario" is
+ * a gate nobody has checked.
+ */
+export function digestSlackTarget(config: HarnessConfig): { botToken: string; channel: string } | null {
+  if (config.dailyDigest && config.slackEnabled && config.slackBotToken && config.slackDigestChannelId) {
+    return { botToken: config.slackBotToken, channel: config.slackDigestChannelId };
+  }
+  return null;
+}
+
 /** The local day the last digest actually went out on, `''` when none has. */
 function digestLastSentDay(): string {
   try { return persist.getKv<string>(DIGEST_LAST_SENT_KV_KEY) ?? ''; } catch { return ''; }
@@ -1109,12 +1132,23 @@ export function fireDigest(): Promise<void> {
     console.error('[digest] notify failed:', e);
   }
 
-  // Arm 3 — Slack. The one arm with a network hop, so it is the one that has to
-  // be awaited; it lands in the next commit behind its own four-switch gate.
-  // `fireDigest` itself stays NON-async deliberately — the two arms above are
-  // synchronous and must have completed by the time this returns, so that a
-  // caller which never awaits (the timer) still gets the file and the toast.
-  return Promise.resolve();
+  // Arm 3 — Slack. The one arm with a network hop, so it is the one that is
+  // awaited; `fireDigest` itself stays NON-async deliberately, so the two
+  // synchronous arms above have completed by the time it returns and a caller
+  // that never awaits (the timer) still gets the file and the toast.
+  return dispatchDigestToSlack(cfg, text);
+}
+
+/** The digest's Slack hop, best-effort: a Slack outage must cost the operator
+ *  nothing that already went out, so this never rejects and never throws back
+ *  into the timer. Logs `res.error` only — a Slack-returned string, never
+ *  `opts`, never the token (T-03-05a). */
+function dispatchDigestToSlack(config: HarnessConfig, text: string): Promise<void> {
+  const target = digestSlackTarget(config);
+  if (!target) return Promise.resolve();
+  return postSlackDigest({ botToken: target.botToken, channel: target.channel, text })
+    .then((res) => { if (!res.ok) console.error('[digest] slack post failed:', res.error); })
+    .catch((e) => { console.error('[digest] slack arm failed:', e); });
 }
 
 /** Stop whichever half of the digest beat is pending. Shared by
