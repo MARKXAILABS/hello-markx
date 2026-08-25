@@ -391,3 +391,39 @@ test('FLOOR-04 ceiling: the control is BOUNDED — what it catches, and the shap
   assert.equal(gitIn(root, 'log', '-p').includes(CAUGHT_SECRET), false,
     'the scrub is off entirely — this ceiling test would then pass vacuously for the wrong reason');
 });
+
+// ── Plan 03-02: spawnedAt — "up" means since THIS PTY, never cumulative ──────
+//
+// SCALE-05's card shows how long an agent has been up. There was no timestamp to
+// derive it from, and the tempting fix — letting `...prev` carry the field
+// forward the way it deliberately carries `sessionId` — is wrong: a respawn IS a
+// new terminal, so a preserved stamp would quietly report uptime across a crash
+// and a restart. Driven through the real `ensureAgent` rather than asserted
+// against the source, because "the field is spelled correctly in the upsert" and
+// "the field advances on respawn" are different claims and only the second one
+// is the behaviour.
+test('03-02: ensureAgent stamps spawnedAt, and a RESPAWN advances it', async (t) => {
+  const { hive } = floor(t);
+  const before = Date.now();
+  await hive.ensureAgent(agent('pam'));
+  const first = hive.registry().agents.pam.spawnedAt;
+
+  assert.equal(typeof first, 'number', 'ensureAgent recorded no spawnedAt — the card has no clock to read');
+  assert.ok(first >= before && first <= Date.now(),
+    `spawnedAt (${first}) is outside the window this spawn actually happened in`);
+
+  // A session id is the CONTRAST: `...prev` is meant to preserve that one.
+  hive.recordSession('pam', 'sid-first-run');
+  assert.equal(hive.registry().agents.pam.sessionId, 'sid-first-run');
+
+  await new Promise((r) => setTimeout(r, 5)); // clear the ms tick
+  await hive.ensureAgent(agent('pam'));
+  const second = hive.registry().agents.pam.spawnedAt;
+
+  assert.ok(second > first,
+    `spawnedAt did not advance on respawn (${first} -> ${second}) — it is being carried forward by the `
+    + '`...prev` spread, so the card would report uptime accumulated across a crash and a restart');
+  assert.equal(hive.registry().agents.pam.sessionId, 'sid-first-run',
+    'the respawn also wiped sessionId — spawnedAt must reset WITHOUT disturbing the field `...prev` is '
+    + 'deliberately preserving (the --resume key)');
+});

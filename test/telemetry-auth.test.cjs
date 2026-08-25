@@ -904,10 +904,13 @@ test('T-03-02g: hasOwnCostSource is true for codex and NOTHING else', () => {
     'an absent provider means claude (the `?? "claude"` default the rest of hive.ts uses), which is false');
 });
 
-test('T-03-02c: spawnedAt is recorded per (re)spawn, and RegistryAgent types it', () => {
-  const hive = SRC('src/main/hive.ts');
-  assert.match(hive, /spawnedAt\?: number;/, 'RegistryAgent must type the field');
-  // Not spread from `...prev`: every (re)spawn is a new PTY, so "up" is time
-  // since THIS spawn. It sits with `lastSeen: Date.now()`, which behaves the same.
-  assert.match(hive, /spawnedAt: Date\.now\(\)/, "ensureAgent's upsert must stamp it unconditionally");
-});
+// T-03-02c (spawnedAt) is NOT asserted here. It was, as a pair of source regexes
+// over hive.ts — which is the weaker claim: `spawnedAt: Date.now()` being spelled
+// in the upsert and the stamp actually ADVANCING on a respawn are different
+// facts, and only the second is the behaviour the card depends on. Worse, the
+// regex reddens on a refactor that keeps the behaviour exactly (hoisting the
+// `Date.now()` into a local), which is a gate that cries wolf.
+// The real guard drives the real `ensureAgent` twice:
+// test/hive-durability.test.cjs, '03-02: ensureAgent stamps spawnedAt, and a
+// RESPAWN advances it' — verified red against the `prev?.spawnedAt ?? Date.now()`
+// spelling this plan explicitly warns against.
