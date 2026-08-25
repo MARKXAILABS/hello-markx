@@ -93,7 +93,18 @@ if (cmd === 'add') {
   if (f.desc) card.description = f.desc;
   if (f.assignee) card.assignee = f.assignee;
   if (num(f['budget-tokens']) !== undefined) card.budgetTokens = num(f['budget-tokens']);
-  mutate(function (tasks) { return { tasks: tasks.concat([card]), card: card }; });
+  mutate(function (tasks) {
+    // VIGIL-04 — the card's own clock, stamped INSIDE the compare-and-swap so a
+    // lost attempt never leaves a timestamp for a mutation that did not happen.
+    // Both clocks come off the same read: a brand-new card must read 0s old, not
+    // a millisecond of jitter. The main-side twin of this stamp is in
+    // HiveManager.writeTasks (src/main/hive.ts) — the kanban, webhooks, Slack and
+    // the voice layer write through there, not through this CLI.
+    const now = new Date().toISOString();
+    card.createdAt = now;
+    card.updatedAt = now;
+    return { tasks: tasks.concat([card]), card: card };
+  });
   return ok({ task: card });
 }
 
@@ -128,6 +139,12 @@ if (cmd === 'patch' || cmd === 'claim' || cmd === 'done') {
       merged.humanQA = (Array.isArray(tasks[i].humanQA) ? tasks[i].humanQA : []).concat([{ q: patch.__q, askedAt: new Date().toISOString(), askedBy: process.env.AGENT_ID || 'god' }]);
       merged.status = 'blocked';
     }
+    // VIGIL-04 — same stamp as the add branch above, inside the same CAS. One site
+    // covers patch, claim and done because all three share this merged-card path;
+    // four separate test cases (test/hive-task-mutation.test.cjs) prove each verb
+    // rather than three copies of this line proving nothing. Main-side twin:
+    // HiveManager.writeTasks in src/main/hive.ts.
+    merged.updatedAt = new Date().toISOString();
     const next = tasks.slice();
     next[i] = merged;
     return { tasks: next, card: merged };

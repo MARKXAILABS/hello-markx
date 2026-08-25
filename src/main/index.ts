@@ -2008,6 +2008,12 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           command: bin,
           cols: opts.cols,
           rows: opts.rows,
+          // GATE-02 — the install ladder needs this as much as a normal spawn,
+          // and arguably more: a proxy variable, a registry token or a corporate
+          // CA bundle is exactly what an operator re-admits to make `npm install
+          // -g` work. Omitting it here would be a silent behaviour split on the
+          // one path where they have no signal the installer differs.
+          envPassThrough: readConfig().envPassThrough ?? [],
           shellScript: buildMissingCliScript(bin, provider, npmAvailable, process.platform, nodeInstaller)
         },
         owner
@@ -2347,6 +2353,12 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   if (provider === 'codex' && opts.hive?.id) {
     await enableCodexRemoteForSpawn(opts, opts.hive.id);
   }
+  // GATE-02 — the operator's env escape hatch, resolved in MAIN and ASSIGNED
+  // rather than defaulted. `pty:spawn` takes its options straight off the
+  // renderer IPC, so `opts.<hatch> ?? readConfig()...` would let a compromised
+  // renderer name its own pass-through list and re-admit every credential the
+  // allowlist just removed. The config file is the only authority.
+  opts.envPassThrough = readConfig().envPassThrough ?? [];
   const res = ptyManager.spawn(opts, owner);
   if (res.ok) {
     analytics.track('agent_spawned', { provider });

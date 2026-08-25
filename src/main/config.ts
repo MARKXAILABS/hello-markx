@@ -454,6 +454,17 @@ export interface HarnessConfig {
   /** Never condense a file smaller than this; also the section-trigger byte floor.
    *  DECIDED: 16 KB. */
   reflectMinBytes?: number;
+
+  // ─── GATE-02: the operator's env escape hatch ──────────────────────────────
+  /** Additional `process.env` NAMES (never values) that agent spawns may inherit
+   *  past the `allowFromEnv` allowlist in shellEnv.ts — e.g. `['CODEX_API_KEY']`
+   *  for a BYOK engine whose key the operator exported in their own shell rather
+   *  than configuring in the app. Config-file only, by design: it WIDENS a
+   *  security boundary, so it should cost more than a checkbox. Default [].
+   *  Reaches the child through `SpawnOptions.envPassThrough` at both of
+   *  `spawnAgentCore`'s `ptyManager.spawn(` sites; `hiddenClaude.ts` and
+   *  `memory.ts` cannot read it (shellEnv.ts ceiling item (h)). */
+  envPassThrough?: string[];
 }
 
 const DEFAULTS: HarnessConfig = {
@@ -461,6 +472,8 @@ const DEFAULTS: HarnessConfig = {
   harnessHome: null,
   recentHives: [],
   registeredRepos: [],
+  // GATE-02: no name is re-admitted unless the operator names it themselves.
+  envPassThrough: [],
   autoMode: true,
   defaultCommand: 'claude',
   godProvider: 'claude',
