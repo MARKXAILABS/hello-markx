@@ -1548,3 +1548,186 @@ test('a floor of only metered engines declares no cost gap at all', (t) => {
       `an all-otel floor still declared "${s}" — a gap sentence that always renders is noise, and noise is how a real declaration stops being read`);
   }
 });
+
+// ─── DayBandTab — the scrubber, the picker and the detail list (§S1c, §S1d, §S1f) ─────
+
+const okDay = (day, fill) => ({
+  ok: true, firstTs: localDayStart(day) - 86_400_000, eventsAgedOut: false, buckets: bandBuckets(day, fill)
+});
+
+/** One event row exactly as `timeline.ts`'s `bucketDetail` emits it: the whole hive log
+ *  entry lives in `json`, because that is what `appendEvent(kind, json, ts)` was handed. */
+const eventRow = (ts, entry) => ({ type: 'event', ts, kind: entry.kind, json: JSON.stringify(entry) });
+
+const attrsOf = (markup, tag) => {
+  const m = new RegExp(`<${tag}[^>]*>`).exec(markup);
+  assert.ok(m, `the day tab rendered no <${tag}> at all`);
+  return m[0];
+};
+
+test('the scrubber is a native range input carrying all five attributes in first-pass markup', () => {
+  const markup = band({
+    day: QUIET,
+    summary: okDay(QUIET, { 4: { events: 7, envelopes: 2, usd: 0.05, tokens: 120 } }),
+    bucket: { index: 4, detail: { ok: true, rows: [], truncated: false, total: 0 } }
+  });
+  const input = /<input[^>]*type="range"[^>]*>/.exec(markup);
+  assert.ok(input, 'there is no <input type="range"> — D-25 makes arrow keys the step control precisely so no glyph button is needed, and that only works if the control is the native one');
+
+  for (const attr of ['min="0"', 'max="95"', 'step="1"', 'aria-label="Time of day"']) {
+    assert.ok(input[0].includes(attr),
+      `the scrubber is missing ${attr} — every one of S1c's attributes is plain first-pass markup, which is the whole reason this surface uses a native input`);
+  }
+  // Without aria-valuetext a screen reader announces "47", which means nothing. The
+  // value it announces has to be the bucket's REAL meaning, not its index.
+  const vt = /aria-valuetext="([^"]*)"/.exec(input[0]);
+  assert.ok(vt, 'the scrubber has no aria-valuetext — it announces a bare bucket index, which tells a screen-reader user nothing about the day');
+  assert.equal(decode(vt[1]), '01:00–01:15 · 7 events · 2 envelopes · $0.05',
+    'the scrubber announces something other than the selected bucket\'s window and its real counts');
+});
+
+test('the day picker is a native date input, capped at today and deliberately WITHOUT a min', () => {
+  const markup = band({ day: QUIET, summary: okDay(QUIET, {}) });
+  const input = attrsOf(markup, 'input[^>]*type="date"');
+
+  assert.ok(input.includes('aria-label="Day to replay"'),
+    'the day picker has no accessible name — it is the one control that decides what the whole tab is about');
+  assert.ok(/max="\d{4}-\d{2}-\d{2}"/.test(input),
+    'the picker has no max — a day in the future has no rows by construction and main rejects it, so offering it is offering a guaranteed error');
+  assert.ok(!/\smin="/.test(input),
+    'the picker grew a min bound. S1d refuses one on purpose: a disabled range HIDES when the record starts, and stating it is the whole job of the empty-state copy');
+});
+
+test('a truncated bucket shows the real total — it never silently slices', () => {
+  const ts = localDayStart(QUIET) + 4 * BUCKET_MS;
+  const markup = band({
+    day: QUIET,
+    summary: okDay(QUIET, { 4: { events: 312 } }),
+    bucket: {
+      index: 4,
+      detail: {
+        ok: true, truncated: true, total: 312,
+        rows: [
+          eventRow(ts + 1000, { kind: 'spawn', name: 'Ada' }),
+          eventRow(ts + 2000, { kind: 'drain', agentId: 'ada', count: 3 })
+        ]
+      }
+    }
+  });
+
+  assert.ok(decode(markup).includes('Showing 2 of 312 rows in this bucket.'),
+    'a capped bucket renders no count — ToolWaterfall.tsx:16 and CommandCenterPanel.tsx:1608 are the two shipped precedents for that sin, and S1e corrects it here');
+  // Rendered from main's numbers verbatim. 03-03 drops zero-delta cost rows BEFORE its
+  // 200-row cap and defines `total` as the DISPLAYABLE count, so a second filter here
+  // would make the two halves of this sentence disagree about what a row is.
+  assert.ok(/<li[^>]*>[\s\S]*Showing 2 of 312 rows in this bucket\./.test(decode(markup)),
+    'the truncation line is not an <li> in the list it describes — S1e puts it last in the <ol> so it cannot be scrolled away from its own rows');
+});
+
+test('round-3 #8: an ok:false bucket detail renders the same binding sentence, never the empty-bucket copy', () => {
+  const markup = band({
+    day: QUIET,
+    summary: okDay(QUIET, { 0: { events: 5 } }),
+    bucket: { index: 0, detail: { ok: false, error: 'sentinel-bucket-unreadable' } }
+  });
+  const text = decode(markup);
+
+  // UI-SPEC :247's row is titled "Timeline query failed" and names no channel, so it
+  // binds the bucket query exactly as much as the day query.
+  assert.ok(text.includes('Could not read the timeline: sentinel-bucket-unreadable. Pick the day again to retry.'),
+    'an unreadable bucket renders an invented sentence or drops its reason — the same defect as the day query\'s, one call deeper');
+  assert.ok(!text.includes('Nothing in this fifteen minutes'),
+    'an unreadable bucket rendered as an EMPTY one — for exactly the reason a rejected day must never render as a quiet one: the store said nothing, which is not the same as saying nothing happened');
+});
+
+test('a genuinely empty bucket says so, rather than rendering as blank space', () => {
+  const text = decode(band({
+    day: QUIET,
+    summary: okDay(QUIET, { 0: { events: 5 } }),
+    bucket: { index: 0, detail: { ok: true, rows: [], truncated: false, total: 0 } }
+  }));
+
+  assert.ok(text.includes('Nothing in this fifteen minutes.'),
+    'a bucket with no rows renders nothing at all — the silent nothing D-27 forbids, and without this branch the unreadable-bucket rule above is true by construction rather than by correct branching');
+});
+
+test('the detail list renders every kind, keeps the blank-subject fallback, and declares the missing body', (t) => {
+  seedServerSnapshot(t, { agents: [agentRow({ id: 'a1', name: 'Ada' })] });
+  const ts = localDayStart(QUIET);
+  const text = decode(band({
+    day: QUIET,
+    summary: okDay(QUIET, { 0: { events: 4, envelopes: 2, usd: 0.0123 } }),
+    bucket: {
+      index: 0,
+      detail: {
+        ok: true, truncated: false, total: 5,
+        rows: [
+          eventRow(ts + 1_000, { kind: 'spawn', name: 'Ada' }),
+          eventRow(ts + 2_000, { kind: 'message', from: 'ada', to: 'bob', act: 'ask', subject: 'the build' }),
+          eventRow(ts + 3_000, { kind: 'message', from: 'ada', to: 'bob', act: 'ask', subject: '' }),
+          eventRow(ts + 4_000, { kind: 'approval', approve: false }),
+          { type: 'cost', ts: ts + 5_000, agentId: 'a1', taskId: null, usd: 0.0123, tokens: 900 }
+        ]
+      }
+    }
+  }));
+
+  assert.ok(text.includes('spawned Ada'), 'the spawn row lost ActivityTab\'s wording');
+  assert.ok(text.includes('ada → bob: the build'), 'the envelope row lost its subject');
+  assert.ok(text.includes('ada → bob: ask'),
+    'the `|| e.act` fallback was dropped — an envelope with a blank subject renders as an empty colon, which is what that fallback exists to prevent');
+  assert.ok(text.includes('approval denied'), 'the approval row lost its granted/denied distinction — the one bit that matters on it');
+  assert.ok(text.includes('Ada +$0.0123'),
+    'the cost row is missing or is not the clamped DIFF — a cumulative snapshot here would be ADR-0005\'s bug on a second surface');
+  assert.ok(text.includes('Envelopes show their subject. The body was never recorded.'),
+    'the standing limitation is stated only in a comment — hive.ts:1668 records no body at all, and a list that stays silent about that implies one could be shown');
+});
+
+test('the detail list\'s event wording is the SHIPPED ActivityTab formatter, not a second vocabulary', () => {
+  // The same technique `shippedRelAge` uses above, and for the same reason: transcribing
+  // a body into this file asserts that the transcription matches itself. Reading BOTH
+  // real sources means this goes red the day either one is edited alone — which is
+  // exactly when a second event vocabulary would start to drift away from the first.
+  const lift = (file, re, sig) => {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const m = re.exec(src);
+    assert.ok(m, `${file} no longer declares the formatter this anchor names — re-derive it by content, not by line`);
+    return new Function(`${m[0].replace(sig, '(e)')}; return ${sig.startsWith('(e: LogEntry') ? 'fmt' : 'fmtActivityRow'};`)();
+  };
+  const shipped = lift(
+    'src/renderer/src/components/CommandCenterPanel.tsx',
+    /const fmt = \(e: LogEntry\): string => \{[\s\S]*?\n {2}\};/, '(e: LogEntry): string'
+  );
+  const copied = lift(
+    'src/renderer/src/components/DayBandTab.tsx',
+    /function fmtActivityRow\(e: Record<string, unknown>\): string \{[\s\S]*?\n\}/, '(e: Record<string, unknown>): string'
+  );
+
+  const cases = [
+    { kind: 'spawn', name: 'Ada' },
+    { kind: 'spawn', agentId: 'a1' },
+    { kind: 'message', from: 'ada', to: 'bob', act: 'ask', subject: 'the build' },
+    { kind: 'message', from: 'ada', to: 'bob', act: 'ask', subject: '' },
+    { kind: 'drain', agentId: 'ada', count: 3 },
+    { kind: 'escalate', subject: 'needs a key' },
+    { kind: 'escalate' },
+    { kind: 'approval', approve: true },
+    { kind: 'approval', approve: false },
+    { kind: 'tool', name: 'Bash' }
+  ];
+  for (const c of cases) {
+    assert.equal(copied(c), shipped(c),
+      `the day band's wording for ${JSON.stringify(c)} has drifted from ActivityTab's — S1f reuses the five existing cases verbatim so one floor cannot describe the same event two ways`);
+  }
+});
+
+test('the production mount calls BOTH timeline channels — the IPC 03-03 landed has a real consumer', () => {
+  // Without this the whole channel — two handlers, a preload bridge and a pure module —
+  // can ship with ZERO renderer callers and every other criterion still passes. That is
+  // the shape D-38 exists to prevent, one wave apart.
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/DayBandTab.tsx'), 'utf8');
+  for (const call of ['window.cth.hiveTimeline(', 'window.cth.hiveTimelineBucket(']) {
+    assert.ok(src.includes(call),
+      `${call}…) is never called — the day band would render only what a test injects, and 03-03's IPC would be dead code`);
+  }
+});
