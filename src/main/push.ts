@@ -373,3 +373,39 @@ export async function sendPush(
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/**
+ * The floor-quiet alarm's push tag (VIGIL-01, 04-UI-SPEC §S6a rule Q-4).
+ *
+ * `sw.js` sets `tag: 'ask:' + taskId`, so a notification REPLACES rather than
+ * stacks on another with the same tag. This one is distinct and stable: the
+ * alarm can only ever replace its own previous notification, and it can never
+ * collide with — or swallow — a real ask. It satisfies `PHONE_TASK_ID_RE`
+ * (`webhook.ts`), which is the only shape constraint on the field.
+ */
+export const FLOOR_QUIET_TAG = 'floor-quiet';
+
+/**
+ * The floor-quiet alarm's wire body — the JSON `resources/phone/sw.js` parses
+ * out of the push event, and the only place that mapping is written down.
+ *
+ * **`agent` is the TITLE.** `sw.js` calls `showNotification(data.agent, {body:
+ * 'is waiting on you'})` with the body HARD-CODED, and that worker is already
+ * installed on the operator's phone. So an old worker renders the title alone,
+ * and the title has to be a complete, true statement on its own — `The floor
+ * has stopped`, `The orchestrator is gone`. A title of `Floor` would render as
+ * "Floor is waiting on you", which is false. `body` is carried for the worker
+ * that reads it; an old one ignores it, which is why both directions are
+ * compatible and why `sw.js` needs no change from this plan (rule Q-5: a
+ * service-worker edit is a live-device risk with no local reproduction).
+ *
+ * Composition only. The floor has no `PushSubscription` to send this to yet —
+ * `webhook.ts` has no subscription-intake route, so nothing in this process has
+ * ever captured one, and adding that route is `index.ts`'s, not this plan's.
+ * When the intake lands, this is the payload it hands to {@link sendPush}.
+ */
+export function floorQuietPushPayload(
+  a: { title: string; body: string }
+): { agent: string; body: string; taskId: string } {
+  return { agent: a.title, body: a.body, taskId: FLOOR_QUIET_TAG };
+}
