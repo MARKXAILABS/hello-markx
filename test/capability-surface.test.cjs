@@ -444,3 +444,56 @@ test('CR-02 payoff: a republished mcpDefaults map moves the card safe count and 
     cfg.setMcpGrants(original);
   }
 });
+
+/* ─────────────── T-P02-11-10: the card must not imply a channel nothing writes ───────────────
+ *
+ * `supportsMcp` answers "can this engine take MCP AT ALL" (the static preset claim).
+ * `mcpWiredFor` answers "does THIS engine's spawn path actually write a server bundle" —
+ * and `MCP_WIRED_PROVIDERS` is `['claude']`. `hive.ts:1162` gates the real write on the
+ * SAME predicate: a non-wired provider gets `{}`, no `mcp.json`, no `--mcp-config`.
+ *
+ * NINE presets declare `supportsMcp: true`; ONE is wired. Before this guard, eight engines
+ * rendered `MCP 6 safe` on their card out of the box while their agents spawned with zero
+ * MCP servers. `mcpCatalog.ts`'s own header names this exact failure: "Conflating the two
+ * is how a capability card starts lying about a channel nothing writes." */
+test('T-P02-11-10: a supportsMcp engine that is NOT wired renders no MCP element at all', () => {
+  const cfg = loadTs('src/renderer/src/store/config.ts');
+  const { MCP_WIRED_PROVIDERS } = loadTs('src/shared/mcpCatalog.ts');
+  const snap = cfg.getMcpGrantsSnapshot();
+
+  // Sanity: exactly one provider is wired today. If this changes, the rows below must too.
+  assert.deepEqual([...MCP_WIRED_PROVIDERS], ['claude'],
+    'MCP_WIRED_PROVIDERS changed — update this case and re-check every card that reads it');
+
+  // claude: supportsMcp AND wired -> a real summary.
+  const wired = cfg.mcpCardSummary(snap, 'a1', { supportsMcp: true, provider: 'claude' });
+  assert.ok(wired && typeof wired.safeCount === 'number',
+    'claude is wired — its card must still render its safe count');
+
+  // The eight that claim MCP but are not wired: null, i.e. render NOTHING.
+  // `null` is the contract AgentCard already honours for "engine cannot take MCP at all";
+  // reusing it means an unwired engine renders no element rather than a truthful-looking
+  // count for servers it will never receive.
+  for (const provider of ['codex', 'grok', 'kimi', 'antigravity', 'qwen', 'opencode', 'crush', 'copilot']) {
+    assert.equal(
+      cfg.mcpCardSummary(snap, 'a1', { supportsMcp: true, provider }),
+      null,
+      `${provider} declares supportsMcp but is not in MCP_WIRED_PROVIDERS — its card must not `
+      + 'imply MCP. hive.ts writes it zero servers.'
+    );
+  }
+
+  // supportsMcp:false still short-circuits first, wired or not (pi, custom).
+  assert.equal(cfg.mcpCardSummary(snap, 'a1', { supportsMcp: false, provider: 'claude' }), null);
+});
+
+test('T-P02-11-10: AgentCard passes the resolved provider, not just the preset flag', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'AgentCard.tsx'), 'utf8');
+  const i = src.indexOf('mcpCardSummary(');
+  assert.ok(i > 0, 'sanity: AgentCard must still build its MCP summary');
+  const call = src.slice(i, i + 400);
+  assert.ok(/provider:/.test(call),
+    'AgentCard must pass `provider` into mcpCardSummary — without it the wired check cannot '
+    + 'run and the card falls back to the preset claim, which is the T-P02-11-10 defect.');
+});
