@@ -710,23 +710,47 @@ const MISSION_FIRED_KEY = 'missionLastFiredAt';
 /** undefined = not opened yet; null = unavailable, so stamps stay in config.json. */
 let firedDb: PersistStore | null | undefined;
 
+/**
+ * `harnessHome` straight off the file, with NONE of `readConfig`'s pipeline.
+ *
+ * This is the getter `firedStore()` below injects, and it must NOT be
+ * `() => readConfig().harnessHome` however much shorter that reads.
+ * `firedStore()` is itself called from inside `readConfig` (via
+ * `withMissionStamps`/`stripMissionStamps`), so a getter that calls `readConfig`
+ * re-enters it — and `migrateMcpConsentV1` and `migrateTriggersV1` are ONE-SHOT
+ * migrations latched by a process-global boolean. The inner read burns the latch,
+ * the outer read then early-returns, and the migration silently never applies:
+ * measured as `test/mcp-per-agent.test.cjs` going red with floor-wide write/secret
+ * MCP consent left armed. A path lookup has no business running two schema
+ * migrations, a secret overlay and a config write.
+ *
+ * Un-cached on purpose: it is read once per `open()`, and `writeConfig` has
+ * already normalized whatever is in the file.
+ */
+function harnessHomeOnDisk(): string | null {
+  try {
+    const p = configPath();
+    if (!existsSync(p)) return null;
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as Partial<HarnessConfig>;
+    return typeof raw.harnessHome === 'string' && raw.harnessHome ? raw.harnessHome : null;
+  } catch {
+    // Unreadable/corrupt config: fall back to the userData path rather than
+    // failing the open. `readConfig` owns quarantining that file, not this.
+    return null;
+  }
+}
+
 function firedStore(): PersistStore | null {
   if (firedDb !== undefined) return firedDb;
-  // LOAD-BEARING, do not move below the try: `getHome` calls readConfig(), which
-  // re-enters this function. `firedDb = null` here is what makes that re-entry
-  // return immediately (null, so the inner read simply skips the stamp overlay
-  // it does not need to resolve harnessHome) instead of recursing forever.
   firedDb = null;
   try {
     // A second connection to the same harness.db index.ts already opens. SQLite in
     // WAL mode is fine with that, and it keeps config.ts free of an import from
     // index.ts — which imports config.
     //
-    // SCALE-01: harnessHome-aware, like boot.ts's handle. `readConfig` is a local
-    // function in this very file, so this is not the reverse import db.ts must
-    // never have. Both handles are repointed together at the one non-relaunching
-    // null -> set transition, or a mission fires off the previous project's stamps.
-    const s = new PersistStore(undefined, () => readConfig().harnessHome);
+    // SCALE-01: harnessHome-aware, like boot.ts's handle — but through the
+    // file-level reader above, never readConfig(). See its comment.
+    const s = new PersistStore(undefined, harnessHomeOnDisk);
     s.open();
     firedDb = s;
   } catch (e) {

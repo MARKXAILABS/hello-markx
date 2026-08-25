@@ -93,13 +93,34 @@ function freshUserData() {
   fs.writeFileSync(path.join(userData, 'config.json'), JSON.stringify({ harnessHome: null }), 'utf8');
 }
 
-test('readConfig() does not recurse when the fired store resolves harnessHome through it', () => {
+/**
+ * NOT TESTED HERE, on purpose — where the re-entry guard actually lives.
+ *
+ * `firedStore()` is called FROM inside readConfig (via withMissionStamps /
+ * stripMissionStamps), so its path getter must read `harnessHome` off the file
+ * directly (`harnessHomeOnDisk`). Written the obvious way instead —
+ * `() => readConfig().harnessHome` — it re-enters readConfig, and readConfig runs
+ * two ONE-SHOT migrations latched by process-global booleans: the inner read
+ * burns the latch and the outer read then skips the migration entirely. Measured
+ * 2026-08-26: that spelling turns `test/mcp-per-agent.test.cjs` red with
+ * floor-wide write/secret MCP consent left armed.
+ *
+ * A read-COUNT assertion was written here first and then deleted: both spellings
+ * read config.json exactly twice for one `writeConfig` (the re-entrant read and
+ * `harnessHomeOnDisk`'s read cost the same), so it could not fail either way. A
+ * check that cannot go red is worse than no check, because it reports green.
+ * `test/mcp-per-agent.test.cjs` is the real guard for this class and it catches
+ * it — verified live, in both directions.
+ */
+
+test('the stamps survive a write/read round-trip through the injected getter', () => {
   freshUserData();
-  // `getHome` is `() => readConfig().harnessHome`, so opening the fired store
-  // re-enters readConfig(). A RangeError here means the `firedDb = null` guard
-  // that terminates that re-entry was moved or removed.
   writeConfig({ missions: [{ ...MISSION, lastFiredAt: 111 }] });
-  assert.equal(readConfig().missions[0].lastFiredAt, 111, 'the stamp did not survive a write/read round-trip');
+  assert.equal(
+    readConfig().missions[0].lastFiredAt, 111,
+    'the stamp did not survive a write/read round-trip — stripMissionStamps wrote it to the kv '
+    + 'store and withMissionStamps did not read it back'
+  );
 });
 
 test('the stamps follow harnessHome, and only repointFiredStore() gets them there', () => {
