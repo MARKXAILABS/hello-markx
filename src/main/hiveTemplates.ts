@@ -356,12 +356,143 @@ process.stdin.on('end', () => {
   if (!sock) { process.exit(0); }
   let resp = '';
   const done = (code) => { if (resp) process.stdout.write(resp); process.exit(code); };
+
+  // GATE-05 — A SILENT EXIT IS ALLOW. That is the single most important line in
+  // this shim: an engine reads "no stdout" as "the hook had no opinion", so every
+  // outcome the wait below can reach that is not an allow has to be a WRITTEN
+  // one, in this shim's own contract (a PreToolUse deny on stdout, exit 0).
+  const denyAndExit = (why) => {
+    try {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: why
+        }
+      }));
+    } catch (_) {}
+    process.exit(0);
+  };
+  const POLL_WAIT_MS = 5000;
+
+  // LIVE-UNVERIFIED (kimi): the poll loop below is genuinely new code and kimi is
+  // one of the three engines that runs this shim. It is exercised end to end by
+  // test/gate05-bounded-wait.test.cjs as a real child process — but against
+  // Claude's and codex's PreToolUse contract, not kimi's, and no kimi CLI is
+  // installed here. The open question is the same one recorded above this
+  // constant: Moonshot documents a hook BLOCK as exit code 2, where this shim
+  // expresses deny through stdout JSON at exit 0, so a kimi engine may read the
+  // written deny below as no opinion at all. What would settle it: an installed
+  // kimi plus one hook fire.
+  const poll = (ask) => {
+    if (Date.now() > ask.deadlineMs) {
+      denyAndExit('Denied: this tool call needed an operator\\'s approval and the approval window closed before an answer arrived. Re-run it if it is still the right thing to do — a fresh call opens a fresh question.');
+      return;
+    }
+    // A FRESH SHORT CONNECTION PER POLL, NEVER A HELD-OPEN ONE, and that is
+    // measured rather than stylistic (04-RESEARCH L-02).
+    //
+    // LIVE-UNVERIFIED (grok, agy): neither engine polls, deliberately — a shim
+    // may enter this loop only where this app itself writes the PreToolUse
+    // timeout and can therefore bound it, and grok applies its own ~5 s
+    // event-aware default whose unit is unverified while agy runs timeout: 0 with
+    // unknown semantics. Both take the ask reply's own permissionDecision:'deny'
+    // instead, which their shipped decoders already translate; that translation
+    // is exercised on this machine as a real child process (gate05 case 7), so
+    // what is unverified is the ENGINE honouring the deny, not the shim writing
+    // it. Which is also why this must not become a stream: both decode with
+    // JSON.parse over the WHOLE accumulated buffer, so a "pending" preamble
+    // followed by a verdict on one connection makes both throw, exit 0 with no
+    // stdout — and no stdout is ALLOW, a fail-open built inside the feature that
+    // exists to fail closed. What would settle it: an installed CLI plus one
+    // hook fire.
+    let body = '';
+    let settled = false;
+    const pc = net.createConnection(sock, () => pc.write(JSON.stringify({
+      hook_event_name: 'ApprovalPoll',
+      ask_id: ask.id,
+      agent_id: payload.agent_id,
+      sock_token: payload.sock_token
+    }) + '\\n'));
+    // The per-poll timer: one per connection, so a floor that accepts a poll and
+    // then answers nothing cannot wedge this shim until the engine kills it —
+    // and an engine kill writes no stdout, which is allow.
+    const stall = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { pc.destroy(); } catch (_) {}
+      denyAndExit('Denied: the floor accepted this approval poll and never answered it.');
+    }, POLL_WAIT_MS);
+    stall.unref();
+    pc.setEncoding('utf8');
+    pc.on('data', (d) => { body += d; });
+    pc.on('end', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(stall);
+      let r = null;
+      try { r = JSON.parse(body || ''); } catch (_) { r = null; }
+      if (!r || typeof r !== 'object') {
+        denyAndExit('Denied: the floor answered this approval poll with something this shim could not read.');
+        return;
+      }
+      // Pending → wait and ask again. The sleep is deliberately NOT unref'd: the
+      // poll socket has closed by now, so an unref'd timer would let this process
+      // exit between polls with nothing written — allow.
+      if (r.status === 'pending') { setTimeout(() => poll(ask), ask.pollMs > 0 ? ask.pollMs : 1000); return; }
+      // A final verdict. Written verbatim, exactly as the non-ask path writes its
+      // reply: it is already this shim's own contract.
+      process.stdout.write(body);
+      process.exit(0);
+    });
+    // D-08 CLAUSE 3 HAS TWO HALVES AND THEY ARE NOT THE SAME FACT. The FIRST
+    // connection's handler below is clause 3 itself — an error there fires before
+    // any hive_ask can exist, so "the floor is not running" ALLOWS, and every
+    // agent keeps working while the app is legitimately down. This handler is the
+    // other half: a hive_ask HAS been received, so this shim knows an ask is open
+    // and knows main opened it. A floor that dies, restarts, or loses its socket
+    // while that ask is pending is "the floor asked and the operator did not
+    // answer" — a DENY. Fail-open here would make killing the Electron main
+    // process an agent-triggerable way to turn a pending deny into an allow, and
+    // agents here run permissions-bypassed by design.
+    pc.on('error', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(stall);
+      denyAndExit('Denied: this tool call needed an operator\\'s approval and the floor became unreachable before an answer arrived.');
+    });
+  };
+
+  const bootTimer = setTimeout(() => process.exit(0), 5000);
+  bootTimer.unref();
   const c = net.createConnection(sock, () => c.write(JSON.stringify(payload) + '\\n'));
   c.setEncoding('utf8');
   c.on('data', (d) => { resp += d; });
-  c.on('end', () => done(0));
+  c.on('end', () => {
+    // main answers an \`ask\` with ONE object that is two things at once: a valid
+    // PreToolUse deny for a shim that has never heard of hive_ask, and a handle
+    // for one that has. No handle → today's behaviour, byte for byte.
+    let ask = null;
+    try {
+      const r = JSON.parse(resp || '{}');
+      if (r && r.hive_ask && r.hive_ask.id) ask = r.hive_ask;
+    } catch (_) { ask = null; }
+    if (!ask) { done(0); return; }
+    // THREE timers live in this shim now and they are three different facts:
+    //  - bootTimer, 5 s from boot. UNCHANGED on the non-ask path: flipping it to
+    //    a deny would make every socket outage, every app restart and every
+    //    legitimately-not-running floor deny every tool call on every agent.
+    //    Cleared HERE and only here, because .unref() stops it holding the event
+    //    loop OPEN, not firing while the poll loop keeps this process alive — so
+    //    an ask outliving 5 s would exit SILENTLY mid-question, and a silent exit
+    //    is ALLOW;
+    //  - the per-poll timer, one per connection, bounding a single hung poll;
+    //  - ask.deadlineMs, bounding the whole wait and expiring to a WRITTEN deny.
+    clearTimeout(bootTimer);
+    resp = '';
+    poll(ask);
+  });
   c.on('error', () => process.exit(0));
-  setTimeout(() => process.exit(0), 5000).unref();
 });
 `;
 
