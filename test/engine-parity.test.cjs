@@ -1078,3 +1078,91 @@ test('codex: the hook-trust flag is gated on a real probe, not pushed blind', ()
     'the probe must fail CLOSED to "unsupported": spawning without the flag still yields a '
     + 'working agent, spawning with an unsupported one yields no agent at all.');
 });
+
+// ─── GATE-03 (04-10): which engines actually honour main's verdict ───────────
+//
+// Plan 04-06 built the judge in main. These cases settle which engines can
+// carry its verdict back to the agent, and — just as importantly — which ones
+// demonstrably cannot. Two of the assertions below are STRUCTURAL reads of a
+// shim constant rather than round trips, and that is a stated ceiling, not an
+// oversight: `PI_EXTENSION` is loaded by pi and `OPENCODE_PLUGIN` is ESM loaded
+// by OpenCode's Bun runtime, so `test/gate-harness.cjs`'s `runShim` — which
+// spawns a `.cjs` file under `process.execPath` — cannot drive either of them.
+// Nothing in this repo executes them. What the structural reads prove is that
+// the property/branch EXISTS; what the server-side cases prove is that main
+// judges that shape correctly. Neither proves the engine sends it. What would
+// settle it: an installed pi / OpenCode, plus one tool call.
+
+/** hiveTemplates.ts's shim/plugin constants, as strings. */
+const templates = loadTs('src/main/hiveTemplates.ts');
+
+/** A shim constant's own source with JS comments removed.
+ *
+ *  WHY: a grep for a token inside a source string is satisfied by a COMMENT
+ *  mentioning it — `// we now send tool_input` passes a naive check while the
+ *  payload builder still sends nothing. Strip the comments and a `tool_input:`
+ *  match can only be a real property assignment.
+ *
+ *  The `[^:]` guard on the line-comment rule keeps `node:net` and any `https://`
+ *  intact; without it the strip would eat the rest of those lines. */
+const stripShimComments = (src) => src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+test('GATE-03: OPENCODE_PLUGIN sends a tool_input PROPERTY, not a comment about one', () => {
+  const raw = templates.OPENCODE_PLUGIN;
+  assert.equal(typeof raw, 'string', 'hiveTemplates.ts exports no OPENCODE_PLUGIN string constant');
+  const src = stripShimComments(raw);
+
+  // Positive lower bound over the SAME stripped text (D-33/D-40): an over-eager
+  // strip that emptied the constant would satisfy any assertion phrased as an
+  // absence, and would make the one below vacuous too.
+  assert.match(src, /hook_event_name\s*:/,
+    'the comment strip ate OPENCODE_PLUGIN\'s payload builder — this case is measuring nothing');
+
+  assert.match(src, /tool_input\s*:/,
+    'OPENCODE_PLUGIN posts no tool_input property, so its veto is DEAD as shipped rather than '
+    + 'merely unverified: protectedPathDenial builds `ti` from `p.tool_input`, finds no '
+    + 'file_path/path/notebook_path and no command, and returns null before resolving anything, '
+    + 'while commandShapeDenial never enters at all. Main answers {} — allow — every time.');
+});
+
+test('GATE-03: PI_EXTENSION waits for main\'s verdict before its auto-approve branch (T-04-CMD-07)', () => {
+  const raw = templates.PI_EXTENSION;
+  assert.equal(typeof raw, 'string', 'hiveTemplates.ts exports no PI_EXTENSION string constant');
+  const src = stripShimComments(raw);
+
+  assert.match(src, /hook_event_name\s*:/,
+    'the comment strip ate PI_EXTENSION\'s payload builder — this case is measuring nothing');
+  assert.match(src, /permissionDecision/,
+    'PI_EXTENSION never decodes main\'s permission verdict. Its post() was fire-and-forget '
+    + '(c.end(...) with no reply read), so a deny authored in main could not reach pi\'s '
+    + 'ev.approve() contract at all and the whole bridge was decorative for GATE-03.');
+
+  // The ORDER is the security property, not the presence. HIVE_AUTO_APPROVE
+  // used to run unconditionally, which auto-approved a call main had denied.
+  const start = src.indexOf("pi.on('tool_call'");
+  const end = src.indexOf("pi.on('tool_result'");
+  assert.ok(start >= 0 && end > start,
+    'the tool_call handler could not be located — this slice is measuring nothing');
+  const handler = src.slice(start, end);
+  const verdictAt = handler.search(/permissionDecision|\bdeny\b/);
+  const autoAt = handler.indexOf('AUTO');
+  assert.ok(verdictAt >= 0, `the tool_call handler never reads a verdict: ${handler}`);
+  assert.ok(autoAt >= 0,
+    'the HIVE_AUTO_APPROVE branch vanished from the tool_call handler — Pam guardrail #5\'s '
+    + 'auto mode is the thing GATE-03 has to gate; deleting it is not gating it');
+  assert.ok(verdictAt < autoAt,
+    'HIVE_AUTO_APPROVE is evaluated BEFORE main\'s verdict is known, so auto mode approves a '
+    + 'call main refused (T-04-CMD-07). The verdict must gate that branch, not race it.');
+});
+
+test('GATE-03: the deliberate connect-error fail-open survives both new paths (D-08 clause 3)', () => {
+  for (const name of ['PI_EXTENSION', 'OPENCODE_PLUGIN']) {
+    const src = stripShimComments(templates[name]);
+    assert.match(src, /on\('error'/,
+      `${name} lost its connect-error handler. hooks.ts:44-53 records the shim fail-open as `
+      + 'DELIBERATE: an agent PTY outlives a quit, so a bridge that failed closed would stop '
+      + 'every agent whenever the app is legitimately not running. Never "fix" it here.');
+  }
+});
