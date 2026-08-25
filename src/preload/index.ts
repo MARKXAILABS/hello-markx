@@ -801,6 +801,31 @@ const api = {
   hiveBoard: (): Promise<string> => ipcRenderer.invoke('hive:board'),
   hiveTasks: (): Promise<unknown> => ipcRenderer.invoke('hive:tasks'),
   hiveLog: (n?: number): Promise<unknown[]> => ipcRenderer.invoke('hive:log', n ?? 200),
+  /** SCALE-03 — a whole day as 96 bucket summaries. `day` is a 'YYYY-MM-DD'
+   *  LOCAL date, exactly what a native <input type="date"> hands back; main
+   *  rejects anything else rather than querying it.
+   *
+   *  ONE shape on every path. `ok === false` is the answer for a rejected day
+   *  AND for a store that is not open — there is deliberately no zeroed
+   *  success, because a caller cannot tell one apart from a genuinely quiet
+   *  day. `eventsAgedOut` outranks any firstTs-derived "no record" copy: it
+   *  means the events table was pruned past this day while the never-rotated
+   *  cost ledger still has its spend, so the day has real cost bars and no
+   *  events. `firstTs` is the earliest event STILL STORED, not the first ever. */
+  hiveTimeline: (day: string) => ipcRenderer.invoke('hive:timeline', day) as Promise<
+    | { ok: true; buckets: Array<{ index: number; startMs: number; events: number; envelopes: number; usd: number; tokens: number }>;
+        firstTs: number | null; eventsAgedOut: boolean }
+    | { ok: false; error: string }
+  >,
+  /** SCALE-03 — one bucket's merged event+cost rows. Bounded: `truncated` with
+   *  the real `total` when the bucket held more than the cap, never a silent
+   *  slice. Zero-delta cost rows are dropped main-side, so `total` counts only
+   *  rows worth drawing. */
+  hiveTimelineBucket: (day: string, bucketIndex: number) =>
+    ipcRenderer.invoke('hive:timelineBucket', day, bucketIndex) as Promise<
+      | { ok: true; rows: unknown[]; truncated: boolean; total: number }
+      | { ok: false; error: string }
+    >,
   hiveMemory: (id: string): Promise<string> => ipcRenderer.invoke('hive:memory', id),
   hiveInbox: (id: string): Promise<HiveMessage[]> => ipcRenderer.invoke('hive:inbox', id),
   /** FLOOR-14 (#42) — tell main an agent just TRANSITIONED into `blocked`, so it

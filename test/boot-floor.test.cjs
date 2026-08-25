@@ -571,7 +571,12 @@ function joinedStripped(rel) {
 // counterpart of the existing `control:breakerState` push event. SCALE-05's
 // card reloads with its window and must read the current level immediately
 // instead of waiting out the ~30s beat.
-const B_IPC_JOINED = 161;
+// 161 -> 163: plan 03-03 (wave 3) adds SCALE-03's two read channels,
+// `hive:timeline` (a day as 96 bucket summaries) and `hive:timelineBucket` (one
+// bucket's merged event+cost rows). Both are THIN — every piece of arithmetic
+// and every argument check is in `src/main/timeline.ts`, driven for real by
+// `test/timeline.test.cjs`, because index.ts cannot be loaded here.
+const B_IPC_JOINED = 163;
 
 test('D-40: ipcMain.handle( count over joined, comment-stripped index.ts is exactly B-ipc-joined', () => {
   const joined = joinedStripped('src/main/index.ts');
@@ -607,6 +612,7 @@ const B_IPC_NAMES = [
   'hive:log', 'hive:memory', 'hive:memoryStatus', 'hive:messages', 'hive:mineNow',
   'hive:notifyBlocked', 'hive:patchTask', 'hive:queue', 'hive:registry',
   'hive:searchMemory', 'hive:send', 'hive:setArchived', 'hive:tasks', 'hive:textSearch',
+  'hive:timeline', 'hive:timelineBucket',
   'integrations:list', 'integrations:remove', 'integrations:setSecret',
   'integrations:templates', 'integrations:test', 'integrations:upsert', 'kg:addFiles',
   'kg:get', 'kg:ingestFiles', 'kg:list', 'kg:remove', 'kg:search', 'kg:status',

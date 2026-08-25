@@ -31,6 +31,7 @@ const { HiveManager, LOG_TAIL_BYTES } = loadTs('src/main/hive.ts');
 // bypass here would make "the SQL path was never exercised" and "the SQL path
 // works" produce identical green output.
 const { PersistStore } = loadTs('src/main/db.ts');
+const { summarizeDay, bucketDetail } = loadTs('src/main/timeline.ts');
 
 /** A throwaway harness home with a live hive in it. */
 function floor(t) {
@@ -504,4 +505,77 @@ test('SCALE-03: the morning falls out of logTail\'s window but stays readable in
     + 'identical whether the morning is there or the noise merely happened to land in the window');
   assert.equal(store.earliestEventTs(), MORNING,
     'firstTs must name the earliest event the STORE holds — 03-07 draws its gap marker from it');
+});
+
+// ── SCALE-03 — the two halves actually fit ──────────────────────────────────
+//
+// `test/timeline.test.cjs` proves the arithmetic against hand-built rows.
+// `hive:timeline` cannot be loaded by any test here, so the ONE thing neither
+// covers is whether the real producers' row shapes match what the pure module
+// consumes: `eventsBetween` returns `{id, ts, kind, json}` and `dailyCostRows`
+// returns `{ts, agentId, taskId, usd, tokens}`. A mismatch in either would
+// return a perfectly well-formed response full of zeroes — the feature existing
+// and doing nothing — and every grep and every unit test above would stay green.
+//
+// So this drives the handler's exact composition end to end: real HiveManager,
+// real PersistStore, real ledger file, real timeline.ts.
+
+test('SCALE-03: the real event + cost producers feed timeline.ts without a shape mismatch', (t) => {
+  const { hive, home } = floor(t);
+  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md-hive-e2e-'));
+  const store = new PersistStore(path.join(dbDir, 'harness.db'));
+  store.open();
+  t.after(() => { store.close(); fs.rmSync(dbDir, { recursive: true, force: true }); });
+  hive.setEventStore(store);
+
+  const DAY_START = new Date(2026, 0, 15).getTime();     // local midnight, as parseDayParam resolves it
+  const DAY_END = DAY_START + 24 * 60 * 60 * 1000;
+  const B0 = DAY_START;                                   // bucket 0  — 00:00
+  const B40 = DAY_START + 40 * 15 * 60 * 1000;            // bucket 40 — 10:00
+
+  // Events through the REAL appendLog, so they take the real mirror path.
+  hive.appendLog({ kind: 'spawn', ts: B0 + 1000, agentId: 'jim-1' });
+  hive.appendLog({ kind: 'message', ts: B0 + 2000, from: 'jim-1', to: 'pam-1' });
+  hive.appendLog({ kind: 'message', ts: B40 + 1000, from: 'pam-1', to: 'jim-1' });
+
+  // Cost through the real ledger file, cumulative as every row is.
+  const raw = (sessionId, taskId, ts, tokens, usd) => JSON.stringify({
+    agent_id: 'jim-1', session_id: sessionId, task_id: taskId, ts,
+    input: tokens, output: 0, cache_read: 0, cache_creation: 0, model: 'claude-x', usd
+  }) + '\n';
+  fs.writeFileSync(path.join(home, 'hive', 'cost-ledger.jsonl'), [
+    raw('s1', 't-1', B0 + 500, 100, 1.00),   // series opens → +100 / +1.00, bucket 0
+    raw('s1', 't-1', B0 + 1500, 100, 1.00),  // no movement  → zero-delta, dropped from detail
+    raw('s1', 't-1', B40 + 500, 260, 2.60)   // 260 − 100    → +160 / +1.60, bucket 40
+  ].join(''));
+
+  // EXACTLY what the hive:timeline handler does, in the same order.
+  const events = store.eventsBetween(DAY_START, DAY_END);
+  const costRows = hive.dailyCostRows(DAY_START, DAY_END);
+  const res = summarizeDay(events, costRows, DAY_START, store.earliestEventTs());
+
+  assert.equal(res.ok, true);
+  assert.equal(res.buckets.length, 96);
+  assert.equal(res.buckets[0].events, 2, `bucket 0 counted ${res.buckets[0].events} events. 0 means `
+    + 'eventsBetween\'s row shape does not reach summarizeDay — the response would be 96 well-formed '
+    + 'empty buckets over a day that really did have traffic');
+  assert.equal(res.buckets[0].envelopes, 1, 'the envelope filter never saw a real kind field');
+  assert.equal(res.buckets[40].events, 1);
+  assert.equal(res.buckets[40].envelopes, 1);
+  assert.equal(res.buckets[0].tokens, 100, `bucket 0 read ${res.buckets[0].tokens} tokens. 0 means `
+    + 'dailyCostRows\' row shape does not reach summarizeDay; 200 means the zero-delta second '
+    + 'snapshot was SUMMED instead of diffed.');
+  assert.equal(res.buckets[40].tokens, 160, 'bucket 40 must carry the DIFF, not the 260 snapshot');
+  assert.equal(Number(res.buckets[40].usd.toFixed(2)), 1.60);
+  assert.equal(res.firstTs, B0 + 1000, 'firstTs did not come from the store');
+  assert.equal(res.eventsAgedOut, false, 'the events table can speak to this day');
+
+  // And the detail path, over the bucket whose cost row was a no-op.
+  const detail = bucketDetail(events, costRows, 0, DAY_START);
+  assert.equal(detail.ok, true);
+  assert.deepEqual(detail.rows.map((r) => r.type), ['cost', 'event', 'event'],
+    'the merged list is one sort across both real sources; the zero-delta row at +1500 must be '
+    + 'absent, which is what makes this three rows and not four');
+  assert.equal(detail.total, 3);
+  assert.equal(detail.truncated, false);
 });

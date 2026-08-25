@@ -43,6 +43,10 @@ import { KnowledgeManager } from './knowledge';
 import { MemoryReflector, type ReflectSettings } from './reflect';
 import { PersistStore } from './db';
 import {
+  summarizeDay, bucketDetail, parseDayParam, validateBucketIndex,
+  type TimelineResult, type BucketDetailResult
+} from './timeline';
+import {
   readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd, SPAWN_SAFE_SESSION_ID
 } from './transcript';
 import { listIssues, listCIRuns } from './github';
@@ -3501,6 +3505,61 @@ ipcMain.handle('history:list', (_evt, agentId: unknown, limit: unknown) =>
   ));
 ipcMain.handle('history:search', (_evt, query: unknown, limit: unknown) =>
   persist.searchHistory(typeof query === 'string' ? query : '', typeof limit === 'number' ? limit : undefined));
+
+// ─── IPC: SCALE-03 — the replayable day ─────────────────────────────────────
+//
+// Both handlers are THIN on purpose. Every piece of arithmetic, every bound and
+// every argument check lives in `timeline.ts`, which imports nothing and which
+// `test/timeline.test.cjs` therefore loads and drives directly. This file cannot
+// be loaded by any test in this repo, so anything computed here would be pinned
+// only by greps that a `return {}` also satisfies.
+//
+// ONE SHAPE ON EVERY PATH — `{ok:true, ...}` or `{ok:false, error}`, including
+// the store-unavailable guard below. NEVER a zeroed success: a consumer cannot
+// tell an empty-but-successful day apart from a genuinely quiet one, so a
+// rejected day would render as "nothing happened", which is the fabrication
+// D-27 exists to forbid.
+const timelineStoreReady = (): boolean => hive.enabled() && persist.isOpen;
+const TIMELINE_UNAVAILABLE = { ok: false as const, error: 'timeline store unavailable' };
+
+/** The rows both handlers read, fetched once per call. `dailyCostRows` scans
+ *  the whole (never-rotated) cost ledger; `eventsBetween` is one range scan off
+ *  idx_ev_ts. Called on an explicit day change, not per keystroke. */
+function timelineDay(dayStartMs: number): {
+  events: ReturnType<typeof persist.eventsBetween>;
+  costRows: ReturnType<typeof hive.dailyCostRows>;
+} {
+  const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000;
+  return { events: persist.eventsBetween(dayStartMs, dayEndMs), costRows: hive.dailyCostRows(dayStartMs, dayEndMs) };
+}
+
+ipcMain.handle('hive:timeline', (_evt, day: unknown): TimelineResult => {
+  const parsed = parseDayParam(day);
+  if (!parsed.ok) return parsed;
+  if (!timelineStoreReady()) return TIMELINE_UNAVAILABLE;
+  try {
+    const { events, costRows } = timelineDay(parsed.dayStartMs);
+    // firstTs is the earliest event STILL STORED, not the first ever — retention
+    // moves it forward, and 03-07's gap marker must describe the live store.
+    return summarizeDay(events, costRows, parsed.dayStartMs, persist.earliestEventTs());
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle('hive:timelineBucket', (_evt, day: unknown, bucketIndex: unknown): BucketDetailResult => {
+  const parsed = parseDayParam(day);
+  if (!parsed.ok) return parsed;
+  const index = validateBucketIndex(bucketIndex);
+  if (!index.ok) return index;
+  if (!timelineStoreReady()) return TIMELINE_UNAVAILABLE;
+  try {
+    const { events, costRows } = timelineDay(parsed.dayStartMs);
+    return bucketDetail(events, costRows, index.index, parsed.dayStartMs);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
 
 // ─── IPC: quit confirmation ─────────────────────────────────────────────────
 /** Every background service this app starts, in the order it must be stopped.
