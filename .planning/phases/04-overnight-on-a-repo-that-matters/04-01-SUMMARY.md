@@ -316,6 +316,32 @@ Until then, plan 04-13 must plan for the `LIVE-UNVERIFIED` path.
   lands first and its task 4 live interactive agent produces a real write.
 - **Plan 04-10 must not cite a shell tool name from this page.** It is `unobserved`.
 
+## Self-Check: PASSED
+
+Every artifact and commit this SUMMARY claims, verified on disk after writing it:
+
+| Claim | Verified |
+|---|---|
+| `.planning/phases/04-overnight-on-a-repo-that-matters/04-SPIKE-codex-sandbox.md` | FOUND |
+| `test/gate-harness.cjs` | FOUND |
+| `.planning/phases/04-overnight-on-a-repo-that-matters/04-01-SUMMARY.md` | FOUND |
+| commit `96ef151` (Task 1) | FOUND in `git log` |
+| commit `32e34df` (Task 2) | FOUND in `git log` |
+| commit `bb0d351` (SUMMARY) | FOUND in `git log` |
+| `git diff --name-only 8749a2b HEAD` | exactly the three files above — no `STATE.md`, no `ROADMAP.md`, no `package.json` |
+| `git status --short` | clean |
+
+No stubs. No placeholder values. No `TODO`/`FIXME` introduced. The one thing this plan does **not**
+deliver — a decisive codex sandbox verdict — is stated as such in both the artifact and the deviations
+section rather than being papered over.
+
+## Threat Flags
+
+None. Task 1 executed a CLI against `%TEMP%` directories only (T-04-SBX-01 asserted: `git status
+--porcelain src/` empty). Task 2 opens a socket that the app already opens, in a tmp `harnessHome`, with a
+token minted and torn down inside a single `finally`; nothing is written under the repo and no token
+reaches a committed file (T-04-ASK-01). No new network endpoint, auth path or schema was introduced.
+
 ---
 *Phase: 04-overnight-on-a-repo-that-matters*
 *Completed: 2026-08-25*
