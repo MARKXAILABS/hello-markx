@@ -1251,11 +1251,88 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     emit: (channel, payload) => { deps.send(channel, payload); }
   });
 
+  // THE COMPOSITION ROOT for every gate this phase added. The last four
+  // arguments are the seams plans 04-06 (GATE-03's host allowlist) and 04-15
+  // (RECORD-01's writer, GATE-05's publisher) declared, and nothing supplied
+  // until now. They are OPTIONAL and TRAILING by the house rule `hooks.ts`
+  // states on `recordCost` — "so the server still runs without it… and LAST, so
+  // no existing call site or test has to move an argument", with eight
+  // construction sites across src/ and test/ that a dep object would move.
+  // Optional also means NOTHING FAILS when they are never wired, which is the
+  // whole reason a gate can ship green and unreachable: the unit suites drive
+  // servers they constructed themselves, and the floor an operator runs has
+  // none of them. `test/boot-floor.test.cjs`'s composition block is what goes
+  // red when one is dropped, and it asserts each seam's EFFECT on a really
+  // booted floor rather than the text of this argument list.
+  //
+  // TWO SEAMS ARE DELIBERATELY NOT HERE, so the next reader counting this list
+  // against 04-15-PLAN.md does not conclude one was dropped:
+  //  - `openAsk` is passed `undefined`. `HookServer` now OWNS an ApprovalRegistry
+  //    and answers an ask itself; the parameter survives as an override and as a
+  //    test hook, and an override supplied here would replace the registry entry,
+  //    the poll handle and the operator page in one argument — GATE-05 switched
+  //    off by a constructor argument. It is positional, so `undefined` is how the
+  //    two seams after it are reached.
+  //  - the ask TTL is not passed either, and there is nowhere here to pass it:
+  //    plan 04-15 gives it at the `new ApprovalRegistry(...)` site inside
+  //    `HookServer`, in the same commit that declares the constant. A second
+  //    place to set it would be a second thing to forget.
   hookServer = new HookServer(
     hive, () => fakeWebContents(), () => readConfig(), control, breaker,
     (agentId) => delivery.drainAtStop(agentId),
     (agentId) => deps.focus?.(agentId),
-    (s) => telemetry.recordCostSample(s)
+    (s) => telemetry.recordCostSample(s),
+    // GATE-03 (04-06) — read through `readConfig()` at CALL time, exactly as the
+    // third argument above already reads config, so an operator's Settings edit
+    // takes effect without a restart. The `?? []` is not a policy: `readConfig`
+    // merges DEFAULTS, so a DELETED key already arrives as the shipped default
+    // list and this branch is reachable only by a malformed non-array value —
+    // which `commandShapeDenial` denies anyway ("absent, empty or not an array
+    // of strings all DENY"), so `[]` is the same verdict as passing it through.
+    () => readConfig().hostAllowlist ?? [],
+    // openAsk — see above. Production passes nothing, deliberately.
+    undefined,
+    // RECORD-01 (04-15) — A CLOSURE, NOT A METHOD REFERENCE BOUND EAGERLY.
+    // `persist` is a module-scope `let` assigned ~28 lines BELOW this call
+    // (`persist = new PersistStore()`), so a reference captured here would
+    // capture `undefined` forever and every tool call would go silently
+    // unrecorded on a floor whose tests are green (T-04-LOG-11). This file
+    // already reasons about that exact hazard in the `handoff` closure's own
+    // comment — cited by SYMBOL, because a line number does not survive the next
+    // edit — and the same reasoning holds here: the closure only ever RUNS while
+    // a hook is being judged, well after boot completes, so it always sees the
+    // real store. Do not "simplify" it to a method reference.
+    // Swallowed and logged: 04-15's contract is that a recording failure costs a
+    // row and never a verdict, and this is the outermost place that can break.
+    (row) => {
+      try { persist.recordToolCall(row); } catch (e) { console.error('[db] recordToolCall failed:', e); }
+    },
+    // GATE-05 (04-15) — publishApproval. The DATA half needs no line here: the
+    // registry is the source, and plan 04-17 PULLS it through
+    // `floor.hookServer.openApprovals()` for `GET /phone/api/asks`. What only
+    // this file can add is the operator's attention, gated on the notifications
+    // setting below — the same expression `breakerToast` and the
+    // watchdog's `notify` use, because an operator who turned notifications off
+    // did not ask for this one either (T-04-ASK-39). The pull stays ungated: a
+    // pull the operator asked for is not a notification.
+    // `paged` is why this is a closure over state rather than a bare arrow: the
+    // registry publishes the WHOLE open list on every change — an open, an
+    // answer, a sweep — so answering one of two open asks would re-toast the
+    // other one the operator has already seen.
+    (() => {
+      const paged = new Set<string>();
+      return (open) => {
+        for (const id of [...paged]) if (!open.some((a) => a.id === id)) paged.delete(id);
+        if (!readConfig().notifications) return;
+        for (const a of open) {
+          if (paged.has(a.id)) continue;
+          paged.add(a.id);
+          // The REASON, never the command: `command` is agent-authored untrusted
+          // text (ASVS V7) and `reason` is main's own sentence.
+          deps.notify({ title: `${a.agentId} needs approval`, body: a.reason });
+        }
+      };
+    })()
   );
   ptyManager.setHookTokenSource(
     (agentId) => hookServer.mintToken(agentId),
