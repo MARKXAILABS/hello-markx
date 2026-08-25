@@ -151,6 +151,30 @@ const reasonEmptyAllowlist = (host: string): string =>
   + 'hosts this floor may reach and this refusal stops.';
 
 /**
+ * The command, with any HERE-DOC BODY cut off.
+ *
+ * A here-doc body is DATA the shell hands to a program, not a command, and the
+ * ceiling has always said this gate cannot see into one. It has to be cut off
+ * rather than merely unread: `cat > README.md <<'EOF' … EOF` carries a whole
+ * file, and this repo's own README contains the line "`rm -rf`, reading
+ * credential files" in ordinary prose. Judged as a command that is a segment
+ * headed by `rm` with a recursive flag — so writing a FILE that documents the
+ * gate was refused BY the gate, which `test/net-binding.test.cjs`'s heredoc
+ * control measured before this cut existed.
+ *
+ * Everything after the introducer's newline goes, including any command that
+ * followed the terminator. That is the same accepted ceiling — item (m) — and it
+ * errs toward NOT judging data, which is the direction a false positive costs an
+ * overnight run.
+ */
+function withoutHeredocBody(raw: string): string {
+  const m = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(raw);
+  if (!m) return raw;
+  const nl = raw.indexOf('\n', m.index);
+  return nl < 0 ? raw : raw.slice(0, nl);
+}
+
+/**
  * Split a raw command into the segments a shell would run separately.
  *
  * A HEURISTIC, not a shell, and the ceiling says so (`hooks.ts` item (v)). It
@@ -191,7 +215,13 @@ const isRecursiveFlag = (t: string): boolean =>
 
 /** The normalized hostname of a token, or null when it names no host. Both the
  *  scheme-ful and the bare form go through `new URL()` so there is ONE
- *  lower-casing rule and one punycode rule, not two. */
+ *  lower-casing rule and one punycode rule, not two.
+ *
+ *  A SINGLE-LABEL host — `http://a/b`, `http://internal/x` — is not judged. It
+ *  names nothing on the public internet without a search domain or a hosts
+ *  entry, and `test/net-binding.test.cjs`'s false-positive sweep measured
+ *  `curl http://a/b -c:v 9:30 a:b` as ordinary work this gate must not touch.
+ *  Ceiling item (p) carries the residual. */
 function hostOf(token: string): string | null {
   let url: URL;
   try {
@@ -205,7 +235,9 @@ function hostOf(token: string): string | null {
   } catch {
     return null;
   }
-  return normalizeHost(url.hostname);
+  const host = normalizeHost(url.hostname);
+  if (!host.includes('.') && !host.includes(':')) return null;
+  return host;
 }
 
 /** Case-folded, bracket-free, trailing-dot-free. `HTTPS://Evil.COM./x` and
@@ -215,26 +247,24 @@ function normalizeHost(host: string): string {
 }
 
 /**
- * The outbound hosts one command names: every scheme-ful token, plus — when a
- * downloader is present — that downloader's first non-flag argument even when it
- * carries no scheme.
+ * The outbound hosts one command names: a DOWNLOADER's first non-flag argument,
+ * whether or not it carries a scheme.
  *
- * The scheme-less half is scoped to downloader arguments ON PURPOSE. A bare
- * dotted word anywhere else in a command is far more often a filename than a
- * host (`node build.config.js`, `cat a.b.c`, `python -m pkg.mod`), and refusing
- * those would be the false-positive storm that gets a gate switched off. What
- * that scope misses is written down as ceiling item (p) rather than implied.
+ * SCOPED TO DOWNLOADER ARGUMENTS, and that scope is measured rather than
+ * cautious. Judging every scheme-ful token anywhere in the command was the first
+ * implementation, and `test/net-binding.test.cjs`'s own control caught it:
+ * `cat > README.md <<'EOF' … EOF` carries this repo's README, whose ordinary
+ * prose links to ten hosts, so writing a FILE that mentions a URL was refused
+ * with a message about an outbound host. That is the false-positive storm that
+ * gets a gate switched off — and a bare dotted word is worse still, since
+ * `node build.config.js` is a filename far more often than `build.config.js` is
+ * a hostname. What the scope misses is written down as ceiling item (p) rather
+ * than implied.
  */
 function outboundHosts(words: readonly string[]): string[] {
   const found: string[] = [];
   for (let i = 0; i < words.length; i += 1) {
-    const w = words[i];
-    if (SCHEMEFUL.test(w)) {
-      const h = hostOf(w);
-      if (h) found.push(h);
-      continue;
-    }
-    if (!DOWNLOADERS.has(w.toLowerCase())) continue;
+    if (!DOWNLOADERS.has(words[i].toLowerCase())) continue;
     for (let j = i + 1; j < words.length; j += 1) {
       const arg = words[j];
       if (VALUE_FLAGS.has(arg.toLowerCase())) { j += 1; continue; }
@@ -271,13 +301,19 @@ export function commandShapeDenial(
   rawCommand: string,
   hostAllowlist: readonly string[] | null | undefined
 ): ShapeVerdict | null {
-  const lower = words.map((w) => w.toLowerCase());
+  // The caller's tokens are the EXPANDED ones and are used as they arrive —
+  // except when a here-doc body has to come off first, where the head is
+  // re-tokenized here with the caller's own split so both arms judge the same
+  // words. Hive-var expansion matters to the PATH gate, not to a command shape.
+  const raw = withoutHeredocBody(rawCommand);
+  const judged = raw === rawCommand ? words : raw.split(/[\s;&|<>()"']+/).filter(Boolean);
+  const lower = judged.map((w) => w.toLowerCase());
 
   // 1. `rm` + ANY recursive flag, anchored to one command segment. `-f` only
   //    suppresses a prompt a non-tty agent shell never sees, so it adds nothing
   //    to the danger and its absence is not an escape: `rm -r ./build` deletes
   //    exactly what `rm -rf ./build` deletes.
-  for (const tokens of segments(rawCommand)) {
+  for (const tokens of segments(raw)) {
     const { head, rest } = headOf(tokens);
     if (head === 'rm' && rest.some(isRecursiveFlag)) return { kind: 'ask', reason: REASON_RM };
     if (head === 'git' && rest.some((t) => t.toLowerCase() === 'push')) {
@@ -291,7 +327,7 @@ export function commandShapeDenial(
 
   // 2. A downloader piped into an interpreter. The pipe lives in the raw string
   //    because the tokenizer consumes it; the two ends live in the tokens.
-  if (/\|/.test(rawCommand)) {
+  if (/\|/.test(raw)) {
     const dl = lower.findIndex((w) => DOWNLOADERS.has(w));
     if (dl >= 0 && lower.slice(dl + 1).some((w) => INTERPRETERS.has(w))) {
       return { kind: 'ask', reason: REASON_PIPE_INTERPRETER };
@@ -299,7 +335,7 @@ export function commandShapeDenial(
   }
 
   // 3. The outbound host allowlist.
-  const hosts = outboundHosts(words);
+  const hosts = outboundHosts(judged);
   if (hosts.length === 0) return null;
 
   const allowed = Array.isArray(hostAllowlist)

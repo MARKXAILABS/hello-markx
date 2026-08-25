@@ -11,6 +11,7 @@ import {
 } from '../shared/agentProvider';
 import { defaultMcpDefaults, MCP_CATALOG, MCP_GRANT_PREFIX } from '../shared/mcpCatalog';
 import { expandTilde, normalizeHiveHome } from './fs';
+import { DEFAULT_HOST_ALLOWLIST } from './commandShape';
 import { PersistStore } from './db';
 import { deleteSecret, deleteSecretsWithPrefix, getSecret, setSecret } from './integrations';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
@@ -465,6 +466,19 @@ export interface HarnessConfig {
    *  `spawnAgentCore`'s `ptyManager.spawn(` sites; `hiddenClaude.ts` and
    *  `memory.ts` cannot read it (shellEnv.ts ceiling item (h)). */
   envPassThrough?: string[];
+
+  // ─── GATE-03: the outbound host allowlist ──────────────────────────────────
+  /** The hosts an agent's commands may reach without the operator being asked —
+   *  matched EXACTLY, after normalization, so `evil.github.com` does not inherit
+   *  `github.com`. Defaults to `DEFAULT_HOST_ALLOWLIST` (commandShape.ts), which
+   *  is marked `[ASSUMED]` and known incomplete: extend it here when a refusal
+   *  names a host this floor legitimately needs.
+   *
+   *  EMPTYING IT IS A DECISION, not a reset. An operator who clears this list has
+   *  said "no outbound hosts", and the judge denies every one of them rather than
+   *  asking once per host at 3am. Deleting the KEY is a different fact — that is
+   *  "not configured", and it takes the default above. */
+  hostAllowlist?: string[];
 }
 
 const DEFAULTS: HarnessConfig = {
@@ -474,6 +488,9 @@ const DEFAULTS: HarnessConfig = {
   registeredRepos: [],
   // GATE-02: no name is re-admitted unless the operator names it themselves.
   envPassThrough: [],
+  // GATE-03: the shipped default, so the judge's fail-closed branch is only ever
+  // reached by an operator who emptied this list themselves.
+  hostAllowlist: [...DEFAULT_HOST_ALLOWLIST],
   autoMode: true,
   defaultCommand: 'claude',
   godProvider: 'claude',

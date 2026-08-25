@@ -15,11 +15,26 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const loadTs = require('./load-ts.cjs');
+
+// hooks.ts uses Notification as a VALUE; outside Electron that resolve gives a
+// path string, so seed the cache with the surface the server actually touches.
+const electron = require.resolve('electron');
+require.cache[electron] = {
+  id: electron,
+  filename: electron,
+  loaded: true,
+  exports: { Notification: class { show() {} static isSupported() { return false; } } }
+};
 
 const {
   commandShapeDenial, DEFAULT_HOST_ALLOWLIST, HOST_ALLOWLIST_KEY
 } = loadTs('src/main/commandShape.ts');
+const { HiveManager } = loadTs('src/main/hive.ts');
+const { HookServer } = loadTs('src/main/hooks.ts');
 
 /** Tokenize exactly as the hooks.ts call site does (`hooks.ts` PreToolUse arm). */
 const words = (cmd) => cmd.split(/[\s;&|<>()"']+/).filter(Boolean);
@@ -236,4 +251,118 @@ test('GATE-03: ordinary work is not judged at all', () => {
   ]) {
     assert.equal(judge(cmd), null, `${cmd} must be allowed`);
   }
+});
+
+test('GATE-03: a here-doc BODY is data, not a command, and a single-label host is not judged', () => {
+  // Measured, not hypothetical: this repo's own README contains the line
+  // "`rm -rf`, reading credential files" in ordinary prose, and it links to ten
+  // hosts. Judging a here-doc body refused `cat > README.md` — the gate denying
+  // the file that documents the gate. test/net-binding.test.cjs's heredoc
+  // control is what caught it; this is the case that keeps it caught here.
+  const body = 'intro\n`rm -rf`, reading credential files\nsee https://evil.example/x\n';
+  const heredoc = `cat > README.md <<'EOF'\n${body}EOF`;
+  assert.equal(judge(heredoc), null, 'a here-doc body must not be judged as a command');
+
+  // The same words OUTSIDE a here-doc are still judged, so the cut is the body
+  // and not the arm.
+  assert.equal(judge('rm -rf ./build').kind, 'ask');
+
+  // A single-label host names nothing on the public internet without a search
+  // domain, and net-binding's false-positive sweep pins `curl http://a/b` as
+  // ordinary work. Ceiling item (p).
+  assert.equal(judge('curl http://a/b -c:v 9:30 a:b'), null);
+  assert.equal(judge('curl http://a.example/b').kind, 'ask', 'a dotted host is still judged');
+});
+
+// ─── the call site: BOTH arms key on a command string, not on a tool name ────
+
+/**
+ * A real HookServer over a real hive root, driven through `handle()`.
+ *
+ * These four cases are the ones a grep cannot prove. `commandOf`'s array branch
+ * and `protectedPathDenial`'s widened entry condition are both satisfiable by
+ * dead code that a source-text pin would happily bless, and both were ALLOW on
+ * six of seven engines before this plan.
+ */
+async function floor(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-cmd-shape-'));
+  t.after(() => { try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* held */ } });
+  const hive = new HiveManager(() => home);
+  await hive.ensureAgent({ id: 'a1', name: 'a1', provider: 'claude', cwd: home });
+  const sent = [];
+  const server = new HookServer(
+    hive, () => ({ send: (channel, payload) => sent.push({ channel, payload }) }), () => ({})
+  );
+  const fire = (tool_name, tool_input) =>
+    server.handle({ hook_event_name: 'PreToolUse', tool_name, tool_input }, 'a1');
+  return { home, hive, server, sent, fire };
+}
+
+const denialOf = (r) => (r && r.hookSpecificOutput
+  && r.hookSpecificOutput.permissionDecision === 'deny')
+  ? r.hookSpecificOutput.permissionDecisionReason
+  : null;
+
+test('GATE-03: tool_input.command as an ARGV ARRAY is judged, on a non-Claude tool name', async (t) => {
+  const { fire } = await floor(t);
+
+  // Codex's `shell` tool sends `command` as an argv array and its tool is not
+  // called `Bash`. A judge testing `typeof ti.command === 'string'` refuses
+  // nothing here while every other test in this file stays green.
+  const denied = fire('shell', { command: ['bash', '-lc', 'rm -rf ./x'] });
+  assert.equal(
+    denialOf(denied), judge('bash -lc rm -rf ./x').reason,
+    'the argv-array form must reach the same judge with the same reason'
+  );
+
+  // Both directions: the same shape with a benign body produces no verdict, so
+  // the deny above is the judge and not "an array denies".
+  assert.equal(denialOf(fire('shell', { command: ['bash', '-lc', 'ls -la'] })), null);
+});
+
+test('GATE-01: path protection reaches a NON-CLAUDE payload, both directions', async (t) => {
+  const { hive, fire } = await floor(t);
+  const root = hive.root();
+  assert.ok(root, 'the fixture has no hive root');
+
+  // Before this plan `protectedPathDenial` collected targets from the command
+  // string ONLY when `tool_name === 'Bash'`, so this exact payload was ALLOWED
+  // on codex, grok, pi, opencode, kimi and agy — which would have made this
+  // plan's own `restore` literal a protection against one engine out of seven.
+  const denied = denialOf(fire('shell', { command: `cat > ${path.join(root, 'bin', 'evil.cjs')}` }));
+  assert.ok(denied, 'a non-Claude payload naming <hive>/bin must be denied');
+  assert.match(denied, /bin/, `the reason should name what was protected: ${denied}`);
+
+  assert.equal(
+    denialOf(fire('shell', { command: `cat > ${path.join(root, 'scratch', 'notes.md')}` })), null,
+    'the positive control: an unprotected path under the same hive still allows'
+  );
+});
+
+test('GATE-01: <hive>/restore is the fifth protected literal, both directions', async (t) => {
+  const { hive, fire } = await floor(t);
+  const root = hive.root();
+
+  // Plan 04-09 puts a full shadow copy of every repo the floor touches here.
+  const denied = denialOf(fire('Bash', { command: `mv ${path.join(root, 'restore')} /tmp` }));
+  assert.ok(denied, '<hive>/restore must be protected');
+  assert.match(denied, /restore/, `the reason should name the store: ${denied}`);
+
+  assert.equal(
+    denialOf(fire('Bash', { command: `mv ${path.join(root, 'scratch')} /tmp` })), null,
+    'the positive control: an unrelated child of the hive root still allows'
+  );
+});
+
+test('GATE-03: a shape deny carries the COMMAND to the renderer (04-UI-SPEC S2)', async (t) => {
+  const { sent, fire } = await floor(t);
+  fire('shell', { command: 'rm -rf ./x' });
+
+  const gate = sent.filter((e) => e.channel === 'control:approvalRequest');
+  assert.equal(gate.length, 1, `expected one approvalRequest, got ${JSON.stringify(sent)}`);
+  assert.equal(
+    gate[0].payload.command, 'rm -rf ./x',
+    'BlockReason.command exists in the store and BlockedBanner renders it — main must set it'
+  );
+  assert.equal(gate[0].payload.reason, judge('rm -rf ./x').reason);
 });
