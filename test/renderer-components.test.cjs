@@ -375,6 +375,44 @@ test('FLOOR-13: the model chip is bounded, so it cannot drop the card\'s project
   // 322px is an operator observation and is not claimed here.
 });
 
+test('SCALE-05: an agent at 7/8 with NO reported context limit still renders the coral compaction warning', (t) => {
+  // The regression the threshold rewire could silently cause, and the reason
+  // `deriveContextColor` has ONE signature and it is percentage-based.
+  //
+  // This card colours its gauge from the `progress` 0..8 INTEGER, not from a token
+  // count: `contextLimit` reaches only the tooltip. A `deriveContextColor(tokens,
+  // limit)` signature would therefore have been fed `undefined` here, returned the
+  // neutral accent, and deleted the "about to compact" warning for every agent whose
+  // limit was never reported — a safety indicator going dark with no test failing.
+  //
+  // This case asserts on an inline `style=` attribute, which the file header at :43
+  // otherwise forbids. The exception is deliberate and narrow: the colour IS the
+  // signal here, there is no text or accessible name carrying it, and the element is
+  // located by its own `title` rather than by counting styles document-wide.
+  seedServerSnapshot(t, { agents: [agentRow()] });
+  const gaugeFill = (markup) => {
+    const i = markup.indexOf('title="Context gauge');
+    assert.ok(i > 0,
+      'the gauge\'s own title is gone, so this case can no longer find the element it measures');
+    const hit = /background:([^;"]*)/.exec(markup.slice(markup.indexOf('<div style="width:', i)));
+    assert.ok(hit, 'the gauge fill element rendered no background — the bar has no colour at all');
+    return hit[1].trim();
+  };
+
+  assert.equal(
+    gaugeFill(html(React.createElement(AgentCard, cardProps({ progress: 7, contextLimit: undefined })))),
+    'var(--cth-coral)',
+    'an agent at 7/8 context with no reported limit lost its coral compaction warning');
+
+  // The two controls, so the case above cannot pass by the gauge being coral always.
+  assert.equal(
+    gaugeFill(html(React.createElement(AgentCard, cardProps({ progress: 6, contextLimit: undefined })))),
+    'var(--cth-lemon)', 'the 6/8 step no longer warns');
+  assert.equal(
+    gaugeFill(html(React.createElement(AgentCard, cardProps({ progress: 2, contextLimit: undefined })))),
+    'var(--cth-blue)', 'a comfortable agent is being coloured as though it were under pressure');
+});
+
 // ─── relAge — VIGIL-04's one shared formatter (04-UI-SPEC § S5 rule A-1) ──────────────
 
 /**
