@@ -84,9 +84,24 @@ test('GATE-05: an ask id is unguessable, hex, and satisfies the phone regex', ()
   );
   assert.ok(entry.id.length <= 128, `the id is ${entry.id.length} chars — past the regex's own bound`);
 
-  // The id is not derivable from anything the caller supplied.
-  assert.ok(!entry.id.includes(String(entry.openedAt)), 'the id encodes openedAt');
-  assert.ok(!entry.id.includes(ASK.agentId), 'the id encodes the agent id');
+  // THE ID IS NOT DERIVED FROM ANYTHING THE CALLER SUPPLIED, asserted by
+  // COLLISION rather than by substring. A substring check is the wrong
+  // instrument here and was measured being wrong: `!id.includes('a1')` against
+  // 32 characters of hex fails on roughly one run in nine, purely by chance, and
+  // it went red in a full-suite run after passing four of them. Two entries
+  // minted from the same clock — one for the same agent, one for a different
+  // one — must both differ from this id, which a clock- or identity-derived id
+  // cannot manage.
+  const { reg: sameClock } = registryAt(entry.openedAt, 120_000);
+  const twin = sameClock.open(ASK);
+  const sibling = sameClock.open({ ...ASK, agentId: 'b2' });
+  assert.equal(twin.openedAt, sibling.openedAt, 'the fixture did not hold the clock still');
+  assert.notEqual(twin.id, sibling.id,
+    'two asks minted in the same millisecond for different agents share an id — the id is derived '
+    + 'from the clock and the agent rather than from randomBytes');
+  assert.notEqual(twin.id, sameClock.open(ASK).id,
+    'two asks minted in the same millisecond FOR THE SAME AGENT share an id — the id is a pure '
+    + 'function of its inputs and is therefore guessable by anyone who knows them');
 });
 
 test('GATE-05: 1000 generated ids are all distinct', () => {
