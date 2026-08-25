@@ -182,8 +182,8 @@ function ledgerCards(deps: Pick<AgentTeardownDeps, 'hive'>): ReleasableCard[] {
  * "within a minute" needs no sweep to be true.
  *
  * `released.branch` is deliberately NOT written here and NOT given a
- * placeholder. Where the work is can only come from `worktreeHasUnintegratedWork`,
- * which shells git and cannot answer in this tick; absence is the correct
+ * placeholder. Where the work is can only come from the unintegrated-work check
+ * in `../git`, which shells git and cannot answer in this tick; absence is the correct
  * representation of "not known yet", and a sentinel would be indistinguishable
  * from a real branch named `unknown` (04-UI-SPEC §S6b rule R-1).
  *
@@ -275,15 +275,54 @@ export async function finalizeWorkerWorktree(
   }
 }
 
+/**
+ * VIGIL-02, **write 2 of 2** — patch the branch fact onto the cards
+ * {@link releaseCardsHeldBy} already released, from the git call that has just
+ * answered. Enrichment only: `released.by` and `released.at` are already
+ * durable and this can never take them back.
+ *
+ * A no-op — never a resurrection — for any card that is no longer in the state
+ * write 1 left it in. A human who dragged the freed card back to `doing`, or
+ * another agent who claimed it, owns it now; a dead agent's continuation must
+ * not re-stamp it a moment later.
+ */
+function patchReleasedBranch(
+  cardIds: string[], work: { branch: string; detail: string }, deps: AgentTeardownDeps
+): void {
+  if (cardIds.length === 0) return;
+  const live = new Map(ledgerCards(deps).map((card) => [card?.id, card]));
+  for (const cardId of cardIds) {
+    const card = live.get(cardId);
+    if (!card?.released || card.status !== 'todo' || card.assignee || card.released.branch) continue;
+    // A full `released` object, spread from what is on disk RIGHT NOW: patchTask
+    // merges at the top level only, so writing a bare {branch, detail} here
+    // would drop the `by`/`at` write 1 put there.
+    deps.hive.patchTask(cardId, { released: { ...card.released, branch: work.branch, detail: work.detail } });
+  }
+}
+
 /** Gated worktree teardown for a NORMAL (non-worker) isolated agent: remove
  *  it only when nothing would be lost. Deliberately does NOT register in
  *  `preservedWorktrees` — a real agent's scratch dir is its memory/inbox,
- *  not a worker's disposable scratch. */
+ *  not a worker's disposable scratch.
+ *
+ *  `deps` is here for VIGIL-02's write 2 (its sibling `finalizeWorkerWorktree`
+ *  has always taken it); `releasedCards` are the ids write 1 freed in the
+ *  teardown tick, and defaults to none so a caller with nothing in flight — and
+ *  every test that predates VIGIL-02 — needs no change. */
 export async function finalizeAgentWorktree(
-  id: string, wtPath: string, origCwd: string, baseBranch: string
+  id: string, wtPath: string, origCwd: string, baseBranch: string,
+  deps: AgentTeardownDeps, releasedCards: string[] = []
 ): Promise<void> {
   try {
     const work = await worktreeHasUnintegratedWork(wtPath, baseBranch);
+    // VIGIL-02 write 2 of 2, reusing the ONE git call this function already
+    // makes rather than re-shelling git on a teardown path. Inside this try on
+    // purpose, and this is the whole reason write 1 is NOT: the catch below
+    // swallows and logs, which is right for losing a branch label and would be
+    // catastrophic for losing the release itself (ADR-0003 — release first,
+    // enrich later, never lose the release to a git error).
+    patchReleasedBranch(releasedCards, work, deps);
     if (work.keep) {
       console.warn(
         `[worktree] PRESERVING ${id}'s worktree — it holds unintegrated work: ${wtPath} `
@@ -339,7 +378,7 @@ export function teardownPty(id: string, deps: AgentTeardownDeps): void {
       deps.liveWorkers.delete(id);
       void finalizeWorkerWorktree(wtPath, origCwd, worker, deps);
     } else {
-      void finalizeAgentWorktree(id, wtPath, origCwd, baseBranch);
+      void finalizeAgentWorktree(id, wtPath, origCwd, baseBranch, deps, releasedCards);
     }
   }
   if (deps.liveWorkers.has(id)) deps.liveWorkers.delete(id);
