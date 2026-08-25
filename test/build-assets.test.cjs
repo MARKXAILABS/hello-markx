@@ -169,3 +169,204 @@ test("the phone's CSP script-src/style-src hashes match the committed inline <sc
   assert.equal(styleMatch[1], realStyleHash,
     'the CSP style-src hash does not match the committed <style> content — the phone would render unstyled');
 });
+
+/* ───── plan 04-17: GATE-05's countdown and VIGIL-01's strip on the phone ─────
+ *
+ * ACCEPTED RESIDUAL, stated rather than implied: nothing in this repo executes
+ * `resources/phone/index.html`'s JavaScript, so the countdown's BEHAVIOUR has
+ * no automated coverage here — only its text, its structure, and (below) the
+ * one function that can be lifted out and run on its own. Three things bound
+ * that gap, all named in 04-17-SUMMARY.md: plan 04-18 unit-tests the identical
+ * rule table through the desktop's `formatRemaining` (wave 6) and OWNS the
+ * phone-vs-desktop literal cross-check that belongs in THIS file once both
+ * sides exist; plan 04-19 task 3 is the physical-device attempt.
+ */
+
+const PHONE_HTML_PATH = path.join(PHONE_DIR, 'index.html');
+const occurrences = (hay, needle) => hay.split(needle).length - 1;
+
+/** 04-UI-SPEC §S1 rule G-3's format table, copied here as a literal array with
+ *  its source named — NOT imported from plan 04-18's `formatRemaining`, which
+ *  does not exist until wave 6. A clause written a wave before the thing it
+ *  reads is red for a wave and fails this plan's own wave gate. */
+const G3_FORMAT_LITERALS = ['m ', 's left', 'expiring', 'expired'];
+
+test('the phone renders a countdown re-derived from an anchor, never a decremented counter (rule G-3)', () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+
+  // Positive: the anchor is recorded AND read; the duration is consumed.
+  assert.ok(occurrences(html, 'receivedAt') >= 2, 'the countdown anchor must be both written and read');
+  assert.ok(occurrences(html, 'expiresInMs') >= 2, 'the server-measured duration must be consumed');
+
+  // Negative, paired with the positives above so an empty file cannot satisfy
+  // it: a DEADLINE timestamp never reaches a client whose clock is not ours.
+  assert.equal(/expiresAt/i.test(html), false, 'a deadline timestamp must never appear on the phone');
+
+  // Two gates, not one OR'd expression. Positive: exactly one new 1000ms
+  // re-derivation beside the pre-existing 10s poll (measured at wave start: 1).
+  assert.equal(occurrences(html, 'setInterval'), 2,
+    'exactly one interval was added — the 1000ms re-derivation, beside the existing 10s poll');
+  // Negative: nothing decrements a counter. A backgrounded tab makes a
+  // decremented counter drift arbitrarily far in the OPTIMISTIC direction.
+  assert.equal(/remaining\s*--|remaining\s*-=|--\s*remaining/.test(html), false,
+    'the countdown must be re-derived from the anchor, never decremented');
+
+  for (const literal of G3_FORMAT_LITERALS) {
+    assert.ok(html.includes(`'${literal}'`) || html.includes(`+ '${literal}'`),
+      `rule G-3's format table literal ${JSON.stringify(literal)} is missing from the phone`);
+  }
+  // The two states that govern the decision controls, and the branch that
+  // keys the disable on the ≤0 case.
+  assert.ok(/if\s*\(!\(ms > 0\)\)\s*return 'expired';/.test(html),
+    "the ≤0 state's literal must be `expired`");
+  assert.ok(/if\s*\(ms < 10000\)\s*return 'expiring';/.test(html),
+    "the <10s state's literal must be `expiring` — no number is shown in the window where skew could lie");
+  assert.ok(/var expired = !\(remaining > 0\);/.test(html) && /state\.sending \|\| expired \|\| /.test(html),
+    'the decision-control disable must be keyed on the ≤0 branch');
+});
+
+test('the floor-quiet strip is a pinned, NON-interactive slot — not a third ask kind (rule Q-1b)', () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+
+  // Occurrences, not lines: the repo documents that exact trap at
+  // test/repo-claims.test.cjs:1325-1329.
+  assert.ok(occurrences(html, 'p-quiet-bar') >= 2, 'the strip needs both a CSS rule and a render');
+
+  // The criterion this replaces read "`data-action` count is unchanged", whose
+  // stated reason is "the strip added no handler". Task 2 also adds the two
+  // decision buttons, which legitimately DO need handlers, so the literal form
+  // could not pass on correct code (the T-04-ASK-37 shape). This asserts the
+  // property that criterion names, on the markup that names it.
+  const renderLine = html.split('\n').find((l) => l.includes("class=\"p-quiet-bar\""));
+  assert.ok(renderLine, 'no p-quiet-bar render found');
+  assert.equal(/data-action|<button/.test(renderLine), false,
+    'the strip is not interactive and does not pretend to be: no button, no handler');
+  assert.ok(/role="status"/.test(renderLine), 'the strip is announced politely, never as an interruption');
+
+  const cssBlock = html.slice(html.indexOf('.p-quiet-bar {'), html.indexOf('.p-empty {'));
+  assert.ok(cssBlock.includes('var(--p-warn-fill)') && cssBlock.includes('inset 2px 0 0 var(--p-warn)'),
+    'the strip is .p-offline-bar geometry in the warn register');
+  assert.equal(/cursor/.test(cssBlock), false, 'no cursor change — there is nothing to tap');
+
+  // It rides its OWN state slot. Overloading `state.banner` would make one of
+  // two co-occurring facts invisible.
+  assert.ok(html.includes('state.floorQuiet'), 'the alarm has its own state slot, not the offline banner\'s');
+  assert.equal(/kind === 'alarm'|kind: 'alarm'/.test(html), false,
+    'there is NO third ask kind — an alarm in the asks array renders "NEEDS YOU 1" when nothing is asking');
+
+  // 04-UI-SPEC §S6a's three copy cases, formatted client-side. The dynamic
+  // parts are interpolated, so these are the literal fragments the source
+  // really carries.
+  for (const fragment of [
+    'The floor has stopped. Nothing has moved for ',
+    'No cards were in flight.',
+    ' cards were in flight.',
+    ' is gone. The floor has no orchestrator, and nothing has moved for '
+  ]) {
+    assert.ok(html.includes(fragment), `the floor-quiet copy fragment ${JSON.stringify(fragment)} is missing`);
+  }
+});
+
+test('an agent-authored command is escaped by the SAME helper title/question already use (T-04-ASK-35)', () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+
+  // The command lands in `ask.question`, and every render of it on this
+  // surface goes through escapeHtml — the phone has no framework escaping text
+  // children for it, unlike the desktop (plan 04-14).
+  for (const site of ['p-ask-cmd', 'p-command']) {
+    const line = html.split('\n').find((l) => l.includes(`'${site}'`) || l.includes(`class="${site}"`));
+    assert.ok(line, `no render found for .${site}`);
+    assert.ok(line.includes('escapeHtml(ask.question)'),
+      `.${site} interpolates the command without escapeHtml — the phone builds markup by concatenation`);
+  }
+
+  // Lift the real helper out of the committed file and run it, so this is the
+  // shipped implementation rather than a re-statement of it.
+  const src = html.match(/function escapeHtml\(s\) \{[\s\S]*?\n {2}\}/);
+  assert.ok(src, 'escapeHtml was not found in the phone bundle');
+  const escapeHtml = new Function(`${src[0]}; return escapeHtml;`)();
+
+  const attack = '<img src=x onerror=alert(1)>';
+  const out = escapeHtml(attack);
+  assert.ok(out.includes('&lt;'), 'the command must appear as TEXT');
+  assert.equal(out.includes('<img'), false, 'nothing in the command may open a tag, so nothing can become an attribute');
+  assert.equal(out.includes('"'), false, 'quotes are escaped too — the command also lands inside an attribute value');
+  // Positive control: a harmless command survives readable, so "escape
+  // everything to nothing" cannot pass this.
+  assert.equal(escapeHtml('rm -rf ./build/vendor'), 'rm -rf ./build/vendor');
+});
+
+/** Lift one top-level helper out of the committed bundle and return its source.
+ *  Every helper in the IIFE is indented two spaces and closes on `\n  }`. */
+function phoneFn(html, name) {
+  const m = html.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n {2}\\}`));
+  assert.ok(m, `${name} was not found in the phone bundle`);
+  return m[0];
+}
+
+test('the phone bundle is syntactically valid — nothing else in this repo parses it', () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+  const i = html.indexOf('<script>');
+  const j = html.indexOf('</script>', i);
+  assert.ok(i !== -1 && j !== -1, 'no inline <script> block found');
+  const script = html.slice(i + '<script>'.length, j);
+  // The CSP hash clause above happily passes on a bundle that throws on load:
+  // it digests bytes, not syntax. This is the only thing standing between a
+  // typo in a hand-written, framework-free bundle and a phone that boots to a
+  // blank screen with no local reproduction.
+  assert.doesNotThrow(() => new (require('node:vm').Script)(script, { filename: 'phone-inline.js' }));
+  assert.ok(script.split('\n').length > 100, 'the extracted script is too short to be the real bundle');
+});
+
+/* This is the accepted residual, made smaller rather than merely restated: the
+ * rule-G-3 formatter and the rule-Q-1b copy function are PURE, so they can be
+ * lifted out of the committed bundle and run for real. What stays uncovered is
+ * the render path and the interval, not the rules themselves. */
+test("rule G-3's format table, executed against the shipped implementation", () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+  const formatRemaining = new Function(`${phoneFn(html, 'formatRemaining')}; return formatRemaining;`)();
+
+  assert.equal(formatRemaining(124_000), '2m 04s left', '≥60s — the seconds field is zero-padded');
+  assert.equal(formatRemaining(60_000), '1m 00s left');
+  assert.equal(formatRemaining(45_000), '45s left', '10–59s — a bare seconds count');
+  assert.equal(formatRemaining(10_000), '10s left', 'the boundary belongs to the number, not to `expiring`');
+  assert.equal(formatRemaining(9_999), 'expiring', '<10s — NO number, because that is the window skew could lie in');
+  assert.equal(formatRemaining(1), 'expiring');
+  assert.equal(formatRemaining(0), 'expired');
+  assert.equal(formatRemaining(-5_000), 'expired', 'a negative remainder is expired, never a negative countdown');
+  assert.equal(formatRemaining(undefined), 'expired', 'a missing duration fails to the SAFE side');
+});
+
+test("rule Q-1b's three copy cases, executed against the shipped implementation", () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+  const body = html.match(/floorQuiet: function \(q\) \{[\s\S]*?\n {4}\}/);
+  assert.ok(body, 'the floor-quiet copy function was not found');
+  const floorQuiet = new Function(
+    `${phoneFn(html, 'humanDuration')}; var COPY = { ${body[0]} }; return COPY.floorQuiet;`
+  )();
+
+  assert.equal(floorQuiet({ sinceMs: 1_920_000, inFlight: 2 }),
+    'The floor has stopped. Nothing has moved for 32m. 2 cards were in flight.');
+  assert.equal(floorQuiet({ sinceMs: 1_920_000, inFlight: 0 }),
+    'The floor has stopped. Nothing has moved for 32m. No cards were in flight.');
+  assert.equal(floorQuiet({ sinceMs: 1_920_000, inFlight: 2, agent: 'Michael' }),
+    'Michael is gone. The floor has no orchestrator, and nothing has moved for 32m.');
+  // Grammar, because a strip that reads "1 cards were in flight" at 3am reads
+  // as a broken floor.
+  assert.equal(floorQuiet({ sinceMs: 1_920_000, inFlight: 1 }),
+    'The floor has stopped. Nothing has moved for 32m. 1 card was in flight.');
+  // The duration is a DURATION: no timestamp, no date, no clock of the phone's.
+  assert.match(floorQuiet({ sinceMs: 3_840_000, inFlight: 0 }), /1h 4m/);
+});
+
+test('rule G-1 holds on the phone: not one taskId was renamed', () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+  const sw = fs.readFileSync(path.join(PHONE_DIR, 'sw.js'), 'utf8');
+  // OCCURRENCES, not lines. `grep -c` measures 15 here and 5 there because
+  // several lines carry two each — a line-count gate could not pass on correct
+  // code. Measured at wave start: 21 and 10.
+  assert.ok(occurrences(html, 'taskId') >= 21, 'a taskId was renamed in index.html');
+  assert.equal(occurrences(sw, 'taskId'), 10,
+    'sw.js is INSTALLED on the operator\'s phone: a rename there is a live-device failure with no local reproduction');
+  assert.equal(occurrences(sw, "'ask:'"), 1, 'the notification tag scheme was not touched');
+});

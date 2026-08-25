@@ -799,3 +799,255 @@ test('mint-then-start with zero endpoints binds once the phone is armed — the 
   assert.equal(server.listening(), true);
   assert.equal(server.publicUrl(), null, 'start() still opens no tunnel by itself — arming is not the same as exposing');
 });
+
+/* ─────────── GATE-05 / VIGIL-01 — publishing into the finished channel ──────
+ *
+ * Plan 04-17. A tool approval and the floor-quiet alarm both ride the phone
+ * channel Phase 2 already hardened: NO new endpoint, NO new trust boundary.
+ * Every case below drives the SAME `GET /phone/api/asks` and
+ * `POST /phone/api/answer` the auth block above already covers, and that auth
+ * block is deliberately left untouched.
+ */
+
+const { ApprovalRegistry } = loadTs('src/main/approvals.ts');
+
+/** The literal from `webhook.ts:231`, COPIED rather than imported: the point of
+ *  the assertion is that an ask id satisfies the regex the TRANSPORT enforces
+ *  before `answerAsk` is ever called, and importing the module's own constant
+ *  would make the test pass for a regex that had been loosened to match. */
+const PHONE_TASK_ID_RE_LITERAL = /^[A-Za-z0-9._-]{1,128}$/;
+
+test("an ApprovalRegistry id satisfies webhook.ts's PHONE_TASK_ID_RE, so a tool ask can be answered at all", () => {
+  const reg = new ApprovalRegistry({ ttlMs: 120_000 });
+  for (let i = 0; i < 8; i++) {
+    const entry = reg.open({ agentId: 'ada', tool: 'Bash', command: 'rm -rf ./build', reason: 'recursive delete' });
+    assert.match(entry.id, PHONE_TASK_ID_RE_LITERAL,
+      'an ask id that fails the regex is a 400 the operator reads as "the floor is broken"');
+  }
+});
+
+test('GET /phone/api/asks carries a tool ask with kind:"tool" and a response-time duration, and a card ask with NO kind at all', async (t) => {
+  const TTL = 120_000;
+  const reg = new ApprovalRegistry({ ttlMs: TTL });
+  const entry = reg.open({ agentId: 'ada', tool: 'Bash', command: 'rm -rf ./build/vendor', reason: 'recursive delete' });
+  const asks = () => [
+    { taskId: 'card-1', title: 'Fix the auth redirect loop', question: 'Drop the legacy path?' },
+    {
+      taskId: entry.id,
+      title: 'wants to run a command',
+      question: entry.command,
+      agent: 'ada',
+      kind: 'tool',
+      expiresInMs: Math.max(0, entry.expiresAt - Date.now())
+    }
+  ];
+  const { server } = makePhoneServer(t, { opts: { openAsks: asks } });
+  const mint = server.mintEnrollment();
+  const ex = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(mint.token) });
+  const res = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(ex.body.bearer) });
+
+  assert.equal(res.status, 200);
+  const card = res.body.asks.find((a) => a.taskId === 'card-1');
+  const tool = res.body.asks.find((a) => a.kind === 'tool');
+
+  assert.ok(card, 'the card ask must still be served');
+  assert.equal('kind' in card, false, 'absent === card: every existing producer stays valid unchanged');
+
+  assert.ok(tool, 'the tool approval must reach the phone on the EXISTING asks route');
+  assert.match(tool.taskId, PHONE_TASK_ID_RE_LITERAL);
+  assert.equal(typeof tool.expiresInMs, 'number');
+  assert.ok(tool.expiresInMs > 0, 'a live ask must report time remaining');
+  assert.ok(tool.expiresInMs < TTL,
+    'expiresInMs must be measured at RESPONSE time (expiresAt - now), never copied from expiresAt');
+  assert.equal('expiresAt' in tool, false, 'a deadline timestamp must never reach a client whose clock is not ours');
+});
+
+test('POST /phone/api/answer reports ok / expired / settled apart — the three outcomes rule G-2 exists for', async (t) => {
+  const outcomes = {
+    live: { ok: true },
+    gone: { ok: false, state: 'expired' },
+    done: { ok: false, state: 'settled' },
+    card: true // the card path may keep returning a bare boolean
+  };
+  const { server } = makePhoneServer(t, {
+    opts: { answerAsk: (taskId) => outcomes[taskId] ?? false }
+  });
+  const mint = server.mintEnrollment();
+  const ex = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(mint.token) });
+  const bearer = ex.body.bearer;
+  const answer = (taskId, text = 'approve') => request(server, {
+    method: 'POST', url: '/phone/api/answer', headers: bearerHeaders(bearer),
+    body: JSON.stringify({ taskId, answer: text })
+  });
+
+  const live = await answer('live');
+  assert.equal(live.status, 200);
+  assert.deepEqual(live.body, { ok: true }, 'no state key at all on success — an old phone reads `ok` and is not confused');
+
+  const gone = await answer('gone');
+  assert.equal(gone.status, 200);
+  assert.deepEqual(gone.body, { ok: false, state: 'expired' });
+
+  const done = await answer('done');
+  assert.equal(done.status, 200);
+  assert.deepEqual(done.body, { ok: false, state: 'settled' });
+
+  // The bare-boolean card path is untouched in BOTH directions.
+  const card = await answer('card', 'yes, ship it');
+  assert.deepEqual(card.body, { ok: true });
+  const unknown = await answer('nope', 'yes, ship it');
+  assert.deepEqual(unknown.body, { ok: false });
+});
+
+test('a tool ask accepts exactly two literals: anything else is a 400 and the ask is STILL PENDING afterwards', async (t) => {
+  const TTL = 120_000;
+  const reg = new ApprovalRegistry({ ttlMs: TTL });
+  const entry = reg.open({ agentId: 'ada', tool: 'Bash', command: 'git push --force', reason: 'force push' });
+  const openAsks = () => reg.list().map((e) => ({
+    taskId: e.id, title: 'wants to run a command', question: e.command,
+    agent: e.agentId, kind: 'tool', expiresInMs: Math.max(0, e.expiresAt - Date.now())
+  }));
+  const answered = [];
+  const { server } = makePhoneServer(t, {
+    opts: {
+      openAsks,
+      answerAsk: (taskId, text) => {
+        answered.push({ taskId, text });
+        return reg.answer(taskId, text === 'approve') ? { ok: true } : { ok: false, state: 'settled' };
+      }
+    }
+  });
+  const mint = server.mintEnrollment();
+  const ex = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(mint.token) });
+  const bearer = ex.body.bearer;
+  const answer = (text) => request(server, {
+    method: 'POST', url: '/phone/api/answer', headers: bearerHeaders(bearer),
+    body: JSON.stringify({ taskId: entry.id, answer: text })
+  });
+
+  // `approved = answer !== 'deny'` would turn every one of these into a YES on
+  // the one channel whose entire purpose is an explicit yes (T-04-ASK-34).
+  for (const bad of ['maybe', 'Approve', 'approve ok', 'yes', '1', 'DENY']) {
+    const res = await answer(bad);
+    assert.equal(res.status, 400, `"${bad}" must be refused, not interpreted`);
+    assert.deepEqual(res.body, { ok: false, error: 'bad request' },
+      'the refusal reuses the existing malformed-body path, byte for byte');
+  }
+  assert.deepEqual(answered, [], 'answerAsk must never be reached for a rejected literal');
+  assert.equal(reg.list().length, 1, 'the ask is STILL PENDING — a 400 that also settled it would pass the status check alone');
+  assert.equal(reg.poll(entry.id, 'ada'), 'pending');
+
+  // Positive control, both directions: the map works, it does not merely reject.
+  const denied = await answer('deny');
+  assert.equal(denied.status, 200);
+  assert.deepEqual(denied.body, { ok: true });
+  assert.equal(reg.poll(entry.id, 'ada'), 'deny', 'the accepted deny literal really settles it to deny');
+
+  const second = reg.open({ agentId: 'ada', tool: 'Bash', command: 'rm -rf /tmp/x', reason: 'recursive delete' });
+  const approvedRes = await request(server, {
+    method: 'POST', url: '/phone/api/answer', headers: bearerHeaders(bearer),
+    body: JSON.stringify({ taskId: second.id, answer: 'approve' })
+  });
+  assert.equal(approvedRes.status, 200);
+  assert.equal(reg.poll(second.id, 'ada'), 'allow', 'the accepted approve literal really settles it to allow');
+});
+
+test('floorQuiet is a SIBLING of asks, in both directions — a snapshot produces it, null omits the key entirely', async (t) => {
+  const snapshot = { sinceMs: 1_920_000, inFlight: 2 };
+  const { server } = makePhoneServer(t, {
+    opts: {
+      openAsks: () => [{ taskId: 'card-1', title: 'A', question: 'q' }],
+      floorQuiet: () => snapshot
+    }
+  });
+  const mint = server.mintEnrollment();
+  const ex = await request(server, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(mint.token) });
+  const res = await request(server, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(ex.body.bearer) });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.floorQuiet, snapshot, "the strip's value is the watchdog's, not a constant");
+  assert.equal(res.body.floorQuiet.sinceMs, 1_920_000);
+  assert.equal(res.body.asks.length, 1,
+    'the alarm is NOT a third ask kind: an entry in this array renders "NEEDS YOU 1" when nothing is asking');
+
+  // A hard-coded object satisfies the half above; a hard-coded null satisfies
+  // the half below. Only a real read satisfies both.
+  const { server: moving } = makePhoneServer(t, {
+    opts: { openAsks: () => [{ taskId: 'card-1', title: 'A', question: 'q' }], floorQuiet: () => null }
+  });
+  const m2 = moving.mintEnrollment();
+  const ex2 = await request(moving, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(m2.token) });
+  const res2 = await request(moving, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(ex2.body.bearer) });
+  assert.equal('floorQuiet' in res2.body, false, 'absent === the floor is moving; a null key is not the same wire');
+
+  // A throwing getter is an empty strip, never a 500 — the same discipline
+  // `openAsks` already has.
+  const { server: boom } = makePhoneServer(t, {
+    opts: { openAsks: () => [], floorQuiet: () => { throw new Error('boom'); } }
+  });
+  const m3 = boom.mintEnrollment();
+  const ex3 = await request(boom, { method: 'POST', url: '/phone/api/enroll', headers: enrollHeaders(m3.token) });
+  const res3 = await request(boom, { method: 'GET', url: '/phone/api/asks', headers: bearerHeaders(ex3.body.bearer) });
+  assert.equal(res3.status, 200);
+  assert.deepEqual(res3.body, { ok: true, asks: [] });
+});
+
+test('the GATE-05 push body leaks nothing to a lock screen, and its title is self-sufficient on an OLD service worker', () => {
+  const { askPushPayload } = loadTs('src/main/push.ts');
+  const command = 'rm -rf /home/ada/projects/build/vendor';
+  const wire = askPushPayload({ agent: 'Ada', taskId: 'ask-deadbeef', expiresInMs: 118_000 });
+
+  // The ask LIST is behind the bearer. A notification is not: it renders on a
+  // locked screen with no authentication at all (T-04-ASK-18).
+  assert.equal(wire.body.includes(command), false, 'the command string must never reach a lock screen');
+  assert.equal(wire.body.includes('rm -rf'), false);
+  assert.equal(/[/\\]/.test(wire.body), false, 'no path separator — the floor quotes source and paths');
+  assert.equal(wire.body.includes('?'), false, 'no question text');
+  // Positive control: an EMPTY body would satisfy every clause above.
+  assert.ok(wire.body.length > 0, 'the body must still say something');
+  assert.match(wire.body, /wants to run a command/);
+  assert.match(wire.body, /118s to answer/, 'a duration is allowed, and it is a duration — never a deadline');
+
+  // `sw.js` renders `data.agent` as the TITLE and, on an installed old worker,
+  // hard-codes `body: 'is waiting on you'` — so `Ada is waiting on you` is
+  // still true where `Floor is waiting on you` would not be.
+  assert.equal(wire.agent, 'Ada');
+  assert.notEqual(wire.agent, 'Floor');
+  assert.notEqual(wire.agent, 'Alert');
+  assert.equal(wire.taskId, 'ask-deadbeef', 'the id rides the UNCHANGED field name, so sw.js:38 tags it as its own');
+
+  // No duration is a shorter body, never a broken one or a fabricated number.
+  const noTtl = askPushPayload({ agent: 'Ada', taskId: 'ask-deadbeef' });
+  assert.equal(noTtl.body, 'wants to run a command');
+  assert.equal(/\d/.test(noTtl.body), false, 'a missing duration is omitted, never guessed');
+});
+
+test('sw.js falls back for an OLD server and renders a new one — both directions, and no other line moved', () => {
+  const sw = fs.readFileSync(path.join(__dirname, '..', 'resources', 'phone', 'sw.js'), 'utf8');
+  // Rule Q-5: this worker is INSTALLED on the operator's phone and updates on
+  // its own schedule, so a mismatch has no local reproduction.
+  assert.ok(sw.includes("body: (typeof data.body === 'string' && data.body) ? data.body : 'is waiting on you',"),
+    'the body fallback is the ONE line this plan is allowed to change in sw.js');
+  assert.equal(sw.split("tag: 'ask:' + taskId").length - 1, 1, 'the tag scheme was not touched');
+  assert.ok(sw.includes('self.skipWaiting()') && sw.includes('self.clients.claim()'),
+    'the update discipline the fallback depends on is intact');
+
+  // Run the fallback expression itself, both directions, against the shipped
+  // source rather than a re-statement of it.
+  const expr = sw.match(/\(typeof data\.body === 'string' && data\.body\) \? data\.body : 'is waiting on you'/);
+  assert.ok(expr, 'the fallback expression was not found');
+  const pick = new Function('data', `return ${expr[0]};`);
+  assert.equal(pick({}), 'is waiting on you', 'OLD SERVER + new SW: no body on the wire, identical to today');
+  assert.equal(pick({ body: '' }), 'is waiting on you', 'an empty body is not a body');
+  assert.equal(pick({ body: 42 }), 'is waiting on you', 'a non-string body is not a body');
+  assert.equal(pick({ body: 'wants to run a command' }), 'wants to run a command', 'NEW server: the sender composes it');
+});
+
+test("index.ts reads the quiet snapshot and the approval settle through plan 04-11's and 04-15's named accessors", () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
+  assert.equal(src.split('floor.watchdog.current()').length - 1, 1,
+    'the quiet snapshot must be read from the Floor member plan 04-11 declared — "wired to a simple store" is exactly what this catches');
+  assert.ok(src.includes('hookServer.answerApproval('),
+    "the settle must route through HookServer's named accessor, not a second registry");
+  assert.ok(src.includes('hookServer.openApprovals('),
+    "the merge must read HookServer's named accessor, not a second registry");
+});
