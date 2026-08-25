@@ -849,6 +849,11 @@ export class HiveManager {
       // reflect.ts copies EVERY agent's memory.md in here on every condense
       // attempt, successful or not.
       'backups/',
+      // RECORD-05's shadow stores (restorePoints.ts): a bare git repo per
+      // operator project, holding compressed copies of that project's source.
+      // Named `restore` and not `backups` because the line above already owns
+      // that name and prunes it on reflect.ts's schedule (D-21).
+      'restore/',
       // atomicWriteJson's staging files. Transient, but a crash mid-write leaves
       // one behind and `git add -A` would commit the corpse.
       '*.tmp-*'

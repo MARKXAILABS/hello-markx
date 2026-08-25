@@ -78,8 +78,19 @@ const SECRET_SCAN_MAX_BYTES = 4 * 1024 * 1024;
 const STALE_LOCK_MS = 60_000;
 /** Paths the hive repo must stop VERSIONING — see untrackIgnored(). Mirrors the
  *  churny half of the .gitignore seed in ensureHive; a `.gitignore` line alone
- *  does nothing to a file git is already tracking. */
-const UNTRACK_PATHS = ['cost-ledger.jsonl', 'log.jsonl', 'log.jsonl.1', 'backups'];
+ *  does nothing to a file git is already tracking.
+ *
+ *  `restore` is RECORD-05's shadow stores (restorePoints.ts): whole bare git
+ *  repos holding compressed copies of the operator's source, one per project
+ *  repo. A hive commit that swallowed those would put the operator's code into
+ *  the hive's history and grow it without bound.
+ *
+ *  It is named `restore` and NOT `backups` on purpose (D-21). `backups` is
+ *  already taken — reflect.ts writes memory-condensation generations into
+ *  `hive/backups/<stamp>/` and prunes them with its own `pruneBackups`/
+ *  `KEEP_BACKUPS`. Restore points filed there would be deleted by a retention
+ *  policy that was never written to see them. */
+const UNTRACK_PATHS = ['cost-ledger.jsonl', 'log.jsonl', 'log.jsonl.1', 'backups', 'restore'];
 
 export interface GitCommitterDeps {
   /** The hive root to commit into, or null before onboarding (no

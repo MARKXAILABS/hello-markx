@@ -41,6 +41,7 @@ import { TelemetryCollector } from '../telemetry';
 import { MemoryManager } from '../memory';
 import { MemoryReflector, type ReflectSettings } from '../reflect';
 import { PersistStore } from '../db';
+import { RestorePoints, SNAPSHOT_CADENCE_MS } from '../restorePoints';
 import { SPAWN_SAFE_SESSION_ID } from '../transcript';
 import {
   appendTriggerHistory, listTriggerHistory
@@ -156,12 +157,22 @@ export let telemetry: TelemetryCollector;
 export let breaker: CircuitBreaker;
 let fleetTimer: ReturnType<typeof setInterval> | null = null;
 let breakerBeatTimer: ReturnType<typeof setInterval> | null = null;
+/** RECORD-05's snapshot beat. Boot-internal like the two above — NOT a Floor
+ *  field — which is exactly why test/boot-floor.test.cjs has to pin it BY NAME:
+ *  that file's offender loop walks `Object.keys(floor)` and cannot see a
+ *  module-level `let`, so without the named pin this timer's teardown would have
+ *  no automated assertion at all. */
+let restorePointTimer: ReturnType<typeof setInterval> | null = null;
 export let accountPool: AccountPoolManager;
 export let delivery: DeliveryService;
 export let hookServer: HookServer;
 export let memory: MemoryManager;
 export let reflector: MemoryReflector;
 export let persist: PersistStore;
+/** RECORD-05's snapshot runner. Boot-internal, like the timer that drives it:
+ *  every collaborator it has arrives injected here at the composition root, in
+ *  the same style as `persist` below, and this is the only place it is built. */
+let restorePoints: RestorePoints;
 export let integrationBroker: IntegrationBroker;
 export let roster: RosterStore;
 
@@ -516,6 +527,39 @@ export function armAlwaysOnBeats(): void {
     try { accountPool.tick(); } catch (e) { console.error('[account-pool beat]', e); }
     try { condenseBoardIfOversized(); } catch (e) { console.error('[board beat]', e); }
   }, 30_000);
+}
+
+/**
+ * RECORD-05's beat: one restore point per operator repo, then a prune.
+ *
+ * Every live agent's `cwd` is a candidate operator repo, so this resolves each
+ * to its repo TOP LEVEL (an agent cwd is very often a subdirectory, and
+ * snapshotting the subdirectory would make git read the wrong `.gitignore`) and
+ * de-duplicates: three agents in one repo cost ONE snapshot, not three.
+ *
+ * Sequential on purpose. Two snapshots of DIFFERENT repos are two different
+ * stores and would be safe to overlap, but they are also two `add -A` passes
+ * over real trees, and a beat that fans them out would put the whole floor's IO
+ * on one tick. There is nothing to be gained by finishing the beat sooner.
+ *
+ * Best-effort end to end: a repo that cannot be snapshotted is logged by
+ * RestorePoints itself and must never take the beat — or the floor — down.
+ */
+async function restorePointBeat(): Promise<void> {
+  if (!hive.enabled()) return;
+  const cwds = new Set<string>();
+  for (const a of Object.values(hive.registry().agents)) {
+    if (!a.archived && a.cwd) cwds.add(a.cwd);
+  }
+  const roots = new Set<string>();
+  for (const cwd of cwds) {
+    const root = await restorePoints.repoRootOf(cwd);
+    if (root) roots.add(root);
+  }
+  for (const root of roots) {
+    await restorePoints.snapshot(root);
+    await restorePoints.prune(root);
+  }
 }
 
 /** Count of UNREAD actionable messages in god's inbox. */
@@ -943,6 +987,18 @@ const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
       breakerBeatTimer = null;
     }
   },
+  // RECORD-05. Same class as the two above and the same reason it is here:
+  // an un-cleared setInterval keeps the process alive past shutdown, and this
+  // one also holds RestorePoints' own trailing debounce timers, which is why
+  // both halves are stopped rather than just the interval.
+  {
+    name: 'clearRestorePointTimer',
+    stop: () => {
+      if (restorePointTimer) clearInterval(restorePointTimer);
+      restorePointTimer = null;
+      restorePoints?.stop();
+    }
+  },
   { name: 'stopWebhookDoneObserver', stop: () => stopWebhookDoneObserver() },
   { name: 'broker.stop', stop: () => integrationBroker.stop() },
   { name: 'stopRouter', stop: () => hive.stopRouter() },
@@ -1052,6 +1108,7 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   contextLastRun = null;
   fleetTimer = null;
   breakerBeatTimer = null;
+  restorePointTimer = null;
   webhookDoneTimer = null;
   webhookOutboundRecorded = null;
 
@@ -1159,6 +1216,13 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
     (event) => { try { hive.appendLog(event); } catch { /* best-effort */ } }
   );
   persist = new PersistStore();
+  restorePoints = new RestorePoints({
+    // `<harnessHome>/hive/restore` — beside `backups/` and deliberately NOT in
+    // it (D-21): reflect.ts owns `hive/backups/` and prunes it on its own
+    // KEEP_BACKUPS schedule, which was never written to see restore points.
+    storeRoot: () => { const r = hive.root(); return r ? join(r, 'restore') : null; },
+    log: (event) => { try { hive.appendLog(event); } catch { /* best-effort */ } }
+  });
   integrationBroker = new IntegrationBroker({
     getRecord: integrations.getRecord,
     getSecret: integrations.getSecret
@@ -1167,6 +1231,16 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
 
   try { persist.open(); } catch (e) { console.error('[db] open failed:', e); }
   try { accountPool.load(); } catch (e) { console.error('[account-pool] load failed:', e); }
+
+  // RECORD-05's snapshot beat. Guarded (clear-then-set) like armAlwaysOnBeats,
+  // so a re-bootstrap cannot stack two of these against the same store — which
+  // is L-07's index.lock fatal arriving by a different route. Unref'd: a pending
+  // restore point must never be the reason the process stays alive.
+  if (restorePointTimer) clearInterval(restorePointTimer);
+  restorePointTimer = setInterval(() => {
+    void restorePointBeat().catch((e) => console.error('[restore beat]', e));
+  }, SNAPSHOT_CADENCE_MS);
+  restorePointTimer.unref?.();
 
   startHiveServices();
 
