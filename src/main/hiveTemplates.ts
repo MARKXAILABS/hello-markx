@@ -408,12 +408,22 @@ process.stdin.on('end', () => {
     // hook fire.
     let body = '';
     let settled = false;
-    const pc = net.createConnection(sock, () => pc.write(JSON.stringify({
+    // DERIVED from the original payload, never rebuilt longhand, and that is not
+    // style. A second \`sock_token:\` literal in this shim satisfies
+    // test/hook-auth-roundtrip.test.cjs's assignment pin ALL BY ITSELF, so
+    // commenting out the real assignment above would leave that pin green while
+    // every hook this shim fires got dropped by authorized() — measured: writing
+    // this object out longhand turned that file's mutation case green. Reusing
+    // the object also means a poll authenticates with the exact bytes the first
+    // payload carried, with no second derivation to drift. tool_input is dropped
+    // because it is the one field that can approach HOOK_LINE_MAX, and a poll is
+    // the same payload plus an ask id.
+    const pollPayload = Object.assign({}, payload, {
       hook_event_name: 'ApprovalPoll',
-      ask_id: ask.id,
-      agent_id: payload.agent_id,
-      sock_token: payload.sock_token
-    }) + '\\n'));
+      ask_id: ask.id
+    });
+    delete pollPayload.tool_input;
+    const pc = net.createConnection(sock, () => pc.write(JSON.stringify(pollPayload) + '\\n'));
     // The per-poll timer: one per connection, so a floor that accepts a poll and
     // then answers nothing cannot wedge this shim until the engine kills it —
     // and an engine kill writes no stdout, which is allow.
