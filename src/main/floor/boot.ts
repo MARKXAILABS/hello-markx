@@ -17,7 +17,7 @@
  * wiring and is too large and IPC-shaped to move) — stays in index.ts, which
  * imports back whatever bare names it still needs from this module.
  */
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import {
   existsSync, readdirSync, statSync, readFileSync, mkdirSync, copyFileSync,
   writeFileSync, renameSync
@@ -808,6 +808,165 @@ function syncContextTriggers(): void {
     }, remaining);
     contextTimers.set(action, entry);
   }
+}
+
+// ─── SCALE-04 — the daily digest ────────────────────────────────────────────
+//
+// One digest, delivered three ways in decreasing order of guaranteedness: a
+// file on disk, an OS toast, a Slack post. NOTHING here may route through
+// `deps.send` — that returns FALSE with no window attached, which is precisely
+// the headless machine this requirement exists for, and a delivery that
+// silently no-ops is worse than no delivery at all (it looks shipped).
+// `emitContextTrigger` above is the shape NOT to copy.
+
+/** The local hour the digest fires at when config names none. 9am: an operator
+ *  reads yesterday's floor at the start of today, which is the whole point of a
+ *  report for someone who was not watching. A named constant in the same style
+ *  as `WATCHDOG_CADENCE_MS`, and the SINGLE source of this value — `config.ts`'s
+ *  `DEFAULTS.digestHour` is deliberately left `undefined` rather than restating
+ *  `9`, so the persisted default and the scheduler's fallback cannot drift. */
+export const DIGEST_DEFAULT_HOUR = 9;
+
+/** A local calendar day as `YYYY-MM-DD`. Local, not UTC: every other date in
+ *  this feature (the fire hour, the day the digest covers) is local, and a UTC
+ *  key would roll the "already sent today" stamp over at the wrong midnight for
+ *  most of the planet. */
+function localDayKey(at: number): string {
+  const d = new Date(at);
+  const two = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+/**
+ * Milliseconds from `now` until the next LOCAL occurrence of `hour:00:00`.
+ *
+ * PURE, and `now` is injected rather than read from `Date.now()` inside, so a
+ * fixed clock drives every case in test/digest-scheduler.test.cjs — a scheduler
+ * whose only proof is "it eventually fired" is a scheduler nobody can check.
+ *
+ * Exactly AT the hour returns 0 (fire now, not in 24 hours); one millisecond
+ * past it returns the wait until TOMORROW's occurrence. The next day is reached
+ * with `setDate(+1)` on a local `Date`, never by adding 86_400_000: across a DST
+ * transition the local day is 23 or 25 hours long, and the arithmetic has to
+ * agree with the calendar the operator reads. A spring-forward day where the
+ * target hour does not exist at all (02:00 in most of the US/EU) normalises
+ * forward to the next real instant, so the result is never negative and never
+ * NaN.
+ */
+export function msUntilNextLocalHour(hour: number, now: number): number {
+  const d = new Date(now);
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 0, 0, 0);
+  if (target.getTime() < now) target.setDate(target.getDate() + 1);
+  return Math.max(0, target.getTime() - now);
+}
+
+/** D-31's identity stamp: WHICH project produced this digest. Read fresh at
+ *  fire time, never cached — `config.json` is app-global (one `configPath()`
+ *  for every project) while `harnessHome` names the one project actually
+ *  running right now (D-13), so two installs firing into the same Slack channel
+ *  at the same hour stay distinguishable without any new per-project storage. */
+function projectLabel(): string {
+  const home = readConfig().harnessHome;
+  return home ? basename(home) : 'default';
+}
+
+/** One already-diffed cost delta, as `hive.dailyCostRows` returns it. Never a
+ *  cumulative snapshot (D-22) — this feature sums what it is handed. */
+type DigestCostRow = { ts: number; agentId: string | null; taskId: string | null; usd: number; tokens: number };
+
+/** D-35 tier 1: an engine whose preset declares `costTracking: 'none'` has no
+ *  meter at all, so its spend is not merely missing from the ledger, it was
+ *  never measured. Seven of the eleven presets are this tier. */
+const digestNoMeterGap = (n: number): string =>
+  `${n} agent(s) report no cost meter; their spend is not in this total.`;
+/** D-35 tier 2, and NOT the same gap. A `costTracking: 'transcript'` engine
+ *  (codex, the one preset in this tier) has a working meter — 03-02's display
+ *  join shows its spend on the agent card and in the fleet snapshot — but
+ *  `appendCostLedger` is gated on `sample?.sessionId` and the transcript
+ *  fallback reports `sessionId: ''`, so that spend never makes the LEDGER hop
+ *  this total is drawn from. Naming the meter here instead of the ledger would
+ *  send an operator to fix a meter that already works. Same sentence as
+ *  DayBandTab.tsx's `transcriptOnlyGap`, `track` -> `total`, so the day band and
+ *  the digest cannot drift into two explanations of one gap. */
+const digestTranscriptGap = (n: number): string =>
+  `${n} agent(s) report spend only from their own transcripts — that spend never reaches the cost ledger this total is drawn from.`;
+
+/**
+ * Assemble the digest body.
+ *
+ * PURE and EXPORTED, taking every input as an argument: a private closure that
+ * reached into `hive.*`/`persist.*` itself would be unreachable from a test, and
+ * the two properties that matter most here (the identity stamp is present; the
+ * content never claims a per-day completion) are exactly the ones only a direct
+ * call can check. `fireDigest` below is the ONE caller and the ONE place the
+ * reads happen.
+ *
+ * WHY THERE IS NO "COMPLETED YESTERDAY" LINE. `HiveTask` has no `doneAt` field —
+ * a card's `status` is current state with no transition timestamp anywhere on
+ * it, so "3 cards finished yesterday" is not derivable from this ledger by any
+ * arithmetic. The board section therefore reports CURRENT counts and says so in
+ * the rendered text, rather than shipping a plausible number nothing measured.
+ *
+ * The two cost-gap sentences are independently gated on their OWN counts. A
+ * floor of only codex agents has `costGapNone === 0` and still gets tier 2; a
+ * floor of only claude/qwen agents gets neither. Neither is boilerplate.
+ */
+export function buildDigestContent(
+  costRows: DigestCostRow[],
+  tasks: HiveTask[],
+  day: { startMs: number; endMs: number },
+  projectLabel: string,
+  costGapNone: number,
+  costGapTranscript: number
+): string {
+  let usd = 0;
+  let tokens = 0;
+  const cards = new Set<string>();
+  for (const r of costRows) {
+    usd += r.usd;
+    tokens += r.tokens;
+    if (r.taskId) cards.add(r.taskId);
+  }
+
+  const counts = { todo: 0, doing: 0, blocked: 0, done: 0 };
+  const waiting: string[] = [];
+  for (const t of tasks) {
+    if (t.status in counts) counts[t.status] += 1;
+    for (const qa of t.humanQA ?? []) {
+      if (qa.answeredAt) continue;
+      const askedAt = qa.askedAt ? Date.parse(qa.askedAt) : NaN;
+      if (!(askedAt >= day.startMs && askedAt < day.endMs)) continue;
+      waiting.push(`- ${t.id} (${t.title}): ${qa.q}`);
+    }
+  }
+
+  const lines: string[] = [
+    `# Daily digest — ${projectLabel}`,
+    '',
+    `Project: ${projectLabel}`,
+    `Covers: ${localDayKey(day.startMs)} (local day)`,
+    '',
+    '## Spend',
+    `$${usd.toFixed(4)} across ${tokens} tokens, from ${costRows.length} cost row(s).`
+  ];
+  if (costGapNone >= 1) lines.push(digestNoMeterGap(costGapNone));
+  if (costGapTranscript >= 1) lines.push(digestTranscriptGap(costGapTranscript));
+  lines.push(
+    '',
+    cards.size > 0
+      ? `Cards with spend on this day: ${[...cards].join(', ')}`
+      : 'No card carried spend on this day.',
+    '',
+    '## Board (current state)',
+    `todo ${counts.todo} · doing ${counts.doing} · blocked ${counts.blocked} · done ${counts.done}`,
+    'These are the counts as they stand RIGHT NOW, not a tally of this day. A task'
+    + ' card carries no doneAt, so how many finished on any given day is not'
+    + ' something this ledger records.',
+    '',
+    '## Waiting on you'
+  );
+  lines.push(waiting.length > 0 ? waiting.join('\n') : 'Nothing new was asked of you on this day.');
+  return `${lines.join('\n')}\n`;
 }
 
 /** Startup migration (#57/#58): archive every agent entry that is
