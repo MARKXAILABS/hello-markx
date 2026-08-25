@@ -2263,7 +2263,41 @@ export class HiveManager {
       this.appendLog({ kind: 'tasks-conflict', expectedRev, rev: current.rev });
       return false;
     }
-    const next: TaskLedger = { tasks: tasks.map(stripDerivedTaskFields), rev: current.rev + 1, updatedAt: new Date().toISOString() };
+    // VIGIL-04 — the CARD-level `updatedAt`, the twin of the stamp in TASK_CLI
+    // (src/main/hiveTemplates.ts). Agents mutate through bin/task.cjs; the kanban
+    // UI, inbound webhooks, Slack and the voice read-layer all come through HERE.
+    // Stamp only one of the two and a card's age is measured from the wrong clock
+    // in exactly the case a human touched it.
+    //
+    // Here and NOT in mutateTasks: mutateTasks is one of five callers. The webhook
+    // card-creation path (src/main/index.ts:1061) and every voice task action
+    // (index.ts's `hiveWriteTasks` → src/main/realtimeActions.ts) call writeTasks
+    // directly, and a stamp one level down would miss all of them.
+    //
+    // NAME COLLISION, deliberate: `next.updatedAt` on the line below is the
+    // LEDGER's — "when tasks.json was last written". `card.updatedAt` is the
+    // CARD's — "when THIS card last changed". Two different facts, one name, two
+    // nesting levels. Stamping every card unconditionally would collapse the
+    // second into the first and no card could ever look stale, which is the whole
+    // measurement VIGIL-04 exists for — so the stamp is diff-driven against
+    // `current`, the ledger this call has already read.
+    //
+    // The fingerprint excludes the card's own `updatedAt`: include it and every
+    // card differs from its predecessor on the write after its first stamp, and
+    // the diff degenerates back into stamping everything.
+    const taskFingerprint = (card: HiveTask): string => {
+      const rest: HiveTask = { ...card };
+      delete rest.updatedAt;
+      return JSON.stringify(rest);
+    };
+    const now = new Date().toISOString();
+    const before = new Map<string, string>();
+    for (const card of current.tasks) {
+      if (card?.id) before.set(card.id, taskFingerprint(stripDerivedTaskFields(card)));
+    }
+    const stamped = tasks.map(stripDerivedTaskFields).map((card) =>
+      !card?.id || before.get(card.id) === taskFingerprint(card) ? card : { ...card, updatedAt: now });
+    const next: TaskLedger = { tasks: stamped, rev: current.rev + 1, updatedAt: now };
     this.writeJson(join(root, 'tasks.json'), next);
     this.appendLog({ kind: 'tasks', count: tasks.length, rev: next.rev });
     this.commit(`hive: tasks (${tasks.length})`);

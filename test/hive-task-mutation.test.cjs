@@ -104,6 +104,7 @@ test('atomic add is idempotent and delete removes only the named card', (t) => {
 test('patch refuses an unknown card without rewriting the ledger', (t) => {
   const hive = floor(t);
   hive.writeTasks([card('existing')]);
+  const before = hive.tasks();
 
   assert.equal(hive.patchTask('missing', { status: 'done' }), false);
 
@@ -118,9 +119,20 @@ test('patch refuses an unknown card without rewriting the ledger', (t) => {
   // DERIVED per read, not card data (`writeTasks` strips them before persisting),
   // so the card content is compared on its own and the meter is pinned beside it
   // rather than the whole widened row being compared to a bare card literal.
-  const { tokens, budgetTokens, pct, ...persisted } = after.tasks[0];
+  // VIGIL-04 widened the persisted card with `updatedAt` — the card's own clock,
+  // stamped by writeTasks when the seed above created it. It is real card data
+  // (unlike the meter), so it is pulled out and asserted on its own terms rather
+  // than dropped: a refused patch must leave it byte-identical too, which is a
+  // strictly stronger statement than the shape comparison it is lifted out of.
+  const { tokens, budgetTokens, pct, updatedAt, ...persisted } = after.tasks[0];
   assert.deepEqual(persisted, card('existing'),
     'a refused patch changed the card that WAS there');
+  assert.equal(updatedAt, before.tasks[0].updatedAt,
+    'a refused patch moved the surviving card\'s clock — its content did not change, so its '
+    + '`last changed` timestamp must not either');
+  assert.equal(typeof updatedAt, 'string',
+    'the seeding write must have stamped the card at all — a never-written clock would '
+    + 'satisfy the byte-identity check above while measuring nothing');
   assert.deepEqual({ tokens, budgetTokens, pct }, { tokens: 0, budgetTokens: null, pct: null },
     'an untouched card with no cap must meter as no spend and no cap — a null cap that reads '
     + 'as 0 would put every capless card permanently over budget');
