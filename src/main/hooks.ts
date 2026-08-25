@@ -248,6 +248,18 @@ function driveRelative(target: string): boolean {
  *  un-created-tail rule cannot drift apart in what they say. Their text is
  *  unchanged from the string-comparison version: this plan changed how a
  *  candidate is MATCHED to a branch, not what any branch decides. */
+/** The ONLY <hive>/bin entries an agent is instructed to EXECUTE. `hive-node`
+ *  is the bundled-node launcher every protocol command goes through; `task.cjs`
+ *  is the kanban CLI the prompt mandates for every card mutation; `kg.cjs` is the
+ *  knowledge-graph reader it mandates for company context. Reading or running
+ *  these is the documented floor protocol. WRITING any of them is still denied —
+ *  the carve-out that uses this set also requires the command to carry no write
+ *  marker at all. Lower-cased basenames; `.cmd`/`.sh` are the win32/posix
+ *  spellings of the same launcher. */
+const PROTOCOL_BIN_EXECUTABLES = new Set([
+  'hive-node', 'hive-node.cmd', 'hive-node.sh', 'task.cjs', 'kg.cjs'
+]);
+
 const DENY_BIN = 'Denied: <hive>/bin holds the ONE hook shim every agent on this floor '
   + 'executes. Writing it runs your code inside another agent\'s hook, with that '
   + 'agent\'s environment and token.';
@@ -883,8 +895,38 @@ export class HookServer {
       // 721 ms of blocking main-thread work. Measured on this repo's README:
       // 2612 words in, 102 out.
       const expanded = this.expandHiveVars(agentId, ti.command);
+      // THE PROTOCOL'S OWN COMMANDS ARE NOT ATTACKS. The injected prompt
+      // (hive.ts) instructs every agent, verbatim, to run
+      //   "<hive>/bin/hive-node.cmd" "<hive>/bin/task.cjs" {add|patch|claim|done}
+      // and the same shape for kg.cjs. Those words are paths INTO <hive>/bin, so
+      // before this carve-out the gate denied the floor's own kanban CLI on every
+      // call — measured live: the god reported "adding kanban card assigned to
+      // Jim", the gate answered DENY_BIN, and tasks.json stayed at zero tasks.
+      // The floor's protocol was blocked by the floor's own gate, and the only
+      // visible symptom was a kanban that silently never filled.
+      //
+      // The carve-out is deliberately TWO conditions, not one. (1) the basename
+      // must be one of the three executables the protocol actually names —
+      // a filename allow-list, so `<hive>/bin/anything-else` is untouched; and
+      // (2) the RAW command must carry no write marker. Condition 2 is tested on
+      // the unsplit string on purpose: the split regex consumes `>` and `>>`, so
+      // a redirect is invisible by the time words exist — which is exactly how
+      // `cat >> "$HIVE_ROOT/bin/task.cjs"` would otherwise walk through a
+      // filename allow-list.
+      //
+      // CEILING, stated rather than implied: an obfuscated write that names one
+      // of the three files and uses no write token — `node -e "…writeFileSync…"`
+      // — still passes. That is the same ceiling AGENT_DENY_RULES already
+      // documents for its prefix rules ("stops the confident accident, not a
+      // hostile model"), and it is a strictly smaller hole than the certain,
+      // active failure it replaces: an unusable kanban for every agent on the
+      // floor.
+      const writeMarker = /(?:^|[\s;&|])(?:rm|del|erase|mv|move|cp|copy|tee|touch|truncate|chmod|attrib|ln|install|Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Remove-Item|Rename-Item)(?:\s|$)|\bsed\s+-i|>>?/i
+        .test(expanded);
       for (const word of expanded.split(/[\s;&|<>()"']+/)) {
-        if (word && pathShaped(word)) targets.push(word);
+        if (!word || !pathShaped(word)) continue;
+        if (!writeMarker && PROTOCOL_BIN_EXECUTABLES.has(basename(word).toLowerCase())) continue;
+        targets.push(word);
       }
     }
     if (targets.length === 0) return null;

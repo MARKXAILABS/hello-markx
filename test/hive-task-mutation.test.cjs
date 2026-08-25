@@ -283,3 +283,80 @@ test('renderer task actions never send a whole stale ledger back to main', () =>
   assert.match(boot.slice(hook, boot.indexOf('\n  },', hook)), /hive\.addTask\(/,
     "main's Slack-origin promotion must go through the atomic addTask, never a whole-ledger rewrite");
 });
+
+/* ── the PreToolUse gate must not deny the floor's own protocol (operator-found) ──
+ *
+ * Measured live, 2026-08-25: the god ran the exact command the injected prompt tells
+ * every agent to run —
+ *
+ *   "<hive>\bin\hive-node.cmd" "<hive>\bin\task.cjs" add "…"
+ *
+ * — reported "adding kanban card assigned to Jim", and the gate answered DENY_BIN.
+ * tasks.json stayed at 0 tasks. Both words are paths INTO <hive>/bin, and the Bash
+ * branch of protectedPathDenial pushes EVERY path-shaped word as a candidate write
+ * target, so the floor's own kanban CLI was denied on every call. The only visible
+ * symptom was a kanban that silently never filled. */
+test('the gate carves out the protocol executables, and does so on TWO conditions', () => {
+  const src = stripComments(
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hooks.ts'), 'utf8'));
+
+  // 1. The allow-list exists and names exactly the executables the prompt mandates.
+  const setStart = src.indexOf('PROTOCOL_BIN_EXECUTABLES');
+  assert.ok(setStart > 0, 'the protocol-executable allow-list must exist');
+  const setBlock = src.slice(setStart, setStart + 260);
+  for (const exe of ['hive-node', 'task.cjs', 'kg.cjs']) {
+    assert.ok(setBlock.includes(exe),
+      `${exe} is named in the injected prompt as a command every agent runs — denying it `
+      + 'breaks the protocol the same prompt mandates');
+  }
+
+  // 2. The carve-out requires BOTH a basename match AND the absence of a write marker.
+  //    Either alone is unsafe: filename-only lets `cat >> <hive>/bin/task.cjs` through,
+  //    and write-marker-only re-opens all of <hive>/bin.
+  const carve = src.slice(src.indexOf('const writeMarker'), src.indexOf('const writeMarker') + 900);
+  assert.ok(/!writeMarker\s*&&\s*PROTOCOL_BIN_EXECUTABLES\.has\(/.test(carve),
+    'the carve-out must require BOTH conditions — a filename allow-list alone would admit '
+    + 'a redirect that overwrites the shim the whole floor executes');
+
+  // 3. The write marker must be tested on the RAW command, BEFORE the split — the split
+  //    regex consumes `>` and `>>`, so after it a redirect is invisible.
+  const splitAt = carve.indexOf('.split(');
+  const markerAt = carve.indexOf('.test(expanded)');
+  assert.ok(markerAt > 0 && markerAt < splitAt,
+    'writeMarker must be evaluated on the unsplit command: the split regex eats `>` and '
+    + '`>>`, so testing after it cannot see a redirect at all');
+});
+
+test('the write marker still catches the redirect and mutation shapes that target the shim', () => {
+  const src = stripComments(
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hooks.ts'), 'utf8'));
+  const line = src.split('\n').find((l) => l.includes('const writeMarker'));
+  assert.ok(line, 'sanity: the write marker must exist');
+  const body = src.slice(src.indexOf('const writeMarker'), src.indexOf('.test(expanded)'));
+  const re = new RegExp(body.slice(body.indexOf('/') + 1, body.lastIndexOf('/i')), 'i');
+
+  // These MUST be seen as writes — each one mutates a file the whole floor executes.
+  for (const attack of [
+    'cat >> "C:/h/bin/task.cjs"',
+    'echo x > C:/h/bin/hive-node.cmd',
+    'cp evil.cjs C:/h/bin/task.cjs',
+    'mv evil.cjs C:/h/bin/kg.cjs',
+    'rm C:/h/bin/task.cjs',
+    'Copy-Item evil.cjs C:/h/bin/task.cjs',
+    'Set-Content C:/h/bin/task.cjs "x"',
+    'tee C:/h/bin/task.cjs',
+    'sed -i s/a/b/ C:/h/bin/task.cjs'
+  ]) {
+    assert.ok(re.test(attack), `must be treated as a WRITE and stay denied: ${attack}`);
+  }
+
+  // And these MUST NOT — they are the protocol's own read/execute calls.
+  for (const ok of [
+    '"C:/h/bin/hive-node.cmd" "C:/h/bin/task.cjs" add "Ship it"',
+    '"C:/h/bin/hive-node.cmd" "C:/h/bin/task.cjs" claim t-1',
+    '"C:/h/bin/hive-node.cmd" "C:/h/bin/kg.cjs" search "policy"'
+  ]) {
+    assert.equal(re.test(ok), false,
+      `the protocol's own command must not read as a write: ${ok}`);
+  }
+});
