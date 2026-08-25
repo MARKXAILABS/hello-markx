@@ -434,7 +434,11 @@ ones — each has an owner and a reason it is not closed in Phase 3.
   #4, #15, #35; round 2 #1, #12, #15, #16, #17, #21, #23, #30, #40) — every attempted fix (a
   fallback-baseline seed, a monotonic floor, `resolveCodexHome` wiring) spawned two more defects of
   the same class, and the money path it touches had zero test coverage the whole time. **Decision:
-  revert the widening rather than patch it a third time.** `applyCostRow` in `hive.ts` is unchanged.
+  revert the widening rather than patch it a third time.** The ledger APPEND GATE
+  (`if (sample?.sessionId) hive.appendCostLedger(sample)`) stays byte-unchanged, and `applyCostRow`'s
+  DIFF ARITHMETIC is unchanged — but the function itself is NOT byte-unchanged: 03-03 relocates it out
+  of `private` and widens its return channel, so the pin is anchored to `cumulative.get(key)` (the
+  arithmetic) rather than to the signature (round-7 finding #9).
   The breaker's inputs and the fleet/agent-directory DISPLAY join (`writeFleetSnapshot`,
   `hive:agentDirectory`) DO show transcript-tier cost as of 03-02 (`telemetry.getAgentUsage(id)`,
   with a `costLifetime` discriminator) — D-36's "invisible to every UI" requirement is satisfied by
