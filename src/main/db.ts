@@ -103,6 +103,59 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
         project  UNINDEXED
       );
     `);
+  },
+
+  // → user_version 3 (RECORD-01 + RECORD-02): the durable record of what the
+  // floor actually did.
+  //
+  // ONE migration for TWO tables, deliberately. The rail is append-only and
+  // indexed by position, so two plans that each append "their" table produce two
+  // MIGRATIONS[2]s: a merge conflict at best, and on any machine that already ran
+  // one of them a user_version of 3 with only half the schema — which never
+  // heals, because index 2 will never run again there. RECORD-01 and RECORD-02
+  // land together or not at all.
+  //
+  // idx_tc_agent_ts is the same index shape command_history already carries
+  // above: "who wrote this file" and "what did the floor run overnight" are that
+  // one index read two ways. idx_tc_ts and idx_ev_ts exist so a DAY is a range
+  // scan rather than a full table scan — tool_calls takes on the order of 288k
+  // rows/day on a busy floor, and SCALE-03's replay reads it by date.
+  //
+  // `target` is AGENT-AUTHORED UNTRUSTED TEXT (ASVS V7): it is whatever string an
+  // LLM put in tool_input.command / file_path. It is written with bound
+  // parameters only, never interpolated into SQL, and it must be ESCAPED AT
+  // RENDER — never eval'd, never fed to a shell, never trusted as a path. It is
+  // nullable on purpose: a Bash call with no path-shaped argument has no target,
+  // and "null by design" must stay distinguishable from "nothing was written".
+  // `events.json` holds the whole event verbatim so nothing is lost to a schema
+  // guess about a shape hive.ts is still free to change.
+  //
+  // Every statement takes IF NOT EXISTS, matching the discipline above. No
+  // `throw` in here, for the reason migration 2 already gives: the quarantine
+  // path in open() only fires for corruption, and a throw raised by a migration
+  // escapes it and leaves the store permanently unopenable.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tool_calls (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT    NOT NULL,
+        ts       INTEGER NOT NULL,        -- epoch ms, like command_history.ts
+        tool     TEXT    NOT NULL,
+        target   TEXT,                    -- file_path / path / notebook_path / command, capped
+        decision TEXT,                    -- 'allow' | 'deny' | 'ask' — the gate's verdict
+        reason   TEXT                     -- the operator-legible deny reason, when denied
+      );
+      CREATE INDEX IF NOT EXISTS idx_tc_agent_ts ON tool_calls(agent_id, ts DESC);
+      CREATE INDEX IF NOT EXISTS idx_tc_ts       ON tool_calls(ts);
+      CREATE TABLE IF NOT EXISTS events (
+        id   INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts   INTEGER NOT NULL,
+        kind TEXT    NOT NULL,            -- hive.ts's own \`kind\` field
+        json TEXT    NOT NULL             -- the whole event, verbatim
+      );
+      CREATE INDEX IF NOT EXISTS idx_ev_ts      ON events(ts);
+      CREATE INDEX IF NOT EXISTS idx_ev_kind_ts ON events(kind, ts);
+    `);
   }
 ];
 
