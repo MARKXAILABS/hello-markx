@@ -1146,8 +1146,8 @@ const api = {
   controlSnapshot: (agentId: string): Promise<AgentControlSnapshot | null> =>
     ipcRenderer.invoke('control:snapshot', agentId),
   /** Subscribe to gate/deny events (a tool was blocked); returns unsubscribe fn. */
-  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string }) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string }) => cb(payload);
+  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string; command?: string }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string; command?: string }) => cb(payload);
     ipcRenderer.on('control:approvalRequest', listener);
     return () => ipcRenderer.removeListener('control:approvalRequest', listener);
   },

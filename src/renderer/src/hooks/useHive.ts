@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useStore, type Agent, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
+import { useStore, type Agent, type BlockReason, type QueuedMessage, type StationKind, type ToolKind } from '@/store/store';
 import {
   buildSpawnCommand,
   ASSISTANT_MODEL,
@@ -342,6 +342,40 @@ function passesContextPressure(a: Agent, rule: ContextRule): boolean {
 }
 
 /**
+ * Assemble the banner text for a GATE-03 refusal (`control:approvalRequest`).
+ *
+ * WHOSE SENTENCE THE "WHY" IS. Main authors the deny reason beside the gate that
+ * decided it (`hooks.ts:251-292`) and passes it here. The renderer renders it and does
+ * not write a second copy: a renderer-authored explanation drifts from main's the first
+ * time a rule changes, and then confidently describes a rule that no longer exists.
+ * `hooks.ts:849` already states the house rule one layer down — a ceiling list that
+ * omits an item reads as a guarantee that does not hold. So when main sends no reason
+ * the fallback is BARE. It says that the floor refused the call and stops talking,
+ * rather than naming a mechanism ("ungate it from the Command Center") the operator may
+ * not have, for a refusal main never explained.
+ *
+ * Exported for the same reason `stopArmDecision` above is: this runs inside a
+ * `useEffect`, and the renderer test harness is a server render with no effect phase at
+ * all (`test/renderer-components.test.cjs:23-38`), so exporting it is the only way the
+ * assembly that SHIPS gets asserted instead of a copy of it.
+ */
+export function blockReasonFromApproval(
+  e: { tool?: string; reason?: string; command?: string },
+  agentName: string | undefined
+): BlockReason {
+  const tool = e.tool ?? 'tool';
+  return {
+    summary: agentName ? `${agentName}'s ${tool} call was refused` : `A ${tool} call was refused`,
+    detail: e.reason ?? 'Refused by the floor.',
+    command: e.command,
+    // Nothing to answer: the call was already denied and the agent kept running, so
+    // this is a notice rather than a prompt. BlockedBanner renders `dismiss` for
+    // exactly this shape.
+    actions: []
+  };
+}
+
+/**
  * The renderer-side glue for the hive:
  *   1. spawns the god agent into Michael's room when none is running,
  *   2. drives avatar state from real Claude Code hook events, and
@@ -611,16 +645,13 @@ export function useHive(config: HarnessConfig | null): void {
   //      instant and the agent keeps running, and the PreToolUse hook event that
   //      follows this on the same boundary would overwrite it anyway.
   useEffect(() => {
-    return window.cth.onApprovalRequest(({ agentId, tool, reason }) => {
+    return window.cth.onApprovalRequest(({ agentId, tool, reason, command }) => {
       const { updateAgent, agents, pushFeed } = useStore.getState();
-      if (!agents.some((a) => a.id === agentId)) return;
-      updateAgent(agentId, {
-        blockReason: {
-          summary: `${tool ?? 'A tool'} was blocked`,
-          detail: reason ?? 'Denied by operator policy — ungate it from the Command Center to let this agent continue.',
-          actions: []
-        }
-      });
+      const self = agents.find((a) => a.id === agentId);
+      if (!self) return;
+      updateAgent(agentId, { blockReason: blockReasonFromApproval({ tool, reason, command }, self.name) });
+      // D-2: the feed line stays. The requirement is that the operator does not HAVE to
+      // read a terminal to see a refusal, not that the audit trail is deleted.
       pushFeed(agentId, `\x1b[31m⛔ ${tool ?? 'tool'} blocked\x1b[0m ${reason ?? ''}`);
     });
   }, []);
