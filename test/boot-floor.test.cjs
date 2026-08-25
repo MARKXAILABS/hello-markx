@@ -249,7 +249,14 @@ test('every subsystem bootFloor started appears in the shutdown list (#34 covera
     'control',      // ControlRegistry — in-memory pause/gate state only
     'breaker',      // CircuitBreaker — pure policy, ticked externally by the beat timer
     'accountPool',  // AccountPoolManager — ticked externally too; no timer/socket of its own
-    'roster'        // RosterStore — reads/writes roster.json on demand, holds nothing open
+    'roster',       // RosterStore — reads/writes roster.json on demand, holds nothing open
+    // AbsenceWatchdog (VIGIL-01) — a latch and four injected readers, ticked
+    // externally by `watchdogTimer`, which IS in SHUTDOWN_STEPS and is pinned
+    // BY NAME in the case below (this loop walks Object.keys(floor) and cannot
+    // see a module-level `let`). The object itself owns no timer, no socket and
+    // no file handle, so a `watchdog.stop()` would be a method with nothing to
+    // stop — the same reason `breaker` and `accountPool` are listed above.
+    'watchdog'
   ]);
 
   const offenders = [];
@@ -300,6 +307,96 @@ test('RECORD-05: restorePointTimer is declared in the boot module and cleared by
   assert.match(shutdownSource, /restorePoints\?\.stop\(\)/,
     'the interval is cleared but RestorePoints\' own trailing debounce timers are not — a snapshot '
     + 'scheduled seconds before shutdown still fires against a store the floor has finished with');
+});
+
+test('VIGIL-01: watchdogTimer is declared in the boot module and cleared by SHUTDOWN_STEPS', async (t) => {
+  const env = floorEnv(t);
+  const { deps } = fakeDeps(env);
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  const { SHUTDOWN_STEPS } = loadTs('src/main/floor/boot.ts');
+  const shutdownSource = SHUTDOWN_STEPS.map((s) => s.stop.toString()).join('\n');
+  const bootSource = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'main', 'floor', 'boot.ts'), 'utf8'
+  );
+
+  // Both directions, for the same reason the restore-point pin above needs
+  // both: the absence beat is a module-level `let`, NOT a Floor field, so the
+  // offender loop walks Object.keys(floor) and cannot see it. The WATCHDOG is a
+  // Floor field and is exempted there as resource-free precisely because this
+  // is where its timer's teardown is proven.
+  assert.match(bootSource, /^let watchdogTimer: ReturnType<typeof setInterval> \| null = null;$/m,
+    'watchdogTimer is not declared in boot.ts\'s module `let` block — VIGIL-01\'s absence beat has '
+    + 'nowhere to live that shutdown can reach');
+  assert.match(shutdownSource, /clearInterval\(watchdogTimer\)/,
+    'watchdogTimer is armed by bootFloor but never cleared. boot.ts documents shutdown as "the exact '
+    + 'inverse of construction. #34 — ONE list": a timer outside that list is a leak, and an '
+    + 'un-unref\'d one keeps node --test alive forever after shutdown');
+
+  // ONE publish site, ONE spelling — plan 04-18's chip listens to this literal
+  // and has nothing to guess at. Anchored on the SEND, because this file also
+  // documents the channel name in a comment and a bare literal count would be 2.
+  const sendSites = (bootSource.match(/deps\.send\('floor:quiet'/g) ?? []).length;
+  assert.equal(sendSites, 1,
+    `boot.ts has ${sendSites} deps.send('floor:quiet', …) sites, expected exactly 1 — two publishers `
+    + 'against one latch is two states that can disagree');
+  const mentions = (bootSource.match(/'floor:quiet'/g) ?? []).length;
+  assert.ok(mentions >= 2,
+    'the channel name appears only once — the positive lower bound: the send AND the comment that '
+    + 'tells plan 04-18 the name is fixed here. Deleting either must fail this clause');
+});
+
+test('VIGIL-01: floor.watchdog is a live Floor member, and floor:quiet fires on BOTH edges', async (t) => {
+  const env = floorEnv(t);
+  const { deps, sent } = fakeDeps(env);
+  const floor = await bootFloor(deps);
+  t.after(() => floor.shutdown());
+
+  // The accessor plan 04-17 reads through — asserted by EFFECT on a really
+  // booted floor, not by grepping the interface.
+  assert.equal(typeof floor.watchdog.current, 'function',
+    'floor.watchdog is absent or is not the watchdog — plan 04-17 composes the phone\'s floorQuiet '
+    + 'field from floor.watchdog.current() in index.ts, and it owns no line of boot.ts to add it');
+  assert.equal(floor.watchdog.current(), null,
+    'a floor that has just booted is MOVING — a watchdog reporting quiet at boot is reporting its own seed');
+  assert.equal(sent.filter((s) => s.channel === 'floor:quiet').length, 0,
+    'nothing may be published on floor:quiet while the floor is moving');
+
+  // Drive the latch to SET by moving the clock past the threshold. All four
+  // signals are read live through the real wiring: no PTY is alive, no
+  // telemetry sample has landed, the ledger rev has not moved, and the hive log
+  // was last touched at boot.
+  const base = Date.now();
+  t.mock.method(Date, 'now', () => base + 20 * 60_000);
+  floor.watchdog.tick();
+  t.mock.restoreAll();
+
+  const set = floor.watchdog.current();
+  assert.notEqual(set, null, 'twenty minutes of silence on all four signals did not set the latch');
+  assert.equal(typeof set.sinceMs, 'number');
+  // The positive lower bound. A getter wired to a store that is never filled —
+  // the "no-op or a simple store" shape this criterion exists to exclude —
+  // passes the `null` assertion above and fails here.
+  assert.ok(set.sinceMs > 0, `sinceMs was ${set.sinceMs}; a quiet snapshot must carry a real duration`);
+  assert.ok(Array.isArray(set.inFlight), 'the snapshot must carry the in-flight set, even when empty');
+  assert.equal(typeof set.godDead, 'boolean');
+
+  const afterSet = sent.filter((s) => s.channel === 'floor:quiet');
+  assert.equal(afterSet.length, 1, 'the setting edge must publish exactly once on floor:quiet');
+  assert.equal(typeof afterSet[0].payload.sinceMs, 'number',
+    'the setting edge carried a bare flag, not the snapshot — plan 04-18\'s chip needs the duration');
+  assert.ok(Array.isArray(afterSet[0].payload.inFlight));
+
+  // …and the clearing edge, because a publisher that only ever SETS leaves the
+  // chip stuck on with nothing left to notice it.
+  floor.watchdog.tick();
+  assert.equal(floor.watchdog.current(), null,
+    'the real clock is back, the floor is inside the threshold again, and the latch did not clear');
+  const afterClear = sent.filter((s) => s.channel === 'floor:quiet');
+  assert.equal(afterClear.length, 2, 'the clearing edge must publish exactly once');
+  assert.equal(afterClear[1].payload, null,
+    'the clearing edge published something other than null — the chip would never go out');
 });
 
 test('no outbound tunnel: the boot sequence never starts Slack/webhook servers', async (t) => {
