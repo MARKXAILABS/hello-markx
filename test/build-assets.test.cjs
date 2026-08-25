@@ -402,6 +402,51 @@ test('rule G-3: the phone and the desktop agree on the three shared bands, and d
   }
 });
 
+/**
+ * One exported TypeScript function, EXECUTED out of the file that ships it.
+ *
+ * `App.tsx` cannot be loaded by any harness in this repo — `:292` reads
+ * `import.meta.env.DEV`, which throws `Cannot use 'import.meta' outside a module`
+ * under the CommonJS transpile every test loader here uses. So the function is
+ * lifted and transpiled on its own, which is `phoneFn`'s trick applied to TS. The
+ * `typescript` package is already what `test/load-ts.cjs` runs on; nothing new is
+ * installed.
+ */
+function tsFn(rel, name) {
+  const ts = require('typescript');
+  const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  const m = src.match(new RegExp(`export function ${name}\\([^)]*\\)[^{]*\\{[\\s\\S]*?\\n\\}`));
+  assert.ok(m, `${name} was not found as an exported function in ${rel}`);
+  const js = ts.transpileModule(m[0].replace(/^export /, ''), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 }
+  }).outputText;
+  return new Function(`${js}; return ${name};`)();
+}
+
+test('rule Q-1b: the phone and the desktop render the SAME quiet duration, executed on both sides', () => {
+  // One operator reads both surfaces, often within the same minute. A phone that
+  // says `32m` beside a titlebar that says `1920000ms` — or `31m` — is a floor whose
+  // two reports of one fact disagree, and the operator has to work out which is lying
+  // before they can act on either.
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+  const phone = new Function(`${phoneFn(html, 'humanDuration')}; return humanDuration;`)();
+  const desktop = tsFn('src/renderer/src/App.tsx', 'humanQuietFor');
+
+  for (const ms of [0, 29_000, 31_000, 60_000, 1_920_000, 3_600_000, 3_840_000, 90_000_000]) {
+    assert.equal(desktop(ms), phone(ms),
+      `the quiet duration differs at ${ms}ms: desktop ${JSON.stringify(desktop(ms))} vs phone ${JSON.stringify(phone(ms))}`);
+  }
+
+  // Positive lower bound over both, so an extraction that returned '' for everything
+  // could not satisfy the equality above.
+  assert.equal(desktop(1_920_000), '32m', 'the 32-minute case is the one 04-UI-SPEC works its copy through');
+  assert.equal(desktop(3_840_000), '1h 4m', 'past an hour the label must carry both fields');
+
+  // Minutes are the resolution, on both sides: a seconds field on a five-minute
+  // absence threshold is noise at 3am.
+  assert.doesNotMatch(desktop(1_920_000), /s\b/, 'the desktop label grew a seconds field');
+});
+
 test("rule Q-1b's three copy cases, executed against the shipped implementation", () => {
   const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
   const body = html.match(/floorQuiet: function \(q\) \{[\s\S]*?\n {4}\}/);

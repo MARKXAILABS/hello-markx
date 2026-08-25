@@ -1166,6 +1166,21 @@ const api = {
    *  means it may already have run — opposite outcomes at 3am. */
   answerApproval: (askId: string, approved: boolean): Promise<{ settled: boolean; expired?: boolean } | null> =>
     ipcRenderer.invoke('control:answerApproval', askId, approved),
+  /** VIGIL-01 — main's absence latch, pushed. Plan 04-11 declared the channel and
+   *  `boot.ts` is its one publisher: a `QuietSnapshot` on the setting edge, `null`
+   *  on the clearing edge. Never polled.
+   *
+   *  THE LITERAL LIVES HERE AND NOWHERE ELSE ON THE RENDERER SIDE.
+   *  `contextIsolation: true` plus the `cth` bridge means the renderer cannot reach
+   *  `ipcRenderer` at all — `useHive.ts` holds zero channel literals and subscribes
+   *  through `window.cth.*` alone. Shape copied verbatim from `onApprovalRequest`
+   *  above, unsubscribe included: an `on` without its `removeListener` leaks a
+   *  listener per remount. */
+  onFloorQuiet: (cb: (s: { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean } | null) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean } | null) => cb(payload);
+    ipcRenderer.on('floor:quiet', listener);
+    return () => ipcRenderer.removeListener('floor:quiet', listener);
+  },
 
   // ─── Task kanban (hive/tasks.json) ───────────────────────────────────────
   /** Atomically append one card against the latest main-process ledger. */

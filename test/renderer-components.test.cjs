@@ -1208,6 +1208,91 @@ test("T-04-BLK-10: the breaker's ⚠ is ANNOUNCED on the one row where the badge
     'the announced ⚠ took an inline fontSize. If it is sub-14px, FLOOR-12 clause 3 fails on it and no allowlist entry can rescue it; --cth-text-body-sm is 14px (tokens.css:71), not 12');
 });
 
+// ─── VIGIL-01 — the QUIET chip, and the latch it mirrors ──────────────────────────────
+//
+// THE CHIP ITSELF IS NOT RENDERED HERE, and the reason is measured rather than assumed:
+// `App.tsx:292` reads `import.meta.env.DEV`, and this harness transpiles to CommonJS —
+// `loadTs('src/renderer/src/App.tsx')` throws `Cannot use 'import.meta' outside a module`
+// before any component is reached. That is a property of the file, not of the chip, and
+// no amount of seeding gets past it. So the chip's DRIVER is asserted behaviourally (the
+// store mirror, both directions, which is exactly what its `{floorQuiet && …}` guard
+// reads) and its SHAPE is asserted on source. Its click is task 4's, for the same reason
+// every other click in this file is.
+
+const appSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/App.tsx'), 'utf8');
+
+test('VIGIL-01: the store field is a MIRROR of main\'s latch — both edges, including the clearing one', (t) => {
+  const before = useStore.getState().floorQuiet;
+  t.after(() => useStore.setState({ floorQuiet: before }));
+
+  assert.equal(useStore.getState().floorQuiet, null,
+    'the quiet latch does not start null. A stale "the floor stopped" chip on a floor that is moving is the one failure this mirror must not be capable of');
+
+  const snap = { sinceMs: 1_920_000, inFlight: [{ id: 't1', title: 'ship the thing', assignee: 'ada' }], godDead: false };
+  useStore.getState().setFloorQuiet(snap);
+  const set = useStore.getState().floorQuiet;
+  assert.ok(set, 'the setting edge did not reach the store, so the chip has no route to the snapshot at all (T-04-ABS-10)');
+  assert.equal(set.sinceMs, 1_920_000, "main's duration was dropped");
+  assert.deepEqual(set.inFlight, snap.inFlight,
+    'the in-flight set was dropped — "with what was in flight when it stopped" is the requirement, and re-reading the board later reports a different, possibly empty, set');
+  assert.ok(typeof set.receivedAt === 'number' && set.receivedAt > 0,
+    "the renderer did not stamp its own anchor. `sinceMs` is a duration at the moment of ONE push; without a local zero the label freezes at the value main happened to send");
+
+  // The clearing edge. Plan 04-11 publishes `null` rather than leaving the last
+  // snapshot in place precisely so this is expressible, and a mirror that can only
+  // be set is a chip that never goes away.
+  useStore.getState().setFloorQuiet(null);
+  assert.equal(useStore.getState().floorQuiet, null,
+    'the clearing edge left the last snapshot in place — the chip would still be claiming the floor is stopped after it started moving again');
+});
+
+test('VIGIL-01 rules Q-2/Q-3: the chip is a button, it opens the task board, and it renders only while the latch is set', () => {
+  const src = appSource();
+
+  // Q-3 — a STATE, not a repeat notification: guarded on the mirror, so it exists
+  // while the latch is set and disappears when it clears. Both directions come from
+  // this one guard plus the store test above.
+  assert.match(src, /\{floorQuiet && \(/,
+    'the QUIET chip is not guarded on the store mirror — a chip that always renders and a chip that never renders both pass every other assertion here');
+
+  // Q-2 — a <button>, and the action it fires was READ FROM SOURCE, not assumed:
+  // `OfficeFloor.tsx:1106` is the shipped task-board click and this copies it,
+  // including the ORDER (select() sets ccTabRequest: null, so requesting first and
+  // selecting second would clear the request it just made).
+  assert.match(src, /st\.requestCommandCenterTab\('tasks'\);/,
+    "the chip does not open the task board through the store action the office board already uses — VIGIL-01 composes with VIGIL-04 rather than growing a surface of its own");
+  assert.ok(
+    src.indexOf('if (god) st.select(god.id);') < src.indexOf("st.requestCommandCenterTab('tasks');"),
+    'the chip requests the Command Center tab BEFORE selecting the god. `select()` sets ccTabRequest to null, so that order clears the request it just made and the click does nothing');
+
+  // A1 — the visible `QUIET 32m` names neither what is quiet nor what clicking does.
+  assert.match(src, /aria-label=\{`Floor quiet for \$\{quietFor\} — \$\{floorQuiet\.inFlight\.length\}/,
+    "the chip's accessible name does not carry the duration and the in-flight count");
+});
+
+test('VIGIL-01: the QUIET chip copies the PUBLIC chip field for field, changing only the background', () => {
+  // Geometry, not taste: two chips in one 36px strip that disagree about padding or
+  // flexShrink degrade differently, and the containment measurement is only valid for
+  // the geometry it was taken against.
+  const src = appSource();
+  const chip = (bg) => {
+    const at = src.indexOf(`background: 'var(${bg})', color: 'var(--cth-on-accent)'`);
+    assert.ok(at >= 0, `no titlebar chip with a ${bg} fill`);
+    return src.slice(at, src.indexOf('}}', at));
+  };
+  const publicChip = chip('--cth-lemon');
+  const quietChip = chip('--cth-coral');
+
+  assert.equal(
+    quietChip.replace('--cth-coral', '--cth-lemon'), publicChip,
+    'the QUIET chip has drifted from the PUBLIC chip on something other than its background. The two share one 36px strip and one measurement; a padding or flexShrink that differs makes the containment probe describe a layout that is not on screen'
+  );
+  // --cth-on-accent on --cth-coral is 5.34:1 light / 7.12:1 dark, both PASS — an
+  // already-measured pairing, which is why this chip needed no new colour work.
+  assert.match(quietChip, /color: 'var\(--cth-on-accent\)'/,
+    'the chip lost the token that does NOT invert with the theme, so its label goes unreadable in one of the two modes');
+});
+
 test('GATE-03 rule D-2: the terminal feed line survives — it is the audit trail, not a duplicate', () => {
   // The requirement is that the operator does not HAVE to read a terminal, not that the
   // trail is deleted. Counted rather than merely matched: a second ⛔ push would mean the

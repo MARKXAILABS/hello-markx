@@ -777,6 +777,23 @@ export function useHive(config: HarnessConfig | null): void {
     });
   }, []);
 
+  // 2b3) VIGIL-01 — main's absence latch, mirrored into the store for the
+  //      titlebar chip. `AbsenceWatchdog` (plan 04-11) publishes ONCE on the
+  //      setting edge and once with `null` on the clearing edge, so there is no
+  //      poll and no second state machine here: the store field is a mirror, and
+  //      the chip renders iff it is non-null. `setFloorQuiet` stamps the
+  //      renderer's own `receivedAt`, which is what lets a duration published
+  //      once keep counting without either clock trusting the other.
+  //
+  //      A TYPED call through the bridge, deliberately NOT the
+  //      `(window.cth as unknown as {...})` shape effect #13 uses: that cast
+  //      exists so a listener can land before its preload method does, and it
+  //      makes `npm run typecheck` prove nothing about whether the method is
+  //      really there. `onFloorQuiet` ships in the same commit as this line.
+  useEffect(() => {
+    return window.cth.onFloorQuiet((s) => { useStore.getState().setFloorQuiet(s); });
+  }, []);
+
   // 2c) Context gauge backfill: poll each live agent's current context size
   //     (tokens) from its session transcript — only until the status line
   //     (effect 2d) has delivered exact numbers for that agent.

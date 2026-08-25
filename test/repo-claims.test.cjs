@@ -1937,3 +1937,48 @@ test('GATE-05 rule G-3: the desktop countdown is re-derived from an anchor, neve
   assert.equal(strippedHits(rel, 'expiresAt'), 0,
     'a deadline TIMESTAMP reached the banner. The renderer clock is not main\'s, and the whole reason main sends a duration is that the two never have to agree');
 });
+
+test("VIGIL-01: the QUIET chip's route is real at ALL THREE hops — T-04-ABS-10 is a chip with nowhere to get its snapshot", () => {
+  // A chip that renders geometry and never fills is the whole of T-04-ABS-10, and
+  // `contextIsolation: true` means the three hops are not optional plumbing: without
+  // the middle one the seam does not cross at all. Each is asserted with the number a
+  // CORRECT implementation actually produces, which is not the same as "at least one".
+
+  // 1. PUBLISHER, main. Plan 04-11 owns this and this plan only listens; one publish
+  //    site, one spelling. Scoped to the `deps.send(` call rather than the bare
+  //    literal, because plan 04-11 also requires a comment quoting the channel.
+  assert.equal(strippedHits('src/main/floor/boot.ts', "deps.send('floor:quiet'"), 1,
+    "the watchdog's publish site is missing or duplicated — report against plan 04-11 rather than adding one here; this plan owns no src/main file beyond index.ts's IPC handler");
+
+  // 2. BRIDGE, preload — where the literal LIVES, and exactly twice: the
+  //    `ipcRenderer.on` and its `removeListener`, which is `onApprovalRequest`'s
+  //    shape verbatim. A 1 means the unsubscribe leaks a listener per remount.
+  assert.equal(strippedHits('src/preload/index.ts', "'floor:quiet'"), 2,
+    'the preload hop is missing, or its subscription no longer pairs `on` with `removeListener`');
+
+  // 3. CONSUMER, renderer — the method by name and the literal NOT at all. Both
+  //    directions, so a listener wired to nothing and a literal planted to satisfy a
+  //    grep each fail.
+  const useHive = 'src/renderer/src/hooks/useHive.ts';
+  assert.equal(strippedHits(useHive, 'onFloorQuiet'), 1,
+    'the renderer does not subscribe to the quiet latch, so the store field is never filled and the chip can never appear');
+  assert.equal(strippedHits(useHive, "'floor:quiet'"), 0,
+    'the channel literal crossed the bridge into the renderer, where contextIsolation means it can do nothing but drift');
+
+  // ⚠ A TYPED call, not a cast. `useHive.ts`'s context-trigger effect deliberately
+  // escapes CthApi — `(window.cth as unknown as {...}).onContextTrigger?.(…)` — so it
+  // could land before its preload method existed. Copying that shape here would make
+  // `npm run typecheck` prove nothing about whether `onFloorQuiet` is really on the
+  // bridge, and every criterion above would pass on a listener bound to undefined.
+  assert.equal(strippedHits(useHive, 'window.cth.onFloorQuiet('), 1,
+    'the quiet listener is not a direct typed call on the bridge');
+  assert.equal(strippedHits(useHive, 'as unknown as'), 2,
+    'the `as unknown as` count in useHive.ts moved off its measured 2. A third cast is how a listener binds to a bridge method that does not exist while every other check stays green');
+
+  // The `.d.ts` is 9 lines and derives the whole surface from
+  // `export type CthApi = typeof api`, so it names NO bridge method — measured, it
+  // matches zero of onApprovalRequest/onBreakerState/onHiveQueue while index.ts
+  // matches several. A token added here to satisfy a grep would be dead.
+  assert.equal(strippedHits('src/preload/index.d.ts', 'onFloorQuiet'), 0,
+    'the .d.ts named a bridge method. It derives the surface from typeof api and names none of them; the typecheck coverage this reaches for is already carried by tsconfig.web.json');
+});
