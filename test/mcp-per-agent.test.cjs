@@ -522,3 +522,87 @@ test('MAIN-02: all three MCP handlers gate agentId on isSafeAgentId, and none ha
     + 'is a real, working agent with no hive dir, and mcpArmed() already answers [] for it. '
     + 'Rejecting it renders a load error in McpConsentModal for every such agent.');
 });
+
+/* ───── Phase-02 security audit follow-ups: IPC-01, IPC-02, T-P02-11-07 ─────
+ *
+ * All three were found by the phase-02 security audit AFTER the code review had
+ * already fixed MAIN-02 on the three `mcp:*` handlers. They are the same
+ * vulnerability class showing up at call sites nobody had traced yet — which is
+ * exactly what 02-REVIEW.md's own coverage-gap note predicted would happen. */
+
+test('IPC-01: agentDir refuses a hostile id at the chokepoint, and every read accessor fails closed', (t) => {
+  // A REAL home, so a miss cannot pass vacuously through root()===null's early
+  // return — the guard, not the absent hive, has to be what refuses.
+  const home = tmpHome('md-ipc01-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, 'hive', 'agents'), { recursive: true });
+  const h = new HiveManager(() => home);
+
+  // The public read accessors are reachable from the renderer via `hive:memory`,
+  // `hive:inbox` and `hive:messages`. A sync ipcMain handler must NEVER let a
+  // throw cross IPC, so each converts the refusal into its own empty contract.
+  for (const bad of ['../agents/a1', '..', 'a/b', 'a\b', '/etc/passwd', 'x'.repeat(200)]) {
+    assert.equal(h.memory(bad), '', `memory(${JSON.stringify(bad)}) must fail closed`);
+    assert.equal(h.hasMemory(bad), false, `hasMemory(${JSON.stringify(bad)}) must fail closed`);
+    assert.deepEqual(h.inbox(bad), [], `inbox(${JSON.stringify(bad)}) must fail closed`);
+    assert.deepEqual(h.outbox(bad), [], `outbox(${JSON.stringify(bad)}) must fail closed`);
+    assert.equal(h.inboxBacklog(bad), 0, `inboxBacklog(${JSON.stringify(bad)}) must fail closed`);
+    assert.deepEqual(h.voiceMessages({ agentId: bad }), [],
+      `voiceMessages({agentId:${JSON.stringify(bad)}}) must fail closed`);
+  }
+});
+
+test('IPC-01: the guard lives in agentDir, not copy-pasted per caller', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hive.ts'), 'utf8');
+  const i = src.indexOf('private agentDir(');
+  assert.ok(i > 0, 'sanity: agentDir must exist');
+  const body = src.slice(i, i + 300);
+  assert.ok(/isSafeAgentId\(/.test(body),
+    'agentDir is the single place every per-agent path in this class is built. Guarding callers '
+    + 'one at a time is how this defect kept reappearing (mcp:agentState, then mcp:grant/revoke, '
+    + 'then hive:memory/inbox/messages). The chokepoint guard is what makes a caller added '
+    + 'tomorrow safe by default.');
+});
+
+test('IPC-02: integrations:setSecret cannot write into the mcp: secret namespace', () => {
+  const { INTEGRATION_SLUG_RE, secretRefFor } = loadTs('src/shared/integrations.ts');
+  const { mcpGrantKey } = loadTs('src/shared/mcpCatalog.ts');
+
+  // The collision is real: both route through the same `int:` prefix.
+  assert.equal(secretRefFor(mcpGrantKey('pty-a-1', 'github')), 'int:mcp:pty-a-1:github');
+  assert.equal(secretRefFor('mcp:pty-a-1:github'), 'int:mcp:pty-a-1:github',
+    'sanity: an attacker-chosen integration id lands in the SAME slot as an MCP grant');
+
+  // The slug rule is what separates them — it must reject anything containing ':'.
+  assert.equal(INTEGRATION_SLUG_RE.test('mcp:pty-a-1:github'), false,
+    'the MCP grant key shape must not pass the integration slug rule');
+  assert.equal(INTEGRATION_SLUG_RE.test('github'), true, 'a real integration id must still pass');
+
+  // And the handler must actually apply it (upsert did; setSecret did not).
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8');
+  const start = src.indexOf("ipcMain.handle('integrations:setSecret'");
+  assert.ok(start > 0, 'sanity: the handler must exist');
+  const body = src.slice(start, src.indexOf('ipcMain.handle(', start + 10));
+  assert.ok(/INTEGRATION_SLUG_RE\.test\(/.test(body),
+    'integrations:setSecret must validate its id against INTEGRATION_SLUG_RE. Without it a '
+    + "renderer can setSecret({id:'mcp:<agentId>:<mcpId>'}) and overwrite an agent's stored MCP "
+    + "credential, bypassing mcp:grant's isSafeAgentId, catalog, tier and mcpWiredFor checks.");
+});
+
+test('T-P02-11-07: --strict-mcp-config is tied to the provider being wired, not to having grants', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hive.ts'), 'utf8');
+  const i = src.indexOf("args.push('--strict-mcp-config')");
+  assert.ok(i > 0, 'sanity: the flag must still be pushed somewhere');
+
+  // The defect was that this push sat INSIDE `if (Object.keys(mcpServers).length)`,
+  // so a fresh agent with zero grants -- the default state of every new agent --
+  // launched with neither flag and inherited the operator's own ~/.claude.json
+  // servers while running --permission-mode bypassPermissions.
+  const before = src.slice(Math.max(0, i - 900), i);
+  const lastEmptyCheck = before.lastIndexOf('if (Object.keys(mcpServers).length)');
+  const lastWiredCheck = before.lastIndexOf('mcpWiredFor(');
+  assert.ok(lastWiredCheck > lastEmptyCheck,
+    '--strict-mcp-config must be gated on mcpWiredFor(provider), NOT on the armed map being '
+    + 'non-empty. Gating on the map defeats the mitigation in exactly the common case it exists '
+    + 'for: an agent with no grants yet.');
+});

@@ -38,7 +38,7 @@ import {
   type AgentProvider
 } from '../shared/agentProvider';
 import { capabilityLine, providerCapabilities } from '../shared/providerAutomation';
-import { MCP_CATALOG, mcpWiredFor } from '../shared/mcpCatalog';
+import { MCP_CATALOG, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { expandTilde } from './fs';
 import { memoryBin } from './memory';
 import {
@@ -522,7 +522,25 @@ export class HiveManager {
   enabled(): boolean {
     return this.root() !== null;
   }
+  /** IPC-01 / MAIN-02 class. Every per-agent path in this class is built here,
+   *  so this is the one place a hostile id has to be stopped. `id` reaches this
+   *  method from the RENDERER through `hive:memory`, `hive:inbox`,
+   *  `hive:messages` and `mcp:agentState` — `'../agents/someone-else'` is a
+   *  perfectly good string, and `mcpArmed('../agents/a1')` was MEASURED
+   *  returning another agent's armed server list before any guard existed.
+   *
+   *  Guarding the callers one at a time is how this defect kept reappearing:
+   *  `mcp:agentState` was fixed, then `mcp:grant`/`mcp:revoke` turned out to
+   *  share the same ungated input, then the phase-02 security audit found
+   *  `hive:memory`/`hive:inbox`/`voiceMessages` ungated as well. This guard is
+   *  at the chokepoint instead, so a caller added tomorrow inherits it.
+   *
+   *  Throws rather than returning a sanitized path: a caller asking for an
+   *  impossible agent has a bug or is hostile, and both deserve to fail loudly
+   *  rather than silently read some other directory. The public read accessors
+   *  below convert it to their own empty-value contract. */
   private agentDir(id: string): string {
+    if (!isSafeAgentId(id)) throw new Error('unsafe agent id');
     return join(this.root()!, 'agents', id);
   }
   /** IPC endpoint the cth-hook shim talks to (Phase 1 autonomy).
@@ -1165,16 +1183,6 @@ export class HiveManager {
       if (Object.keys(mcpServers).length) {
         this.writeJson(mcpPath, { mcpServers }, 0o600);
         args.push('--mcp-config', mcpPath);
-        // POLICY (this plan, D-25/RESEARCH §5): --strict-mcp-config is
-        // deliberate, not incidental. Without it the operator's own
-        // ~/.claude.json servers would be silently inherited by every hive
-        // agent — one already running with --permission-mode
-        // bypassPermissions would then hold tools the card never showed,
-        // using the operator's own credentials. The cost is real and is
-        // recorded in the SUMMARY: an operator who relied on their personal
-        // MCP servers inside hive agents loses them here and re-grants the
-        // catalog equivalent per agent.
-        args.push('--strict-mcp-config');
       } else {
         // Nothing armed (no consent, an unwired provider, or a revoke) — a
         // STALE file must not survive to re-arm the server on the next
@@ -1182,6 +1190,25 @@ export class HiveManager {
         // running session actually get" (D-29).
         try { rmSync(mcpPath, { force: true }); } catch { /* best-effort */ }
       }
+      // POLICY (D-25/RESEARCH §5): --strict-mcp-config is deliberate, not
+      // incidental. Without it the operator's own ~/.claude.json servers are
+      // silently inherited by every hive agent — one already running with
+      // --permission-mode bypassPermissions would then hold tools the card
+      // never showed, using the operator's own credentials. The cost is real
+      // and recorded in the SUMMARY: an operator who relied on their personal
+      // MCP servers inside hive agents loses them here and re-grants the
+      // catalog equivalent per agent.
+      //
+      // T-P02-11-07: this MUST be tied to the provider being wired, NOT to
+      // whether this agent happens to have anything armed. It used to sit
+      // inside the non-empty branch above, so a freshly spawned agent with
+      // zero grants — the DEFAULT state of every new agent, and the common
+      // case — launched with neither flag and inherited the operator's
+      // servers anyway. The mitigation was defeated in exactly the situation
+      // it was written for. Pushing it unconditionally for a wired provider
+      // is harmless when nothing is armed: it simply asserts "no servers
+      // beyond what I was given", which with no --mcp-config means none.
+      if (mcpWiredFor(meta.provider ?? 'claude')) args.push('--strict-mcp-config');
     }
     return { args, env };
   }
@@ -2176,6 +2203,7 @@ export class HiveManager {
     });
   }
   memory(id: string): string {
+    if (!isSafeAgentId(id)) return ''; // IPC-01: renderer-supplied; fail closed, never throw across IPC
     const p = join(this.agentDir(id), 'memory.md');
     return existsSync(p) ? readFileSync(p, 'utf8') : '';
   }
@@ -2186,6 +2214,7 @@ export class HiveManager {
    *  but most of the floor's history lives in a handful of them). Cheap: reads a
    *  small markdown file; never throws. Works for ANY id, active OR archived. */
   hasMemory(id: string): boolean {
+    if (!isSafeAgentId(id)) return false; // IPC-01
     const p = join(this.agentDir(id), 'memory.md');
     if (!existsSync(p)) return false;
     try {
@@ -2195,12 +2224,14 @@ export class HiveManager {
     } catch { return false; }
   }
   inbox(id: string): HiveMessage[] {
+    if (!isSafeAgentId(id)) return []; // IPC-01: reachable from the renderer via `hive:inbox`
     return this.listMessages(join(this.agentDir(id), 'inbox'));
   }
   /** Read an agent's OUTBOX (messages it has authored/sent). Symmetric with
    *  inbox(); the router drains live outbox files into recipients' inboxes and
    *  archives the original under outbox/.sent, so a sent message survives there. */
   outbox(id: string): HiveMessage[] {
+    if (!isSafeAgentId(id)) return []; // IPC-01
     return this.listMessages(join(this.agentDir(id), 'outbox'));
   }
 
@@ -2258,6 +2289,9 @@ export class HiveManager {
     const includeArchived = opts.includeArchived !== false; // default true
 
     let owners: string[];
+    // IPC-01: `opts.agentId` reaches here from the renderer via `hive:messages`
+    // and is about to become `join(root,'agents',<id>)`. Fail closed.
+    if (onlyAgent && !isSafeAgentId(onlyAgent)) return [];
     try {
       owners = onlyAgent
         ? [onlyAgent]
@@ -2311,6 +2345,7 @@ export class HiveManager {
   }
   /** Count undrained inbox messages for an agent (cheap — for the fleet snapshot). */
   inboxBacklog(id: string): number {
+    if (!isSafeAgentId(id)) return 0; // IPC-01
     const dir = join(this.agentDir(id), 'inbox');
     if (!existsSync(dir)) return 0;
     try { return readdirSync(dir).filter((f) => f.endsWith('.json')).length; } catch { return 0; }

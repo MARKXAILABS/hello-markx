@@ -71,7 +71,7 @@ import { TelemetryCollector } from './telemetry';
 import { analytics } from './analytics';
 import { IntegrationBroker } from './integrationBroker';
 import * as integrations from './integrations';
-import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES } from '../shared/integrations';
+import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, INTEGRATION_TEMPLATES, INTEGRATION_SLUG_RE } from '../shared/integrations';
 import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { RosterStore } from './roster';
 import { ControlRegistry } from './control';
@@ -2551,6 +2551,20 @@ ipcMain.handle('integrations:upsert', (_evt, record: unknown) => integrations.up
 ipcMain.handle('integrations:setSecret', (_evt, payload: unknown) => {
   const p = (payload ?? {}) as { id?: unknown; secret?: unknown };
   if (typeof p.id !== 'string' || !p.id) return { ok: false, error: 'id required' };
+  // IPC-02. `secretRefFor(id)` is `int:${id}` — the SAME namespace `mcp:grant`
+  // writes into as `secretRefFor(mcpGrantKey(agentId, mcpId))` =
+  // `int:mcp:<agentId>:<mcpId>`. `integrations:upsert` validates its id against
+  // INTEGRATION_SLUG_RE (which excludes `:`), but this sibling handler never
+  // did — so a renderer could call
+  // `setSecret({ id: 'mcp:<agentId>:<mcpId>', secret: '<attacker value>' })`
+  // and write straight into an agent's MCP credential slot, bypassing
+  // mcp:grant's isSafeAgentId gate, its catalog-existence check, its tier
+  // refusal and its mcpWiredFor refusal — silently replacing a real stored
+  // credential that the next spawn then arms. Same class as SEC-02: a charset
+  // rule enforced at one call site and not at its sibling.
+  if (!INTEGRATION_SLUG_RE.test(p.id)) {
+    return { ok: false, error: 'id must be a lowercase slug (2–40 chars, a–z 0–9 -, no leading/trailing hyphen)' };
+  }
   if (typeof p.secret !== 'string' || !p.secret) return { ok: false, error: 'secret required' };
   return integrations.setSecret(secretRefFor(p.id), p.secret);
 });
