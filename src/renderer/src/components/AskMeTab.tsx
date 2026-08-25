@@ -3,7 +3,7 @@ import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { useStore } from '@/store/store';
 import { useHiveTasks } from '@/hooks/useHiveTasks';
-import { type HiveTask, type HumanQA, openQuestion, waitsOnHuman } from './TasksKanban';
+import { type HiveTask, type HumanQA, openQuestion, waitsOnHuman, TaskAge, localStamp } from './TasksKanban';
 
 /**
  * ASK ME — first-class human feedback through the task system.
@@ -52,7 +52,17 @@ function dependentsTree(id: string, all: HiveTask[], seen = new Set<string>()): 
 export function AskMeTab() {
   const agents = useStore((s) => s.agents);
   const restorable = useStore((s) => s.restorableAgents);
-  const [tasks, setTasks] = useState<HiveTask[]>([]);
+  // The renderer's ONE task poll (hooks/useHiveTasks) replaces this view's own 5s timer
+  // against the same file (#20). Read BEFORE the state below, which seeds off it.
+  const rawTasks = useHiveTasks();
+  // SEEDED from the shared poll's payload rather than from `[]`. The poll's cache is
+  // module-level and is already warm whenever anything else in the renderer is mounted,
+  // so starting empty made switching to this tab flash "Nothing needs you right now" and
+  // then contradict itself one tick later, when the effect below ran. The initializer
+  // runs once; every subsequent sync is still the effect's job.
+  const [tasks, setTasks] = useState<HiveTask[]>(() => {
+    try { return parse(rawTasks); } catch { return []; }
+  });
   // Drafts live in the STORE (keyed by task id) — switching tabs unmounts this
   // view, and a half-typed answer must survive the round trip.
   const drafts = useStore((s) => s.answerDrafts);
@@ -60,16 +70,24 @@ export function AskMeTab() {
   const openTaskDetail = useStore((s) => s.openTaskDetail);
   const [sending, setSending] = useState<string | null>(null);
 
-  // The renderer's ONE task poll (hooks/useHiveTasks) replaces this view's own
-  // 5s timer against the same file (#20). `tasks` stays LOCAL state rather than
-  // being derived straight off the payload: sendAnswer and dismiss both write
-  // to it optimistically (`setTasks(next)` before the disk round trip, and the
-  // restore-on-failure below), so a derived value would drop the immediate
-  // feedback and leave the card sitting there until the next tick.
-  const rawTasks = useHiveTasks();
+  // `tasks` stays LOCAL state rather than being derived straight off the payload:
+  // sendAnswer and dismiss both write to it optimistically (`setTasks(next)` before
+  // the disk round trip, and the restore-on-failure below), so a derived value would
+  // drop the immediate feedback and leave the card sitting there until the next tick.
   useEffect(() => {
     try { setTasks(parse(rawTasks)); } catch { /* keep last good */ }
   }, [rawTasks]);
+
+  /** Rule A-3 for an ask: relative on screen, absolute in the tooltip, and the tooltip
+   *  NAMES the clock it read. `askedAt` is optional on the shared HumanQA shape — the
+   *  task CLI stamps it (`hiveTemplates.ts:139`) but a hand-written god edit need not,
+   *  and `openPhoneAsks` already guards for its absence (`index.ts:1232`). Rendering
+   *  `0s` for such an ask would disguise a nine-hour-old one as brand new, which is the
+   *  exact failure VIGIL-04 exists to prevent, so the card's own clock is the fallback
+   *  and the tooltip says that is what happened. */
+  const askAge = (task: HiveTask, ask: HumanQA) => (ask.askedAt
+    ? { iso: ask.askedAt, title: `asked ${localStamp(ask.askedAt)}` }
+    : { iso: task.createdAt, title: `asked at or after ${localStamp(task.createdAt)}, when the card was created — the ask carries no timestamp` });
 
   const nameFor = (id?: string): string | undefined =>
     id ? (agents.find((a) => a.id === id)?.name ?? restorable.find((a) => a.id === id)?.name ?? id) : undefined;
@@ -222,6 +240,12 @@ export function AskMeTab() {
               >
                 {t.title}
               </button>
+              {/* VIGIL-04's age (04-UI-SPEC § S5 rule A-4): immediately before the
+                  badge's wrapper span. The header's existing `gap: 8` absorbs it and
+                  the title button's `flex: 1, minWidth: 0` gives up the width, so this
+                  adds no geometry. Same four-channel treatment as the kanban card —
+                  it IS the kanban card's element. */}
+              <TaskAge {...askAge(t, open)} />
               {/* the recipient badge — sourced from the SAME recipientOf() call
                   sendAnswer mails to, so this card can never display one
                   recipient and mail another (D-36/T-P02-08-02). The operator
