@@ -1284,13 +1284,16 @@ test('index.ts calls bootFloor and no longer owns SHUTDOWN_STEPS (D-04)', () => 
 /** Every file under `src/` that carries at least one `LIVE-UNVERIFIED`
  *  marker, mapped to its EXACT occurrence count. Re-measure with:
  *  `grep -ro 'LIVE-UNVERIFIED' src/ | cut -d: -f1 | sort | uniq -c`
- *  Measured in THIS session at `02779b9` (2026-08-24, after this plan's own
- *  fix commit added qwen's missing marker) — never copied from a plan file
- *  or a prior SUMMARY. */
+ *  Re-measured in THIS session by plan 04-10 (2026-08-25), in the same commit
+ *  as the two markers it added — never computed by adding a plan's expected
+ *  marker count to the previous ledger, and never copied from a plan file or
+ *  a prior SUMMARY. Plan 02-12 found a real gap the arithmetic way round.
+ *  `src/main/hiveTemplates.ts` went 3 → 5: GATE-03 gave pi a request/response
+ *  PreToolUse path and OpenCode a veto, and each carries its own marker. */
 const MARKER_LEDGER = {
   'src/main/hive.ts': 3,
   'src/main/hiveProvisioning.ts': 5,
-  'src/main/hiveTemplates.ts': 3,
+  'src/main/hiveTemplates.ts': 5,
   'src/main/index.ts': 1,
   'src/main/webhook.ts': 3,
   'src/shared/agentProvider.ts': 3
@@ -1298,23 +1301,35 @@ const MARKER_LEDGER = {
 
 /** The repo-wide EXACT total of raw `LIVE-UNVERIFIED` occurrences under
  *  `src/` — the sum of MARKER_LEDGER's values, re-measured in THIS session
- *  at `02779b9` (2026-08-24) with
+ *  by plan 04-10 (2026-08-25) with
  *  `grep -rc 'LIVE-UNVERIFIED' src --include=*.ts | grep -v ':0' | awk -F: '{s+=$2} END {print s}'`.
  *  The ONLY reason this number is allowed to change is a real marker being
  *  added or removed in source — never a refactor, a rename, or a change to
- *  how this file strips comments. */
-const LIVE_UNVERIFIED_TOTAL = 18;
+ *  how this file strips comments. 18 → 20: GATE-03's two new engine paths. */
+const LIVE_UNVERIFIED_TOTAL = 20;
 
-/** The five engines this phase built bridges for and never live-verified
- *  (D-33, D-35): none of these four CLIs is installed on this machine
- *  (`pi`, `opencode`, `crush`, `qwen`), and `kimi`'s bridge is new and
- *  unverified by construction. Committed here rather than derived from
+/** The five engines this project built bridges for and never live-verified
+ *  (D-33, D-35), mapped to the MINIMUM number of marker blocks that must
+ *  name each: none of these four CLIs is installed on this machine
+ *  (`pi`, `opencode`, `crush`, `qwen`), and `kimi`'s bridge is unverified by
+ *  construction. Committed here rather than derived from
  *  `agentProvider.ts`'s preset table, because the whole point of the
  *  per-engine assertion below is to catch a bridge that shipped with NO
  *  marker at all — deriving the expected set from the same table the
  *  markers are supposed to describe would let a missing marker hide behind
- *  a missing list entry too. */
-const LIVE_UNVERIFIED_ENGINES = ['pi', 'opencode', 'crush', 'qwen', 'kimi'];
+ *  a missing list entry too.
+ *
+ *  A per-engine COUNT rather than mere presence, since plan 04-10 (2026-08-25).
+ *  `>= 1` cannot see an engine being unmarked in one place while a second,
+ *  unrelated marker still names it — the exact shape of the drift the total
+ *  pin above also cannot see. The numbers are a live measurement from that
+ *  session, not arithmetic: pi 3 → 4 and opencode 4 → 5 because GATE-03 gave
+ *  each a second marker (pi's request/response PreToolUse path, OpenCode's
+ *  veto), on top of their pre-existing bridge markers. Lowering any of these
+ *  is a claim that a real session ran against a real account — say which. */
+const LIVE_UNVERIFIED_ENGINES = {
+  pi: 4, opencode: 5, crush: 1, qwen: 1, kimi: 5
+};
 
 /** Raw (un-stripped) contents of a repo-relative file. The required read
  *  path for anything counting `LIVE-UNVERIFIED`: the marker IS a comment,
@@ -1439,22 +1454,24 @@ test('PARITY-03: the LIVE-UNVERIFIED ledger is pinned per file, repo-wide, per e
   // block, attributed structurally (never by character count). A total
   // alone is satisfied by unmarking crush and adding a marker elsewhere —
   // this is the positive half that catches exactly that.
-  const engineCounts = Object.fromEntries(LIVE_UNVERIFIED_ENGINES.map((e) => [e, 0]));
+  const engines = Object.keys(LIVE_UNVERIFIED_ENGINES);
+  const engineCounts = Object.fromEntries(engines.map((e) => [e, 0]));
   for (const rel of allSrcFiles) {
     for (const block of markerBlocks(rel)) {
-      for (const engine of LIVE_UNVERIFIED_ENGINES) {
+      for (const engine of engines) {
         if (new RegExp(`\\b${engine}\\b`, 'i').test(block)) engineCounts[engine]++;
       }
     }
   }
-  for (const engine of LIVE_UNVERIFIED_ENGINES) {
+  for (const [engine, floor] of Object.entries(LIVE_UNVERIFIED_ENGINES)) {
     assert.ok(
-      engineCounts[engine] >= 1,
-      `${engine} has ${engineCounts[engine]} attributed LIVE-UNVERIFIED marker(s), expected >= 1. `
-      + `Under the zero-recurring-cost rule the honest answer is normally "none, and it stays `
-      + `marked" — which account was ${engine}'s bridge verified against, by whom, on what date? `
-      + 'If the answer is a real one, replace the marker with the evidence; if not, put the '
-      + 'marker back.'
+      engineCounts[engine] >= floor,
+      `${engine} has ${engineCounts[engine]} attributed LIVE-UNVERIFIED marker(s), expected >= `
+      + `${floor}. Under the zero-recurring-cost rule the honest answer is normally "none, and `
+      + `it stays marked" — which account was ${engine}'s bridge verified against, by whom, on `
+      + 'what date? If the answer is a real one, replace the marker with the evidence; if not, '
+      + 'put the marker back. Re-measure, never subtract: the per-engine floor is a live '
+      + 'measurement, and arithmetic over a prior figure is how plan 02-12\'s gap survived.'
     );
   }
 });

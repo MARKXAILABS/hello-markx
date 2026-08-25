@@ -439,28 +439,102 @@ process.stdin.on('end', () => {
 // agent_end→Stop keeps the harness status in step (→ idle) so the renderer idle
 // inbox-wake nudge can deliver mail. Fully wrapped so a wrong API guess can never
 // break the spawn. LIVE-UNVERIFIED (Pi's exact extension surface needs BYOK keys).
+//
+// GATE-03 (04-10). `post()` is now request/response for PreToolUse ONLY, so a
+// deny authored in main can reach pi's own `ev.approve()` contract; every other
+// event keeps the fire-and-forget shape, because waiting costs latency on a path
+// with no verdict to wait for. The `HIVE_AUTO_APPROVE === '1'` branch is now
+// reachable only on an ALLOW — before this it ran unconditionally and approved
+// calls main had refused (T-04-CMD-07).
+//
+// LIVE-UNVERIFIED — pi, and this is an UNVERIFIABLE MECHANISM, not a defect that
+// was fixed. Assumption A6: pi's documented `tool_call` contract honours the
+// handler's RETURN value, but whether it awaits an ASYNC return is not settleable
+// without an installed `pi` plus a BYOK key, and `pi` is not on this machine
+// (`command -v pi` → absent). If pi does not await, the handler returns a Promise
+// where pi expects an object and the auto-approve simply stops firing — the
+// fail-safe direction, never an approval of something denied. What would settle
+// it: `npm i -g @earendil-works/pi-coding-agent`, a provider key, and one tool
+// call under HIVE_AUTO_APPROVE=1 against a hive that denies it.
+//
+// WHAT *IS* VERIFIED, so the marker is not read as wider than it is: this
+// constant is EXECUTED in `test/engine-parity.test.cjs` — written out,
+// `require()`d, registered against a stub `pi`, and driven against a REAL
+// HookServer over a real socket. A deny comes back as `{approve:false}` with
+// main's own reason, WITH `HIVE_AUTO_APPROVE=1` set, and a benign command still
+// auto-approves. The bridge logic is unit-verified; only pi's runtime is not.
+//
+// NEW BEHAVIOUR THIS TURNS ON, named rather than left as a category: with a
+// verdict now honoured, `commandShapeDenial` reaches pi for the first time, and
+// FOUR of its five shapes return `{kind:'ask'}` — which on a shim that cannot
+// poll for an answer is answered as a DENY. So every recursive `rm`, every
+// forced `git push`, every `curl … | sh` and every fetch to a host outside the
+// 30-entry `[ASSUMED]` allowlist becomes an unconditional refusal with no path
+// through, on an engine nobody here can run. Safe direction, substantial change.
 export const PI_EXTENSION = `'use strict';
 var net = require('node:net');
 var SOCK = process.env.HIVE_SOCK;
 var AGENT = process.env.AGENT_ID || null;
 var AUTO = process.env.HIVE_AUTO_APPROVE === '1';
+function stamp(payload) {
+  payload.agent_id = payload.agent_id || AGENT;
+  // See HOOK_SHIM: without this the socket rejects every payload.
+  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
+  return payload;
+}
 function post(payload) {
   try {
     if (!SOCK) return;
-    payload.agent_id = payload.agent_id || AGENT;
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
+    var c = net.createConnection(SOCK, function () { try { c.end(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) {} });
     c.on('error', function () {});
   } catch (e) {}
+}
+// Request/response. Resolves main's deny REASON, or null for allow.
+// FAIL-OPEN, deliberately and identically to HOOK_SHIM's
+// c.on('error', function () { process.exit(0); }): a missing socket, a connect
+// error, a 5 s timeout and an unparseable reply ALL resolve null = allow.
+// hooks.ts:44-53 records why — an agent PTY outlives a quit, so a bridge that
+// failed closed would stop every agent whenever the app is legitimately not
+// running. Never "fix" this to fail closed here.
+function ask(payload) {
+  return new Promise(function (resolve) {
+    var settled = false;
+    var finish = function (v) { if (!settled) { settled = true; resolve(v); } };
+    try {
+      if (!SOCK) return finish(null);
+      var resp = '';
+      var c = net.createConnection(SOCK, function () {
+        try { c.write(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) { finish(null); }
+      });
+      c.setEncoding('utf8');
+      c.on('data', function (d) { resp += d; });
+      c.on('end', function () {
+        try {
+          var r = JSON.parse(resp || '{}');
+          var h = r.hookSpecificOutput;
+          if (h && h.permissionDecision === 'deny') { return finish(h.permissionDecisionReason || 'denied by the hive'); }
+          if (r.decision === 'deny' || r.decision === 'block') { return finish(r.reason || 'denied by the hive'); }
+        } catch (e) {}
+        finish(null);
+      });
+      c.on('error', function () { finish(null); });
+      setTimeout(function () { finish(null); }, 5000).unref();
+    } catch (e) { finish(null); }
+  });
 }
 function register(pi) {
   if (!pi || typeof pi.on !== 'function') return false;
   try {
     pi.on('tool_call', function (ev) {
-      post({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) });
-      if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }
-      return undefined;
+      return ask({ hook_event_name: 'PreToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)), tool_input: ev && (ev.args || ev.input) }).then(function (deny) {
+        if (deny) {
+          try { if (ev && typeof ev.deny === 'function') ev.deny(deny); } catch (e) {}
+          return { approve: false, reason: deny };
+        }
+        // AUTO is reachable only past the verdict. That order IS the gate.
+        if (AUTO) { try { if (ev && typeof ev.approve === 'function') ev.approve(); } catch (e) {} return { approve: true }; }
+        return undefined;
+      });
     });
     pi.on('tool_result', function (ev) { post({ hook_event_name: 'PostToolUse', tool_name: ev && (ev.name || (ev.tool && ev.tool.name)) }); });
     pi.on('agent_end', function () { post({ hook_event_name: 'Stop' }); });
@@ -480,26 +554,110 @@ module.exports.default = module.exports;
 // after + session.idle. The session.idle→Stop keeps status in step (→ idle) so the
 // renderer idle inbox-wake nudge delivers mail. ESM (OpenCode runs on Bun). Fully
 // wrapped. LIVE-UNVERIFIED (plugin auto-load + session.idle firing need BYOK keys).
+//
+// GATE-03 (04-10), and the two halves below are DIFFERENT KINDS of statement.
+// Conflating them would let a marker read as an excuse for a bug.
+//
+// HALF 1 — A DEFECT, FIXED HERE, not an unverifiable. `tool.execute.before` used
+// to post `tool_name` and NO `tool_input`. On the server `protectedPathDenial`
+// builds `ti` from `p.tool_input`, finds no file_path/path/notebook_path and no
+// command, and returns null before resolving anything; `commandShapeDenial` needs
+// a command string to enter at all. So OpenCode's gate was not merely unverified
+// — it was provably INERT, answering allow on every call, and that is provable on
+// this machine without OpenCode installed. It now sends `output.args`, which is
+// where OpenCode's documented plugin API puts a tool's arguments.
+//
+// HALF 2 — LIVE-UNVERIFIED, opencode: an UNVERIFIABLE MECHANISM. The veto form
+// used here (throw from `tool.execute.before`) is the one OpenCode's own docs
+// demonstrate — their `.env` protection example throws to abort a `read`. What
+// cannot be settled here is whether the plugin AUTO-LOADS from the per-agent
+// `.opencode/plugin/` directory, and whether OpenCode HONOURS a throw as a veto
+// at runtime: `opencode` is not installed on this machine and needs a BYOK key.
+// It also runs plugins under BUN, not Node.
+//
+// WHAT *IS* VERIFIED, stated so the marker is not read as wider than it is: this
+// constant is EXECUTED in `test/engine-parity.test.cjs` — written out, imported
+// as real ESM, and its `tool.execute.before` driven against a REAL HookServer
+// over a real socket. It throws `hive: <main's own reason>` on a denied command
+// and returns silently on a benign one. `runShim` genuinely cannot drive it (it
+// spawns a `.cjs` under `process.execPath`), but a dynamic `import()` can, so
+// the bridge LOGIC is unit-verified and only OpenCode's runtime is not. What
+// would settle the rest: an installed OpenCode, a key, one tool call.
+//
+// AND A MEASURED RESIDUAL, stated rather than left for a reader to discover:
+// OpenCode's `read` tool names its target `output.args.filePath`, while
+// `protectedPathDenial` collects `file_path` / `path` / `notebook_path`. So the
+// PATH arm still does not see an OpenCode file read; the command arm does, since
+// its `bash` tool uses `output.args.command`. That gap is plan 04-06's ceiling
+// item (s) — an engine that uses a different KEY — measured here for opencode.
+//
+// NEW BEHAVIOUR THIS TURNS ON: `commandShapeDenial` now reaches OpenCode for the
+// first time, and FOUR of its five shapes return `{kind:'ask'}` — which on a shim
+// that cannot poll for an answer is answered as a DENY. Every recursive `rm`,
+// every forced `git push`, every `curl … | sh` and every fetch to a host outside
+// the 30-entry `[ASSUMED]` allowlist becomes an unconditional refusal with no
+// path through. Safe direction, substantial change, on an engine nobody here can
+// run to see it.
 export const OPENCODE_PLUGIN = `import { createConnection } from 'node:net';
 const SOCK = process.env.HIVE_SOCK;
 const AGENT = process.env.AGENT_ID || null;
+function stamp(payload) {
+  payload.agent_id = payload.agent_id || AGENT;
+  // See HOOK_SHIM: without this the socket rejects every payload.
+  payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
+  return payload;
+}
 function post(payload) {
   try {
     if (!SOCK) return;
-    payload.agent_id = payload.agent_id || AGENT;
-    // See HOOK_SHIM: without this the socket rejects every payload.
-    payload.sock_token = process.env.HIVE_SOCK_TOKEN || '';
-    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(payload) + '\\n'); } catch (e) {} });
+    const c = createConnection(SOCK, () => { try { c.end(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) {} });
     c.on('error', () => {});
   } catch (e) {}
+}
+// Request/response. Resolves main's deny REASON, or null for allow.
+// FAIL-OPEN, deliberately and identically to HOOK_SHIM's connect-error exit(0):
+// no socket, a connect error, a 5 s timeout and an unparseable reply ALL resolve
+// null = allow (hooks.ts:44-53). Never "fix" this to fail closed.
+function ask(payload) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    try {
+      if (!SOCK) return finish(null);
+      let resp = '';
+      const c = createConnection(SOCK, () => {
+        try { c.write(JSON.stringify(stamp(payload)) + '\\n'); } catch (e) { finish(null); }
+      });
+      c.setEncoding('utf8');
+      c.on('data', (d) => { resp += d; });
+      c.on('end', () => {
+        try {
+          const r = JSON.parse(resp || '{}');
+          const h = r.hookSpecificOutput;
+          if (h && h.permissionDecision === 'deny') { return finish(h.permissionDecisionReason || 'denied by the hive'); }
+          if (r.decision === 'deny' || r.decision === 'block') { return finish(r.reason || 'denied by the hive'); }
+        } catch (e) {}
+        finish(null);
+      });
+      c.on('error', () => { finish(null); });
+      setTimeout(() => { finish(null); }, 5000).unref();
+    } catch (e) { finish(null); }
+  });
 }
 export const HiveBridge = async () => {
   return {
     event: async (input) => {
       try { if (input && input.event && input.event.type === 'session.idle') post({ hook_event_name: 'Stop' }); } catch (e) {}
     },
-    'tool.execute.before': async (input) => {
-      try { post({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}
+    'tool.execute.before': async (input, output) => {
+      // The wrap stays: a wrong API guess must never break the spawn, and must
+      // never fail closed either. Only a real deny escapes it.
+      let deny = null;
+      try {
+        deny = await ask({ hook_event_name: 'PreToolUse', tool_name: input && (input.tool || input.name), tool_input: (output && output.args) || (input && (input.args || input.input)) || {} });
+      } catch (e) { deny = null; }
+      // OpenCode's documented veto: throw from tool.execute.before.
+      if (deny) { throw new Error('hive: ' + deny); }
     },
     'tool.execute.after': async (input) => {
       try { post({ hook_event_name: 'PostToolUse', tool_name: input && (input.tool || input.name) }); } catch (e) {}
