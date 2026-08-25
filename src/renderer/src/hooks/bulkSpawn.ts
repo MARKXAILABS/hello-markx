@@ -67,6 +67,20 @@ export function spawnBatch<T>(
 }
 
 /**
+ * The slug an agent id is built from — THE one normalisation of a display name.
+ *
+ * Exported because two rules depend on agreeing about it: `batchAgentIds` below
+ * mints ids from it, and the import review sheet's `markDuplicates` uses it to
+ * decide which rows to flag as `name taken`. If those two carried separate copies
+ * of this regex, the operator's duplicate warning would stop matching the collisions
+ * that actually happen — the warning would fire on pairs that get distinct ids, and
+ * stay silent on pairs that do not. One function, so they cannot disagree.
+ */
+export function agentIdSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+/**
  * Mint one agent id per name, all from ONE clock reading, all distinct.
  *
  * THE HAZARD THIS CLOSES (UI-SPEC S3a's STOP-AND-REPORT clause). Agent identity in
@@ -102,7 +116,7 @@ export function batchAgentIds(names: readonly string[], now: number): string[] {
   const stamp = now.toString(36);
   const seen = new Map<string, number>();
   return names.map((name) => {
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const slug = agentIdSlug(name);
     const nth = (seen.get(slug) ?? 0) + 1;
     seen.set(slug, nth);
     // The FIRST of a slug keeps the exact shape the single-hire path always

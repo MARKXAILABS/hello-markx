@@ -98,7 +98,12 @@ test('AddAgentModal renders — and this file is not silently asserting against 
   assert.ok(html.length > 1000, `the render produced ${html.length} chars; it did not render`);
   // A control that is definitely there today. If this ever goes red the harness
   // broke, not the export button.
-  assert.ok(html.includes('import hire'), 'the existing import button is missing — the harness, not this feature');
+  //
+  // The literal was `import hire` until plan 03-06 relabelled the button to
+  // `import…` (UI-SPEC:944 / D-17): the same channel now accepts a team file too,
+  // so a label naming only "hire" was false. Updated to the current contract
+  // rather than deleted — this assertion's job is to prove the render is real.
+  assert.ok(html.includes('import…'), 'the existing import button is missing — the harness, not this feature');
 });
 
 test('the export button is IN THE RENDERED MARKUP, next to import', () => {
@@ -107,7 +112,10 @@ test('the export button is IN THE RENDERED MARKUP, next to import', () => {
 
   // S3b: immediately LEFT of import, so the two file actions read as a pair.
   const exportAt = html.indexOf('export team');
-  const importAt = html.indexOf('import hire');
+  const importAt = html.indexOf('import…');
+  // Both halves pinned: a -1 from a renamed label would otherwise satisfy
+  // `exportAt < importAt` by accident and this ordering check would go vacuous.
+  assert.notEqual(importAt, -1, 'the import button did not render');
   assert.ok(exportAt < importAt, `export (${exportAt}) must render before import (${importAt})`);
 });
 
@@ -132,8 +140,9 @@ test('D-16: the lossiness declaration renders, verbatim from UI-SPEC S3b', () =>
 
 test('the lossiness sentence renders BELOW the buttons, not somewhere else on the sheet', () => {
   const html = render();
+  assert.notEqual(html.indexOf('import…'), -1, 'the import button did not render');
   assert.ok(html.indexOf('export team') < html.indexOf('A team file carries names'));
-  assert.ok(html.indexOf('import hire') < html.indexOf('A team file carries names'));
+  assert.ok(html.indexOf('import…') < html.indexOf('A team file carries names'));
 });
 
 // ─── the outcome copy (unreachable through a render; driven directly) ────────

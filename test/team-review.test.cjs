@@ -37,11 +37,12 @@ const { renderToStaticMarkup } = require('react-dom/server');
 
 const loadTs = require('./load-ts.cjs');
 
-const { spawnBatch } = loadTs('src/renderer/src/hooks/bulkSpawn.ts');
+const { spawnBatch, batchAgentIds } = loadTs('src/renderer/src/hooks/bulkSpawn.ts');
 const {
   TeamReviewModal,
   markDuplicates,
-  memberFailureText
+  memberFailureText,
+  memberHirePlan
 } = loadTs('src/renderer/src/components/TeamReviewModal.tsx');
 
 const member = (name, extra = {}) => ({
@@ -107,11 +108,22 @@ test('distinct names all default checked', () => {
   assert.deepEqual(rows.map((r) => r.note), [null, null, null]);
 });
 
-test('duplicate detection is case- and punctuation-insensitive, matching the id slug', () => {
-  // Two names that differ only in case still produce the same agent slug, so the
-  // operator is warned about the pair that would actually be confusable.
-  const rows = markDuplicates([member('Jim B'), member('jim-b'), member('JIM  B!')]);
-  assert.deepEqual(rows.map((r) => r.checked), [true, false, false]);
+test('duplicate detection follows the ID SLUG, not the raw name', () => {
+  // The rule that matters: flag exactly the members that would land on the same
+  // agent id, since that is what makes two rows genuinely confusable on the floor.
+  // 'Jim B', 'jim-b' and 'JIM B' all slug to `jim-b`, so the 2nd and 3rd are dups.
+  const same = markDuplicates([member('Jim B'), member('jim-b'), member('JIM B')]);
+  assert.deepEqual(same.map((r) => r.checked), [true, false, false]);
+
+  // But trailing punctuation is NOT normalised away — 'JIM B!' slugs to `jim-b-`,
+  // a genuinely different id, so flagging it would be a false warning. Asserted
+  // rather than assumed, because markDuplicates and batchAgentIds MUST agree on
+  // this: a rule that warned here while the id generator disagreed would train the
+  // operator to ignore the note.
+  const punct = markDuplicates([member('Jim B'), member('JIM B!')]);
+  assert.deepEqual(punct.map((r) => r.checked), [true, true]);
+  const ids = batchAgentIds(['Jim B', 'JIM B!'], 1700000000000);
+  assert.equal(new Set(ids).size, 2, `the two rows markDuplicates left unflagged collided: ${ids}`);
 });
 
 test('markDuplicates over an empty team returns an empty list rather than throwing', () => {
@@ -127,6 +139,61 @@ test('a failed member gets its OWN copy, naming the member and keeping the rest'
     memberFailureText('Jim', 'spawn failed'),
     'Jim did not start: spawn failed. The rest of the team is hired — you can add Jim on their own.'
   );
+});
+
+// ─── what a member actually turns into (unreachable through a render) ────────
+
+test('role comes from DESCRIPTION and goal never touches it', () => {
+  // `role` is interpolated into <agentDir>/identity.md on every spawn; `goal`
+  // becomes the standing directive. Swapping them would move 4,000 characters of
+  // untrusted text into the agent's identity, and both fields are strings, so
+  // nothing but this assertion would notice.
+  const { request, agent } = memberHirePlan(
+    member('Jim', { description: 'THE-ROLE', goal: 'THE-GOAL' }),
+    'jim-x', 'C:/repo', CONFIG
+  );
+  assert.equal(request.hive.role, 'THE-ROLE');
+  assert.notEqual(request.hive.role, 'THE-GOAL');
+  assert.equal(agent.goal, 'THE-GOAL');
+  assert.equal(agent.description, 'THE-ROLE');
+});
+
+test('D-19: the ONE operator-picked root is threaded into every member', () => {
+  const { request, agent } = memberHirePlan(member('Jim'), 'jim-x', 'C:/repo/floor', CONFIG);
+  // Both places: main's own spawn guard rejects a missing cwd, and the hive
+  // descriptor is what the agent's workspace is provisioned against.
+  assert.equal(request.cwd, 'C:/repo/floor');
+  assert.equal(request.hive.cwd, 'C:/repo/floor');
+  assert.equal(agent.cwd, 'C:/repo/floor');
+  assert.equal(agent.project, 'floor');
+  assert.equal(request.isolate, false, 'a team import must never isolate without being asked');
+});
+
+test('the spawn binary comes from the LOCAL preset, never from the file', () => {
+  // The manifest contributes a model and (on the single-hire path) validated
+  // flags. It can never name the executable.
+  const { request } = memberHirePlan(
+    member('Jim', { provider: 'claude', model: 'sonnet' }),
+    'jim-x', 'C:/repo', CONFIG
+  );
+  assert.equal(request.command, 'claude');
+  assert.ok(request.args.includes('sonnet'), `model did not reach the args: ${request.args}`);
+});
+
+test('an unknown character or accent from an untrusted file falls back, never lands raw', () => {
+  // The validator only length-caps and lowercases `character` — it does NOT
+  // constrain it to the cast, so this is the only guard on the team path.
+  const { agent } = memberHirePlan(
+    member('Jim', { character: 'not-a-character', accent: 'octarine' }),
+    'jim-x', 'C:/repo', CONFIG
+  );
+  assert.equal(agent.character, 'jim');
+  assert.equal(agent.accent, 'sky');
+  // …and a legitimate one still round-trips, or the fallback would be hiding a
+  // dropped field rather than guarding a bad one.
+  const kept = memberHirePlan(member('P', { character: 'pam', accent: 'mint' }), 'p', 'C:/r', CONFIG);
+  assert.equal(kept.agent.character, 'pam');
+  assert.equal(kept.agent.accent, 'mint');
 });
 
 // ─── failure isolation through the SHARED batch ──────────────────────────────

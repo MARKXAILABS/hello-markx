@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
+import { TeamReviewModal } from './TeamReviewModal';
 import { SpritePortrait } from './SpritePortrait';
 import { Icon } from './Icon';
 import { ProviderLogo } from './ProviderLogo';
@@ -289,6 +290,10 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
    *  red would be as wrong as showing it nowhere. One line of state rather than a
    *  second modal or a toast. */
   const [notice, setNotice] = useState<string | undefined>();
+  /** The members of an imported team@1 file, awaiting review. Non-null opens the
+   *  review sheet over this modal — a team NEVER prefills this single-agent form,
+   *  and never spawns without passing through that sheet. */
+  const [teamToReview, setTeamToReview] = useState<HireManifest[] | null>(null);
   const [busy, setBusy] = useState(false);
   // Which config section the left sidebar index is showing.
   const [section, setSection] = useState<SectionKey>('identity');
@@ -370,11 +375,17 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     setIsolate(m.isolate ?? false);
   };
 
+  /** One button, two formats (D-17): the main process branches on the parsed
+   *  `spec` and hands back EITHER a single manifest OR a team. A hire@1 file keeps
+   *  filling this form directly, exactly as before; a team@1 file opens the review
+   *  sheet instead, because a bulk hire needs a per-member confirmation this form
+   *  has nowhere to put. Neither ever auto-spawns. */
   const importHire = async () => {
     setError(undefined);
     setNotice(undefined);
     const res = await window.cth.importHireFile();
     if (res.ok && res.manifest) applyManifest(res.manifest);
+    else if (res.ok && res.team) setTeamToReview(res.team.members);
     else if (res.error && res.error !== 'cancelled') setError(res.error);
   };
 
@@ -499,6 +510,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   };
 
   return (
+    <>
     <Modal
       title="ADD AGENT"
       onClose={onClose}
@@ -1187,8 +1199,12 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                 <PixelButton variant="secondary" size="md" onClick={exportTeam} disabled={busy} title="Export this floor as a team file (.json)">
                   export team…
                 </PixelButton>
-                <PixelButton variant="secondary" size="md" onClick={importHire} disabled={busy} title="Import a hire manifest (.json)">
-                  import hire…
+                {/* Label names both formats (D-17). It used to name only the
+                    single-manifest case, which this same channel outgrew once it
+                    started accepting a team file too — at which point the old
+                    wording was a lie about what the button does. */}
+                <PixelButton variant="secondary" size="md" onClick={importHire} disabled={busy} title="Import a hire or a team file (.json)">
+                  import…
                 </PixelButton>
                 <div style={{ flex: 1 }} />
                 <PixelButton variant="ghost" size="md" onClick={onClose} disabled={busy}>cancel</PixelButton>
@@ -1207,6 +1223,18 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
             </div>
           </div>
     </Modal>
+    {/* A team@1 import reviews EVERY member before anything spawns (UI-SPEC S3a).
+        It shares this form's operator-picked folder — D-19: one root for the whole
+        team, never a per-member cwd. */}
+    {teamToReview ? (
+      <TeamReviewModal
+        members={teamToReview}
+        config={config}
+        cwd={cwd}
+        onClose={() => setTeamToReview(null)}
+      />
+    ) : null}
+    </>
   );
 }
 
