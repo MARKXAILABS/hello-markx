@@ -57,6 +57,8 @@ import { claudeAccountSecretRef } from '../../shared/claudeAccounts';
 import { matchBlockHint } from '../../shared/blockHints';
 import { DEFAULT_CONTEXT_TRIGGER, type ContextRule } from '../../shared/triggers';
 import type { FloorDeps } from './deps';
+import { AbsenceWatchdog, type QuietSnapshot } from './watchdog';
+import { floorQuietPushPayload } from '../push';
 import {
   teardownPty as lifecycleTeardownPty,
   workerScratchDir as lifecycleWorkerScratchDir,
@@ -100,6 +102,14 @@ export interface Floor {
   hive: HiveManager;
   delivery: DeliveryService;
   hookServer: HookServer;
+  /** VIGIL-01's absence watchdog — a member for the same reason `hookServer`
+   *  is one: it is how a caller in main reaches state `bootFloor` owns without
+   *  `bootFloor` having to know who is asking. `floor.watchdog.current()`
+   *  returns the quiet snapshot, or `null` while the floor is moving, and that
+   *  is the synchronous read the phone's `floorQuiet` field is composed from
+   *  (plan 04-17, in index.ts, which needs no line in THIS file). The renderer
+   *  half arrives by push instead, on the `'floor:quiet'` channel below. */
+  watchdog: AbsenceWatchdog;
   telemetry: TelemetryCollector;
   persist: PersistStore;
   ptyManager: PtyManager;
@@ -163,6 +173,16 @@ let breakerBeatTimer: ReturnType<typeof setInterval> | null = null;
  *  module-level `let`, so without the named pin this timer's teardown would have
  *  no automated assertion at all. */
 let restorePointTimer: ReturnType<typeof setInterval> | null = null;
+/** VIGIL-01's absence beat. Boot-internal for the same reason as the two
+ *  above, and pinned BY NAME in test/boot-floor.test.cjs for the same reason:
+ *  the offender loop there walks `Object.keys(floor)` and a module-level `let`
+ *  is invisible to it. The WATCHDOG itself is a Floor field (plan 04-17 reads
+ *  `floor.watchdog.current()`); only its timer lives here. */
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+/** How often the absence beat asks. A sixth of the 300 000 ms quiet threshold,
+ *  and the same cadence the breaker beat already runs at — the alarm lands
+ *  within one tick of the threshold and the reads are four cheap ones. */
+const WATCHDOG_CADENCE_MS = 30_000;
 export let accountPool: AccountPoolManager;
 export let delivery: DeliveryService;
 export let hookServer: HookServer;
@@ -173,6 +193,12 @@ export let persist: PersistStore;
  *  every collaborator it has arrives injected here at the composition root, in
  *  the same style as `persist` below, and this is the only place it is built. */
 let restorePoints: RestorePoints;
+/** VIGIL-01's watchdog. Assigned in `bootFloor` and returned as a `Floor`
+ *  member, because a snapshot with no named accessor is a seam nobody can
+ *  reach: plan 04-17 composes the phone's `floorQuiet` field from
+ *  `floor.watchdog.current()` in index.ts, exactly as it reaches approvals
+ *  through `floor.hookServer`. */
+let watchdog: AbsenceWatchdog;
 export let integrationBroker: IntegrationBroker;
 export let roster: RosterStore;
 
@@ -1026,6 +1052,16 @@ const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
       restorePoints?.stop();
     }
   },
+  // VIGIL-01. Same class as the three above and here for the same reason: an
+  // un-cleared setInterval keeps the process alive past shutdown, and the boot
+  // test fails that by HANGING rather than by a red assertion.
+  {
+    name: 'clearWatchdogTimer',
+    stop: () => {
+      if (watchdogTimer) clearInterval(watchdogTimer);
+      watchdogTimer = null;
+    }
+  },
   { name: 'stopWebhookDoneObserver', stop: () => stopWebhookDoneObserver() },
   { name: 'broker.stop', stop: () => integrationBroker.stop() },
   { name: 'stopRouter', stop: () => hive.stopRouter() },
@@ -1136,6 +1172,7 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   fleetTimer = null;
   breakerBeatTimer = null;
   restorePointTimer = null;
+  watchdogTimer = null;
   webhookDoneTimer = null;
   webhookOutboundRecorded = null;
 
@@ -1275,10 +1312,112 @@ export async function bootFloor(d: FloorDeps): Promise<Floor> {
   }, SNAPSHOT_CADENCE_MS);
   restorePointTimer.unref?.();
 
+  // ─── VIGIL-01 — the absence watchdog. ────────────────────────────────────
+  //
+  // Deliberately NOT the built-in heartbeat (`config.ts`): that one is
+  // `to: 'god'` and types into god's PTY, so it cannot report that the god is
+  // the dead one — the case VIGIL-01 names explicitly. This alarm is addressed
+  // to the OPERATOR and writes into no PTY (ADR-0001).
+  //
+  // Every dep below is a READ of something this seam already has in scope. It
+  // is constructed HERE and never at module scope, so importing this file has
+  // no side effect (T-P02-02-01, pinned by test/repo-claims.test.cjs).
+  watchdog = new AbsenceWatchdog({
+    now: () => Date.now(),
+    // The floor's PTY silence: time since the most recent output by ANY live
+    // PTY — `isFloorQuiet`'s own `Date.now() - Math.max(...lastOutputAt)`,
+    // written as a duration. `Infinity` with no live PTY at all, which is the
+    // god-death shape and must read as silence rather than as "no data".
+    //
+    // ponytail: `delivery.ts`'s `painted` guard (a never-printed TUI reads as
+    // "idle for ages" because `pty.ts` SEEDS `lastOutputAt` to the spawn
+    // instant) is deliberately absent, and the MINIMUM is why. An unpainted PTY
+    // can only ever make the floor look busier than it is, which suppresses a
+    // false alarm; it can never manufacture one. Add the guard the day this
+    // becomes a max.
+    ptyIdleMs: () => {
+      const now = Date.now();
+      let idle = Infinity;
+      for (const t of ptyManager.list()) idle = Math.min(idle, now - t.lastOutputAt);
+      return idle;
+    },
+    // "No card advances", as one integer that already exists. Bumped by every
+    // ledger mutation under the CAS, so it needs neither the RECORD track's
+    // tool_calls table nor a per-card updatedAt.
+    ledgerRev: () => (hive.tasks() as { rev?: number }).rev ?? 0,
+    // "No mail routes" — every `appendLog` write of any kind lands in this one
+    // file, so its mtime is "did anything at all happen in the hive": mail
+    // routed, a card moved, an agent spawned. `isFloorQuiet` reads it too.
+    lastEventAt: () => {
+      const root = hive.root();
+      if (!root) return 0;
+      try { return statSync(join(root, 'log.jsonl')).mtimeMs; } catch { return 0; }
+    },
+    // "No spend lands" — the newest cost sample across every live session.
+    lastSpendAt: () => {
+      let ts = 0;
+      for (const u of telemetry.snapshot().usage) ts = Math.max(ts, u.ts);
+      return ts;
+    },
+    doingCards: () => {
+      const ledger = hive.tasks() as { tasks?: HiveTask[] };
+      return (ledger.tasks ?? [])
+        .filter((t) => t.status === 'doing')
+        .map((t) => ({ id: t.id, title: t.title, assignee: t.assignee }));
+    },
+    // "The god died" — the registry names a god and no PTY is bound to it. A
+    // floor whose registry names NO god reports alive: it never had an
+    // orchestrator to lose, and "the orchestrator is gone" would be a lie on a
+    // floor that never had one.
+    godAlive: () => {
+      const godId = hive.registry().godId;
+      return !godId || ptyForAgent(godId) !== undefined;
+    },
+    // D-25 ① — the same notifications gate every other toast in this file
+    // honours. An operator who turned notifications off did not ask for this
+    // one either.
+    notify: (a) => { if (readConfig().notifications) deps.notify(a); },
+    // D-25 ② — the already-wired renderer channel; no second signal is added.
+    // The channel NAME is fixed HERE, in the plan that produces the snapshot:
+    // plan 04-18's desktop chip listens to this exact literal and declares no
+    // channel of its own. `null` on the clearing edge, so the chip mirrors the
+    // latch instead of running a second state machine.
+    publishQuiet: (s: QuietSnapshot | null) => { deps.send('floor:quiet', s); },
+    // D-25 ③ — composed here so rule Q-4's contract (`agent` IS the title an
+    // installed old service worker renders) runs on every real alarm and not
+    // only in a test. There is nothing to send it to yet, and that is measured,
+    // not assumed: `push.ts` persists the VAPID keypair and nothing else, and
+    // `webhook.ts` has no subscription-intake route, so no `PushSubscription`
+    // has ever been captured in this process. Adding that route is index.ts's,
+    // which D-35 puts outside this plan. One line per quiet EDGE — the latch
+    // guarantees that — and the TITLE only, never the body.
+    push: (a) => {
+      const payload = floorQuietPushPayload(a);
+      console.warn('[watchdog] no push subscription intake exists yet; this alarm reached the desktop only:', payload.agent);
+    }
+  });
+  // Guarded (clear-then-set) like armAlwaysOnBeats, so a re-bootstrap cannot
+  // stack two beats against one latch. Unref'd: a pending absence check must
+  // never be the reason the process stays alive.
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = setInterval(() => {
+    try {
+      // Nothing to watch on a floor with no home, or on one where no agent has
+      // ever existed — "nothing is happening" is only an event where something
+      // was supposed to. Archived agents STAY in the registry, so this skips a
+      // never-used hive and nothing else: a floor whose whole roster died still
+      // ticks, which is exactly the case VIGIL-01 exists for.
+      if (!hive.enabled()) return;
+      if (Object.keys(hive.registry().agents).length === 0) return;
+      watchdog.tick();
+    } catch (e) { console.error('[watchdog beat]', e); }
+  }, WATCHDOG_CADENCE_MS);
+  watchdogTimer.unref?.();
+
   startHiveServices();
 
   return {
-    hive, delivery, hookServer, telemetry, persist, ptyManager, control, breaker,
+    hive, delivery, hookServer, watchdog, telemetry, persist, ptyManager, control, breaker,
     memory, reflector, accountPool, integrationBroker, roster,
     ptyToAgent, worktreePaths, worktreeOrigins, worktreeBases, preservedWorktrees,
     spawnRecipes, missionTimers, contextTimers, liveWorkers,
