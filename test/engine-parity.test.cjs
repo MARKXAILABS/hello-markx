@@ -1111,11 +1111,30 @@ test('codex: the hook-trust flag is gated on a real probe, not pushed blind', ()
 //   Codex-shaped PreToolUse payloads, driven by the real shim as a child
 //   process (test/gate03-roundtrip.test.cjs and this file), in BOTH command
 //   shapes — a `command` string and an argv array — with a tool name that is
-//   not Claude's `Bash`. NO LIVE AGENT HAS BEEN OBSERVED REFUSED YET: plan
-//   04-13 task 4 owns that measurement, in wave 4, and until it writes its
-//   machine-readable `LIVE GATE-03 REFUSAL: yes|no` line this claim must not
-//   say otherwise. Codex is the only one of criterion 1's four engines
-//   installed here (codex-cli 0.128.0).
+//   not Claude's `Bash`. NO LIVE AGENT HAS EVER BEEN OBSERVED REFUSED, and
+//   this is now a CLOSED measurement rather than a pending one. Codex is the
+//   only one of criterion 1's four engines installed here (codex-cli 0.128.0).
+//
+//   CORRECTED DOWNWARD by plan 04-13 (2026-08-25, wave 4), in the same commit
+//   as the finding, exactly as the correction path below prescribed. That plan
+//   task 4's live interactive codex agent — the phase's ONLY live non-Claude
+//   agent, and therefore the sole vehicle for this measurement — could not be
+//   spawned at all: this machine's stored ChatGPT refresh token is revoked, so
+//   every codex model turn dies at `401 refresh_token_reused` before any tool
+//   call is ever emitted. Re-tested twice in that session (a bare auth probe
+//   and a verbatim re-run of the spike's Run A, 29 auth failures, no write
+//   attempted), roughly 90 minutes after plan 04-01's spike hit the identical
+//   wall. No agent ran, so no agent was refused.
+//
+//   READ THE SENSE OF THAT "no" CAREFULLY, because the two readings differ and
+//   only one of them is true here. It records that NO LIVE REFUSAL WAS
+//   OBSERVED. It does NOT record that a live agent attempted a denied shape
+//   and sailed through — that experiment never ran. So this is an ABSENCE of
+//   evidence about live enforcement, not evidence of absence, and neither the
+//   sentence above nor SECURITY.md's wording may be upgraded on the strength
+//   of it. What would settle it is unchanged and cheap: `codex login`, then
+//   one interactive hive agent asked to run one of `commandShapeDenial`'s
+//   shapes inside its own worktree.
 //
 //   It is BUILT for grok, kimi and agy, and all three are LIVE-UNVERIFIED for
 //   want of an installed CLI and an account. grok's and agy's reply
@@ -1151,6 +1170,14 @@ test('codex: the hook-trust flag is gated on a real probe, not pushed blind', ()
 // `LIVE GATE-03 REFUSAL: no`, this comment is corrected downward in the same
 // commit as the finding — this file is in plan 04-13's files_modified for
 // wave 4 for exactly that reason.
+//
+// THAT PATH WAS TAKEN. Plan 04-13 recorded `LIVE GATE-03 REFUSAL: no` and
+// `LIVE VIGIL-03 BLOCKED: no` in 04-13-SUMMARY.md, and the correction is the
+// paragraph above, made in the same commit. Plan 04-19 task 2's pin reads
+// those SUMMARY lines and must find SECURITY.md agreeing with them — a
+// SECURITY.md that claims a live refusal would now contradict two files, not
+// one. The residual is a MISSING measurement blocked on operator auth, not a
+// failed one, and it must keep reading that way until someone runs it.
 // ────────────────────────────────────────────────────────────────────────────
 
 /** hiveTemplates.ts's shim/plugin constants, as strings. */
