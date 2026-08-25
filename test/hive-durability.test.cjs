@@ -24,7 +24,13 @@ const os = require('node:os');
 const path = require('node:path');
 const loadTs = require('./load-ts.cjs');
 
-const { HiveManager } = loadTs('src/main/hive.ts');
+const { HiveManager, LOG_TAIL_BYTES } = loadTs('src/main/hive.ts');
+// SCALE-03's driver below needs a REAL store, wired the way boot.ts wires it.
+// `db.ts` imports `app` from electron, which load-ts.cjs stubs; better-sqlite3
+// is the real native module and there is deliberately no guard around it — a
+// bypass here would make "the SQL path was never exercised" and "the SQL path
+// works" produce identical green output.
+const { PersistStore } = loadTs('src/main/db.ts');
 
 /** A throwaway harness home with a live hive in it. */
 function floor(t) {
@@ -426,4 +432,71 @@ test('03-02: ensureAgent stamps spawnedAt, and a RESPAWN advances it', async (t)
   assert.equal(hive.registry().agents.pam.sessionId, 'sid-first-run',
     'the respawn also wiped sessionId — spawnedAt must reset WITHOUT disturbing the field `...prev` is '
     + 'deliberately preserving (the --resume key)');
+});
+
+// ── SCALE-03 — SQL answers the time range the 64 KB tail read cannot ────────
+//
+// The H3 case above pins the tail window as a BOUND. This one pins what the
+// bound costs, and what now survives it. `logTail` reads the last
+// LOG_TAIL_BYTES of log.jsonl, so on any floor busier than a few hundred
+// kilobytes a day the morning is simply unreachable — that is the wall SCALE-03
+// exists to get past, and it is a READ cap, not the 8 MB rotate the roadmap
+// blamed. RECORD-02's mirror puts the same events in SQLite, where a day is a
+// range scan; this drives BOTH stores over the same fixture and asserts they
+// disagree in exactly the way that makes the mirror worth having.
+//
+// Sized from the real exported constant. A hardcoded 64 * 1024 here would keep
+// passing after someone widened the window, while proving nothing.
+
+test('SCALE-03: the morning falls out of logTail\'s window but stays readable in SQLite', (t) => {
+  const { hive, home, root } = floor(t);
+  const store = new PersistStore(path.join(home, 'harness.db'));
+  store.open();
+  t.after(() => store.close());
+
+  // NEGATIVE CONTROL, before any wiring: an event appended with no store must
+  // not appear in SQLite. Without this the assertions below would also pass if
+  // rows were arriving by some path other than the sink under test.
+  const MORNING = Date.UTC(2026, 0, 15, 9, 0, 0);
+  hive.appendLog({ kind: 'pre-wiring', ts: MORNING - 10 });
+  assert.equal(store.eventsBetween(MORNING - 100, MORNING).length, 0,
+    'a row reached the events table before setEventStore was ever called — this driver is not '
+    + 'measuring the sink it claims to measure');
+
+  // Wired EXACTLY as floor/boot.ts wires it, immediately after persist.open().
+  hive.setEventStore(store);
+
+  // The earliest hour: five events carrying their own timestamps, so the window
+  // asserted below is deterministic rather than a race against the wall clock.
+  for (let i = 0; i < 5; i++) hive.appendLog({ kind: 'daybreak', ts: MORNING + i, i });
+
+  // Then a day's worth of traffic — enough to push those five past the read cap.
+  const pad = 'p'.repeat(4096);
+  for (let i = 0; Buffer.byteLength(pad) * i <= LOG_TAIL_BYTES * 2; i++) {
+    hive.appendLog({ kind: 'noise', i, pad });
+  }
+
+  const size = fs.statSync(path.join(root, 'log.jsonl')).size;
+  assert.ok(size > LOG_TAIL_BYTES,
+    `the fixture is ${size} bytes and LOG_TAIL_BYTES is ${LOG_TAIL_BYTES} — it must exceed the read `
+    + 'cap or this test proves nothing at all');
+
+  // 1. The JSONL tail read, at any n: the morning is GONE. Not truncated with a
+  //    marker, not paged — absent, with the read reporting success.
+  const tail = hive.logTail(1_000_000);
+  assert.equal(tail.some((e) => e.kind === 'daybreak'), false,
+    'logTail still sees the morning, so the fixture never cleared the window and the SQL half '
+    + 'below is being compared against nothing');
+  assert.ok(tail.some((e) => e.kind === 'noise'), 'logTail returned nothing at all — it is broken, not bounded');
+
+  // 2. The SQL range read over the same five milliseconds: all five, by content.
+  const early = store.eventsBetween(MORNING, MORNING + 5);
+  assert.equal(early.length, 5,
+    `the events table returned ${early.length} of the 5 morning events that logTail can no longer `
+    + 'reach. This is the whole requirement: a time range the 64 KB tail read cannot answer.');
+  assert.deepEqual(early.map((e) => JSON.parse(e.json).i), [0, 1, 2, 3, 4],
+    'the rows came back, but not the right ones — assert by content, because a count looks '
+    + 'identical whether the morning is there or the noise merely happened to land in the window');
+  assert.equal(store.earliestEventTs(), MORNING,
+    'firstTs must name the earliest event the STORE holds — 03-07 draws its gap marker from it');
 });
