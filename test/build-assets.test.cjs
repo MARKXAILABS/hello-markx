@@ -337,6 +337,71 @@ test("rule G-3's format table, executed against the shipped implementation", () 
   assert.equal(formatRemaining(undefined), 'expired', 'a missing duration fails to the SAFE side');
 });
 
+/* ─── Rule G-3 across BOTH implementations (plan 04-18, wave 6) ──────────────
+ *
+ * Two hand-written implementations of one rule table, in two languages, in two
+ * files, with no shared module possible: the phone bundle is framework-free
+ * inline script served to a device, and the desktop is a `.tsx` in the renderer
+ * bundle. So the only honest check is to EXTRACT AND EXECUTE BOTH and compare
+ * their outputs — never either against a third copy of the table written here,
+ * which is a check that passes while both implementations are wrong together.
+ *
+ * THE CLAUSE LIVES IN WAVE 6, not with plan 04-17's phone work in wave 5,
+ * because `formatRemaining` does not exist on the desktop until this wave and a
+ * clause written before the thing it reads is red for a wave.
+ *
+ * AND IT IS NOT A BYTE-IDENTITY CHECK ON ALL FOUR BANDS. 04-UI-SPEC makes the
+ * fourth band deliberately different — the phone renders `expiring`, the desktop
+ * renders `expiring — will deny`. A blanket identity clause would be "fixed" by
+ * deleting the desktop suffix, which is the only half of the string that tells a
+ * 3am operator what the timeout DOES.
+ */
+test('rule G-3: the phone and the desktop agree on the three shared bands, and diverge on the fourth ON PURPOSE', () => {
+  const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
+  const phone = new Function(`${phoneFn(html, 'formatRemaining')}; return formatRemaining;`)();
+  // The desktop's, out of the shipped .tsx. `BlockedBanner` imports `BlockReason`
+  // as a TYPE only, so the transpile erases it and the module loads without the
+  // renderer-alias shim this file does not carry.
+  const { formatRemaining: desktop } = require('./load-ts.cjs')(
+    'src/renderer/src/components/BlockedBanner.tsx'
+  );
+  assert.equal(typeof desktop, 'function',
+    'BlockedBanner.tsx no longer exports formatRemaining — the rule table has gone back to being unassertable');
+
+  // 1. BYTE-IDENTICAL on the three shared bands. Both sides extracted, neither
+  //    compared against a literal written in this file.
+  for (const ms of [124_000, 60_000, 45_000, 10_000, 0, -5_000]) {
+    assert.equal(desktop(ms).text, phone(ms),
+      `the two countdowns disagree at ${ms}ms: desktop ${JSON.stringify(desktop(ms).text)} vs phone ${JSON.stringify(phone(ms))}. One operator reads both surfaces, often within the same minute, and a countdown that says two different things about one ask is the state they cannot act on`);
+  }
+
+  // 2. The shared TOKENS survive on both sides — a positive lower bound, so an
+  //    extraction that returned empty strings could not satisfy clause 1 above.
+  const phoneSet = [124_000, 45_000, 9_000, 0].map(phone);
+  const desktopSet = [124_000, 45_000, 9_000, 0].map((ms) => desktop(ms).text);
+  for (const token of ['m ', 's left', 'expired']) {
+    assert.ok(phoneSet.some((s) => s.includes(token)), `rule G-3's ${JSON.stringify(token)} is gone from the phone`);
+    assert.ok(desktopSet.some((s) => s.includes(token)), `rule G-3's ${JSON.stringify(token)} is gone from the desktop`);
+  }
+
+  // 3. The <10s band, asserted in the one shape that keeps the divergence honest:
+  //    the desktop literal STARTS WITH the phone's, and the remainder is exactly
+  //    the desktop's extra clause. This fails if either side drifts, and it fails
+  //    if someone "aligns" the two by deleting the suffix.
+  const [pShort, dShort] = [phone(9_000), desktop(9_000).text];
+  assert.ok(dShort.startsWith(pShort),
+    `the desktop's <10s literal ${JSON.stringify(dShort)} no longer starts with the phone's ${JSON.stringify(pShort)} — the two surfaces have drifted into unrelated wordings for the same state`);
+  assert.equal(dShort.slice(pShort.length), ' — will deny',
+    'the desktop lost the half of its <10s string that says what the timeout DOES. `expiring` alone tells a 3am operator the clock is running; `— will deny` tells them which way it lands if they do nothing');
+
+  // Neither side shows a NUMBER below ten seconds — the window where clock skew
+  // and transit latency could lie.
+  for (const [name, s] of [['phone', pShort], ['desktop', dShort]]) {
+    assert.doesNotMatch(s, /[0-9]/,
+      `the ${name}'s <10s state shows a number, in exactly the window where a number can lie about how much time is left`);
+  }
+});
+
 test("rule Q-1b's three copy cases, executed against the shipped implementation", () => {
   const html = fs.readFileSync(PHONE_HTML_PATH, 'utf8');
   const body = html.match(/floorQuiet: function \(q\) \{[\s\S]*?\n {4}\}/);
