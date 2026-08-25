@@ -389,3 +389,169 @@ test('driveRelative refuses only genuinely unframable shapes, not POSIX absolute
   assert.ok(!/return\s+\/\^\[\\\\\/\]/.test(fn),
     'the old [\\/] character class must be gone from the rooted-relative rule');
 });
+
+/* ── VIGIL-04 — every ledger mutation stamps a card-level `updatedAt` ──
+ *
+ * "A card nine hours in `doing`" is unmeasurable without a per-card clock:
+ * `HiveTask` carried `createdAt` and nothing else, so a card that was created
+ * this morning and touched a minute ago read the same as one nobody has opened
+ * since. The field is stamped by BOTH writers — `bin/task.cjs`, which agents
+ * mutate through, and `HiveManager.writeTasks`, which the kanban UI, inbound
+ * webhooks, Slack and the voice read-layer all pass through. A TASK_CLI-only
+ * stamp measures the age from the wrong clock in exactly the case a human
+ * touched the card.
+ *
+ * Four SEPARATE verb cases below, never one parameterised loop: a loop is the
+ * shape that stays green with three verbs unstamped and the fourth carrying the
+ * assertion (04-VALIDATION § Anti-Vacuous-Pass Rules, the VIGIL-04 row). */
+
+/** A timestamp old enough to be unmistakably NOT "now", seeded straight onto
+ *  disk so a stamp that fires can be told from one that does not. */
+const SEEDED = '2026-08-15T08:00:00.000Z';
+
+/** `floor(t)` hides its home, and `writeTasks` now stamps everything it writes —
+ *  so a card in the pre-phase legacy shape (`createdAt`, no `updatedAt`), or one
+ *  carrying a known-old stamp, can only be put on disk behind the writer's back. */
+function floorWithLedger(t, cards, rev = 0) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-task-seed-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const hive = new HiveManager(() => home);
+  hive.ensureHive();
+  fs.writeFileSync(
+    path.join(home, 'hive', 'tasks.json'),
+    JSON.stringify({ tasks: cards, rev, updatedAt: SEEDED }, null, 2),
+    'utf8');
+  return { home, hive };
+}
+
+/** The card as it is PERSISTED — `tasks()` widens every row with the derived
+ *  meter (`tokens`/`budgetTokens`/`pct`), which is not card data. */
+function persisted(hive, id) {
+  const { tokens, budgetTokens, pct, ...rest } = tasks(hive).find((c) => c && c.id === id) ?? {};
+  void tokens; void budgetTokens; void pct;
+  return rest;
+}
+
+function assertIsoAtOrAfter(updatedAt, createdAt, what) {
+  assert.equal(typeof updatedAt, 'string', `${what}: updatedAt must be an ISO string, got ${updatedAt}`);
+  assert.equal(new Date(updatedAt).toISOString(), updatedAt,
+    `${what}: updatedAt must be ISO 8601, got ${updatedAt}`);
+  assert.ok(Date.parse(updatedAt) >= Date.parse(createdAt),
+    `${what}: updatedAt (${updatedAt}) predates createdAt (${createdAt})`);
+}
+
+test('bin/task.cjs add stamps updatedAt, exactly equal to createdAt', (t) => {
+  const { hive, run } = floorWithCli(t);
+  const added = run(process.env, 'add', 'ship the thing');
+
+  assertIsoAtOrAfter(added.task.updatedAt, added.task.createdAt, 'add');
+  assert.equal(added.task.updatedAt, added.task.createdAt,
+    'a brand-new card must read 0s old, not a millisecond of jitter');
+  assert.equal(persisted(hive, added.task.id).updatedAt, added.task.createdAt,
+    'the stamp must reach tasks.json, not just the CLI stdout');
+});
+
+test('bin/task.cjs patch stamps updatedAt at or after createdAt', (t) => {
+  const { hive, run } = floorWithCli(t);
+  hive.writeTasks([card('to-patch')]);
+
+  const patched = run(process.env, 'patch', 'to-patch', '--title', 'renamed');
+  assert.equal(patched.task.title, 'renamed');
+  assertIsoAtOrAfter(patched.task.updatedAt, patched.task.createdAt, 'patch');
+  assert.equal(persisted(hive, 'to-patch').updatedAt, patched.task.updatedAt);
+});
+
+test('bin/task.cjs claim stamps updatedAt at or after createdAt', (t) => {
+  const { hive, run } = floorWithCli(t);
+  hive.writeTasks([card('to-claim')]);
+
+  const claimed = run({ ...process.env, AGENT_ID: 'jim-1' }, 'claim', 'to-claim');
+  assert.equal(claimed.task.status, 'doing');
+  assertIsoAtOrAfter(claimed.task.updatedAt, claimed.task.createdAt, 'claim');
+  assert.equal(persisted(hive, 'to-claim').updatedAt, claimed.task.updatedAt);
+});
+
+test('bin/task.cjs done stamps updatedAt at or after createdAt', (t) => {
+  const { hive, run } = floorWithCli(t);
+  hive.writeTasks([card('to-finish')]);
+
+  const finished = run(process.env, 'done', 'to-finish', '--result', 'shipped');
+  assert.equal(finished.task.status, 'done');
+  assertIsoAtOrAfter(finished.task.updatedAt, finished.task.createdAt, 'done');
+  assert.equal(persisted(hive, 'to-finish').updatedAt, finished.task.updatedAt);
+});
+
+test('a main-side patchTask (the mutateTasks path) stamps updatedAt too', (t) => {
+  const { hive } = floorWithLedger(t, [card('main-side', { updatedAt: SEEDED })], 4);
+
+  assert.equal(hive.patchTask('main-side', { status: 'doing' }), true);
+  const after = persisted(hive, 'main-side');
+  assertIsoAtOrAfter(after.updatedAt, after.createdAt, 'patchTask');
+  assert.notEqual(after.updatedAt, SEEDED,
+    'the kanban / webhook / Slack writers must move the clock too, or a human-touched card '
+    + 'is aged from the wrong one');
+});
+
+test('a direct writeTasks stamps only the card that changed — an unchanged sibling keeps its updatedAt byte-for-byte', (t) => {
+  // src/main/index.ts:1061 (webhook card creation) and index.ts:4166 →
+  // realtimeActions.ts:360,427,446,497 (voice) call writeTasks DIRECTLY, bypassing
+  // mutateTasks entirely — a stamp placed in mutateTasks misses every one of them.
+  const { hive } = floorWithLedger(t, [
+    card('touched', { updatedAt: SEEDED }),
+    card('untouched', { updatedAt: SEEDED })
+  ], 4);
+
+  // Rows straight out of tasks() — the exact objects those five call sites hand back,
+  // derived meter and all.
+  const ledger = hive.tasks();
+  const next = ledger.tasks.map((c) => (c.id === 'touched' ? { ...c, status: 'doing' } : c));
+  assert.equal(hive.writeTasks(next, ledger.rev), true);
+
+  const touched = persisted(hive, 'touched');
+  assertIsoAtOrAfter(touched.updatedAt, touched.createdAt, 'writeTasks');
+  assert.notEqual(touched.updatedAt, SEEDED, 'the changed card must be re-stamped');
+  assert.equal(persisted(hive, 'untouched').updatedAt, SEEDED,
+    'an UNCHANGED card was re-stamped: HiveTask.updatedAt has silently become a duplicate of '
+    + 'the ledger-level updatedAt and no card can ever look stale (T-04-AGE-10)');
+});
+
+test('a legacy card — createdAt present, updatedAt absent — survives a patch and gains one', (t) => {
+  const { hive } = floorWithLedger(t, [card('legacy-card')], 4);
+  assert.equal(Object.hasOwn(persisted(hive, 'legacy-card'), 'updatedAt'), false,
+    'sanity: the seed must be the pre-phase shape every card on disk today has');
+
+  assert.equal(hive.patchTask('legacy-card', { status: 'doing' }), true);
+  const after = persisted(hive, 'legacy-card');
+  assert.equal(after.status, 'doing', 'the patch itself must succeed on a legacy card');
+  assert.equal(after.createdAt, '2026-08-15T08:00:00.000Z',
+    'createdAt must come through byte-identical — the new field is additive, not a rewrite');
+  assertIsoAtOrAfter(after.updatedAt, after.createdAt, 'legacy patch');
+});
+
+test('reading the ledger without mutating leaves updatedAt byte-identical', (t) => {
+  const { hive } = floorWithLedger(t, [card('idle', { updatedAt: SEEDED })], 4);
+
+  const first = persisted(hive, 'idle').updatedAt;
+  const second = persisted(hive, 'idle').updatedAt;
+  assert.equal(first, SEEDED, 'a plain read must not stamp the card');
+  assert.equal(second, first, 'two reads with no mutation between must agree byte-for-byte');
+
+  // D-33/D-40 — the positive lower bound beside the negative. A field that never
+  // moves at all satisfies both assertions above and measures nothing.
+  assert.equal(hive.patchTask('idle', { priority: 1 }), true);
+  assert.notEqual(persisted(hive, 'idle').updatedAt, SEEDED,
+    'the clock did not move on a real mutation either — the field measures nothing');
+});
+
+test('a legacy tasks.json round-trips through writeTasks byte-identically', (t) => {
+  const { hive } = floorWithLedger(t, [card('legacy-roundtrip')], 4);
+  const before = JSON.stringify(persisted(hive, 'legacy-roundtrip'));
+
+  const ledger = hive.tasks();
+  assert.equal(hive.writeTasks(ledger.tasks, ledger.rev), true);
+
+  assert.equal(JSON.stringify(persisted(hive, 'legacy-roundtrip')), before,
+    'an unmodified legacy card was rewritten by a write that changed nothing about it');
+  assert.equal(Object.hasOwn(persisted(hive, 'legacy-roundtrip'), 'updatedAt'), false,
+    'and it was not given the key as undefined either — Object.hasOwn is what tells those apart');
+});
