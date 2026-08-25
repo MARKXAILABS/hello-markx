@@ -1910,3 +1910,23 @@ test('ADR-0001: the approval answer is not a second PTY typer', () => {
       `${rel} gained or lost a writePty call. The existing path survives unchanged for non-ask reasons; the ask path must not acquire one`);
   }
 });
+
+test('GATE-05 rule G-3: the desktop countdown is re-derived from an anchor, never decremented', () => {
+  const rel = 'src/renderer/src/components/BlockedBanner.tsx';
+  const src = readStripped(rel);
+
+  // A backgrounded window throttles intervals, so a decremented counter drifts
+  // arbitrarily far in the OPTIMISTIC direction — it tells the operator they have
+  // time to answer a question that has already auto-denied.
+  assert.equal(/remaining\s*(--|-=)|--\s*remaining|setRemaining\(/.test(src), false,
+    'the countdown decrements a counter instead of re-deriving from its anchor');
+
+  // D-33/D-40's positive bound over the same text, so the negative above cannot be
+  // satisfied by a banner that never counts at all.
+  assert.ok(strippedHits(rel, 'receivedAt') >= 2,
+    'the countdown anchor is not both written and read');
+  assert.ok(strippedHits(rel, 'expiresInMs') >= 1,
+    "main's measured duration is not consumed");
+  assert.equal(strippedHits(rel, 'expiresAt'), 0,
+    'a deadline TIMESTAMP reached the banner. The renderer clock is not main\'s, and the whole reason main sends a duration is that the two never have to agree');
+});

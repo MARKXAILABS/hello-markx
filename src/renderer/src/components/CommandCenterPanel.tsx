@@ -21,6 +21,7 @@ import { useFleetTelemetry, type AgentUsageSample } from '@/hooks/useTelemetry';
 import { useClaudeAccountPool } from '@/hooks/useClaudeAccountPool';
 import { COMMAND_GROUPS } from '@shared/claudeCommands';
 import { useStore, triggerHistoryVisible, type Agent } from '@/store/store';
+import { answerAskFromBanner } from '@/hooks/useHive';
 import { usePtyParser } from '@/hooks/usePtyParser';
 import {
   buildSpawnCommand,
@@ -259,7 +260,11 @@ export function CommandCenterPanel({ agent, fullscreen = false }: { agent: Agent
       {agent.blockReason && (
         <BlockedBanner
           reason={agent.blockReason}
-          onAction={(_label, send) => {
+          onAction={(label, send) => {
+            // GATE-05 — the same shipped decision AgentDetailPanel calls. The god's
+            // banner is the one that most often carries an ask, and a second copy of
+            // a security branch is how two surfaces come to disagree about it.
+            if (answerAskFromBanner(agent, label)) return;
             if (send && agent.ptyId) void window.cth.writePty(agent.ptyId, send);
             updateAgent(agent.id, { blockReason: undefined });
           }}

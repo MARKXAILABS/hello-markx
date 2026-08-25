@@ -107,7 +107,7 @@ Module._load = function (request, ...rest) {
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
-let PixelButton, blockReasonFromApproval, rosterBadgeStatus, formatRemaining;
+let PixelButton, blockReasonFromApproval, rosterBadgeStatus, formatRemaining, askOutcomeText;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
   ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
@@ -130,7 +130,7 @@ try {
   // `stopArmDecision` is (`useHive.ts:156`): it lives inside a `useEffect`, and this
   // harness has no effect phase at all (see the ceiling at :23-38), so the only way to
   // assert the SHIPPED assembly rather than a copy of it is to call it directly.
-  ({ blockReasonFromApproval } = loadTs('src/renderer/src/hooks/useHive.ts'));
+  ({ blockReasonFromApproval, askOutcomeText } = loadTs('src/renderer/src/hooks/useHive.ts'));
   // The roster badge's precedence rule. Exported for a MEASURED reason, not a stylistic
   // one: `armed` is derived from `breakers`, which is `useState({})` inside
   // `useFleetTelemetry` (`useTelemetry.ts:96`) and is filled only by an effect. This
@@ -1078,6 +1078,50 @@ test('GATE-05 rule 4: a resolved ask keeps its banner, shows an outcome, and off
   // sentence the operator has to reconcile at 3am.
   assert.doesNotMatch(resolved, /margin-left:auto/,
     'the countdown is still rendered on a settled ask');
+});
+
+test('GATE-05 rule G-2: the outcome line says WHICH way a failed answer went', () => {
+  // The two failures are opposites at 3am. `expired` means the floor already denied
+  // and nothing ran; `settled` means somebody else answered and it may have run. One
+  // "could not answer" line for both is the message that leaves the operator unable
+  // to act, which is the whole reason main returns the distinction.
+  assert.match(askOutcomeText(true, { settled: true }, false), /approved/);
+  assert.match(askOutcomeText(false, { settled: true }, false), /denied/);
+  assert.doesNotMatch(askOutcomeText(false, { settled: true }, false), /did run|was allowed/,
+    'a DENY reported that the command ran');
+
+  assert.match(askOutcomeText(true, { settled: false, expired: true }, false), /expired/,
+    "main said the ask expired and the banner did not pass that on — the operator cannot tell a denied command from one that may have run");
+  assert.match(askOutcomeText(true, { settled: false, expired: false }, false), /elsewhere/,
+    'an ask settled on another surface is reported as an expiry, which claims the command did not run when it may well have');
+
+  // The renderer's OWN reading wins on a desktop-only floor: `toolAskExpiry` in main is
+  // filled by phone GETs, so `expired` is false there for a genuinely expired ask. Either
+  // source saying expired is enough; requiring both would report the safe outcome as the
+  // unsafe one exactly where the phone is not in play.
+  assert.match(askOutcomeText(true, { settled: false, expired: false }, true), /expired/,
+    "the renderer ignored its own anchor. Main's expired flag reads false for any ask no phone GET memoised, so on a desktop-only floor this is the ONLY honest source");
+
+  // A dead IPC is neither: the ask was not touched, and saying so is the only
+  // statement that is true.
+  assert.match(askOutcomeText(true, null, false), /could not reach the floor/,
+    'a failed IPC was reported as an outcome — the ask is still open and the operator has been told it is not');
+});
+
+test('GATE-05: BOTH banner call sites route through the shipped ask decision, so the cases above are not asserting a copy', () => {
+  for (const rel of [
+    'src/renderer/src/components/AgentDetailPanel.tsx',
+    'src/renderer/src/components/CommandCenterPanel.tsx'
+  ]) {
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    assert.match(src, /if \(answerAskFromBanner\(agent, label\)\) return;/,
+      `${rel} no longer routes an ask through answerAskFromBanner — a second copy of a security branch is how two surfaces come to disagree about it`);
+    // ...and the PTY path it guards is STILL THERE for the non-ask reasons it was
+    // written for. T-04-ASK-21 is a grep gate on these two files precisely so that
+    // "the ask does not type" cannot be satisfied by deleting the typer.
+    assert.match(src, /window\.cth\.writePty\(agent\.ptyId, send\)/,
+      `${rel} lost its writePty path entirely — the GATE-03/pty-parser reasons this banner was built for now do nothing`);
+  }
 });
 
 // ─── VIGIL-03 — a blocked agent is visibly blocked, even under a tripped breaker ──────

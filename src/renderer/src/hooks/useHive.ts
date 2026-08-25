@@ -410,6 +410,88 @@ export function blockReasonFromApproval(
 }
 
 /**
+ * 04-UI-SPEC rule G-2's outcome line: what the banner says once the ask is settled.
+ *
+ * WHICH WAY IT WENT IS THE WHOLE POINT, and the two failures are opposites at 3am.
+ * `expired` means the floor already denied the command and the agent moved on — nothing
+ * ran. `settled` means somebody else answered, and it may have run. A single "could not
+ * answer" line for both is the one message that leaves the operator unable to act.
+ *
+ * Pure, and exported, for the same measured reason `blockReasonFromApproval` above is:
+ * the IPC round trip needs a `window.cth` this harness does not have, but the RULE is a
+ * function of three booleans and gets asserted for real.
+ *
+ * `locallyExpired` is the renderer's OWN reading, derived from `receivedAt + expiresInMs`
+ * — its own anchor, its own clock, skew-immune by construction (rule G-3). Main's
+ * `expired` flag is read too, but it is `false` for an ask no phone GET ever memoised, so
+ * it can only ever CONFIRM. Either source saying "expired" is enough; requiring both
+ * would report an expiry as an unexplained settle on a desktop-only floor.
+ */
+export function askOutcomeText(
+  approved: boolean,
+  res: { settled: boolean; expired?: boolean } | null,
+  locallyExpired: boolean
+): string {
+  if (res === null) return 'could not reach the floor — the ask was left exactly as it was';
+  if (res.settled) {
+    return approved
+      ? 'approved — the command was allowed to run'
+      : 'denied — the command did not run';
+  }
+  if (res.expired === true || locallyExpired) {
+    return 'expired before you answered — the floor denied it for you, so the command did not run';
+  }
+  return 'already answered elsewhere — this ask was settled on another surface, and the command may have run';
+}
+
+/**
+ * GATE-05's arm of `BlockedBanner`'s `onAction`, shared by both of its callers.
+ *
+ * Returns TRUE when it took the click, so a caller's remaining lines are the
+ * PTY-parser-derived path they were already written for, byte-unchanged.
+ *
+ * ONLY the ask arm is shared, deliberately. The obvious refactor is to absorb both
+ * callers' `onAction` whole — but that would move `window.cth.writePty` out of
+ * `AgentDetailPanel` and `CommandCenterPanel`, and T-04-ASK-21's mitigation is a
+ * `grep -c 'writePty'` gate on exactly those two files. A one-gate invariant whose
+ * measurement surface moves in the commit that adds a second answer route is a worse
+ * trade than three lines appearing twice.
+ *
+ * The branch is on `askId` AND on the label being one of the two literals main allowlists
+ * (`answerToolAsk`, index.ts) — never "the reason has an id, so route everything". The
+ * `dismiss` control on a RESOLVED ask still carries `askId`, and routing it back to the
+ * IPC would re-answer a question that is already settled.
+ *
+ * ADR-0001: this function contains no `writePty` and cannot reach one —
+ * `blockReasonFromApproval` gives an ask's actions no `send` at all, so the callers' PTY
+ * path is unreachable for an ask rather than merely unused.
+ */
+export function answerAskFromBanner(
+  agent: { id: string; blockReason?: BlockReason },
+  label: string,
+  now: number = Date.now()
+): boolean {
+  const reason = agent.blockReason;
+  const askId = reason?.askId;
+  if (!reason || askId === undefined || (label !== 'approve' && label !== 'deny')) return false;
+
+  const { updateAgent } = useStore.getState();
+  const approved = label === 'approve';
+  const locallyExpired = reason.receivedAt !== undefined && reason.expiresInMs !== undefined
+    && reason.receivedAt + reason.expiresInMs - now <= 0;
+  // Rule 4 — the banner does NOT vanish. `actions: []` swaps the action row for the
+  // outcome plus the `dismiss` control BlockedBanner already renders on exactly that
+  // condition, so the swap needs no new JSX and no second state machine.
+  const settle = (res: { settled: boolean; expired?: boolean } | null): void => {
+    updateAgent(agent.id, {
+      blockReason: { ...reason, actions: [], outcome: askOutcomeText(approved, res, locallyExpired) }
+    });
+  };
+  void window.cth.answerApproval(askId, approved).then(settle).catch(() => settle(null));
+  return true;
+}
+
+/**
  * The renderer-side glue for the hive:
  *   1. spawns the god agent into Michael's room when none is running,
  *   2. drives avatar state from real Claude Code hook events, and
