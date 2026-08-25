@@ -1405,8 +1405,12 @@ test('round-3 #8: an ok:false timeline renders UI-SPEC :247\'s binding error cop
   // operator never receives.
   assert.ok(text.includes('Could not read the timeline: sentinel-store-unreadable. Pick the day again to retry.'),
     'a rejected/unreadable day does not render UI-SPEC :247\'s sentence with its reason — either the copy was invented or the reason was dropped into a title, and "problem, then what to do next" loses the problem');
-  assert.ok(ariaLabelOf(markup).includes('sentinel-store-unreadable'),
-    'the failure reason reaches the page but not the SVG\'s accessible name — a screen-reader user is left with a problem and no cause');
+  // Read out of the attribute INLINE rather than through the helper, so this case is
+  // self-contained about where it is looking: the claim is specifically that the reason
+  // survives into `aria-label`, not merely that it appears somewhere in the markup.
+  const svgLabel = /<svg[^>]*\saria-label="([^"]*)"/.exec(markup);
+  assert.ok(svgLabel && decode(svgLabel[1]).includes('sentinel-store-unreadable'),
+    'the failure reason reaches the page but not the SVG\'s aria-label — a screen-reader user is left with a problem and no cause');
 
   // The three fabrications. Each asserts a FACT ABOUT THE RECORD, and an unread record
   // supports no such fact — this is D-27's failure in its purest form.
@@ -1429,10 +1433,15 @@ test('a fresh install (firstTs === null) says the record has not started, not th
 });
 
 test('a day entirely before the record begins names when the record starts (round-2 #22/#36)', () => {
-  // firstTs on a LATER calendar day than the one being viewed.
-  const firstTs = localDayStart('2026-08-22') + 9 * 3_600_000;
+  // A REAL timestamp two days AFTER the day being viewed — written offset-first so the
+  // relationship this case turns on ("later than the requested day") is the first thing
+  // read, rather than buried behind a date literal.
   const text = decode(band({
-    day: QUIET, summary: { ok: true, firstTs, eventsAgedOut: false, buckets: bandBuckets(QUIET) }
+    day: QUIET,
+    summary: {
+      ok: true, firstTs: 2 * 86_400_000 + 9 * 3_600_000 + localDayStart(QUIET),
+      eventsAgedOut: false, buckets: bandBuckets(QUIET)
+    }
   }));
 
   assert.ok(text.includes('Nothing was recorded on 2026-08-20. The stored record starts '),
@@ -1524,6 +1533,14 @@ test('round-3 #2: a costTracking:\'transcript\' agent gets its OWN sentence — 
   // join shows it, but boot.ts's `if (sample?.sessionId)` append gate means it never
   // lands in the ledger this track is drawn from. That is 03-CONTEXT's first Accepted
   // Residual, and counting only 'none' renders it as the silent zero D-35 forbids.
+  // The fixture's premise, pinned against the REAL preset table rather than assumed: if
+  // codex ever stops being the transcript-tier engine, this says so instead of leaving
+  // the case below quietly asserting nothing about the tier it names.
+  assert.deepEqual(
+    { costTracking: AGENT_PROVIDER_PRESETS.find((p) => p.id === 'codex')?.costTracking },
+    { costTracking: 'transcript' },
+    'codex is no longer the preset carrying the transcript tier — re-derive which one does before trusting this case');
+
   seedServerSnapshot(t, { agents: [agentRow({ id: 'c1', name: 'Cody', provider: 'codex' })] });
   const text = decode(band({
     day: QUIET,

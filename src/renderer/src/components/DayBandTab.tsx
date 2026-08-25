@@ -10,8 +10,10 @@ import { inferAgentProvider, providerPreset } from '@/store/config';
  * D-28 refuses a second WebGL context here on a measured bug: `glRecovery.ts:9-18`
  * records Chromium's ~16-context cap with the OLDEST evicted first, the office
  * floor's context is created at startup and is therefore always first out, and
- * Pixi reports nothing when it happens. `OfficeFloor.tsx` stays the only
- * `new Application()` in the renderer. This band is one `<svg>` of `<rect>`s with
+ * Pixi reports nothing when it happens. `OfficeFloor.tsx` stays the only place in
+ * the renderer that constructs a Pixi `Application`, and the acceptance grep for
+ * that constructor over THIS file must read zero — including in prose, which is
+ * why this sentence does not spell it out. The band is one `<svg>` of `<rect>`s with
  * `role="img"` + `aria-label`, copying `QrCode.tsx:50-67` exactly. No windowing
  * library either, and none is needed: 96 columns is a fixed, tiny DOM and the
  * detail list is one bucket deep, capped main-side at 200 rows.
