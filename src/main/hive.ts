@@ -1058,7 +1058,7 @@ export class HiveManager {
           if (desc.kind === 'hooks') {
             if (desc.shim === 'agy') installAgyHooks(root, this.nodeRunUnquoted.bind(this));
             else if (desc.shim === 'codex') {
-              env.CODEX_HOME = installCodexHooks(dir, this.shimPath(), this.nodeRunUnquoted.bind(this));
+              env.CODEX_HOME = installCodexHooks(dir, this.shimPath(), this.nodeRunUnquoted.bind(this), meta.cwd);
               // Codex refuses to run hooks from a config dir without persisted
               // "hook trust" (normally an interactive gate). Our hooks.json is
               // hive-authored inside an isolated CODEX_HOME, so we bypass that gate

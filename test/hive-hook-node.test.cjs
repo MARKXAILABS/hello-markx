@@ -141,7 +141,7 @@ test('every hook installer routes through the launcher — none left on bare nod
   const hiveRoot = path.join(home, 'hive');
   installAgyHooks(hiveRoot, hive.nodeRunUnquoted.bind(hive));
   installGrokHooks(hiveRoot, hive.nodeRun.bind(hive));
-  installCodexHooks(path.join(home, 'hive/agents/a1'), hive.shimPath(), hive.nodeRunUnquoted.bind(hive));
+  installCodexHooks(path.join(home, 'hive/agents/a1'), hive.shimPath(), hive.nodeRunUnquoted.bind(hive), path.join(home, 'work'));
 
   const launcher = launcherIn(home);
   const commands = hookCommandsUnder(home);
@@ -200,4 +200,58 @@ test('a hook fires with NO node on PATH, and its payload reaches HIVE_SOCK', { s
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.ok(received.length > 0, 'nothing arrived at HIVE_SOCK');
   assert.match(received[0], /"hook_event_name"\s*:\s*"Stop"/);
+});
+
+/* ── codex directory trust is written, not prompted for (operator-found, 2026-08-25) ──
+ *
+ * codex-cli 0.128.0 removed `--dangerously-bypass-hook-trust` and replaced it with an
+ * INTERACTIVE gate, seen live on a real spawn:
+ *
+ *   Do you trust the contents of this directory? … Trusting the directory allows
+ *   project-local config, hooks, and exec policies to load.
+ *     1. Yes, continue   2. No, quit
+ *
+ * A hive worker has nobody to press 1, so it sits there idle forever — never reading
+ * its inbox, while LOOKING like a healthy agent. Worse than the flag error it replaced,
+ * which at least died loudly.
+ *
+ * The supported non-interactive answer is the table codex itself writes when the
+ * operator picks "Yes". */
+test('installCodexHooks trusts the agent cwd in the per-agent config, so no prompt blocks the spawn', () => {
+  const home = tmpHome('md-codex-trust-');
+  const agentDir = path.join(home, 'hive', 'agents', 'a1');
+  const cwd = path.join(home, 'work', 'Project-X');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+
+  const codexHome = installCodexHooks(agentDir, null, (s) => `node ${s}`, cwd);
+  const cfg = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
+
+  assert.match(cfg, /trust_level = "trusted"/,
+    'the per-agent config must trust something, or codex stops on its interactive gate');
+  assert.ok(cfg.toLowerCase().includes(`[projects.'${cwd.toLowerCase()}']`),
+    `the trusted path must be the AGENT'S OWN cwd (${cwd}) — trusting some other path does `
+    + 'not clear the prompt for this workspace');
+
+  // TOML literal strings do not process escapes, so a Windows path survives verbatim.
+  // Double quotes here would turn every backslash into an escape and corrupt the key.
+  const line = cfg.split('\n').find((l) => l.toLowerCase().startsWith("[projects.'"));
+  assert.ok(line && line.includes("'"), 'the project key must be a single-quoted TOML literal');
+});
+
+test('installCodexHooks does not emit a duplicate trust table when the seed already has one', () => {
+  const home = tmpHome('md-codex-trust2-');
+  const agentDir = path.join(home, 'hive', 'agents', 'a1');
+  const cwd = path.join(home, 'work');
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+
+  // installCodexHooks seeds from the operator's ~/.codex/config.toml. If that file
+  // already trusts this path, appending our own copy produces a DUPLICATE TOML table,
+  // which codex refuses to parse — a config it cannot read is worse than a prompt.
+  const codexHome = installCodexHooks(agentDir, null, (s) => `node ${s}`, cwd);
+  const cfg = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
+  const key = `[projects.'${cwd.toLowerCase()}']`;
+  const hits = cfg.toLowerCase().split(key).length - 1;
+  assert.equal(hits, 1, `the trust table for ${cwd} must appear exactly once, found ${hits}`);
 });

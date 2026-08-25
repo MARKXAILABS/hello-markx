@@ -170,7 +170,7 @@ export function installAgyHooks(root: string | null, nodeRunUnquoted: NodeRunFn)
  *  untouched. The user's ~/.codex/auth.json is linked in and their config.toml is
  *  copied + extended (login + model/provider/trust settings still apply).
  *  Returns the CODEX_HOME path for the caller to put in the worker's env. */
-export function installCodexHooks(dir: string, shimPath: string | null, nodeRunUnquoted: NodeRunFn): string {
+export function installCodexHooks(dir: string, shimPath: string | null, nodeRunUnquoted: NodeRunFn, cwd: string): string {
   const home = join(dir, '.codex');
   try {
     mkdirSync(home, { recursive: true });
@@ -231,6 +231,34 @@ export function installCodexHooks(dir: string, shimPath: string | null, nodeRunU
       for (const ev of events) {
         config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = '${nodeRunUnquoted(shim)}'\ntimeout = 30\n`;
       }
+    }
+    // DIRECTORY TRUST — where `--dangerously-bypass-hook-trust` went.
+    //
+    // codex-cli 0.128.0 removed that flag and replaced it with an INTERACTIVE
+    // gate, observed live on a real spawn:
+    //
+    //   Do you trust the contents of this directory? … Trusting the directory
+    //   allows project-local config, hooks, and exec policies to load.
+    //     1. Yes, continue   2. No, quit
+    //
+    // An automated hive worker has nobody to press 1, so it sits on that prompt
+    // forever — idle, never reading its inbox. Worse than the old failure, which
+    // at least died loudly: this one looks like a healthy agent doing nothing.
+    //
+    // The supported non-interactive answer is the same one codex writes when the
+    // operator picks "Yes": a `[projects.'<path>']` table with
+    // `trust_level = "trusted"`. The seed carries the operator's own trusted
+    // paths, but never the agent cwd we just created, so we add it here.
+    //
+    // Single-quoted TOML literal: no escape processing, so a Windows path's
+    // backslashes survive verbatim. Lower-cased to match how codex itself writes
+    // these keys. Skipped when the seed already trusts this path — TOML rejects a
+    // duplicate table, and a config codex cannot parse is a worse outcome than a
+    // trust prompt.
+    const trustKey = cwd.toLowerCase();
+    if (!config.toLowerCase().includes(`[projects.'${trustKey}']`)) {
+      config += '\n# --- hellomarkx-hive: trust this agent\'s own workspace (auto-generated) ---\n'
+        + `[projects.'${trustKey}']\ntrust_level = "trusted"\n`;
     }
     writeFileSync(join(home, 'config.toml'), config, 'utf8');
   } catch (e) { console.error('[hive] installCodexHooks failed:', e); }
