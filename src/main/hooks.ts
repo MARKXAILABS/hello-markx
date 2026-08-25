@@ -86,6 +86,15 @@ import { estimateCostUsd } from './pricing';
 // configuration and `floor/deps.ts` is emphatic that config reaches a service
 // through its constructor rather than through an import of `config.ts`.
 import { commandShapeDenial, DEFAULT_HOST_ALLOWLIST } from './commandShape';
+import { ApprovalRegistry, type PendingApproval } from './approvals';
+// A CONSTANT, not a collaborator, so this is an import rather than an injected
+// dependency — the same way `estimateCostUsd`, `SPAWN_SAFE_SESSION_ID` and
+// `isClaudeProvider` already arrive. It has to be an import: `HookServer`
+// constructs its own `ApprovalRegistry` (below), so `boot.ts` never does, and a
+// `ttlMs` option nobody passes silently takes whatever the class was written
+// with. No cycle — `hiveProvisioning.ts` imports `hiveTemplates.ts` and nothing
+// else in `src/main/`, and it imports this file not at all.
+import { ASK_TTL_MS } from './hiveProvisioning';
 import { SPAWN_SAFE_SESSION_ID } from './transcript';
 import { isClaudeProvider } from '../shared/agentProvider';
 
@@ -104,6 +113,10 @@ interface HookPayload {
   /** Status-line payloads only: the session's live context accounting. */
   context_window?: { total_input_tokens?: number; context_window_size?: number };
   cwd?: string;
+  /** `ApprovalPoll` payloads only (GATE-05): the id of the ask this shim is
+   *  waiting on. Unguessable and single-use, but never sufficient on its own —
+   *  the poll branch also checks that the token-derived agent OWNS the ask. */
+  ask_id?: string;
   tool_name?: string;
   tool_input?: unknown;
   stop_hook_active?: boolean;
@@ -488,6 +501,23 @@ export const HOOK_LINE_MAX = 16 * 1024 * 1024;
  */
 const HOOK_IDLE_MS = 2_000;
 
+/** GATE-05 — how often a waiting shim re-connects to ask whether its question
+ *  has been answered. One connection per second per pending ask, and there is at
+ *  most a handful of those at a time. Each poll is a FRESH SHORT connection, well
+ *  inside HOOK_IDLE_MS above: a held-open connection with a "pending" preamble
+ *  would be two JSON objects on one socket, which `GROK_HOOK_SHIM`'s
+ *  `JSON.parse(resp || '{}')` over the whole accumulated buffer reads as a parse
+ *  failure — and its parse failure exits 0 with no stdout, which is ALLOW. A
+ *  silent fail-OPEN that would pass every Claude test (RESEARCH § L-02). */
+const ASK_POLL_MS = 1_000;
+
+/** What an unanswered ask ends up being, in the audit trail and on the wire.
+ *  Declared once so the row and the reply cannot say different things about the
+ *  same event. */
+const ASK_EXPIRED_REASON =
+  'Denied: this tool call was refused, or its approval window closed before an operator answered. '
+  + 'Re-run it if it is still the right thing to do — a fresh call opens a fresh question.';
+
 /**
  * The reply every bound writes before it closes. Declared once so the exits
  * cannot drift apart, and deliberately the SAME shape `handle` returns for a
@@ -568,6 +598,26 @@ export class HookServer {
    */
   private tokens = new Map<string, string>();
 
+  /**
+   * GATE-05 — the questions this floor is currently waiting on.
+   *
+   * CONSTRUCTED HERE rather than at the composition root, and given the
+   * production TTL in the same commit that declares it. `HookServer` is the only
+   * thing that opens an ask (the PreToolUse shape arm) and the only thing that
+   * answers a poll, so it is the registry's natural owner — which also means
+   * `boot.ts` never constructs it, which is precisely why `ttlMs` cannot be left
+   * to a caller to remember: an option nobody supplies silently takes whatever
+   * the class was written with (T-04-ASK-44).
+   *
+   * The publisher is read at CALL time, not captured: `publishApproval` is a
+   * constructor parameter and this initializer must not depend on the order the
+   * two are assigned in.
+   */
+  private readonly approvals = new ApprovalRegistry({
+    ttlMs: ASK_TTL_MS,
+    publish: (open) => { try { this.publishApproval?.(open); } catch { /* a listener must not break a gate */ } }
+  });
+
   /** Socket watchdog (see `armSocketWatchdog`) — POSIX only. */
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private sockIno: number | null = null;
@@ -610,15 +660,36 @@ export class HookServer {
      *  same stated reason as `recordCost` above — no existing call site or test
      *  has to move an argument, and there are eight `new HookServer(` sites. */
     private hostAllowlist?: () => readonly string[],
-    /** GATE-05's seam, declared here and supplied by a later plan. When a shape
-     *  verdict is `ask` and this is present, the decision is delegated to it and
-     *  its reply is returned verbatim. When it is ABSENT — every wave until the
-     *  approval transport is wired — an `ask` is answered as a DENY carrying the
-     *  same reason. That is not a temporary state to clean up: it is the correct
-     *  behaviour for a floor with nobody to ask. */
+    /** GATE-05's seam, declared by plan 04-06 and SUPPLIED HERE by plan 04-15:
+     *  `HookServer` now owns an `ApprovalRegistry` and answers an `ask` itself
+     *  (`openApproval` below), so this parameter is an OVERRIDE, not the wiring.
+     *
+     *  PRODUCTION PASSES NOTHING HERE, and the composition root must not start:
+     *  an override replaces the registry entry, the poll handle and the operator
+     *  page all at once, which is GATE-05 switched off by a constructor argument.
+     *  It survives as the seam 04-06 declared and as a test hook. */
     private openAsk?: (a: {
       agentId: string; tool: string; command: string; reason: string
-    }) => unknown
+    }) => unknown,
+    /** RECORD-01's sink — an INJECTED thunk, never an import of `db.ts`.
+     *
+     *  A thunk rather than a value because `boot.ts` assigns its module-scope
+     *  `persist` let AFTER the `new HookServer(...)` call: a value captured at
+     *  construction time would be `undefined` forever. Read at CALL time, exactly
+     *  as `boot.ts`'s own `handoff` closure already reasons about `delivery`.
+     *
+     *  Best-effort by contract: a recording failure must never change a verdict.
+     *  A gate that fails open because its audit log was unavailable is a worse
+     *  bug than a missing row. */
+    private recordToolCall?: (row: {
+      agentId: string; ts: number; tool: string;
+      target: string | null; decision: 'allow' | 'deny' | 'ask'; reason?: string;
+    }) => void,
+    /** GATE-05's publisher — called with the currently-open asks whenever that
+     *  set changes. Plan 04-17 wires it to `openAsks()`, the desktop
+     *  `Notification` and Web Push; plan 04-20 wires it at the composition root.
+     *  Optional and LAST, same house rule as every seam above it. */
+    private publishApproval?: (open: PendingApproval[]) => void
   ) {
     // GATE-01 — the qwen/crush PROXY SIDECAR is not a PTY, so `PtyManager`'s
     // per-spawn mint never sees it: it is a child of `HiveManager`. Register
@@ -797,6 +868,241 @@ export class HookServer {
     return this.contextById.get(agentId);
   }
 
+  /** GATE-05 — the questions the floor is waiting on, for the operator surfaces.
+   *  A NAMED ACCESSOR on an object that is already a declared `Floor` member, so
+   *  `index.ts` can merge these into `openAsks()` and the desktop IPC can answer
+   *  one without a `boot.ts` line or a `Floor` interface change. */
+  openApprovals(): PendingApproval[] {
+    this.approvals.sweep(Date.now());
+    return this.approvals.list();
+  }
+
+  /** Settle one ask from an OPERATOR surface — the phone's bearer-guarded
+   *  `POST /phone/api/answer` or the desktop IPC. False when the id is unknown,
+   *  already settled or expired. No agent id to compare against here and none is
+   *  asked for: the unguessable single-use id IS the capability on these two
+   *  paths, which is GATE-05 ceiling item (f) below. */
+  answerApproval(id: string, approved: boolean): boolean {
+    const entry = this.approvals.list().find((e) => e.id === id);
+    const settled = this.approvals.answer(id, approved);
+    // RECORD-01 — an operator's answer is a verdict on a tool call, so it lands
+    // in the ledger for the same reason an expiry does: an ask whose only row
+    // reads `'ask'` is a question the audit trail never sees answered.
+    if (settled && entry) {
+      this.record(
+        entry.agentId, entry.tool, entry.command, approved ? 'allow' : 'deny',
+        approved ? 'Approved by the operator.' : 'Refused by the operator.'
+      );
+    }
+    return settled;
+  }
+
+  /**
+   * GATE-05's third answer: open a question, page the operator, and reply with
+   * ONE object that is two things at once.
+   *
+   * THE REPLY SHAPE, and why it needs no version negotiation. An un-upgraded shim
+   * reads `hookSpecificOutput` and nothing else, so it sees a valid `deny` and
+   * refuses — fail-closed, on the correct side, for free. An upgraded shim sees
+   * `hive_ask` and polls instead. There is no version field, no handshake, and no
+   * wave in which a mixed floor is unsafe.
+   *
+   * `permissionDecisionReason` is the JUDGE'S OWN sentence, byte for byte — the
+   * one `commandShape.ts` authored beside the rule that fired. The plan's
+   * `<interfaces>` block proposed a generic "approval required and this shim
+   * cannot wait" string instead; that would tell an operator reading a refused
+   * agent's transcript nothing about WHICH rule refused it, and it would break
+   * `test/gate03-roundtrip.test.cjs`'s byte-for-byte reason assertion, which is
+   * the strongest evidence in the repo that this reply really is a valid deny to
+   * an old shim. The upgrade notice belongs on the poll path, where only a shim
+   * that already understands `hive_ask` can read it.
+   *
+   * `hive_ask.deadlineMs` is READ OFF THE ENTRY, never recomputed. Two
+   * independently-derived deadlines is exactly the "times out on the wrong side"
+   * failure D-08 names, and it is what lets an operator's late "yes" answer a
+   * question whose asker already denied and moved on.
+   *
+   * SYNCHRONOUS, like every other exit in `handle`. Making `handle` async to
+   * await an answer would move every side effect in a ~30-return-point function
+   * from same-tick to microtask, on every hook event on the floor, to serve one
+   * branch — and the wait belongs on the shim anyway (RESEARCH § Pattern 3).
+   *
+   * ── GATE-05's CEILING (D-34) ────────────────────────────────────────────────
+   * Its own list, lettered (a)-(h). GATE-01's and GATE-03's are on
+   * `protectedPathDenial` above, (a)-(i) and (j)-(v); this one is here because
+   * this is where a reader of GATE-05 will look.
+   *
+   *   (a) THE DENY-ON-TIMEOUT ONLY BINDS ENGINES WHOSE SHIM POLLS, and four of
+   *       them do not: pi, OpenCode, grok and agy all take the first reply's deny
+   *       and never come back, so on those four "ask" **degrades to** an
+   *       unconditional deny. That is the safe side and it is not the third
+   *       answer, and after plan 04-10 turns OpenCode's judging on for the first
+   *       time the change in behaviour is substantial: on pi, OpenCode, grok and
+   *       agy, **every force-push, every `curl … | sh`, every `rm` with a
+   *       recursive flag, and every fetch to a host outside a 30-entry
+   *       `[ASSUMED]` allowlist becomes a refusal with no path through** — and
+   *       two of the four (pi, OpenCode) have never been observed live. This is
+   *       the phase's ONE new deliberate fail-CLOSED. Named here rather than
+   *       discovered by an operator whose pi agent cannot install a toolchain;
+   *   (a-rider) THE ASK IS STILL OPENED FOR THOSE FOUR, so the operator is still
+   *       paged and their answer is INERT. The registry entry is created and
+   *       published before the reply goes back, so the phone push and the desktop
+   *       banner fire exactly as they do for a polling engine — but that shim
+   *       already has its deny and the decision is made. Tapping `approve`
+   *       settles an entry nobody will read. Zero practical impact today (none of
+   *       the four is installed on this machine) and the safe direction either
+   *       way, but being woken at 3am to answer a question that was already
+   *       answered is a real cost. What would settle it: suppress the ask surface
+   *       for engines whose shim cannot poll, or label it "already denied — for
+   *       your information". Owner: the hive maintainer;
+   *   (b) AN APP RESTART MID-ASK loses the in-memory registry and the next poll
+   *       denies. Deliberate: this is the "asked and nobody answered" case, not
+   *       the "floor is down" case, and those must not share a default;
+   *   (c) an agent that never runs a HOOK-BRIDGED tool is not asked about
+   *       anything — the same limit both judges above already carry;
+   *   (d) `--permission-mode bypassPermissions` (autoMode's default) suppresses
+   *       Claude's own permission prompt, so this gate is the only thing between
+   *       the model and the command. That is WHY (a) is written down rather than
+   *       implied;
+   *   (e) GROK'S AND AGY'S PreToolUse HOOK TIMEOUTS ARE UNCHANGED, AND THEIR
+   *       SHIMS DELIBERATELY **DO NOT POLL**. agy is `timeout: 0`
+   *       (`hiveProvisioning.ts`'s `installAgyHooks`), and that file's own note
+   *       records the same `0` sentinel meaning ONE SECOND on codex rather than
+   *       "no timeout". grok writes no key at all (`installGrokHooks`) and
+   *       applies its own ~5 s event-aware default, whose UNIT — seconds or
+   *       milliseconds — is unverified; if it reads milliseconds then writing
+   *       `150` would mean 150 ms, every grok PreToolUse hook would die before
+   *       the shim could answer, and that is WORSE than today and undetectable.
+   *       Neither CLI is installed here, so neither resolver can be probed. So
+   *       this gate guesses at neither, and the rule that makes refusing safe is:
+   *       **a shim may enter the poll loop only on an engine whose PreToolUse
+   *       timeout this app itself writes and can therefore bound.** For grok and
+   *       agy the ask reply's own `permissionDecision: 'deny'` stands — their
+   *       existing decoders already translate exactly that — so both take item
+   *       (a)'s degradation instead of a fail-open. What would settle it: an
+   *       installed CLI plus one hook fire. Owner: whoever installs them;
+   *   (f) THE REGISTRY'S `answer` IS REACHABLE FROM THREE PLACES — the hook
+   *       socket (a poll), the phone, and the desktop IPC. On the socket the
+   *       owning agent is checked; on the other two the ask id IS the whole
+   *       capability. It is unguessable and single-use, but anyone who can call
+   *       those surfaces with a live id can settle the ask. The phone's half sits
+   *       behind Phase 2's bearer boundary and the desktop's behind Electron IPC.
+   *       Named so the capability model is legible;
+   *   (g) CLAUDE'S PreToolUse BUDGET — path A, and the number. This app now
+   *       writes `timeout: PRETOOLUSE_HOOK_TIMEOUT_SEC` into `hookSettings`'
+   *       PreToolUse entry and nowhere else, so the row closes by construction
+   *       and `CLAUDE_PRETOOLUSE_TIMEOUT_SEC` enters `MIN_PRETOOLUSE_SEC` as a
+   *       measured number rather than a shrug. The UNIT was read out of the
+   *       installed binary — `claude --version` → 2.1.236, and every hook runner
+   *       inside it computes `e.timeout ? e.timeout * 1000 : <default>`, i.e.
+   *       SECONDS; the command-hook default is 600000 ms. What would settle it
+   *       further: a released settings schema that pins the unit. Owner: the hive
+   *       maintainer;
+   *   (h) `PRETOOLUSE_HOOK_TIMEOUT_SEC = 150` IS FIVE TIMES codex's previous 30 s,
+   *       and that is a real latency change on the NON-ask path — bounded, not
+   *       dismissed. `hiveProvisioning.ts` chose 30 s because each hook
+   *       cold-starts via hive-node (measured 0.08-0.16 s idle, 0.6-0.7 s under 8
+   *       concurrent spawns). What keeps 150 s from becoming a five-fold stall is
+   *       a bound this phase deliberately does not touch: the shim's own
+   *       unconditional 5 s exit timer stays armed on the non-ask path, so a shim
+   *       wedged for a non-ask reason still exits at ~5 s whatever the engine
+   *       budget is. The engine timeout binds only after a `hive_ask` has been
+   *       seen and that boot timer cleared — which is the case it exists for.
+   *       `150` remains `[ASSUMED]`.
+   */
+  private openApproval(a: {
+    agentId: string; tool: string; command: string; reason: string
+  }): unknown {
+    if (this.openAsk) return this.openAsk(a);
+    // The poll loop is the clock, and this is its other tick: an ask opened after
+    // a long idle must not sit behind one that expired while nothing polled.
+    this.sweepApprovals();
+    const entry = this.approvals.open(a);
+    console.warn(
+      '[hive] PreToolUse ASKED (shape) agent=' + a.agentId + ' tool=' + a.tool
+      + ' ask=' + entry.id + ': ' + a.reason.slice(0, 90)
+      + ' | command: ' + a.command.slice(0, 200)
+    );
+    this.emitControl(a.agentId, a.tool, a.reason, a.command);
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: a.reason
+      },
+      hive_ask: { id: entry.id, deadlineMs: entry.expiresAt, pollMs: ASK_POLL_MS }
+    };
+  }
+
+  /**
+   * A waiting shim asking whether its question has been answered yet.
+   *
+   * `authorized()` has already run at the socket, so `agentId` here is DERIVED
+   * from this caller's own per-agent token. That is necessary and NOT sufficient:
+   * it maps a valid token to the identity it was minted for, so agent B polling
+   * agent A's ask id sends B's own perfectly valid token and nothing upstream
+   * objects. GATE-01 bound a token to an identity; it never bound an ask to an
+   * owner. `ApprovalRegistry.poll` takes the owner as a required argument and
+   * treats a mismatch exactly like an unknown id — deny, and leak nothing about
+   * whether the id exists (ASVS V4).
+   *
+   * Answered EARLY in `handle`, beside `Status`, and returned before anything
+   * else runs: a poll is a question about a decision already recorded, not a hook
+   * boundary. It must not feed the breaker's loop detector (a shim polling once a
+   * second for two minutes is 120 identical payloads), must not re-`emit` to the
+   * renderer, and must not touch `recordSession`.
+   */
+  private approvalPoll(agentId: string, p: HookPayload): unknown {
+    this.sweepApprovals();
+    const verdict = this.approvals.poll(typeof p.ask_id === 'string' ? p.ask_id : '', agentId);
+    if (verdict === 'pending') return { status: 'pending' };
+    if (verdict === 'allow') {
+      return {
+        status: 'allow',
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          permissionDecisionReason: 'Approved by the operator.'
+        }
+      };
+    }
+    return {
+      status: 'deny',
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: ASK_EXPIRED_REASON
+      }
+    };
+  }
+
+  /**
+   * Expire whatever is past its deadline, and write the denial each expiry
+   * actually was.
+   *
+   * WITHOUT THIS, `tool_calls` holds `decision = 'ask'` forever for a call that
+   * was in fact denied, and the Repudiation mitigation RESEARCH names does not
+   * exist (T-04-ASK-30). `sweep` needs a caller and this is it — driven from the
+   * `ApprovalPoll` branch (a pending ask is polled once a second by definition)
+   * and from `openApproval`, so the poll loop is the clock and there is no new
+   * timer and no new scheduler slot.
+   *
+   * IT APPENDS A SECOND ROW RATHER THAN REWRITING THE FIRST, and that is a
+   * deliberate departure from the plan's wording. `PersistStore` exposes an
+   * INSERT and no UPDATE, and `src/main/db.ts` has exactly one owner for this
+   * whole phase (plan 04-02) — so adding one here would be a drive-by edit to
+   * another plan's file. It is also the better record: plan 04-02's own note
+   * says these rows are DISCRETE EVENTS rather than cumulative snapshots, and
+   * "a1 asked to run X at T1; that ask was denied at T2" is strictly more than a
+   * mutated row that has forgotten the question was ever open. `toolCalls()`
+   * returns newest-first, so the LATEST row for a call is its final verdict.
+   */
+  private sweepApprovals(): void {
+    for (const e of this.approvals.sweep(Date.now())) {
+      this.record(e.agentId, e.tool, e.command, 'deny', ASK_EXPIRED_REASON);
+    }
+  }
+
   /**
    * WHO sent this payload — derived, never claimed. Returns the agent id bound
    * to the payload's token at mint time, or null if there is no such token.
@@ -863,6 +1169,74 @@ export class HookServer {
         .join(' ').trim() || null;
     }
     return null;
+  }
+
+  /**
+   * WHAT a tool call acted on, for the audit row — the SAME extraction
+   * `protectedPathDenial` already performs, in the same key order, over the same
+   * object. A second spelling of "what did this call touch" is how the gate and
+   * the record start disagreeing about what happened.
+   *
+   * NULL IS A REAL ANSWER, not a failure: a tool with no path-shaped argument and
+   * no command genuinely has no target, `tool_calls.target` is nullable on
+   * purpose, and plan 04-02's tests already distinguish "null by design" from
+   * "null because nothing was written".
+   */
+  private targetOf(ti: Record<string, unknown>): string | null {
+    for (const key of ['file_path', 'path', 'notebook_path']) {
+      const v = ti[key];
+      if (typeof v === 'string' && v) return v;
+    }
+    return this.commandOf(ti);
+  }
+
+  /**
+   * RECORD-01 — one tool call, persisted with its FINAL verdict.
+   *
+   * ONE helper for every PreToolUse exit, declared for the same stated reason as
+   * `boundDeny` above — *"so the exits cannot drift apart"*. There are ~30 return
+   * points in `handle` and five of them are PreToolUse verdicts; a writer at
+   * `handle`'s ENTRY, where the obvious placement is, could only ever record
+   * `decision: 'pending'`, because `decision` and `reason` do not exist yet up
+   * there. That is the half of the requirement RECORD-01 exists for
+   * (T-04-ASK-31).
+   *
+   * `agentId` is whatever `authorized()` derived from the caller's per-agent
+   * token — NEVER a value the payload claimed. That is GATE-01 doing its work
+   * here: without it a persisted tool-call record attributes to an agent id any
+   * shell could forge (T-04-LOG-09).
+   *
+   * BEST-EFFORT AND SWALLOWED. A recording failure must never change a verdict: a
+   * gate that fails open because its audit log was unavailable is a worse bug
+   * than a missing row (T-04-LOG-10). The store arrives as an injected thunk, so
+   * an unwired floor records nothing and gates exactly as before.
+   *
+   * WHY THIS IS NOT ON THE TELEMETRY PATH, measured rather than assumed, so a
+   * future reader does not "fix" it by moving it there: (1) `ToolSpan`
+   * (`telemetry.ts`) has no `target` field at all; (2) `ATTR_ALLOWLIST` admits no
+   * path key and no command key, so the string would be dropped even if a field
+   * existed; and (3) the whole OTel path is behind
+   * `if (claudeProvider && this._otelEndpoint)` in `hive.ts`, i.e. one engine and
+   * only when an endpoint is configured. The data lives HERE, on the socket, where
+   * `tool_name`, `tool_input` and the token-derived agent id are all already in
+   * hand. `telemetry.ts` is deliberately untouched — its 200-entry span ring stays
+   * the hot read path for the waterfall UI.
+   */
+  private record(
+    agentId: string,
+    tool: string | undefined,
+    target: string | null,
+    decision: 'allow' | 'deny' | 'ask',
+    reason?: string
+  ): void {
+    if (!agentId) return;
+    try {
+      this.recordToolCall?.({
+        agentId, ts: Date.now(), tool: String(tool ?? ''), target, decision, reason
+      });
+    } catch (e) {
+      console.error('[hive] tool-call record failed (the verdict is unaffected):', e);
+    }
   }
 
   /**
@@ -1417,6 +1791,13 @@ export class HookServer {
       this.transcriptPaths.set(agentId, p.transcript_path);
     }
 
+    // GATE-05 — a shim waiting on an ask, on a FRESH SHORT connection, once a
+    // second. Answered FIRST and returned early for the same reason `Status`
+    // below is: it is a question about a decision already made, not a hook
+    // boundary, and 120 identical payloads over two minutes would otherwise feed
+    // the breaker's repeated-tool-call loop detector.
+    if (event === 'ApprovalPoll') return this.approvalPoll(agentId, p);
+
     // Status-line payloads carry the session's EXACT context accounting —
     // current tokens AND the real window size (200k vs 1M, which nothing else
     // exposes). Forward to the renderer for the agent-card context gauge.
@@ -1598,11 +1979,13 @@ export class HookServer {
     // the path arm's deny payload below. `commandOf` is the entry condition of a
     // security gate; a third spelling of it in this file is how the two arms
     // start disagreeing about what a command is.
-    const preCmd = event === 'PreToolUse'
-      ? this.commandOf((p.tool_input && typeof p.tool_input === 'object')
-        ? p.tool_input as Record<string, unknown>
-        : {})
-      : null;
+    const preTi = (p.tool_input && typeof p.tool_input === 'object')
+      ? p.tool_input as Record<string, unknown>
+      : {};
+    const preCmd = event === 'PreToolUse' ? this.commandOf(preTi) : null;
+    // RECORD-01's `target`, extracted ONCE for this payload and reused by all
+    // five verdict exits below — same discipline, same reason, as `preCmd`.
+    const preTarget = event === 'PreToolUse' ? this.targetOf(preTi) : null;
     if (event === 'PreToolUse') {
       const shapeCmd = preCmd;
       if (shapeCmd) {
@@ -1616,11 +1999,15 @@ export class HookServer {
           words, shapeCmd, this.hostAllowlist?.() ?? DEFAULT_HOST_ALLOWLIST
         );
         if (verdict) {
-          // An `ask` with somewhere to ask is delegated; an `ask` with NOWHERE to
-          // ask is answered as a deny carrying the same reason, which is the same
-          // fail-closed direction as everything else in this block.
-          if (verdict.kind === 'ask' && this.openAsk) {
-            return this.openAsk({
+          // GATE-05 — the third answer. An `ask` opens a registry entry, pages
+          // the operator, and returns one object that an un-upgraded shim reads
+          // as a plain deny (with this same reason) and an upgraded one reads as
+          // a handle to poll. The `blocked` emit is deliberate and stays true:
+          // the reply on the wire IS a deny, whatever a later poll may say.
+          if (verdict.kind === 'ask') {
+            this.emit(agentId, event, p, true);
+            this.record(agentId, p.tool_name, preTarget, 'ask', verdict.reason);
+            return this.openApproval({
               agentId, tool: String(p.tool_name ?? ''), command: shapeCmd, reason: verdict.reason
             });
           }
@@ -1631,6 +2018,7 @@ export class HookServer {
           );
           this.emitControl(agentId, p.tool_name, verdict.reason, shapeCmd);
           this.emit(agentId, event, p, true);
+          this.record(agentId, p.tool_name, preTarget, 'deny', verdict.reason);
           return {
             hookSpecificOutput: {
               hookEventName: 'PreToolUse',
@@ -1659,9 +2047,7 @@ export class HookServer {
         //
         // Truncated on purpose — a tool_input can carry a whole heredoc, and the
         // point is identifying WHICH command, not archiving it.
-        const denyTi = (p.tool_input && typeof p.tool_input === 'object')
-          ? p.tool_input as Record<string, unknown>
-          : {};
+        const denyTi = preTi;
         const denyWhat = preCmd
           ?? (typeof denyTi.file_path === 'string' ? denyTi.file_path : '');
         console.warn(
@@ -1671,6 +2057,7 @@ export class HookServer {
         );
         this.emitControl(agentId, p.tool_name, denial, preCmd ?? undefined);
         this.emit(agentId, event, p, true);
+        this.record(agentId, p.tool_name, preTarget, 'deny', denial);
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
@@ -1688,17 +2075,27 @@ export class HookServer {
     if (event === 'PreToolUse' && agentId && this.control) {
       const d = this.control.toolDecision(agentId, p.tool_name ?? '');
       if (d.deny) {
+        const reason = d.reason ?? 'Denied by operator.';
         this.emitControl(agentId, p.tool_name, d.reason);
         this.emit(agentId, event, p);
+        this.record(agentId, p.tool_name, preTarget, 'deny', reason);
         return {
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
-            permissionDecisionReason: d.reason ?? 'Denied by operator.'
+            permissionDecisionReason: reason
           }
         };
       }
     }
+
+    // RECORD-01's FIFTH exit — the fall-through allow. Every judge above has had
+    // its say and nothing below this line can refuse a PreToolUse: `steer` is
+    // UserPromptSubmit/PostToolUse only, `roster` is SessionStart/UserPromptSubmit
+    // only, and the Notification toast is its own event. So a PreToolUse that
+    // reaches here IS allowed, and recording it here rather than at each of the
+    // tail returns keeps the exits from drifting apart.
+    if (event === 'PreToolUse') this.record(agentId, p.tool_name, preTarget, 'allow');
 
     // 7C.2 — mid-run steering: inject queued operator guidance as context on the
     // next eligible hook (no fragile typing into the TUI). Delivered once.

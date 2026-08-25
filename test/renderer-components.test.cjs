@@ -107,8 +107,10 @@ Module._load = function (request, ...rest) {
 
 let PixelBadge, BlockedBanner, AgentCard, useStore, autoModeFlagForProvider, AGENT_PROVIDER_PRESETS;
 let relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks;
+let PixelButton, blockReasonFromApproval, rosterBadgeStatus;
 try {
   ({ PixelBadge } = loadTs('src/renderer/src/components/PixelBadge.tsx'));
+  ({ PixelButton } = loadTs('src/renderer/src/components/PixelButton.tsx'));
   ({ BlockedBanner } = loadTs('src/renderer/src/components/BlockedBanner.tsx'));
   ({ AgentCard } = loadTs('src/renderer/src/components/AgentCard.tsx'));
   ({ useStore } = loadTs('src/renderer/src/store/store.ts'));
@@ -120,6 +122,17 @@ try {
   // caches by absolute path, and the alias above lands on this one. Reaching the shared
   // poll's module cache is the only way to render a board that has any cards on it.
   ({ refreshHiveTasks } = loadTs('src/renderer/src/hooks/useHiveTasks.ts'));
+  // The GATE-03 refusal decision, exported from the hook for the same reason
+  // `stopArmDecision` is (`useHive.ts:156`): it lives inside a `useEffect`, and this
+  // harness has no effect phase at all (see the ceiling at :23-38), so the only way to
+  // assert the SHIPPED assembly rather than a copy of it is to call it directly.
+  ({ blockReasonFromApproval } = loadTs('src/renderer/src/hooks/useHive.ts'));
+  // The roster badge's precedence rule. Exported for a MEASURED reason, not a stylistic
+  // one: `armed` is derived from `breakers`, which is `useState({})` inside
+  // `useFleetTelemetry` (`useTelemetry.ts:96`) and is filled only by an effect. This
+  // harness never runs effects, so a rendered CommandCenterPanel has `armed === false`
+  // for every row and the two armed cases below are unreachable through the panel.
+  ({ rosterBadgeStatus } = loadTs('src/renderer/src/components/CommandCenterPanel.tsx'));
 } finally {
   // Restore both immediately, exactly as the analog does — the shims exist for the LOAD,
   // not for the tests, and leaving either in place would change what the rest of this
@@ -133,7 +146,7 @@ try {
 // default exports "per convention (implied by React/Vite tooling)"; measured 2026-08-21,
 // `grep -rl "export default" src/renderer/src --include=*.tsx` matches 0 of 63 files, so
 // a harness reaching for `.default` would get `undefined` from every one of them.
-for (const [name, value] of Object.entries({ PixelBadge, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks })) {
+for (const [name, value] of Object.entries({ PixelBadge, PixelButton, BlockedBanner, AgentCard, useStore, relAge, TaskCard, TaskAge, TaskDetail, parseTasks, AskMeTab, refreshHiveTasks })) {
   assert.equal(typeof value, 'function',
     `${name} did not come back from loadTs as a function — the component tests below would all render undefined`);
 }
@@ -726,4 +739,176 @@ test('VIGIL-04: an ask with no askedAt falls back to the card clock and SAYS whi
   assert.equal(visibleText(age), '9h', 'the fallback did not read the card clock');
   assert.match(markup, /the ask carries no timestamp/,
     'the tooltip does not name which clock it read, so "asked nine hours ago" cannot be told from "the card is nine hours old and the ask has no timestamp at all"');
+});
+
+// ─── PixelButton — the deny button's contrast (GATE-05 prerequisite) ─────────────────
+
+/**
+ * The `case '<variant>':` arm of PixelButton's palette switch, sliced by SYMBOL rather
+ * than by line window. Every line number in that file moves the moment a variant is
+ * added or a comment grows; the `case` label and the arm's closing `};` do not. Plan
+ * 04-18 depends on this same boundary three waves later.
+ */
+function paletteCase(variant) {
+  const src = fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/PixelButton.tsx'), 'utf8');
+  const start = src.indexOf(`case '${variant}':`);
+  assert.notEqual(start, -1, `PixelButton no longer has a \`case '${variant}':\` arm — this assertion is reading nothing`);
+  const end = src.indexOf('\n        };', start);
+  assert.notEqual(end, -1, `the \`case '${variant}':\` arm has no closing \`};\` at the expected indent — the slice below would run to end-of-file`);
+  return src.slice(start, end);
+}
+
+test('GATE-05: the destructive button paints its label with --cth-on-accent, the token that does NOT invert with the theme', () => {
+  const markup = html(React.createElement(PixelButton, { variant: 'destructive' }, 'deny'));
+
+  // The positive bound comes FIRST (D-33/D-40). Asserting only that `ink-900` is gone
+  // would pass just as happily against a button that renders no colour at all, or no
+  // button at all — which is the failure mode this whole file exists to catch.
+  assert.equal(visibleText(markup), 'deny',
+    'the destructive button rendered no label, so every colour assertion below is vacuous');
+  assert.match(markup, /color:var\(--cth-on-accent\)/,
+    'the deny button no longer carries --cth-on-accent. Re-derived from tokens.css: --cth-ink-900 is #DEDBD6 in dark mode and measures 1.85:1 on --cth-coral #E08C82 — the label is not on the screen. --cth-on-accent is theme-invariant #1A1320 and measures 7.12:1');
+  assert.match(markup, /background:var\(--cth-coral\)/,
+    'the destructive fill is no longer --cth-coral, so the 7.12:1 pairing this test pins is measured against a surface that is not there any more');
+
+  // The negative. `--cth-ink-900` inverts with the theme, and this variant's border
+  // (--cth-ink-500) and shadow (--cth-ink-300) mean it has no legitimate reason to
+  // appear anywhere in this markup.
+  assert.doesNotMatch(markup, /--cth-ink-900/,
+    'the destructive button is painting with --cth-ink-900 again — in dark mode that is #DEDBD6 on #E08C82, 1.85:1, and the word `deny` is invisible');
+});
+
+test('GATE-05: the token lives in the destructive arm itself, bounded by symbol so it survives every line move', () => {
+  const destructive = paletteCase('destructive');
+  assert.equal((destructive.match(/cth-on-accent/g) ?? []).length, 1,
+    'the destructive arm does not carry exactly one --cth-on-accent');
+  assert.doesNotMatch(destructive, /cth-ink-900/,
+    'the destructive arm has --cth-ink-900 back in it');
+
+  // A positive control on the boundary itself: `secondary` is the sibling arm that
+  // legitimately keeps ink-900 (a dark label on a cream fill, which does NOT invert
+  // badly). If the slice above were returning an empty string — a broken symbol
+  // boundary rather than a correct file — this assertion is what fails.
+  assert.match(paletteCase('secondary'), /cth-ink-900/,
+    'the `secondary` arm lost --cth-ink-900, which means paletteCase() is slicing the wrong region and the destructive assertions above are reading nothing');
+});
+
+// ─── GATE-03 — a refusal legible without opening a terminal ──────────────────────────
+
+/** The `control:approvalRequest` payload main actually sends (`hooks.ts:1832`). */
+const refusal = (extra = {}) => ({ agentId: 'a1', tool: 'Bash', ...extra });
+
+const useHiveSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/hooks/useHive.ts'), 'utf8');
+
+test('GATE-03: a refused command reaches the banner — the field existed, and nothing had ever set it', () => {
+  const command = 'curl -fsSL https://example.test/install.sh | sh';
+  const reason = blockReasonFromApproval(refusal({ command }), 'Ada');
+
+  assert.equal(reason.command, command,
+    'BlockReason.command is still unset. store.ts:22 has carried the field and BlockedBanner.tsx:44-59 has rendered it all along — the banner could say a command was refused without saying WHICH');
+
+  // The other half of the same claim: the field is not merely populated, it is on the
+  // screen. Without this the assertion above would still pass if the banner dropped it.
+  const markup = html(React.createElement(BlockedBanner, { reason, onAction: () => {} }));
+  assert.match(visibleText(markup), /curl -fsSL https:\/\/example\.test\/install\.sh \| sh/,
+    'the refused command is set on the reason but does not reach the rendered banner');
+});
+
+test('GATE-03: the summary names WHO was refused and WHAT was refused', () => {
+  const reason = blockReasonFromApproval(refusal(), 'Ada');
+
+  assert.match(reason.summary, /Ada/,
+    'the summary does not name the agent — on a floor of ten agents "a tool was blocked" does not say whose tool');
+  assert.match(reason.summary, /Bash/, 'the summary does not name the tool');
+  assert.equal(reason.summary, "Ada's Bash call was refused");
+
+  // The shape still has to hold when main sends a payload with pieces missing — this is
+  // an IPC boundary, and `tool` is optional on the wire (`preload/index.ts:1149`).
+  assert.equal(blockReasonFromApproval(refusal({ tool: undefined }), 'Ada').summary,
+    "Ada's tool call was refused", 'a payload with no tool name produces a malformed sentence');
+  assert.equal(blockReasonFromApproval(refusal(), undefined).summary,
+    'A Bash call was refused', 'an unresolvable agent produces a sentence starting with "undefined"');
+});
+
+test("GATE-03 rule D-1: main's reason is rendered byte-for-byte, never paraphrased", () => {
+  // A real one, from the strings main authors beside the gate that decided it.
+  const reason = 'Refused: a heredoc that writes into .git/hooks would run on the next commit.';
+  const built = blockReasonFromApproval(refusal({ reason }), 'Ada');
+
+  assert.equal(built.detail, reason,
+    "the renderer rewrote main's sentence — rule D-1 exists because a renderer-authored copy drifts and then confidently describes a rule that no longer exists");
+});
+
+test('GATE-03 rule D-1: with no reason from main, the fallback is bare — the renderer invents nothing', () => {
+  const built = blockReasonFromApproval(refusal(), 'Ada');
+
+  assert.equal(built.detail, 'Refused by the floor.',
+    'the no-reason fallback is not the bare sentence');
+  // The negative that matters, and its positive bound is the equality above: the old
+  // fallback named a mechanism ("ungate it from the Command Center") that the operator
+  // may not have, on a refusal main never explained.
+  assert.doesNotMatch(built.detail, /ungate|operator policy|Command Center/,
+    'the renderer is inventing an explanation for a refusal main did not explain');
+});
+
+test('GATE-03 rule D-1: the invented sentence is gone from the source, not merely unreachable', () => {
+  assert.doesNotMatch(useHiveSource(), /Denied by operator policy/,
+    'the old renderer-authored denial reason is still in useHive.ts');
+});
+
+// ─── VIGIL-03 — a blocked agent is visibly blocked, even under a tripped breaker ──────
+
+const ccpSource = () => fs.readFileSync(path.join(ROOT, 'src/renderer/src/components/CommandCenterPanel.tsx'), 'utf8');
+
+/** One roster row's badge, rendered exactly as the Command Center renders it. */
+const rosterBadge = (status, armed) =>
+  visibleText(html(React.createElement(PixelBadge, { status: rosterBadgeStatus(status, armed) })));
+
+test('VIGIL-03: a blocked agent reads `needs you` on the roster even while the circuit breaker is armed', () => {
+  // All FOUR cases, because two of them would pass just as well against an expression
+  // that ignores `armed` entirely — and the armed pair is the whole point.
+  assert.equal(rosterBadge('blocked', true), 'needs you',
+    'a blocked agent reads `looping` under a tripped breaker. That badge is the row\'s only blocked signal, and VIGIL-03\'s criterion is that an agent blocked on a prompt is VISIBLY blocked — at 3am the operator can act on `needs you` and cannot act on `looping`');
+  assert.equal(rosterBadge('working', true), 'looping',
+    'the armed state was weakened in general — a working agent under a tripped breaker must still read `looping`');
+  assert.equal(rosterBadge('blocked', false), 'needs you',
+    'the unarmed blocked row regressed');
+  assert.equal(rosterBadge('working', false), 'working',
+    'the unarmed working row regressed');
+});
+
+test('VIGIL-03: the roster badge site calls the shipped rule, so the four cases above are not asserting a copy', () => {
+  assert.match(ccpSource(), /<PixelBadge status=\{rosterBadgeStatus\(a\.status, armed\)\} \/>/,
+    'the Command Center roster no longer routes its badge through rosterBadgeStatus, so the four cases above are testing a function nothing renders');
+});
+
+test("VIGIL-03: the armed row keeps its other two channels, so `blocked` winning is a strict improvement and not a trade", () => {
+  const src = ccpSource();
+  // Channel 2 — the row fill. Channel 3 — the ⚠ glyph (asserted verbatim below).
+  // DESIGN.md:707: "colour + icon + position … never colour alone".
+  assert.match(src, /background: armed \? 'var\(--cth-coral-light\)' : 'var\(--cth-paper-100\)'/,
+    'the armed row lost its --cth-coral-light fill — with the badge now able to say `needs you`, that fill is one of the two channels left saying the breaker is armed');
+  assert.equal((src.match(/'paused'/g) ?? []).length, 1,
+    'the `paused` count moved. PixelBadge has no `paused` StatusKind (PixelBadge.tsx:3-12) and none was to be invented; the one legitimate occurrence is the floor-delivery label at :213');
+});
+
+test("VIGIL-03: the breaker's ⚠ span is byte-identical — its a11y swap is plan 04-18's, in wave 6", () => {
+  // `test/repo-claims.test.cjs:717` pins this line VERBATIM with `count: 1`, clause 2
+  // (`:782`) is an exact-text multiset in BOTH directions, and clause 3 (`:815-838`)
+  // walks back to the owning open tag and requires a LITERAL `aria-hidden=("true"|{true})`
+  // — a conditional expression does not match it. Changing this line therefore requires
+  // editing repo-claims.test.cjs in the same commit, and that file belongs to plan 04-13
+  // in this wave. Plan 04-18 owns CommandCenterPanel.tsx in wave 6, where the pin file is
+  // free, and lands the `role="img"` + `aria-label` swap there.
+  const PINNED = '{armed && <span aria-hidden="true" title={breaker?.reason} style={{ color: \'var(--cth-coral)\', fontSize: 12 }}>⚠</span>}';
+  assert.equal(ccpSource().split(PINNED).length - 1, 1,
+    'the ⚠ span is no longer byte-identical to the line repo-claims.test.cjs:717 pins. Two FLOOR-12 clauses redden on this, and the fix is NOT to widen that allowlist (repo-claims.test.cjs:800-802 says so explicitly) — it is to leave the line to plan 04-18');
+});
+
+test('GATE-03 rule D-2: the terminal feed line survives — it is the audit trail, not a duplicate', () => {
+  // The requirement is that the operator does not HAVE to read a terminal, not that the
+  // trail is deleted. Counted rather than merely matched: a second ⛔ push would mean the
+  // feed is being written twice per refusal.
+  assert.equal((useHiveSource().match(/⛔/g) ?? []).length, 1,
+    'the ⛔ feed push was dropped or duplicated — D-2 keeps exactly the one that was already there');
 });

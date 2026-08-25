@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { PixelPanel } from './PixelPanel';
-import { PixelBadge } from './PixelBadge';
+import { PixelBadge, type StatusKind } from './PixelBadge';
 import { PixelButton } from './PixelButton';
 import { SpritePortrait } from './SpritePortrait';
 import { PtyTerminalView } from './PtyTerminalView';
@@ -64,6 +64,30 @@ type CCTab = 'terminal' | 'floor' | 'tasks' | 'human' | 'triggers' | 'trigger-hi
  *  is configured — so the bar reads as a budget estimate (filled + remaining)
  *  rather than being pinned to 100% for whichever agent burns the most tokens. */
 const DEFAULT_TOKEN_CAP = 1_000_000;
+
+/**
+ * The roster badge for one agent row: `blocked` OUTRANKS the circuit breaker (VIGIL-03).
+ *
+ * The breaker pins a constrained/stopped agent to `looping`, and this row's badge used
+ * to say that unconditionally — so while the breaker was armed, an agent parked at a
+ * permission prompt read `looping` here, and this badge is the row's ONLY blocked
+ * signal. VIGIL-03's criterion is that an agent blocked on a prompt is visibly blocked;
+ * on this surface, under a tripped breaker, it was not.
+ *
+ * `blocked` wins because it means A HUMAN MUST ACT, where `looping` means the breaker
+ * tripped and the floor is already handling it — at 3am the operator can only act on the
+ * first. It is not a trade: the armed state keeps its two other channels on this exact
+ * row, the `--cth-coral-light` fill and the `⚠` glyph, both untouched.
+ *
+ * Exported because `armed` comes from `breakers`, which is `useState({})` inside
+ * `useFleetTelemetry` (`useTelemetry.ts:96`) and is filled only by an effect. The
+ * renderer test harness is a server render with no effect phase, so a rendered panel has
+ * `armed === false` on every row and the armed cases are unreachable through it — the
+ * same reason `useHive.ts` exports `stopArmDecision`.
+ */
+export function rosterBadgeStatus(status: StatusKind, armed: boolean): StatusKind {
+  return status === 'blocked' ? 'blocked' : armed ? 'looping' : status;
+}
 
 /** A GitHub issue as returned by `window.cth.githubIssues` (labels/assignees flattened). */
 interface GHIssue {
@@ -792,7 +816,7 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
                   }}
                 >AUTO</span>
               )}
-              <PixelBadge status={armed ? 'looping' : a.status} />
+              <PixelBadge status={rosterBadgeStatus(a.status, armed)} />
               {armed && <span aria-hidden="true" title={breaker?.reason} style={{ color: 'var(--cth-coral)', fontSize: 12 }}>⚠</span>}
               <span style={{ marginLeft: 'auto', fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
                 {(toolCounts[a.id] ?? 0)} tool calls
