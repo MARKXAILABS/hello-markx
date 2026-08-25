@@ -379,6 +379,26 @@ export interface HarnessConfig {
    *  thread) or an agent's own direct in-thread reply — those always stay on. */
   slackProactivePosting?: boolean;
 
+  // ─── SCALE-04 (the daily digest) ──────────────────────────────────────────
+  /** Master switch for the daily digest's TOAST and SLACK arms. Default OFF.
+   *  The file arm is deliberately NOT gated on this: a digest written to the
+   *  hive folder costs nothing and is the one delivery that survives a machine
+   *  with no window, no toast permission and no network. Kept separate from
+   *  `notifications` above, which is scoped to agent lifecycle events — sharing
+   *  one flag would make whichever switch the operator flipped a decoration. */
+  dailyDigest?: boolean;
+  /** Channel id the digest is posted to. A channel id is not a secret (same
+   *  treatment as `slackChannelId` and the webhook triggers' channel-shaped
+   *  fields), so it is deliberately NOT in SECRET_FIELDS. Absent = no Slack arm,
+   *  whatever the other three switches say. */
+  slackDigestChannelId?: string;
+  /** Local hour (0-23) the digest fires at. Absent = `DIGEST_DEFAULT_HOUR` in
+   *  src/main/floor/boot.ts, which is the SINGLE source of that number: it is
+   *  deliberately not restated in `DEFAULTS` below, because a second copy is a
+   *  second thing to keep in step and boot.ts cannot be imported here without
+   *  closing a require cycle (boot.ts imports this file). */
+  digestHour?: number;
+
   // ─── Free Flow (voice dictation → message queue) ───────────────────────────
   /** Master toggle for Free Flow push-to-talk dictation. Default OFF: with it off
    *  the composer shows no mic button, no getUserMedia runs, and no Groq call is
@@ -531,6 +551,11 @@ const DEFAULTS: HarnessConfig = {
   slackChannelId: undefined,
   slackPort: undefined,
   slackProactivePosting: false,
+  // SCALE-04. `digestHour` is deliberately absent, not `9`: boot.ts's
+  // DIGEST_DEFAULT_HOUR is the one place that number lives, and a restated
+  // literal here is exactly the silent disagreement the requirement forbids.
+  dailyDigest: false,
+  slackDigestChannelId: undefined,
   freeflowEnabled: true,
   groqApiKey: undefined,
   freeflowModel: 'whisper-large-v3-turbo',

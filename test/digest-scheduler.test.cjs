@@ -369,7 +369,7 @@ test('SCALE-04: the file arm writes a stamped digest under the hive root, with n
 
 test('SCALE-04: the toast arm is gated on dailyDigest — NOT on the notifications field', async (t) => {
   const env = floorEnv(t, { dailyDigest: false, notifications: true });
-  const { deps, notified } = fakeDeps(env);
+  const { deps, notified, sent } = fakeDeps(env);
   const { bootFloor, fireDigest } = loadTs('src/main/floor/boot.ts');
   const floor = await bootFloor(deps);
   t.after(() => floor.shutdown());
@@ -381,7 +381,14 @@ test('SCALE-04: the toast arm is gated on dailyDigest — NOT on the notificatio
     + 'documented as "agent lifecycle events" — borrowing it makes the digest toggle a decoration');
 
   writeCfg({ harnessHome: env.harnessHome, slackEnabled: false, webhookTriggers: [], notifications: false, dailyDigest: true });
+  const sentBefore = sent.length;
   await fireDigest();
+  // The deps.send pin belongs HERE as well as on the file-arm case: with the
+  // toggle OFF the toast arm never runs, so that case cannot see a toast
+  // rerouted through the renderer channel. This one can.
+  assert.equal(sent.length, sentBefore,
+    `the toast arm pushed ${sent.length - sentBefore} message(s) through deps.send, which returns `
+    + `FALSE with no window: ${JSON.stringify(sent.slice(sentBefore))}`);
   assert.equal(notified.length, 1, 'the digest did NOT toast with dailyDigest ON');
   assert.ok(notified[0].title.includes(env.label),
     `the toast title does not name the project: ${JSON.stringify(notified[0])}`);
@@ -433,9 +440,13 @@ test('SCALE-04: a floor armed BEFORE its fire hour sends nothing yet', async (t)
 
 test('SCALE-04: fireDigest calls deps.notify and never deps.send (structural, T-03-05d)', () => {
   const { fireDigest } = loadTs('src/main/floor/boot.ts');
-  const src = fireDigest.toString();
+  // COMMENT-STRIPPED, both directions. `Function.prototype.toString` returns the
+  // comments too, so an unstripped check is satisfiable by a comment that merely
+  // NAMES deps.notify — and fails on a comment that merely names deps.send.
+  // Neither is what this pin is about. Same helper shape as repo-claims.test.cjs.
+  const src = fireDigest.toString().replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
   assert.ok(src.includes('deps.notify'),
-    'fireDigest does not reference deps.notify — the toast arm is not in this function');
+    'fireDigest does not CALL deps.notify — the toast arm is not in this function');
   assert.equal(src.includes('deps.send'), false,
     'fireDigest routes through deps.send, which returns FALSE with no window attached. That is a '
     + 'silent no-op on exactly the headless machine SCALE-04 exists for');

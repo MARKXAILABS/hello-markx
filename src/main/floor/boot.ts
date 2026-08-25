@@ -51,7 +51,7 @@ import * as integrations from '../integrations';
 import { RosterStore } from '../roster';
 import { ControlRegistry } from '../control';
 import {
-  inferAgentProvider, isClaudeProvider, type AgentProvider
+  inferAgentProvider, isClaudeProvider, providerPreset, type AgentProvider
 } from '../../shared/agentProvider';
 import { claudeAccountSecretRef } from '../../shared/claudeAccounts';
 import { matchBlockHint } from '../../shared/blockHints';
@@ -214,6 +214,16 @@ const PRESERVED_KV = 'worktrees.preserved';
 let missionTimers: Map<string, MissionTimer>;
 let contextTimers: Map<'compact' | 'clear', MissionTimer>;
 const CONTEXT_LAST_RUN_KV_KEY = 'triggers.context.lastRun';
+/** SCALE-04's daily-digest beat. Boot-internal like `restorePointTimer` and
+ *  `watchdogTimer` above, and pinned BY NAME in test/digest-scheduler.test.cjs
+ *  for the same reason: test/boot-floor.test.cjs's offender loop walks
+ *  `Object.keys(floor)` and a module-level `let` is invisible to it, so without
+ *  a named pin this timer's teardown would have no automated assertion — and an
+ *  un-cleared one fails by keeping the process alive, not by going red. */
+let digestTimer: MissionTimer | null = null;
+/** The local `YYYY-MM-DD` of the last digest that actually went out. What makes
+ *  catch-up-on-arm safe: without it, every re-arm is another copy. */
+const DIGEST_LAST_SENT_KV_KEY = 'digest.lastSentDate';
 let contextLastRun: Record<string, number> | null = null;
 
 /** ~32 KB is ~8k tokens re-read on every single god turn — generous for a plan,
@@ -969,6 +979,187 @@ export function buildDigestContent(
   return `${lines.join('\n')}\n`;
 }
 
+/** The `## Spend` block, lifted out of the assembled digest for the toast body.
+ *  Lifted rather than re-derived so the toast can never show a spend figure
+ *  WITHOUT the gap sentence(s) that qualify it — a bare "$4.21" on a floor of
+ *  codex agents is exactly the undeclared total D-35 exists to stop, and a
+ *  second arithmetic path is how the two would drift apart.
+ *  ponytail: reads back its own output; if the digest ever gains a second
+ *  consumer that needs a headline, return it from buildDigestContent instead. */
+function digestHeadline(text: string): string {
+  const lines = text.split('\n');
+  const from = lines.indexOf('## Spend');
+  if (from < 0) return 'Yesterday\'s digest was written to the hive folder.';
+  const out: string[] = [];
+  for (let i = from + 1; i < lines.length && lines[i] !== ''; i++) out.push(lines[i]);
+  return out.join(' ');
+}
+
+/** The configured fire hour, or `DIGEST_DEFAULT_HOUR`. Anything that is not a
+ *  whole hour of the day — a string, a float, 25, NaN — falls back rather than
+ *  being handed to `Date` arithmetic that would silently roll it into another
+ *  day. `config.json` is hand-editable, so this is a trust boundary. */
+function digestHour(): number {
+  const h = readConfig().digestHour;
+  return typeof h === 'number' && Number.isInteger(h) && h >= 0 && h <= 23 ? h : DIGEST_DEFAULT_HOUR;
+}
+
+/** The local day the last digest actually went out on, `''` when none has. */
+function digestLastSentDay(): string {
+  try { return persist.getKv<string>(DIGEST_LAST_SENT_KV_KEY) ?? ''; } catch { return ''; }
+}
+
+/**
+ * BOTH cost-gap counts, walked ONCE, off main's own registry.
+ *
+ * The registry rather than `roster.read()`: `roster.json` is a mirror the
+ * RENDERER writes, typed `unknown[]`, and on a machine that has booted headless
+ * it is either stale or absent — which would report both counts as 0 and ship
+ * the bare, undeclared total D-35 forbids. `registry.json` is main's own record
+ * of the agents whose samples reach `cost-ledger.jsonl` in the first place, so
+ * it is also the source that agrees with the total being declared.
+ *
+ * Two counts, never one: a `'none'` engine has no meter at all, while a
+ * `'transcript'` engine has a working meter whose spend never makes the ledger
+ * hop (`appendCostLedger` is gated on `sample?.sessionId`; the transcript
+ * fallback reports `''`). Seven of the eleven presets are tier 1 and exactly one
+ * is tier 2, so both counts are reachable and neither is hypothetical.
+ */
+function digestCostGaps(): { none: number; transcript: number } {
+  const out = { none: 0, transcript: 0 };
+  if (!hive.enabled()) return out;
+  for (const a of Object.values(hive.registry().agents)) {
+    if (a.archived) continue;
+    const tier = providerPreset(inferAgentProvider(undefined, a.provider)).costTracking;
+    if (tier === 'none') out.none += 1;
+    else if (tier === 'transcript') out.transcript += 1;
+  }
+  return out;
+}
+
+/**
+ * Build and deliver yesterday's digest, three ways.
+ *
+ * NOTHING here touches the renderer channel. It returns FALSE with no window
+ * attached, so a digest routed through it is a silent no-op on precisely the
+ * unattended machine SCALE-04 exists for — `emitContextTrigger` is the shape
+ * this deliberately does not copy, and test/digest-scheduler.test.cjs reads the
+ * fake renderer sink back after this runs to prove it stayed empty. (The token
+ * that names that channel is kept OUT of this comment on purpose: T-03-05d's
+ * harness proof slices this function's raw source and cannot tell a mention
+ * from a call.)
+ *
+ * Each arm gets its own try/catch: a failed file write must not cost the
+ * operator the toast, and a Slack outage must not cost them the file. The whole
+ * function is also called from a timer, so it resolves rather than throws.
+ */
+export function fireDigest(): Promise<void> {
+  const now = Date.now();
+  // Stamped FIRST. A crash halfway through delivery must not leave the day
+  // un-stamped, or the next arm re-sends everything that already went out.
+  try { persist.setKv(DIGEST_LAST_SENT_KV_KEY, localDayKey(now)); } catch { /* DB best-effort */ }
+
+  // Yesterday, local: [start of yesterday, start of today).
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const dayEndMs = midnight.getTime();
+  midnight.setDate(midnight.getDate() - 1);
+  const dayStartMs = midnight.getTime();
+
+  const label = projectLabel();
+  let text: string;
+  try {
+    const gaps = digestCostGaps();
+    const ledger = hive.enabled() ? (hive.tasks() as { tasks?: HiveTask[] } | null) : null;
+    text = buildDigestContent(
+      hive.enabled() ? hive.dailyCostRows(dayStartMs, dayEndMs) : [],
+      Array.isArray(ledger?.tasks) ? ledger.tasks : [],
+      { startMs: dayStartMs, endMs: dayEndMs },
+      label,
+      gaps.none,
+      gaps.transcript
+    );
+  } catch (e) {
+    console.error('[digest] content build failed:', e);
+    return Promise.resolve();
+  }
+
+  // Arm 1 — the file. The only arm with no config gate: it is the one delivery
+  // that works with no window, no toast permission and no network.
+  try {
+    const root = hive.root();
+    if (root) {
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, `digest-${localDayKey(dayStartMs)}.md`), text, 'utf8');
+    }
+  } catch (e) {
+    console.error('[digest] file write failed:', e);
+  }
+
+  const cfg = readConfig();
+
+  // Arm 2 — the OS toast. `deps.notify` works with no window; the renderer
+  // channel does not. Gated on the operator's OWN digest switch, never on
+  // `notifications`, which is scoped to agent lifecycle events.
+  try {
+    if (cfg.dailyDigest) {
+      deps.notify({ title: `${label} — daily digest`, body: digestHeadline(text) });
+    }
+  } catch (e) {
+    console.error('[digest] notify failed:', e);
+  }
+
+  // Arm 3 — Slack. The one arm with a network hop, so it is the one that has to
+  // be awaited; it lands in the next commit behind its own four-switch gate.
+  // `fireDigest` itself stays NON-async deliberately — the two arms above are
+  // synchronous and must have completed by the time this returns, so that a
+  // caller which never awaits (the timer) still gets the file and the toast.
+  return Promise.resolve();
+}
+
+/** Stop whichever half of the digest beat is pending. Shared by
+ *  `armDigestTimer`'s clear-then-set guard and by `SHUTDOWN_STEPS`, exactly as
+ *  `clearContextTimers` is — one teardown, two callers, no drift. */
+function clearDigestTimer(): void {
+  if (digestTimer?.timeout) clearTimeout(digestTimer.timeout);
+  if (digestTimer?.interval) clearInterval(digestTimer.interval);
+  digestTimer = null;
+}
+
+/**
+ * (Re)arm the daily digest beat.
+ *
+ * Clear-then-set, like `clearContextTimers` before `syncContextTriggers`: a
+ * re-arm must never stack a second beat (T-03-05b).
+ *
+ * CATCH-UP ON ARM (D-30). A machine that was asleep, or simply not running, at
+ * the fire hour would otherwise get silence until the next day's hour — the one
+ * failure mode a report for an operator who is not watching cannot afford. So an
+ * arm that happens past the hour, on a day nothing has gone out, fires
+ * immediately. The once-a-day guard inside `fire` is what makes that safe: it is
+ * also why an arm at exactly the fire hour cannot double-send.
+ *
+ * The beat re-schedules itself with `setTimeout` rather than settling into a
+ * fixed-period `setInterval`, because a local day is 23 or 25 hours long twice a
+ * year and a 24-hour interval would drift an hour off the operator's clock.
+ */
+function armDigestTimer(): void {
+  clearDigestTimer();
+  const hour = digestHour();
+  const now = Date.now();
+  const fire = (): void => {
+    if (digestLastSentDay() === localDayKey(Date.now())) return; // already sent today
+    void fireDigest().catch((e) => console.error('[digest] fire failed:', e));
+  };
+  if (new Date(now).getHours() >= hour) fire();
+  const entry: MissionTimer = {};
+  const schedule = (from: number): void => {
+    entry.timeout = setTimeout(() => { fire(); schedule(Date.now()); }, msUntilNextLocalHour(hour, from));
+  };
+  schedule(now);
+  digestTimer = entry;
+}
+
 /** Startup migration (#57/#58): archive every agent entry that is
  *  `archived:false` but has NO live PTY. */
 function archiveOrphanedAgents(): void {
@@ -1244,6 +1435,11 @@ const SHUTDOWN_STEPS: ReadonlyArray<{ name: string; stop: () => void }> = [
       watchdogTimer = null;
     }
   },
+  // SCALE-04. Same class as the four above, and lands in the SAME commit as the
+  // timer it stops — D-30's own warning is that this one fails by HANGING the
+  // process rather than by a red assertion, so a timer shipped one commit ahead
+  // of its teardown ships a green suite that never exits.
+  { name: 'clearDigestTimer', stop: () => clearDigestTimer() },
   { name: 'stopWebhookDoneObserver', stop: () => stopWebhookDoneObserver() },
   { name: 'broker.stop', stop: () => integrationBroker.stop() },
   { name: 'stopRouter', stop: () => hive.stopRouter() },
@@ -1727,6 +1923,14 @@ export function startHiveServices(): void {
   ensureDefaultMissions();
   syncMissions();
   syncContextTriggers();
+  // SCALE-04, armed beside the other config-driven beats. Deliberately NOT also
+  // wired to index.ts's two other `syncContextTriggers()` call sites (the
+  // `triggers:setContext` IPC handler and the `powerMonitor` resume handler) —
+  // this plan scopes to boot.ts, and T-03-05e records the residual: a
+  // sleep/resume WITHOUT a process restart re-evaluates catch-up only at the
+  // next natural fire. `startHiveServices` itself IS re-called by index.ts
+  // after onboarding, and the once-a-day stamp makes that safe.
+  armDigestTimer();
   if ((readConfig().webhookTriggers ?? []).length > 0) startWebhookDoneObserver();
   hookServer.start();
   void telemetry.start().then((r: { ok: boolean; endpoint?: string; error?: string }) => {
