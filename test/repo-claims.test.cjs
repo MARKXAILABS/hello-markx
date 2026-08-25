@@ -1341,7 +1341,12 @@ const MARKER_LEDGER = {
  *  above in that session and NOT by adding two to 21: GATE-05's poll loop ships
  *  with one marker for kimi's path through it and one for grok's and agy's
  *  deliberate absence from it. This is also the answer to plan 04-19's
- *  zero-marker sweep for GATE-05 — a decision, recorded, rather than a hole. */
+ *  zero-marker sweep for GATE-05 — a decision, recorded, rather than a hole.
+ *  RE-MEASURED AT THE CLOSING WAVE by plan 04-19 (2026-08-26, wave 7) with the
+ *  command above, run in that session. It reads 23 and the per-file split is
+ *  unchanged, so nothing here moved — recorded because "re-measured and found
+ *  identical" and "not re-measured" are the same number and different facts,
+ *  and this file's whole premise is that the difference matters. */
 const LIVE_UNVERIFIED_TOTAL = 23;
 
 /** The five engines this project built bridges for and never live-verified
@@ -1396,7 +1401,22 @@ const LIVE_UNVERIFIED_TOTAL = 23;
  *  `test/engine-parity.test.cjs` for agy). Widening the map on the back of that
  *  would conflate an unverified engine with an unverified bridge, the same
  *  conflation 04-13 refused for codex. The repo-wide total above is what holds
- *  the grok/agy marker in place. */
+ *  the grok/agy marker in place.
+ *
+ *  THE ZERO-MARKER SWEEP, plan 04-19, wave 7 — the job plan 02-12 invented after
+ *  finding `qwen` with ZERO markers while it was exactly as unverified as
+ *  pi/opencode/crush. Run over all 23 blocks in this session, by canonical
+ *  `AgentProvider` id rather than by the short names the prose uses, because an
+ *  audit keyed on the union type is how the next reader will check: claude 11,
+ *  codex 7, kimi 6, opencode 5, pi 4, grok 4, agy 2, crush 1, qwen 1,
+ *  antigravity 0, copilot 0. Verdict: NO bridged engine carries zero markers.
+ *  The two zeroes are both explained and neither is a hole — `copilot` has no
+ *  bridge at all (nothing to mark), and `antigravity` is the CANONICAL id of the
+ *  engine every marker block spells `agy`, which carries 2. That alias is the
+ *  one thing worth writing down: it is a naming inconsistency, not a missing
+ *  marker, and it is recorded rather than inflated into a finding it is not.
+ *  codex's SANDBOX path was checked by name for the same reason (04-13's spike
+ *  came back INCONCLUSIVE, not clean) and carries its own marker. */
 const LIVE_UNVERIFIED_ENGINES = {
   pi: 4, opencode: 5, crush: 1, qwen: 1, kimi: 6
 };
@@ -1981,4 +2001,302 @@ test("VIGIL-01: the QUIET chip's route is real at ALL THREE hops — T-04-ABS-10
   // matches several. A token added here to satisfy a grep would be dead.
   assert.equal(strippedHits('src/preload/index.d.ts', 'onFloorQuiet'), 0,
     'the .d.ts named a bridge method. It derives the surface from typeof api and names none of them; the typecheck coverage this reaches for is already carried by tsconfig.web.json');
+});
+
+// ─── 04-19 (wave 7): the phase's closing clauses ───────────────────────────
+//
+// Four clauses, each asserting BOTH directions (D-33/D-40): softening or
+// deleting the claim fails, and inflating it fails. They land here, in the
+// closing wave, because this is the first commit in which SECURITY.md carries
+// the claims AND this file is free to pin them — plan 04-10 (wave 3) wrote the
+// honest claim and deliberately left it unpinned rather than pin a comment it
+// had just written in the same commit, which would have been self-certifying.
+//
+// GREP-GATE HYGIENE, binding here: every count-based gate below runs over text
+// with Markdown HEADINGS stripped, because a heading naming a token is the
+// documentation-level equivalent of the comment case `readStripped` exists for,
+// and every negative is paired with a positive LOWER BOUND in the same clause,
+// so an empty extraction (a renamed heading, a deleted section, a moved file)
+// fails LOUDLY instead of satisfying the negative by parsing nothing.
+
+/** Repo-relative Markdown, with heading lines removed and all whitespace
+ *  squeezed to single spaces. The required read path for anything asserting a
+ *  PHRASE over a doc: SECURITY.md wraps at ~88 columns, so every claim in it
+ *  straddles a newline and a line-oriented grep would miss the ones that
+ *  matter most (D-33/D-40). */
+const readDocJoined = (rel) => fs.readFileSync(path.join(root, rel), 'utf8')
+  .replace(/\r/g, '')
+  .split('\n')
+  .filter((l) => !/^#/.test(l))
+  .join(' ')
+  .replace(/^>\s?|\s>\s?/g, ' ')
+  .replace(/\s+/g, ' ');
+
+/** The lines of `rel` between the heading matching `fromRe` and the next
+ *  heading of the same-or-higher level. Section-scoped on purpose: GATE-02's
+ *  ceiling is lettered (a)-(j) and GATE-05's (a)-(h), so a whole-file letter
+ *  count cannot tell them apart and would score either gate as complete on the
+ *  other's items. */
+function docSection(rel, fromRe) {
+  const lines = fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r/g, '').split('\n');
+  const start = lines.findIndex((l) => /^#{2,4}\s/.test(l) && fromRe.test(l));
+  if (start < 0) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => /^#{2,4}\s/.test(l));
+  return (end < 0 ? rest : rest.slice(0, end)).join('\n');
+}
+
+/** Item markers `- (a)` … `- (v)` in a doc section, deduplicated by letter, so
+ *  a section that repeats one item does not score as two. Filtered so a heading
+ *  can never satisfy the gate — `docSection` already excludes them. */
+function docItemLetters(sectionText) {
+  const seen = new Set();
+  for (const m of sectionText.matchAll(/^\s*[-*(]\s*\(([a-v])\)/gm)) seen.add(m[1]);
+  return seen;
+}
+
+/** Occurrences of `needle` in `text` whose ±`radius`-character window also
+ *  contains `nearRe`. The shape every negative below uses: "the doc must not
+ *  describe grok as live-verified" is a PROXIMITY claim, and a bare
+ *  `indexOf(...) === -1` on either token alone would forbid honest prose that
+ *  names the token in order to deny it. */
+function nearMatches(text, needle, nearRe, radius = 200) {
+  const out = [];
+  for (const m of text.matchAll(new RegExp(needle, 'gi'))) {
+    const win = text.slice(Math.max(0, m.index - radius), m.index + m[0].length + radius);
+    if (nearRe.test(win)) out.push(win);
+  }
+  return out;
+}
+
+test('04-19 clause 1: SECURITY.md carries each gate ceiling at NO FEWER items than its source (D-34)', () => {
+  // ── The SOURCE counts, measured here rather than quoted. The doc is asserted
+  //    AGAINST the source, so a ceiling item added to hooks.ts and never written
+  //    into SECURITY.md fails this clause — which is the whole point: a stale
+  //    `(j)-(o)` range in the doc would silently drop ten items that are exactly
+  //    the remedies two red-team rounds produced.
+  const hooks = readRaw('src/main/hooks.ts');
+  const g3Src = hooks.slice(hooks.indexOf('(j) a RUNTIME-ASSEMBLED'), hooks.indexOf('INHERITED AND RESTATED'));
+  const g5Src = hooks.slice(hooks.indexOf("GATE-05's CEILING"), hooks.indexOf('private openApproval'));
+  const srcLetters = (text, re) => {
+    const seen = new Set();
+    for (const m of text.matchAll(re)) seen.add(m[1]);
+    return seen;
+  };
+  // `(j)` heads its own slice, so it is counted explicitly; every later item is
+  // matched by the 3-space doc-comment indent the file uses for list items —
+  // which is also what excludes the `(a)'s degradation` CROSS-REFERENCE inside
+  // GATE-05's item (e), indented seven spaces. Measured: without that exclusion
+  // the GATE-05 block scores 9 for 8 items.
+  const g3SrcLetters = srcLetters(g3Src, /^\s*\*\s{3}\(([k-v])\)/gm);
+  g3SrcLetters.add('j');
+  const g5SrcLetters = srcLetters(g5Src, /^\s*\*\s{3}\(([a-h])\)/gm);
+
+  assert.ok(g3SrcLetters.size >= 13,
+    `hooks.ts's GATE-03 ceiling has ${g3SrcLetters.size} distinct items, expected >= 13 ((j)-(v)). `
+    + 'The ceiling shrank in SOURCE — report that, do not shrink the doc to match.');
+  assert.ok(g5SrcLetters.size >= 8,
+    `hooks.ts's GATE-05 ceiling has ${g5SrcLetters.size} distinct items, expected >= 8 ((a)-(h)).`);
+
+  // ── The DOC counts, section-scoped and heading-filtered.
+  const g3Doc = docSection('SECURITY.md', /GATE-03's ceiling/);
+  const g5Doc = docSection('SECURITY.md', /GATE-05's ceiling/);
+  const g2Doc = docSection('SECURITY.md', /GATE-02's ceiling/);
+  assert.ok(g3Doc && g5Doc && g2Doc,
+    'SECURITY.md no longer has the three per-gate ceiling sections — their headings were renamed or '
+    + 'the sections deleted, and every count below would then measure nothing at all');
+
+  const g3DocLetters = docItemLetters(g3Doc);
+  const g5DocLetters = docItemLetters(g5Doc);
+  const g2DocLetters = docItemLetters(g2Doc);
+
+  // Positive lower bounds FIRST, so an empty extraction can never pass the
+  // comparison below by scoring 0 on both sides.
+  assert.ok(g2DocLetters.size >= 10,
+    `SECURITY.md's GATE-02 ceiling lists ${g2DocLetters.size} items, expected >= 10 ((a)-(j) in shellEnv.ts)`);
+  assert.ok(g3DocLetters.size >= 13,
+    `SECURITY.md's GATE-03 ceiling lists ${g3DocLetters.size} items, expected >= 13`);
+  assert.ok(g5DocLetters.size >= 8,
+    `SECURITY.md's GATE-05 ceiling lists ${g5DocLetters.size} items, expected >= 8`);
+
+  assert.ok(g3DocLetters.size >= g3SrcLetters.size,
+    `SECURITY.md carries ${g3DocLetters.size} GATE-03 ceiling items against hooks.ts's `
+    + `${g3SrcLetters.size}. A doc count lower than its source count is a boundary described as `
+    + 'tighter than it is.');
+  assert.ok(g5DocLetters.size >= g5SrcLetters.size,
+    `SECURITY.md carries ${g5DocLetters.size} GATE-05 ceiling items against hooks.ts's `
+    + `${g5SrcLetters.size}.`);
+
+  // The two items a stale range would have dropped FIRST, named individually so
+  // the failure message says which remedy went missing rather than "a count moved".
+  for (const letter of ['s', 't', 'u', 'v']) {
+    assert.ok(g3DocLetters.has(letter),
+      `SECURITY.md's GATE-03 ceiling has no item (${letter}). Items (s)-(v) are round 2's and `
+      + "round 3's own remedies — the argv residual, the unjudged deletion spellings, the "
+      + 'incomplete host allowlist and the `rm` segmentation heuristic.');
+  }
+  for (const letter of ['e', 'g', 'h']) {
+    assert.ok(g5DocLetters.has(letter),
+      `SECURITY.md's GATE-05 ceiling has no item (${letter}). (e), (g) and (h) are grok/agy's `
+      + "unchanged timeouts, Claude's PreToolUse budget and the 150 s latency hazard.");
+  }
+});
+
+test('04-19 clause 2: SECURITY.md names four fail-opens with dispositions, and states the fail-open/fail-closed contrast (T-04-DOC-01)', () => {
+  const joined = readDocJoined('SECURITY.md');
+
+  // Positive, with a lower bound: four fail-opens means at least four
+  // disposition lines. Counted on heading-stripped text so a section title
+  // cannot satisfy it.
+  const dispositions = (joined.match(/\*\*Disposition:\*\*/g) || []).length;
+  assert.ok(dispositions >= 4,
+    `SECURITY.md carries ${dispositions} **Disposition:** line(s), expected >= 4 — one per `
+    + 'fail-open. Three are inherited (the user-global engine seeds, the shim\'s connect-error '
+    + 'exit 0, protectedPathDenial\'s `if (!root) return null`) and one is new this phase '
+    + "(GATE-05's ask degrading to deny on the engines whose shim cannot poll).");
+
+  const owners = (joined.match(/\*\*Owner:\*\*/g) || []).length;
+  assert.ok(owners >= 4,
+    `SECURITY.md carries ${owners} **Owner:** line(s), expected >= 4. A disposition with no owner `
+    + 'is a note, not a decision.');
+
+  // Each of the four, by the phrase that identifies it. Deleting any one drops
+  // the count above too, but this half says WHICH went.
+  const each = [
+    [/user-global engine seeds/i, 'fail-open 1 — the user-global engine seeds outside the hive root'],
+    [/connect-error `process\.exit\(0\)`|connect-error .process\.exit\(0\)./i, "fail-open 2 — the shim's connect-error exit 0, which for a Claude PreToolUse hook is allow"],
+    [/if \(!root\) return null/i, "fail-open 3 — protectedPathDenial's no-hive-root early return"],
+    [/degrades to\s*\*?\*?"?deny"?|"ask" degrades to/i, "fail-open 4 — GATE-05's ask degrading to deny"]
+  ];
+  for (const [re, what] of each) {
+    assert.match(joined, re, `SECURITY.md no longer names ${what}`);
+  }
+
+  // THE CONTRAST, which is the point of listing item 3 beside GATE-03's empty
+  // allowlist: one fails OPEN because with no hive root there is nothing to
+  // protect, the other fails CLOSED because an empty allowlist is not the same
+  // kind of absence. Asserted as a proximity claim over joined text, because the
+  // two halves are deliberately in one paragraph and a line grep cannot see it.
+  assert.ok(
+    nearMatches(joined, 'fails\\s+\\*?\\*?closed', /empt(y|ied)\s+(host\s+)?allowlist/i, 300).length >= 1,
+    'SECURITY.md no longer states that GATE-03\'s host arm fails CLOSED on an empty allowlist '
+    + 'beside the fail-open it contrasts with. Both directions in one place IS the claim; either '
+    + 'one alone reads as a policy rather than a choice.'
+  );
+});
+
+test('04-19 clause 3: SECURITY.md carries the honest GATE-03 claim and cannot inflate it (T-04-DOC-02, T-04-DOC-09)', () => {
+  const joined = readDocJoined('SECURITY.md');
+
+  // ── POSITIVE, three unconditional. Softening or deleting any one fails.
+  //    These are the clauses plan 04-10 measured UP and DOWN during wave 3; a
+  //    later editor "tidying" them is the drift this clause exists for.
+  const unconditional = [
+    'through the real `HookServer`',
+    'LIVE-UNVERIFIED for pi',
+    'exercised through a real child process'
+  ];
+  for (const phrase of unconditional) {
+    assert.ok(joined.includes(phrase),
+      `SECURITY.md no longer contains the literal ${JSON.stringify(phrase)}. This is one of the `
+      + "claim's own POSITIVE clauses — the negatives below cannot see it go.");
+  }
+
+  // ── POSITIVE, one CONDITIONAL, cross-checked against plan 04-13's own
+  //    machine-readable line. An unmeasured live run cannot be rounded in
+  //    either direction (round 1's BL-11), so the clause FAILS if that line is
+  //    absent, and fails if two copies of it disagree.
+  const summary = readRaw('.planning/phases/04-overnight-on-a-repo-that-matters/04-13-SUMMARY.md');
+  const verdicts = [...summary.matchAll(/LIVE GATE-03 REFUSAL:\s*(yes|no)\b/gi)].map((m) => m[1].toLowerCase());
+  assert.ok(verdicts.length >= 1,
+    "04-13-SUMMARY.md carries no `LIVE GATE-03 REFUSAL: yes|no` line. Plan 04-13 task 4 is "
+    + 'required to write exactly one of them, and without it SECURITY.md\'s live-refusal wording '
+    + 'cannot be checked in either direction — which is the whole of BL-11.');
+  assert.equal(new Set(verdicts).size, 1,
+    `04-13-SUMMARY.md's LIVE GATE-03 REFUSAL line is AMBIGUOUS — it reads ${verdicts.join(' and ')}. `
+    + 'An unmeasured run cannot be rounded either way; fix the SUMMARY, do not pick one here.');
+
+  const liveRefusalSentence = /(had a command refused on this machine|a live agent (was|has been) refused|live[- ]verified refusal)/i;
+  if (verdicts[0] === 'yes') {
+    assert.match(joined, liveRefusalSentence,
+      'plan 04-13 recorded LIVE GATE-03 REFUSAL: yes, but SECURITY.md does not carry the '
+      + 'live-refusal sentence. A measurement that was obtained must be stated.');
+  } else {
+    assert.doesNotMatch(joined, liveRefusalSentence,
+      'plan 04-13 recorded LIVE GATE-03 REFUSAL: no — no live agent ever ran, because this '
+      + "machine's codex auth is revoked — yet SECURITY.md claims a live refusal. That is the "
+      + 'exact over-claim round 1 flagged as BL-11.');
+    assert.ok(joined.includes('NO LIVE AGENT HAS EVER BEEN OBSERVED REFUSED'),
+      'plan 04-13 recorded LIVE GATE-03 REFUSAL: no, so SECURITY.md must carry the '
+      + 'corrected-downward wording explicitly. Silence is not the same as saying so: a reader '
+      + 'who finds neither sentence assumes the gate was watched working.');
+  }
+
+  // ── NEGATIVE. Proximity, not presence: the doc is allowed to use the words in
+  //    order to DENY them (it does, naming what the phase's opening wording asked
+  //    for and could not achieve), and forbidden to attach them to these engines.
+  for (const engine of ['grok', '\\bpi\\b', 'OpenCode']) {
+    const hits = nearMatches(joined, 'live-verified', new RegExp(engine, 'i'));
+    assert.equal(hits.length, 0,
+      `SECURITY.md describes ${engine.replace(/\\\\b/g, '')} as live-verified. None of grok, pi or `
+      + 'OpenCode is installed on this machine and no live session has ever run against any of '
+      + `them.\nOffending text: ${JSON.stringify((hits[0] || '').slice(0, 240))}`);
+  }
+  const agyHits = nearMatches(joined, 'unit-verified', /\bagy\b|antigravity/i);
+  assert.equal(agyHits.length, 0,
+    'SECURITY.md calls agy unit-verified. What is true and measured is narrower and is already '
+    + "written: agy's reply TRANSLATOR is exercised through a real child process. The engine "
+    + `honouring the deny is unverified.\nOffending text: ${JSON.stringify((agyHits[0] || '').slice(0, 240))}`);
+
+  // ── The marker vocabulary itself, with a lower bound, so the negatives above
+  //    cannot be satisfied by a SECURITY.md that stopped talking about engines.
+  const markers = (joined.match(/LIVE-UNVERIFIED/g) || []).length;
+  assert.ok(markers >= 3,
+    `SECURITY.md mentions LIVE-UNVERIFIED ${markers} time(s), expected >= 3 (GATE-04, the `
+    + 'grok/kimi/agy bridges, and pi/OpenCode). A doc with none of them has stopped making the '
+    + 'claim rather than making it honestly.');
+});
+
+test('04-19 clause 4: TELEMETRY.md states the durability level it has, and the writer is in hooks.ts (RECORD-01)', () => {
+  const joined = readDocJoined('TELEMETRY.md');
+
+  // Positive, with lower bounds.
+  assert.ok(joined.includes('synchronous = NORMAL'),
+    'TELEMETRY.md no longer states the `synchronous = NORMAL` durability level. Without it the '
+    + 'reader infers `FULL`, which this app deliberately does not pay for.');
+  assert.match(joined, /survives?\s+a\s+process\s+crash/i,
+    'TELEMETRY.md no longer says what NORMAL under WAL actually buys — a row committed before the '
+    + 'insert returns, surviving a PROCESS crash.');
+  assert.match(joined, /not\s+guaranteed\s+against\s+an?\s+OS\s+crash|not\s+\*?\*?guaranteed\*?\*?\s+against\s+an\s+OS/i,
+    'TELEMETRY.md no longer states the CEILING of `synchronous = NORMAL`: a row is not guaranteed '
+    + 'against an OS crash or a power loss until the next checkpoint.');
+  assert.match(joined, /in-memory ring/i,
+    'TELEMETRY.md no longer says the span ring is unchanged. The waterfall UI reads exactly that '
+    + 'ring, and a reader who thinks it was replaced will "fix" the duplication by deleting it.');
+  for (const reason of [/ToolSpan/, /ATTR_ALLOWLIST/, /Claude-only/i]) {
+    assert.match(joined, reason,
+      'TELEMETRY.md no longer states all three measured reasons the durable writer is NOT on the '
+      + 'telemetry path (`ToolSpan` has no target, `ATTR_ALLOWLIST` admits no path or command key, '
+      + 'the OTel block is Claude-only). Drop one and somebody moves the writer back.');
+  }
+
+  // Negative: it must not upgrade the guarantee it has.
+  assert.doesNotMatch(joined, /synchronous\s*=\s*FULL\b(?![^.]*would)/i,
+    'TELEMETRY.md describes `synchronous = FULL` as what ships. It does not: FULL would fsync on '
+    + 'every tool call, and the doc may only name it as the trade NOT taken.');
+
+  // Both directions on the writer's location — a positive alone would pass while
+  // a duplicate crept back into telemetry.ts, and a negative alone would pass on
+  // a repo where the writer was deleted outright.
+  assert.ok(strippedHits('src/main/hooks.ts', 'recordToolCall') >= 1,
+    'src/main/hooks.ts no longer references recordToolCall — the hook socket is the only place '
+    + 'agent, tool and TARGET all exist for every engine, which is the whole reason RECORD-01\'s '
+    + 'writer lives there and not on the telemetry path');
+  assert.equal(strippedHits('src/main/telemetry.ts', 'recordToolCall'), 0,
+    'src/main/telemetry.ts references recordToolCall. The durable writer was moved (or copied) '
+    + 'onto the telemetry path, where `ToolSpan` has no `target` and `ATTR_ALLOWLIST` admits no '
+    + 'path or command key — so the record it writes cannot answer "who wrote this file"');
+  assert.equal(strippedHits('src/main/telemetry.ts', 'never persisted'), 0,
+    'the ToolSpan comment in telemetry.ts was rewritten. It is comment-stripped here on purpose: '
+    + 'this clause pins the CODE, and TELEMETRY.md is where that sentence is explained');
 });

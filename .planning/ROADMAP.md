@@ -425,6 +425,24 @@ phase's watchdog lives in).
      string, not by prefix matching in a settings file that only Claude Code reads.
      — GATE-02, GATE-03
 
+     > **ANNOTATED AT THE PHASE-4 CLOSE (plan 04-19, 2026-08-26), beside the original wording
+     > rather than replacing it, so the diff shows what the phase learned.** What this criterion
+     > names as four engines was **live-verified on none of them**. Judged in main: yes, and the
+     > judge reaches **seven** engines, refused **through the real `HookServer`** for
+     > Claude-shaped and Codex-shaped payloads in both command shapes, driven by the real shim as
+     > a child process. But **no live agent has ever been observed refused** — plan 04-13 task 4
+     > owned that measurement and recorded `LIVE GATE-03 REFUSAL: no`, meaning the experiment
+     > never ran (this machine's codex token is revoked), not that an agent sailed through. Of
+     > the four engines named above, **only Codex is installed here**; Grok, pi and OpenCode ship
+     > `LIVE-UNVERIFIED` because none of their CLIs is installed and an xAI key is a recurring
+     > cost `PROJECT.md` forbids. Two further limits are structural, not pending: the host arm is
+     > scoped to a **downloader's own argument**, so `git clone` against an unlisted host is
+     > **not** reached, and an **emptied** allowlist denies while an **unlisted** host asks.
+     > GATE-02's own live half ran on a real `claude` agent in both directions; its non-Claude
+     > clause is blocked with proven attribution. **Do not read this criterion as met for four
+     > engines in a later phase** — `SECURITY.md` § the honest cross-engine claim is the wording
+     > that is true, and `test/repo-claims.test.cjs` fails if it is ever inflated.
+
   2. **There is a third answer between allow and deny, and sandboxes are opt-in per engine.**
      An agent about to run something unrecoverable stops; the operator is asked wherever they
      are, including on the phone; the call proceeds only on an explicit yes; and the wait is
