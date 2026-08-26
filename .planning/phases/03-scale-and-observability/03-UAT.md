@@ -8,7 +8,7 @@ updated: 2026-08-26T05:40:00Z
 
 ## Current Test
 
-[testing paused — 4 items outstanding; the BLOCKING 03-08 checkpoint is now DISCHARGED]
+[testing paused — 5 items outstanding (2, 3, 4, 7, 8); the BLOCKING 03-08 checkpoint is now DISCHARGED]
 
 ## Method
 
@@ -171,10 +171,13 @@ evidence: |
 
 total: 11
 passed: 6
-issues: 1
-pending: 4
+pending: 5
 skipped: 0
 blocked: 0
+issues: 1
+issues_note: |
+  The one issue is a PRE-EXISTING defect found DURING a passing test (10), not a
+  twelfth test. 6 passed + 5 pending = 11, which is the total.
 
 ## Gaps
 
