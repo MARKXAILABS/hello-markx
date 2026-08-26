@@ -54,7 +54,7 @@
     "better-sqlite3": "^13.0.3",
     "commit-graph": "^2.4.0",
     "electron-updater": "^6.8.9",
-    "monaco-editor": "^0.52.2",
+    "monaco-editor": "^0.56.0",
     "node-pty": "1.1.0",
     "pixi.js": "^8.5.1",
     "posthog-node": "^5.48.2",
