@@ -413,6 +413,58 @@ export function postSlackReply(opts: {
   });
 }
 
+/**
+ * SCALE-04: post the daily digest to a channel ROOT via `chat.postMessage`.
+ *
+ * A SIBLING of `postSlackReply` above, never a caller of it and never an edit
+ * to it. The difference is one key: this body carries NO `thread_ts` at all,
+ * because a digest belongs at the channel root — the very destination
+ * `postSlackReply`'s CLAUSE-1 guard exists to refuse. There a channel-root post
+ * is an implicit destination the caller never named; here it is the whole
+ * point, named explicitly by the operator in Settings. Sharing one function
+ * would mean weakening that guard for everybody.
+ *
+ * Fails CLOSED on a missing token or a blank channel: an outbound sender with
+ * nowhere to send resolves an error rather than letting Slack decide.
+ *
+ * The token is NEVER logged, and nothing in this function logs `opts` at all
+ * (T-03-05a) — the one `console` an ordinary implementation reaches for. The
+ * caller in boot.ts logs `res.error`, a Slack-returned string, and nothing else.
+ */
+export function postSlackDigest(opts: {
+  botToken: string;
+  channel: string;
+  text: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    if (!opts.botToken) { resolve({ ok: false, error: 'missing bot token' }); return; }
+    if (!opts.channel?.trim()) { resolve({ ok: false, error: 'missing digest channel' }); return; }
+    const body = JSON.stringify({ channel: opts.channel, text: opts.text });
+    const req = httpsRequest({
+      method: 'POST',
+      hostname: 'slack.com',
+      path: '/api/chat.postMessage',
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+        authorization: `Bearer ${opts.botToken}`
+      }
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { ok?: boolean; error?: string };
+          resolve({ ok: json.ok === true, error: json.error });
+        } catch { resolve({ ok: false, error: 'bad response from Slack' }); }
+      });
+    });
+    req.on('error', (e) => resolve({ ok: false, error: errMsg(e) }));
+    req.write(body);
+    req.end();
+  });
+}
+
 /** Per-session shared secret + lazy bot-token accessor for the reply endpoint. */
 export interface SlackReplyServerOptions {
   /** Secret the helper must echo in the `x-md-reply-token` header. */

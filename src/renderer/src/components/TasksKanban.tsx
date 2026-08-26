@@ -5,6 +5,7 @@ import { PixelBadge } from './PixelBadge';
 import { Icon } from './Icon';
 import { useStore } from '@/store/store';
 import { useHiveTasks, refreshHiveTasks } from '@/hooks/useHiveTasks';
+import { relAge, isStaleUnit } from '@shared/relAge';
 
 /** A card on the task kanban. Mirrors HiveTask in the main/preload process —
  *  re-declared locally so the renderer doesn't reach into the preload package
@@ -32,6 +33,20 @@ export interface HiveTask {
   /** First-class human feedback: the god appends {q} when a card needs the
    *  human; the ASK ME view fills in {a}. Full history stays on the card. */
   humanQA?: HumanQA[];
+  /** ISO 8601, "when THIS card last changed" — stamped by every ledger writer
+   *  (bin/task.cjs and main's HiveManager.writeTasks). Distinct from the
+   *  LEDGER's `updatedAt`, which is "when tasks.json was last written".
+   *
+   *  ABSENT on every card written before this phase, so the card's age falls
+   *  back to `createdAt` — and the tooltip SAYS it did (rule A-3). "Nine hours
+   *  since the last change" and "nine hours since it was created and nothing
+   *  has ever touched it" are different facts and must not read the same. */
+  updatedAt?: string;
+  /** Written when the owning agent's PTY exits with the card still in flight.
+   *  Two writes: {by, at} synchronously, then {branch, detail} once the
+   *  worktree is finalized. The absence of `branch` is the CORRECT rendering of
+   *  "not known yet" — never a placeholder (rule R-1). */
+  released?: { by: string; at: string; branch?: string; detail?: string };
 }
 
 /** The card's currently open question for the human, if any. An entry the human
@@ -52,6 +67,81 @@ export function waitsOnHuman(t: HiveTask): boolean {
 
 type Status = HiveTask['status'];
 
+/** An ISO string as a human-readable local timestamp. An unparseable value is
+ *  shown RAW rather than as `Invalid Date` or as a blank — what is actually on
+ *  the card is the only honest thing to show about it. */
+export function localStamp(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+/**
+ * VIGIL-04's age — the one element both surfaces that carry an age use
+ * (04-UI-SPEC § S5 rules A-2, A-3, A-4).
+ *
+ * DERIVED AT RENDER, NEVER STORED (D-32). A stored elapsed value is wrong the
+ * moment nothing re-writes it, and a card nobody is touching is exactly the case
+ * this requirement exists to make visible — the age of a stale card would be the
+ * one number that stopped moving.
+ *
+ * FOUR CHANNELS, not colour alone (`DESIGN.md:707`). Rule A-2 defines stale as
+ * "the age stopped being minutes", so the unit letter and the emphasis are read
+ * off the SAME `relAge()` result and cannot drift apart: `9h` renders in
+ * `--cth-ink-900` at weight 600 behind a clock, `4m` in `--cth-ink-500` at 400
+ * with no icon. `emphasize={false}` turns the treatment off for `done` cards —
+ * a card finished three days ago is not a problem, and lighting it up is noise.
+ *
+ * `marginLeft: 'auto'` is rule A-4's kanban placement (push the age to the far
+ * end of the meta row). It is inert in the ASK ME header, where the title button
+ * is `flex: 1` and there is no free space to absorb.
+ */
+export function TaskAge({ iso, title, emphasize = true }: {
+  /** The stored timestamp this age is derived from. */
+  iso?: string;
+  /** Rule A-3: relative on screen, absolute in the tooltip — and the tooltip
+   *  NAMES which clock it read, so the caller composes it. */
+  title: string;
+  emphasize?: boolean;
+}) {
+  // Date.parse of undefined/garbage is NaN; relAge degrades that to `0s` rather
+  // than rendering `NaNd` (T-04-AGE-06).
+  const { text, unit } = relAge(Date.now() - Date.parse(iso ?? ''));
+  const stale = emphasize && isStaleUnit(unit);
+  return (
+    <span
+      title={title}
+      style={{
+        flexShrink: 0, marginLeft: 'auto',
+        display: 'inline-flex', alignItems: 'center', gap: 3,
+        fontFamily: 'var(--cth-font-ui)',
+        fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+        color: stale ? 'var(--cth-ink-900)' : 'var(--cth-ink-500)',
+        fontWeight: stale ? 600 : 400
+      }}
+    >
+      {stale && <Icon name="clock" />}
+      {text}
+    </span>
+  );
+}
+
+/** Resolve an agent id to a display name — the live floor roster first, then the
+ *  restorable roster (so a done card keeps its author's name after that worker's
+ *  terminal is gone), then the raw id.
+ *
+ *  A hook rather than a prop so `TaskDetail` can resolve `released.by` without
+ *  its host (`TaskDetailOverlay.tsx`) having to grow a prop for it. */
+function useNameFor(): (id?: string) => string | undefined {
+  const agents = useStore((s) => s.agents);
+  const restorableAgents = useStore((s) => s.restorableAgents);
+  return (id) =>
+    id
+      ? (agents.find((a) => a.id === id)?.name
+        ?? restorableAgents.find((a) => a.id === id)?.name
+        ?? id)
+      : undefined;
+}
+
 const COLUMNS: { key: Status; label: string; accent: string }[] = [
   { key: 'todo',    label: 'TODO',    accent: 'var(--cth-sky)' },
   { key: 'doing',   label: 'DOING',   accent: 'var(--cth-lemon)' },
@@ -67,6 +157,24 @@ function stableId(seed: string): string {
   let h = 5381;
   for (let i = 0; i < seed.length; i++) h = (((h << 5) + h) ^ seed.charCodeAt(i)) | 0;
   return `t-${(h >>> 0).toString(36)}`;
+}
+
+/** `released`, normalized. Same law as every other field here — the ledger is a
+ *  hand-written file, so a half-written `released` (an object with no `by`, or a
+ *  `branch` that is not a string) must normalize to something safe rather than
+ *  reach a render as `undefined.toUpperCase()`. `by` and `at` are required for the
+ *  block to exist at all; `branch`/`detail` arrive on the SECOND write and their
+ *  absence is a legitimate, renderable state (rule R-1). */
+function releasedOf(raw: unknown): HiveTask['released'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.by !== 'string' || !r.by || typeof r.at !== 'string') return undefined;
+  return {
+    by: r.by,
+    at: r.at,
+    branch: typeof r.branch === 'string' && r.branch ? r.branch : undefined,
+    detail: typeof r.detail === 'string' && r.detail ? r.detail : undefined
+  };
 }
 
 /** Normalize whatever hive:tasks returns into a typed task array. The god
@@ -91,6 +199,10 @@ export function parseTasks(raw: unknown): HiveTask[] {
       dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn.filter((d): d is string => typeof d === 'string') : [],
       priority: typeof t.priority === 'number' ? t.priority : 3,
       createdAt: typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString(),
+      // NOT defaulted to createdAt or to now: "this card has never been touched"
+      // is a fact the tooltip renders, and defaulting would erase it silently.
+      updatedAt: typeof t.updatedAt === 'string' ? t.updatedAt : undefined,
+      released: releasedOf(t.released),
       humanQA: Array.isArray(t.humanQA)
         ? (t.humanQA as unknown[])
           .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object' && typeof (e as { q?: unknown }).q === 'string')
@@ -116,7 +228,6 @@ export function parseTasks(raw: unknown): HiveTask[] {
  * god), never by the human inserting cards the orchestrator never heard about.
  */
 export function TasksKanban() {
-  const agents = useStore((s) => s.agents);
   const [tasks, setTasks] = useState<HiveTask[]>([]);
   // Detail view: cards show just the title — clicking one opens the full
   // breakdown as an APP-WIDE overlay over the office floor (see
@@ -147,16 +258,7 @@ export function TasksKanban() {
     } catch { /* keep last good; the next poll re-syncs from disk */ }
   }, []);
 
-  const restorableAgents = useStore((s) => s.restorableAgents);
-  /** Resolve an assignee id to a display name — falls back to the restorable
-   *  roster so a done card keeps its author's name even after that worker's
-   *  terminal is gone, then to the raw id. */
-  const nameFor = (id?: string): string | undefined =>
-    id
-      ? (agents.find((a) => a.id === id)?.name
-        ?? restorableAgents.find((a) => a.id === id)?.name
-        ?? id)
-      : undefined;
+  const nameFor = useNameFor();
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--cth-paper-200)', position: 'relative' }}>
@@ -204,6 +306,7 @@ export function TasksKanban() {
                     task={t}
                     accent={col.accent}
                     assigneeName={nameFor(t.assignee)}
+                    releasedByName={nameFor(t.released?.by)}
                     onOpen={() => openTaskDetail(t.id)}
                     onDismiss={() => dismissTask(t.id)}
                   />
@@ -218,22 +321,49 @@ export function TasksKanban() {
 }
 
 // ─── Card ────────────────────────────────────────────────────────────────────
-// Deliberately minimal — a colored status edge, the title, a whisper of an
-// assignee. Everything else (the full contract, deps, controls) lives in the
-// detail view a click away: a kanban card can carry a title at most.
+// Deliberately minimal — a colored status edge, the title, and ONE meta row
+// carrying a whisper of an assignee (or who dropped the card) plus its age.
+// Everything else (the full contract, deps, the branch a released card left
+// behind, controls) lives in the detail view a click away: a kanban card can
+// carry a title at most.
+//
+// Exported for `test/renderer-components.test.cjs`. The board around it cannot be
+// server-rendered — `TasksKanban` fills `tasks` from a `useEffect`, and
+// `renderToStaticMarkup` runs no effect phase, so rendering the board yields four
+// empty columns and asserts nothing about a card.
 
-function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
+export function TaskCard({ task, accent, assigneeName, releasedByName, onOpen, onDismiss }: {
   task: HiveTask;
   accent: string;
   assigneeName?: string;
+  /** `task.released.by` resolved to a display name (rule R-2). */
+  releasedByName?: string;
   onOpen: () => void;
   onDismiss: () => void;
 }) {
+  // Rule A-3. The age falls back to `createdAt` when the card has never been
+  // touched — which is every card written before this phase — and the tooltip
+  // SAYS so. Silently substituting one clock for the other is the repudiation
+  // threat T-04-AGE-07: "nothing has changed in nine hours" and "nothing has
+  // ever touched this" would read identically.
+  const ageTitle = task.updatedAt
+    ? `updated ${localStamp(task.updatedAt)}`
+    : `created ${localStamp(task.createdAt)} — never updated`;
+
+  // Rule R-1: when write 2 has not landed the branch is simply absent. No `…`,
+  // no `loading`, no `unknown`, no skeleton — a placeholder is the only way this
+  // state can look broken in between, and if write 2 never lands (git failed;
+  // ADR-0003 keeps the work anyway) the placeholder would be permanent and false.
+  const cardTitle = task.released
+    ? `${releasedByName ?? task.released.by}'s terminal exited at ${localStamp(task.released.at)}.`
+      + (task.released.branch ? ` Their work is on branch ${task.released.branch}.` : '')
+    : 'open task details';
+
   return (
     <div style={{ position: 'relative', display: 'flex' }}>
       <button
         onClick={onOpen}
-        title="open task details"
+        title={cardTitle}
         style={{
           flex: 1, minWidth: 0,
           display: 'flex', alignItems: 'stretch', gap: 0, padding: 0,
@@ -249,14 +379,32 @@ function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
             color: 'var(--cth-ink-900)',
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden'
           }}>{task.title}</span>
-          {assigneeName && (
+          {/* The meta row (rule A-4). This is the line that used to render ONLY
+              when an assignee resolved; it is now unconditional, so an unassigned
+              card still shows its age. NO new row and no height change — the row
+              already existed, it just always renders now.
+
+              The label slot is where a released card says who dropped it (rule
+              R-2): releasing the card CLEARS its assignee, so the slot is free.
+              Only the colour changes — same face, same uppercase, same ellipsis. */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
             <span style={{
-              fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)',
+              flex: 1, minWidth: 0,
+              fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+              color: task.released ? 'var(--cth-coral)' : 'var(--cth-ink-500)',
+              fontFamily: 'var(--cth-font-display)',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
             }}>
-              {assigneeName.toUpperCase()}
+              {task.released
+                ? `DROPPED BY ${(releasedByName ?? task.released.by).toUpperCase()}`
+                : (assigneeName ? assigneeName.toUpperCase() : '')}
             </span>
-          )}
+            <TaskAge
+              iso={task.updatedAt ?? task.createdAt}
+              title={ageTitle}
+              emphasize={task.status !== 'done'}
+            />
+          </span>
         </span>
         {waitsOnHuman(task) && (
           <span title="waiting on YOUR answer — see the ASK ME tab" role="img" aria-label="Waiting on your answer" style={{
@@ -313,6 +461,11 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
     .map((id) => all.find((t) => t.id === id))
     .filter((t): t is HiveTask => !!t);
   const created = new Date(task.createdAt);
+  const nameFor = useNameFor();
+  // Rule R-3: the branch is long, and `TasksKanban.tsx`'s own law is that a
+  // kanban card carries a title at most — so the full text lives HERE and in the
+  // card's title attribute, never in the card body.
+  const droppedBy = task.released ? (nameFor(task.released.by) ?? task.released.by) : undefined;
   return (
     <Modal
       title="TASK"
@@ -342,10 +495,45 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
                 ? <PixelBadge status="working" label={assigneeName} />
                 : <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-300)' }}>unassigned</span>}
               <PriorityDots level={Math.max(1, Math.min(5, task.priority))} />
+              {/* Rule A-3: relative on the card, ABSOLUTE here. Both clocks are
+                  labelled — two unlabelled timestamps side by side say nothing,
+                  and which one you are reading is the whole point. */}
               <span style={{ marginLeft: 'auto', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-ink-500)', fontFamily: 'var(--cth-font-display)' }}>
-                {isNaN(created.getTime()) ? '' : created.toLocaleString()}
+                {isNaN(created.getTime()) ? '' : `CREATED ${created.toLocaleString()}`}
+                {task.updatedAt ? ` · UPDATED ${localStamp(task.updatedAt)}` : ' · NEVER UPDATED'}
               </span>
             </div>
+
+            {/* VIGIL-02 — the released card, in full (rule R-3). */}
+            {task.released && (
+              <div style={{
+                padding: '7px 9px', background: 'var(--cth-paper-100)',
+                boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+                display: 'flex', flexDirection: 'column', gap: 3,
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)'
+              }}>
+                <span style={{
+                  fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)',
+                  lineHeight: 'var(--cth-lh-display-md)', color: 'var(--cth-coral)'
+                }}>
+                  {`DROPPED BY ${(droppedBy ?? '').toUpperCase()}`}
+                </span>
+                <span>{`${droppedBy}'s terminal exited at ${localStamp(task.released.at)}. The card is back on the board.`}</span>
+                {/* No placeholder when write 2 has not landed (rule R-1) — absence
+                    IS the rendering of "not known yet". `break-all` copies
+                    WorkersTab.tsx:161's shipped treatment of a worktree path. */}
+                {task.released.branch && (
+                  <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', wordBreak: 'break-all' }}>
+                    {`Their work is on branch ${task.released.branch}.`}
+                  </span>
+                )}
+                {task.released.detail && (
+                  <span style={{ fontFamily: 'var(--cth-font-mono)', fontSize: 'var(--cth-text-mono-md)', lineHeight: 'var(--cth-lh-mono)', wordBreak: 'break-all', color: 'var(--cth-ink-700)' }}>
+                    {task.released.detail}
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* The contract — preserved line by line */}
             <div style={{

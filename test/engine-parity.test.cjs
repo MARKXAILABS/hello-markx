@@ -22,8 +22,10 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 const { spawn, spawnSync } = require('node:child_process');
 const loadTs = require('./load-ts.cjs');
+const { withHookServer, runShim } = require('./gate-harness.cjs');
 
 const { TelemetryCollector } = loadTs('src/main/telemetry.ts');
 const { CircuitBreaker } = loadTs('src/main/breaker.ts');
@@ -34,6 +36,7 @@ const { capabilityLine, providerCapabilities, remoteControlAvailability } =
   loadTs('src/shared/providerAutomation.ts');
 const { bridgeOf, canReceiveInbox, AGENT_PROVIDER_PRESETS } = loadTs('src/shared/agentProvider.ts');
 const { installKimiConfig } = loadTs('src/main/hiveProvisioning.ts');
+const { commandShapeDenial, DEFAULT_HOST_ALLOWLIST } = loadTs('src/main/commandShape.ts');
 
 /** One proxy-sidecar CostSample, in the shape hooks.ts builds for the ledger. */
 function costSample(over = {}) {
@@ -1037,4 +1040,561 @@ test('FLOOR-09: the number the budget arm enforces against includes the proxy ti
     + "and a per-card cap silently exempts every proxy-tier agent — asserted on the CALL and "
     + 'not on a mention, because this source is comment-stripped first.'
   );
+});
+
+/* ── codex's hook-trust flag is PROBED, never assumed (operator-found, 2026-08-25) ──
+ *
+ * Found live: spawning a codex hive agent on `codex-cli 0.128.0` produced
+ *
+ *   error: unexpected argument '--dangerously-bypass-hook-trust' found
+ *     tip: a similar argument exists: '--dangerously-bypass-approvals-and-sandbox'
+ *   – process exited (code 2) –
+ *
+ * before a single token. Older codex builds accepted the flag; 0.128.0 removed it,
+ * and codex REFUSES an unknown argument rather than ignoring it. So passing it
+ * unconditionally meant every codex agent was dead on arrival — while every unit
+ * test stayed green, because none of them spawns a real codex.
+ *
+ * PARITY-02/PARITY-01a call codex a first-class citizen with an inbox. An engine
+ * that cannot start is not first-class. */
+test('codex: the hook-trust flag is gated on a real probe, not pushed blind', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'hive.ts'), 'utf8');
+
+  const push = src.indexOf("preArgs.push('--dangerously-bypass-hook-trust')");
+  assert.ok(push > 0, 'sanity: the flag must still be pushed on builds that accept it');
+
+  // The push must be guarded, on the same line or the one before it.
+  const lineStart = src.lastIndexOf('\n', src.lastIndexOf('\n', push - 1) - 1);
+  const guarded = src.slice(lineStart, push + 60);
+  assert.ok(/codexAcceptsHookTrust\(/.test(guarded),
+    'pushing --dangerously-bypass-hook-trust unconditionally kills every codex agent on any '
+    + 'codex build that does not accept it (0.128.0 removed it). It must be gated on a probe '
+    + 'of the INSTALLED binary.');
+
+  // And the probe must actually shell out on win32, or it cannot read codex.cmd.
+  const probe = src.slice(src.indexOf('function codexAcceptsHookTrust'), src.indexOf('function codexAcceptsHookTrust') + 700);
+  assert.ok(/spawnSync\(/.test(probe), 'the probe must really execute the binary');
+  assert.ok(/shell:\s*process\.platform === 'win32'/.test(probe),
+    'on win32 the binary is codex.cmd, which Node cannot exec directly — the probe needs '
+    + "shell:true there, the same lesson pty.ts's `where` probe and mcp-live-probe.cjs encode.");
+  assert.ok(/codexHookTrust = false/.test(probe),
+    'the probe must fail CLOSED to "unsupported": spawning without the flag still yields a '
+    + 'working agent, spawning with an unsupported one yields no agent at all.');
+});
+
+// ─── GATE-03 (04-10): which engines actually honour main's verdict ───────────
+//
+// Plan 04-06 built the judge in main. These cases settle which engines can
+// carry its verdict back to the agent, and — just as importantly — which ones
+// demonstrably cannot.
+//
+// The first two cases are STRUCTURAL reads of a shim constant: cheap, and they
+// catch the failure mode a round trip does not, namely a "fix" that is only a
+// comment. They are not the only evidence. `test/gate-harness.cjs`'s `runShim`
+// really cannot drive `PI_EXTENSION` or `OPENCODE_PLUGIN` (it spawns a `.cjs`
+// under `process.execPath`, and the plugin is ESM), but `require()` and a
+// dynamic `import()` can — so both constants are also EXECUTED below against a
+// real HookServer on a real socket.
+//
+// ── THE HONEST CLAIM ────────────────────────────────────────────────────────
+//
+// The exact wording, kept beside the assertions that support it so a reader
+// finds the claim and its evidence in one place. It is DELIBERATELY narrower
+// than 04-CONTEXT.md's D-06, which bound this phase to "refused for Codex and
+// Grok (live-verified)". Grok is not installed on this machine and buying an
+// xAI key is forbidden by PROJECT.md's zero-recurring-cost rule, so that
+// wording is not achievable here and writing it anyway would be the exact
+// over-claim this project bans. The substitution is stated, never performed
+// silently.
+//
+//   GATE-03 is refused THROUGH THE REAL HookServer for Claude-shaped and
+//   Codex-shaped PreToolUse payloads, driven by the real shim as a child
+//   process (test/gate03-roundtrip.test.cjs and this file), in BOTH command
+//   shapes — a `command` string and an argv array — with a tool name that is
+//   not Claude's `Bash`. NO LIVE AGENT HAS EVER BEEN OBSERVED REFUSED, and
+//   this is now a CLOSED measurement rather than a pending one. Codex is the
+//   only one of criterion 1's four engines installed here (codex-cli 0.128.0).
+//
+//   CORRECTED DOWNWARD by plan 04-13 (2026-08-25, wave 4), in the same commit
+//   as the finding, exactly as the correction path below prescribed. That plan
+//   task 4's live interactive codex agent — the phase's ONLY live non-Claude
+//   agent, and therefore the sole vehicle for this measurement — could not be
+//   spawned at all: this machine's stored ChatGPT refresh token is revoked, so
+//   every codex model turn dies at `401 refresh_token_reused` before any tool
+//   call is ever emitted. Re-tested twice in that session (a bare auth probe
+//   and a verbatim re-run of the spike's Run A, 29 auth failures, no write
+//   attempted), roughly 90 minutes after plan 04-01's spike hit the identical
+//   wall. No agent ran, so no agent was refused.
+//
+//   READ THE SENSE OF THAT "no" CAREFULLY, because the two readings differ and
+//   only one of them is true here. It records that NO LIVE REFUSAL WAS
+//   OBSERVED. It does NOT record that a live agent attempted a denied shape
+//   and sailed through — that experiment never ran. So this is an ABSENCE of
+//   evidence about live enforcement, not evidence of absence, and neither the
+//   sentence above nor SECURITY.md's wording may be upgraded on the strength
+//   of it. What would settle it is unchanged and cheap: `codex login`, then
+//   one interactive hive agent asked to run one of `commandShapeDenial`'s
+//   shapes inside its own worktree.
+//
+//   It is BUILT for grok, kimi and agy, and all three are LIVE-UNVERIFIED for
+//   want of an installed CLI and an account. grok's and agy's reply
+//   TRANSLATORS are each exercised through a real child process below; kimi
+//   reuses HOOK_SHIM verbatim, which test/gate03-roundtrip.test.cjs drives.
+//   kimi's open question is unchanged and recorded at hiveTemplates.ts: Moonshot
+//   documents a hook BLOCK as exit code 2, where this shim expresses a deny as
+//   stdout JSON at exit 0.
+//
+//   For pi and OpenCode it is BUILT, and their bridge LOGIC is executed here
+//   against a real HookServer: pi's require()d extension returns
+//   {approve:false} carrying main's own reason even with HIVE_AUTO_APPROVE=1,
+//   and OpenCode's dynamically imported ESM plugin throws its documented veto.
+//   Both remain LIVE-UNVERIFIED for the RUNTIME question, which no test here
+//   can settle — whether pi awaits an async return (A6), and whether OpenCode
+//   auto-loads the plugin and honours a thrown veto under Bun (A7). OpenCode
+//   was additionally INERT AS SHIPPED: it posted no tool_input, so main
+//   answered allow on every call. That was a defect, fixed in this plan, and
+//   it is not laundered into the marker as if it were an unverifiable.
+//
+//   The qwen and crush proxy tiers have no tool-call boundary to gate at
+//   (hooks.ts:60-62) and are out of scope. copilot has no bridge at all.
+//
+// THIS CLAIM IS NOT PINNED BY A TEST YET, and that is deliberate rather than an
+// omission. Its natural subject is SECURITY.md, which does not carry it until
+// WAVE 7 — a pin written here would be red for four waves — and pinning the
+// comment you are reading would make the pin satisfied by a comment the same
+// commit wrote. Plan 04-19 task 2 owns both SECURITY.md and
+// test/repo-claims.test.cjs in one commit and owns the pin, in both directions,
+// including the live-refusal sentence above.
+//
+// AND THE CORRECTION PATH IS OPEN: if plan 04-13 task 4 records
+// `LIVE GATE-03 REFUSAL: no`, this comment is corrected downward in the same
+// commit as the finding — this file is in plan 04-13's files_modified for
+// wave 4 for exactly that reason.
+//
+// THAT PATH WAS TAKEN. Plan 04-13 recorded `LIVE GATE-03 REFUSAL: no` and
+// `LIVE VIGIL-03 BLOCKED: no` in 04-13-SUMMARY.md, and the correction is the
+// paragraph above, made in the same commit. Plan 04-19 task 2's pin reads
+// those SUMMARY lines and must find SECURITY.md agreeing with them — a
+// SECURITY.md that claims a live refusal would now contradict two files, not
+// one. The residual is a MISSING measurement blocked on operator auth, not a
+// failed one, and it must keep reading that way until someone runs it.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** hiveTemplates.ts's shim/plugin constants, as strings. */
+const templates = loadTs('src/main/hiveTemplates.ts');
+
+/** A shim constant's own source with JS comments removed.
+ *
+ *  WHY: a grep for a token inside a source string is satisfied by a COMMENT
+ *  mentioning it — `// we now send tool_input` passes a naive check while the
+ *  payload builder still sends nothing. Strip the comments and a `tool_input:`
+ *  match can only be a real property assignment.
+ *
+ *  The `[^:]` guard on the line-comment rule keeps `node:net` and any `https://`
+ *  intact; without it the strip would eat the rest of those lines. */
+const stripShimComments = (src) => src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+test('GATE-03: OPENCODE_PLUGIN sends a tool_input PROPERTY, not a comment about one', () => {
+  const raw = templates.OPENCODE_PLUGIN;
+  assert.equal(typeof raw, 'string', 'hiveTemplates.ts exports no OPENCODE_PLUGIN string constant');
+  const src = stripShimComments(raw);
+
+  // Positive lower bound over the SAME stripped text (D-33/D-40): an over-eager
+  // strip that emptied the constant would satisfy any assertion phrased as an
+  // absence, and would make the one below vacuous too.
+  assert.match(src, /hook_event_name\s*:/,
+    'the comment strip ate OPENCODE_PLUGIN\'s payload builder — this case is measuring nothing');
+
+  assert.match(src, /tool_input\s*:/,
+    'OPENCODE_PLUGIN posts no tool_input property, so its veto is DEAD as shipped rather than '
+    + 'merely unverified: protectedPathDenial builds `ti` from `p.tool_input`, finds no '
+    + 'file_path/path/notebook_path and no command, and returns null before resolving anything, '
+    + 'while commandShapeDenial never enters at all. Main answers {} — allow — every time.');
+});
+
+test('GATE-03: PI_EXTENSION waits for main\'s verdict before its auto-approve branch (T-04-CMD-07)', () => {
+  const raw = templates.PI_EXTENSION;
+  assert.equal(typeof raw, 'string', 'hiveTemplates.ts exports no PI_EXTENSION string constant');
+  const src = stripShimComments(raw);
+
+  assert.match(src, /hook_event_name\s*:/,
+    'the comment strip ate PI_EXTENSION\'s payload builder — this case is measuring nothing');
+  assert.match(src, /permissionDecision/,
+    'PI_EXTENSION never decodes main\'s permission verdict. Its post() was fire-and-forget '
+    + '(c.end(...) with no reply read), so a deny authored in main could not reach pi\'s '
+    + 'ev.approve() contract at all and the whole bridge was decorative for GATE-03.');
+
+  // The ORDER is the security property, not the presence. HIVE_AUTO_APPROVE
+  // used to run unconditionally, which auto-approved a call main had denied.
+  const start = src.indexOf("pi.on('tool_call'");
+  const end = src.indexOf("pi.on('tool_result'");
+  assert.ok(start >= 0 && end > start,
+    'the tool_call handler could not be located — this slice is measuring nothing');
+  const handler = src.slice(start, end);
+  const verdictAt = handler.search(/permissionDecision|\bdeny\b/);
+  const autoAt = handler.indexOf('AUTO');
+  assert.ok(verdictAt >= 0, `the tool_call handler never reads a verdict: ${handler}`);
+  assert.ok(autoAt >= 0,
+    'the HIVE_AUTO_APPROVE branch vanished from the tool_call handler — Pam guardrail #5\'s '
+    + 'auto mode is the thing GATE-03 has to gate; deleting it is not gating it');
+  assert.ok(verdictAt < autoAt,
+    'HIVE_AUTO_APPROVE is evaluated BEFORE main\'s verdict is known, so auto mode approves a '
+    + 'call main refused (T-04-CMD-07). The verdict must gate that branch, not race it.');
+});
+
+test('GATE-03: the deliberate connect-error fail-open survives both new paths (D-08 clause 3)', () => {
+  for (const name of ['PI_EXTENSION', 'OPENCODE_PLUGIN']) {
+    const src = stripShimComments(templates[name]);
+    assert.match(src, /on\('error'/,
+      `${name} lost its connect-error handler. hooks.ts:44-53 records the shim fail-open as `
+      + 'DELIBERATE: an agent PTY outlives a quit, so a bridge that failed closed would stop '
+      + 'every agent whenever the app is legitimately not running. Never "fix" it here.');
+  }
+});
+
+/** Run `fn` with a real agent PTY's three env vars set, then put the environment
+ *  back exactly as it was — `delete` for a var that did not exist, never `= ''`.
+ *
+ *  Both bridges read `process.env` at MODULE LOAD (`const SOCK = …`), so they
+ *  cannot be driven by passing an env in: the variables have to be live in THIS
+ *  process across the require()/import() and across every call that follows,
+ *  because `stamp()` re-reads HIVE_SOCK_TOKEN per payload. */
+async function withAgentEnv(vars, fn) {
+  const saved = Object.keys(vars).map((k) => [k, process.env[k]]);
+  Object.assign(process.env, vars);
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+/** The judge's OWN reason for a command, never a literal copied into this file —
+ *  a copy is asserting yesterday's text the day a reason is reworded. */
+const reasonFor = (cmd) => {
+  const v = commandShapeDenial(
+    cmd.split(/[\s;&|<>()"']+/).filter(Boolean), cmd, DEFAULT_HOST_ALLOWLIST
+  );
+  assert.ok(v, `the judge returned nothing for "${cmd}" — this fixture tests nothing`);
+  return v.reason;
+};
+
+// The two bridges below are EXECUTED, not read. That is stronger than this plan
+// asked for, and it is deliberate: the planned ceiling — "nothing in this repo
+// executes OpenCode's payload builder, because runShim spawns .cjs and the
+// plugin is ESM" — turned out to be false in the safe direction. Node imports
+// the written plugin as ESM directly, and PI_EXTENSION is plain CJS that
+// `require()` takes. Understating what was verified is the same failure as
+// overstating it, so the claim moved rather than the evidence.
+//
+// WHAT THIS STILL DOES NOT PROVE, and the marker text says the same: OpenCode
+// runs plugins under BUN, not Node, and neither engine is installed here. So the
+// bridge LOGIC is verified — payload shape, verdict decode, veto, fail-open —
+// while plugin AUTO-LOAD, pi's honouring of an async return (A6) and OpenCode's
+// honouring of a thrown veto (A7) remain LIVE-UNVERIFIED for want of a CLI and
+// an account.
+
+test('GATE-03: pi\'s REAL extension honours a deny, and auto mode cannot override it', async () => {
+  await withHookServer({ agentId: 'a1' }, async (ctx) => {
+    const file = path.join(ctx.userData, 'pi-extension.cjs');
+    fs.writeFileSync(file, templates.PI_EXTENSION, 'utf8');
+
+    await withAgentEnv({
+      HIVE_SOCK: ctx.sock,
+      HIVE_SOCK_TOKEN: ctx.token,
+      AGENT_ID: ctx.agentId,
+      // AUTO ON, which is the point: this is the branch that used to approve a
+      // call main had refused (T-04-CMD-07). Driven, not inferred from source.
+      HIVE_AUTO_APPROVE: '1'
+    }, async () => {
+      const handlers = {};
+      const register = require(file);
+      assert.equal(
+        register({ on: (ev, fn) => { handlers[ev] = fn; } }), true,
+        'PI_EXTENSION\'s register() refused a well-formed pi object'
+      );
+      assert.equal(typeof handlers.tool_call, 'function', 'no tool_call handler was registered');
+
+      const denied = await handlers.tool_call({ name: 'bash', args: { command: 'rm -rf ./x' } });
+      assert.equal(denied.approve, false,
+        `HIVE_AUTO_APPROVE=1 approved a call main denied: ${JSON.stringify(denied)}`);
+      assert.equal(denied.reason, reasonFor('rm -rf ./x'),
+        'the reason pi hands back must be the one main authored, byte for byte');
+
+      // Positive control: the same handler, a benign command, auto mode still on.
+      const allowed = await handlers.tool_call({ name: 'bash', args: { command: 'ls -la' } });
+      assert.deepEqual(allowed, { approve: true },
+        `an ordinary command was refused, or auto mode stopped working: ${JSON.stringify(allowed)}`);
+      assert.ok(
+        ctx.sent.some((e) => e.channel === 'hive:hookEvent' && e.payload.event === 'PreToolUse'),
+        `pi's payload never reached an AUTHORIZED handle(): ${JSON.stringify(ctx.sent)}`
+      );
+    });
+  });
+});
+
+test('GATE-03: OpenCode\'s REAL plugin sends a judgeable payload and vetoes on a deny', async () => {
+  await withHookServer({ agentId: 'a1' }, async (ctx) => {
+    const file = path.join(ctx.userData, 'hive-bridge.mjs');
+    fs.writeFileSync(file, templates.OPENCODE_PLUGIN, 'utf8');
+
+    await withAgentEnv({
+      HIVE_SOCK: ctx.sock, HIVE_SOCK_TOKEN: ctx.token, AGENT_ID: ctx.agentId
+    }, async () => {
+      const mod = await import(pathToFileURL(file).href);
+      const bridge = await mod.HiveBridge({});
+      const before = bridge['tool.execute.before'];
+      assert.equal(typeof before, 'function', 'the plugin registered no tool.execute.before hook');
+
+      // OpenCode's documented shape: `input.tool` is the name, `output.args`
+      // carries the arguments (their own .env-protection example reads
+      // `output.args.filePath`; the bash tool uses `output.args.command`).
+      await assert.rejects(
+        () => before({ tool: 'bash' }, { args: { command: 'rm -rf ./x' } }),
+        (err) => {
+          assert.equal(err.message, 'hive: ' + reasonFor('rm -rf ./x'),
+            `the veto carried the wrong reason: ${err.message}`);
+          return true;
+        },
+        'the real plugin did not veto a command main denied — before this plan it sent no '
+        + 'tool_input at all, so main answered {} (allow) on every call'
+      );
+
+      // Positive control: a benign command must NOT throw, and must still have
+      // reached an authorized handle() rather than dying quietly on the way.
+      await before({ tool: 'bash' }, { args: { command: 'ls -la' } });
+      assert.ok(
+        ctx.sent.some((e) => e.channel === 'hive:hookEvent' && e.payload.event === 'PreToolUse'),
+        `OpenCode's payload never reached an AUTHORIZED handle(): ${JSON.stringify(ctx.sent)}`
+      );
+    });
+  });
+});
+
+test('GATE-03: grok\'s REAL shim TRANSLATES a deny into grok\'s own decision shape', async () => {
+  await withHookServer({ agentId: 'a1' }, async (ctx) => {
+    // D-06 asserted grok "reuses HOOK_SHIM's response contract". It does not:
+    // GROK_HOOK_SHIM has its own reply decoder, and a Claude-shaped
+    // hookSpecificOutput passed through unchanged would mean NOTHING to grok.
+    // So this drives the real constant as a child process — no eval, no
+    // POSIX-gated bespoke spawn, and no copy of the decoder living in a test
+    // where it would then be testing itself.
+    const grok = (command) => runShim(ctx, {
+      hookEventName: 'pre_tool_use', sessionId: 's1', cwd: ctx.userData,
+      toolName: 'bash', toolInput: { command }
+    }, { shim: 'GROK_HOOK_SHIM' });
+
+    const denied = await grok('rm -rf ./x');
+    assert.equal(denied.code, 0, `GROK_HOOK_SHIM exited ${denied.code}: ${denied.stderr}`);
+    const out = JSON.parse(denied.stdout || '{}');
+    assert.equal(out.decision, 'deny',
+      `grok's shim did not translate main's deny into its own shape: ${denied.stdout}`);
+    assert.equal(out.reason, reasonFor('rm -rf ./x'),
+      'the REASON must survive the translation — a deny with no reason tells the model nothing '
+      + 'about what to do differently, and asserting only that "a deny appeared" would pass '
+      + 'against a decoder that dropped it');
+    assert.equal(out.hookSpecificOutput, undefined,
+      'grok received Claude\'s envelope verbatim rather than its own decision shape — that is '
+      + 'the passthrough D-06 assumed and Drift row 12 corrected');
+
+    // Positive control: an allow must produce NO decision at all. Without this
+    // the case above passes against a decoder that denies everything.
+    const allowed = await grok('ls -la');
+    assert.equal(allowed.stdout.trim(), '',
+      `grok's shim emitted a decision for an ordinary command: ${allowed.stdout}`);
+    assert.ok(
+      ctx.sent.some((e) => e.channel === 'hive:hookEvent' && e.payload.event === 'PreToolUse'),
+      `the benign grok payload never reached an AUTHORIZED handle(): ${JSON.stringify(ctx.sent)}`
+    );
+  });
+});
+
+test('GATE-03: agy\'s REAL shim translates a deny, and stays SILENT on an allow', async () => {
+  await withHookServer({ agentId: 'a1' }, async (ctx) => {
+    // This case exists because the honest claim above would otherwise have to
+    // read "built for agy and exercised by no test at all". The mechanism was
+    // already there for grok (runShim's opts.shim selector), so leaving agy
+    // unexercised would have been a hole kept for the price of six lines.
+    //
+    // agy's event arrives as ARGV, not in the payload — hence opts.args.
+    const agy = (command) => runShim(ctx, {
+      conversationId: 'c1', workspacePaths: [ctx.userData],
+      toolCall: { name: 'bash', args: { command } }
+    }, { shim: 'AGY_HOOK_SHIM', args: ['PreToolUse'] });
+
+    const denied = await agy('rm -rf ./x');
+    assert.equal(denied.code, 0, `AGY_HOOK_SHIM exited ${denied.code}: ${denied.stderr}`);
+    const out = JSON.parse(denied.stdout || '{}');
+    assert.equal(out.decision, 'deny', `agy's shim did not translate the deny: ${denied.stdout}`);
+    assert.equal(out.reason, reasonFor('rm -rf ./x'));
+
+    // The allow control matters MORE for agy than for any other engine: agy
+    // treats ANY object on stdout as a decision and FAIL-CLOSES, so writing
+    // `{}` here would deny every benign call on the floor. Silence is allow.
+    const allowed = await agy('ls -la');
+    assert.equal(allowed.stdout.trim(), '',
+      `agy's shim wrote ${allowed.stdout} for an ordinary command — agy reads any object as a `
+      + 'decision and fail-closes, so that is a DENY of every benign tool call it sees');
+  });
+});
+
+test('GATE-03: a codex-shaped payload is refused in BOTH command shapes — string and argv array', async () => {
+  await withHookServer({ agentId: 'a1' }, async (ctx) => {
+    // ON THE TOOL NAME: it does not matter, and this comment says so rather
+    // than guessing. Neither judging arm in hooks.ts reads `p.tool_name` any
+    // more — both enter on `commandOf(tool_input)` — so all these payloads need
+    // is a name that is NOT Claude's `Bash`. `'shell'` is a placeholder for
+    // exactly that condition, NOT a claim about codex's spelling: plan 04-01's
+    // spike recorded `CODEX SHELL TOOL NAME: unobserved`, deliberately, because
+    // its session died at auth before any tool call happened. Plan 04-13 task 4
+    // measures the real payload — name, KEY and the JSON type of the command
+    // argument — from a live interactive codex agent.
+    //
+    // ON THE COMMAND SHAPE: a test that drove only the string form would define
+    // "codex-shaped" as whatever satisfies the condition under test. Codex's
+    // shell tool takes `command` as an ARGV ARRAY, and hiveProvisioning.ts
+    // vouches only that codex's hook ENVELOPE is Claude-shaped — it says
+    // nothing about this field's type. If the array branch of `commandOf` were
+    // ever dropped, both arms would exit and GATE-03 would refuse nothing on the
+    // one non-Claude engine installed on this machine, with every other test in
+    // this file still green.
+    // ON THE WAIT (plan 04-16, wave 5): three of GATE-03's four shapes are
+    // ASKS, and codex runs HOOK_SHIM, which since wave 5 no longer prints main's
+    // ask reply — it polls until an operator answers, for up to ASK_TTL_MS. Both
+    // deny calls below measured 120 s each before this helper existed, blowing
+    // 04-VALIDATION's 90 s full-suite budget on its own. So refuse the ask the
+    // way an operator would and read the verdict off the shim's stdout as
+    // before; a benign command opens no ask and the race resolves on the run.
+    // The wait itself belongs to test/gate05-bounded-wait.test.cjs.
+    const codex = async (command) => {
+      const run = runShim(ctx, {
+        hook_event_name: 'PreToolUse', tool_name: 'shell', tool_input: { command }
+      });
+      const ask = await Promise.race([
+        (async () => {
+          const until = Date.now() + 3_000;
+          for (;;) {
+            const open = ctx.server.openApprovals()[0];
+            if (open) return open;
+            if (Date.now() > until) return null;
+            await new Promise((r) => setTimeout(r, 25));
+          }
+        })(),
+        run.then(() => null)
+      ]);
+      if (ask) {
+        assert.equal(ctx.server.answerApproval(ask.id, false), true,
+          'the operator\'s refusal was not accepted, so this case would wait out the real TTL');
+      }
+      return run;
+    };
+    const denialOf = (res) => {
+      assert.equal(res.code, 0, `the shim exited ${res.code}: ${res.stderr}`);
+      const parsed = JSON.parse(res.stdout || '{}');
+      return (parsed.hookSpecificOutput || {}).permissionDecision || null;
+    };
+
+    assert.equal(denialOf(await codex('rm -rf ./x')), 'deny',
+      'a command STRING on a non-Claude tool name was allowed');
+    assert.equal(denialOf(await codex(['bash', '-lc', 'rm -rf ./x'])), 'deny',
+      'an ARGV ARRAY command on a non-Claude tool name was allowed — commandOf\'s array branch '
+      + 'is what stops GATE-03 being decorative on codex');
+
+    const benignString = await codex('ls -la');
+    assert.equal(denialOf(benignString), null,
+      `the string shape with a benign body was refused: ${benignString.stdout}`);
+    assert.equal(benignString.stdout.trim(), '{}',
+      'the allow must be a well-formed empty decision, not silence from a shim that never '
+      + 'reached the server (its fail-open exits 0 with empty stdout too)');
+    assert.equal(denialOf(await codex(['bash', '-lc', 'ls -la'])), null,
+      'the argv shape with a benign body was refused');
+  });
+});
+
+test('GATE-03: the PATH arm reaches a non-Claude payload too (plan 04-06\'s wave-2 widening)', async () => {
+  await withHookServer({ agentId: 'a1' }, async (ctx) => {
+    const root = ctx.hive.root();
+    assert.ok(root, 'the harness hive has no root — this case would pass vacuously');
+    const shellPath = (target) => runShim(ctx, {
+      hook_event_name: 'PreToolUse', tool_name: 'shell',
+      tool_input: { command: `cat >> ${target}` }
+    });
+
+    // Before the wave-2 widening, `protectedPathDenial` collected targets only
+    // from file_path/path/notebook_path, so a write named inside a COMMAND
+    // string reached `targets.length === 0 → allow` on six of the seven engines
+    // main judges. This is the case that proves the widening landed.
+    const denied = await shellPath(path.join(root, 'bin', 'cth-hook.cjs'));
+    const out = JSON.parse(denied.stdout || '{}');
+    assert.equal((out.hookSpecificOutput || {}).permissionDecision, 'deny',
+      `a write to <hive>/bin named in a command string was allowed: ${denied.stdout}`);
+    assert.match((out.hookSpecificOutput || {}).permissionDecisionReason, /<hive>\/bin/,
+      'the deny came from somewhere other than the protected-path arm');
+
+    // Positive control: a path under the hive that is NOT protected still
+    // allows, so the arm is not simply denying every hive-shaped word.
+    const allowed = await shellPath(path.join(root, 'scratch', 'notes.md'));
+    assert.equal(allowed.stdout.trim(), '{}',
+      `an ordinary write under <hive>/scratch was refused: ${allowed.stdout}`);
+  });
+});
+
+test('GATE-03: main-side judging reaches SEVEN engines — derived from the preset table, never a magic number', () => {
+  // CONTEXT.md's criterion 1 names four engines. The table names more, and the
+  // measurement is the thing that is true: `kimi` and `antigravity` are two
+  // engines main judges that CONTEXT.md never mentions.
+  const judged = [];
+  const proxyTier = [];
+  const noBridge = [];
+  for (const preset of AGENT_PROVIDER_PRESETS) {
+    const bridge = bridgeOf(preset.id);
+    // Claude reaches the same HookServer through its OWN --settings PreToolUse
+    // entry rather than through a shim, so it has no BridgeDescriptor and must
+    // be counted by the property that IS true of it.
+    if (preset.hiveAware) { judged.push(preset.id); continue; }
+    if (!bridge) { noBridge.push(preset.id); continue; }
+    if (bridge.kind === 'hooks') judged.push(preset.id);
+    else proxyTier.push(preset.id);
+  }
+
+  // Derived, so a preset change moves the number instead of going stale: one
+  // engine per distinct shim, plus Claude's native path.
+  const shims = new Set(
+    AGENT_PROVIDER_PRESETS
+      .map((p) => bridgeOf(p.id))
+      .filter((b) => b && b.kind === 'hooks')
+      .map((b) => b.shim)
+  );
+  assert.equal(judged.length, shims.size + 1,
+    `${judged.length} engines are judged by main but ${shims.size} distinct hook shims exist `
+    + `(${[...shims].sort().join(', ')}) — two presets share a shim, or Claude's native path `
+    + 'stopped being counted. Reconcile before trusting the reach claim.');
+
+  // Named membership, which is what makes the reach concrete rather than a
+  // count nobody can check. AGENT_DENY_RULES — the only rule surface that
+  // survives --permission-mode bypassPermissions inside Claude's own process,
+  // and therefore real defence in depth (D-03) — is written into exactly ONE
+  // of these engines' settings files. Main-side judging reaches all seven.
+  for (const id of ['claude', 'codex', 'grok', 'kimi', 'antigravity', 'pi', 'opencode']) {
+    assert.ok(judged.includes(id),
+      `${id} is not judged by main. judged=[${judged.join(', ')}]`);
+  }
+
+  // The exclusions, named individually rather than left as a remainder — the
+  // seven is only a measurement if what is NOT in it is stated too.
+  for (const id of ['qwen', 'crush']) {
+    assert.ok(proxyTier.includes(id),
+      `${id} is not on the proxy tier. hooks.ts:60-62 records that the proxy tier has NO `
+      + 'tool-call boundary at all: there is nothing to gate at, so it is out of scope rather '
+      + 'than unprotected-and-ignored.');
+  }
+  assert.ok(noBridge.includes('copilot'),
+    'copilot gained a bridge. It had none at all, which is why it is excluded here.');
+  assert.ok(!judged.includes('qwen') && !judged.includes('crush') && !judged.includes('copilot'),
+    'a proxy-tier or bridgeless engine was counted into the reach');
 });

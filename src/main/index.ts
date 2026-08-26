@@ -16,7 +16,8 @@ import { initAutoUpdater } from './updater';
 import { RealtimeFloorWatcher } from './realtimeFloorWatcher';
 import {
   readConfig, writeConfig, resetConfig, redactedConfig, ensureHarnessHome, ensureClaudePermissionsAccepted,
-  modelForRole, OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
+  modelForRole, repointFiredStore,
+  OPS_STANDUP_MISSION, HEARTBEAT_MISSION, COMPACT_MAINTENANCE_MISSION, type HarnessConfig, type ScheduledMission
 } from './config';
 import {
   listDir, readFileText, readFileBinary, writeFileText, statAbs, expandTilde,
@@ -27,7 +28,7 @@ import {
   addWorktree, removeWorktree, worktreeHasUnintegratedWork, worktreeIsGcSafe,
   getLogGraph, getCommitFiles, getFileAtRev, compareRefs, listWorktrees, checkoutRef
 } from './git';
-import { HiveManager, redactSecrets, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
+import { HiveManager, redactSecrets, hasOwnCostSource, type AgentMeta, type HiveMessage, type HiveTask } from './hive';
 import { AccountPoolManager } from './accountPool';
 import {
   DeliveryService, condenseBoardText, verifyBoard, BOARD_KEEP_SECTIONS,
@@ -35,12 +36,16 @@ import {
 } from './delivery';
 import type { QueueOp, QueuedDelivery } from '../shared/queueDelivery';
 import { HookServer } from './hooks';
-import { CircuitBreaker, type BreakerInput } from './breaker';
+import { CircuitBreaker, type BreakerInput, type BreakerState } from './breaker';
 import type { UsageProvider } from './usage';
 import { MemoryManager } from './memory';
 import { KnowledgeManager } from './knowledge';
 import { MemoryReflector, type ReflectSettings } from './reflect';
 import { PersistStore } from './db';
+import {
+  summarizeDay, bucketDetail, parseDayParam, validateBucketIndex,
+  type TimelineResult, type BucketDetailResult
+} from './timeline';
 import {
   readAgentUsage, readContextTokens, seedSessionTranscript, resolveSessionCwd, SPAWN_SAFE_SESSION_ID
 } from './transcript';
@@ -48,7 +53,8 @@ import { listIssues, listCIRuns } from './github';
 import { SlackWebhookServer, SlackReplyServer, postSlackReply, type SlackEventFile } from './slack';
 import {
   WebhookServer,
-  type PhoneAsk, type WebhookDispatch, type WebhookEndpointRef, type WebhookInbound, type WebhookTaskStatus
+  type PhoneAsk, type PhoneAnswerOutcome, type PhoneFloorQuiet,
+  type WebhookDispatch, type WebhookEndpointRef, type WebhookInbound, type WebhookTaskStatus
 } from './webhook';
 import { openTunnel, type TunnelOpener } from './tunnel';
 import { ensureCloudflared } from './cloudflared';
@@ -75,8 +81,8 @@ import { validateBaseUrl, buildAuthHeaders, resolveUpstreamUrl, secretRefFor, IN
 import { MCP_CATALOG, mcpCatalogEntry, mcpGrantKey, mcpWiredFor, isSafeAgentId } from '../shared/mcpCatalog';
 import { RosterStore } from './roster';
 import { ControlRegistry } from './control';
-import { fetchHireManifest, readHireManifestFile } from './hire';
-import { parseHireDeepLink, type HireManifest } from '../shared/hire';
+import { buildTeamExport, fetchHireManifest, readHireManifestFile } from './hire';
+import { HIRE_TEAM_SPEC_V1, parseHireDeepLink, type HireManifest } from '../shared/hire';
 import { ClosingTimeController } from './closingTime';
 import {
   inferAgentProvider,
@@ -1217,8 +1223,35 @@ function openAskOf(task: HiveTask): PhoneHumanQA | undefined {
   return undefined;
 }
 
+/**
+ * GATE-05 — the deadline of every tool ask this process has ever SERVED to the
+ * phone, id → `expiresAt`.
+ *
+ * It exists for one reason: `HookServer.answerApproval` returns a bare boolean,
+ * and rule G-2 needs "expired" told apart from "already answered on the
+ * desktop" — opposite outcomes at 3am. Once an entry leaves `openApprovals()`
+ * there is nothing left to ask, so the deadline has to have been kept when it
+ * was still there. The phone can only learn an ask id from a GET, so an id it
+ * posts back is always in here.
+ *
+ * Bounded by pruning on every read: nothing survives more than one
+ * {@link TOOL_ASK_MEMO_MS} past its own deadline.
+ */
+const toolAskExpiry = new Map<string, number>();
+/** How long a settled/expired ask's deadline is remembered — long enough that a
+ *  phone answering the ask it is looking at gets the honest verdict, short
+ *  enough that an overnight run does not accumulate ids. */
+const TOOL_ASK_MEMO_MS = 10 * 60_000;
+
 /** `GET /phone/api/asks`' data source (UI-SPEC S5 screen 1) — every card
- *  blocked on an open human question, newest first. */
+ *  blocked on an open human question, newest first, PLUS every open tool
+ *  approval behind `kind:'tool'` (D-10).
+ *
+ *  The approvals are NOT cards and are never written to `tasks.json`: a tool
+ *  approval has no card, is ephemeral, and expires to deny in seconds. Writing
+ *  one into the ledger would block a real card, survive its own timeout as a
+ *  dead question on the phone, and put a high-frequency transient into the
+ *  durable ledger ADR-0004 gives a single committer. */
 function openPhoneAsks(): PhoneAsk[] {
   const ledger = hive.tasks() as { tasks?: HiveTask[] };
   const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
@@ -1227,13 +1260,79 @@ function openPhoneAsks(): PhoneAsk[] {
     if (t.status !== 'blocked') continue;
     const open = openAskOf(t);
     if (!open) continue;
+    // No `kind` on the card path: absent === 'card', so this producer is
+    // back-compatible by construction and an old phone sees no change at all.
     const ask: PhoneAsk = { taskId: t.id, title: t.title, question: open.q };
     if (t.assignee) ask.agent = t.assignee;
     if (open.askedAt) ask.askedAt = open.askedAt;
     asks.push(ask);
   }
   asks.sort((a, b) => (b.askedAt ?? '').localeCompare(a.askedAt ?? ''));
+
+  // Tool approvals ride the same response. Guarded because this thunk is
+  // reachable from the webhook server the instant it is constructed, and
+  // `hookServer` is assigned inside `bootFloor` — a pre-boot GET must answer
+  // with the cards it has, never a 500.
+  try {
+    const now = Date.now();
+    for (const [id, expiresAt] of toolAskExpiry) {
+      if (now - expiresAt > TOOL_ASK_MEMO_MS) toolAskExpiry.delete(id);
+    }
+    for (const a of hookServer.openApprovals()) {
+      toolAskExpiry.set(a.id, a.expiresAt);
+      asks.push({
+        taskId: a.id,               // rule G-1: the ASK id in the UNCHANGED field
+        title: 'wants to run a command',
+        question: a.command,        // agent-authored; escaped at render, never eval'd
+        agent: a.agentId,
+        kind: 'tool',
+        // Rule G-3 — computed HERE, at response time, so what crosses the wire
+        // is a duration. The raw `expiresAt` never leaves this process.
+        expiresInMs: Math.max(0, a.expiresAt - now)
+      });
+    }
+  } catch (e) {
+    console.error('[phone] could not read open approvals:', e instanceof Error ? e.message : e);
+  }
   return asks;
+}
+
+/** VIGIL-01 — the floor-quiet snapshot on the wire the phone reads it from.
+ *  The watchdog's `current()` below is plan 04-11's named accessor on a
+ *  declared `Floor` member, exactly as approvals are reached through
+ *  `floor.hookServer` — one call site, no second copy of the state;
+ *  neither needs a line in `boot.ts`. Null (the floor is moving, or boot has
+ *  not settled) omits the field entirely. */
+function phoneFloorQuiet(): PhoneFloorQuiet | null {
+  if (!floor) return null;
+  const snap = floor.watchdog.current();
+  if (!snap) return null;
+  const out: PhoneFloorQuiet = { sinceMs: snap.sinceMs, inFlight: snap.inFlight.length };
+  if (snap.godDead) {
+    const reg = hive.registry();
+    const name = reg.godId ? reg.agents[reg.godId]?.name : undefined;
+    if (name) out.agent = name;
+  }
+  if (snap.inFlight.length === 1) out.card = snap.inFlight[0].title;
+  return out;
+}
+
+/** Settle one GATE-05 tool approval from the phone.
+ *
+ * The two-literal allowlist is asserted TWICE on purpose. `webhook.ts` refuses
+ * anything else with a 400 before this is ever called, which is the operator's
+ * honest error; this second check is the security guarantee (T-04-ASK-34) — if
+ * the transport's classification ever misses, the worst outcome must still be
+ * "nothing happened", never an accidental YES on the channel whose whole point
+ * is an explicit yes for an unrecoverable command. */
+function answerToolAsk(id: string, answer: string): PhoneAnswerOutcome {
+  const approved = answer === 'approve' ? true : answer === 'deny' ? false : null;
+  if (approved === null || !floor) return { ok: false };
+  if (floor.hookServer.answerApproval(id, approved)) return { ok: true };
+  // It did not settle, so it is gone. Rule G-2: WHICH way it went matters —
+  // expired means the command was denied, settled means it may already have run.
+  const expiresAt = toolAskExpiry.get(id);
+  return { ok: false, state: expiresAt !== undefined && Date.now() >= expiresAt ? 'expired' : 'settled' };
 }
 
 /**
@@ -1246,7 +1345,12 @@ function openPhoneAsks(): PhoneAsk[] {
  * D-39 binds: the god is ALSO informed, even when the recipient is someone
  * else — one send is exactly the failure mode this decision closes.
  */
-function answerPhoneAsk(taskId: string, answer: string): boolean {
+function answerPhoneAsk(taskId: string, answer: string): PhoneAnswerOutcome {
+  // A tool ask is one this process has SERVED as `kind:'tool'`, and the memo is
+  // the only place that fact survives the entry leaving `openApprovals()` —
+  // which is exactly the expired/settled case rule G-2 exists to tell apart.
+  // Card ids and `ask-<hex>` ids never collide.
+  if (toolAskExpiry.has(taskId)) return answerToolAsk(taskId, answer);
   try {
     const ledger = hive.tasks() as { tasks?: HiveTask[] };
     const tasks = Array.isArray(ledger?.tasks) ? ledger.tasks : [];
@@ -1320,7 +1424,8 @@ function ensureWebhookServerInstance(): WebhookServer {
     lookupStatus: lookupWebhookStatus,
     staticRoot: () => phoneRootPath(),
     openAsks: () => openPhoneAsks(),
-    answerAsk: (taskId, answer) => answerPhoneAsk(taskId, answer)
+    answerAsk: (taskId, answer) => answerPhoneAsk(taskId, answer),
+    floorQuiet: () => phoneFloorQuiet()
   });
   webhookServer = server;
   return server;
@@ -1551,6 +1656,34 @@ ipcMain.handle('hire:openFile', async () => {
   });
   if (res.canceled || res.filePaths.length === 0) return { ok: false, error: 'cancelled' };
   return readHireManifestFile(res.filePaths[0]);
+});
+
+// IPC: "export team…" in the Add-Agent modal — SCALE-02's only new channel.
+//
+// Thin on purpose. The strip, the validate-before-write self-check and the skipped
+// count are `buildTeamExport` in main/hire.ts, which the test harness can load;
+// index.ts cannot be loaded, so anything decided in here is unprovable.
+ipcMain.handle('team:export', async () => {
+  const snap = roster.read();
+  // `read()` returns null for BOTH "no roster file" and "roster unreadable", and
+  // neither is an empty floor. Turning either into an ok:true, skipped:0 empty
+  // export would tell an operator their floor exported fine when nothing was read.
+  if (!snap) return { ok: false, error: 'no roster to export' };
+
+  const { members, skipped } = buildTeamExport(snap.agents ?? []);
+
+  const res = await dialog.showSaveDialog({
+    title: 'Export team',
+    defaultPath: 'team.json',
+    filters: [{ name: 'Team file', extensions: ['json'] }]
+  });
+  if (res.canceled || !res.filePath) return { ok: false, error: 'cancelled' };
+  try {
+    writeFileSync(res.filePath, JSON.stringify({ spec: HIRE_TEAM_SPEC_V1, members }, null, 2), 'utf8');
+    return { ok: true, members: members.length, skipped };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 });
 
 /**
@@ -2008,6 +2141,12 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
           command: bin,
           cols: opts.cols,
           rows: opts.rows,
+          // GATE-02 — the install ladder needs this as much as a normal spawn,
+          // and arguably more: a proxy variable, a registry token or a corporate
+          // CA bundle is exactly what an operator re-admits to make `npm install
+          // -g` work. Omitting it here would be a silent behaviour split on the
+          // one path where they have no signal the installer differs.
+          envPassThrough: readConfig().envPassThrough ?? [],
           shellScript: buildMissingCliScript(bin, provider, npmAvailable, process.platform, nodeInstaller)
         },
         owner
@@ -2347,6 +2486,12 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   if (provider === 'codex' && opts.hive?.id) {
     await enableCodexRemoteForSpawn(opts, opts.hive.id);
   }
+  // GATE-02 — the operator's env escape hatch, resolved in MAIN and ASSIGNED
+  // rather than defaulted. `pty:spawn` takes its options straight off the
+  // renderer IPC, so `opts.<hatch> ?? readConfig()...` would let a compromised
+  // renderer name its own pass-through list and re-admit every credential the
+  // allowlist just removed. The config file is the only authority.
+  opts.envPassThrough = readConfig().envPassThrough ?? [];
   const res = ptyManager.spawn(opts, owner);
   if (res.ok) {
     analytics.track('agent_spawned', { provider });
@@ -2727,6 +2872,20 @@ ipcMain.handle('config:update', (_evt, patch: Partial<HarnessConfig>) => {
   if (typeof patch?.telemetryEnabled === 'boolean') analytics.setEnabled(patch.telemetryEnabled);
   if (!hiveWasEnabled && hive.enabled()) {
     console.log('[hive] harnessHome configured — bootstrapping hive services');
+    // SCALE-01: both live PersistStore handles were opened BEFORE harnessHome
+    // existed, so they are bound to the pre-onboarding userData file. Repoint
+    // them HERE — strictly before the hive bootstrap below, which reads
+    // `missionLastFiredAt` off whichever handle is open at that moment and would
+    // otherwise arm the scheduler off the previous project's stamps.
+    //
+    // Its OWN try/catch, deliberately NOT the one below: PersistStore.open()
+    // rethrows every non-corruption failure (locked file, read-only or full
+    // disk), so a bare call here would propagate out of the handler and skip
+    // the bootstrap entirely — resurrecting the dead-services bug that guard
+    // exists to prevent. A repoint that cannot open is a wrong-DB problem; it
+    // must never also become a no-hive problem.
+    try { persist.repoint(); repointFiredStore(); }
+    catch (e) { console.error('[hive] repoint at first-run transition:', e); }
     try { startHiveServices(); } catch (e) { console.error('[hive] bootstrap after onboarding:', e); }
   }
   return next;
@@ -2779,11 +2938,26 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
 
   if (mode === 'move' && oldHome) {
     try {
+      // The teardown above never closes `persist`, and since SCALE-01 that handle
+      // holds `<oldHome>/harness.db` OPEN in WAL mode — cpSync would copy the
+      // main file while unflushed pages still sat in `-wal`. Close first so the
+      // WAL is checkpointed into the file being copied. 'move' only: 'fresh'
+      // copies nothing and needs neither the close nor the reopen.
+      try { persist.close(); } catch (e) { console.error('[changeHome] persist.close:', e); }
       // roster.json + its backups ride along with hive/palace: the roster is the
       // renderer's half of the same state, and leaving it behind would move the
       // agents' sessions and memory to the new home while their names, notes and
       // worktree paths stayed at the old one.
-      for (const sub of ['hive', 'palace', 'roster.json', 'roster-backups']) {
+      //
+      // harness.db (+ its WAL/SHM siblings, absent unless the close above left
+      // them) and knowledge/ join them since SCALE-01 made both project-local:
+      // without them 'move' silently strands command_history, the whole kv store
+      // (missionLastFiredAt included), the FTS recall index and the knowledge
+      // graph at the old home. existsSync below already no-ops the absent ones.
+      for (const sub of [
+        'hive', 'palace', 'roster.json', 'roster-backups',
+        'harness.db', 'harness.db-wal', 'harness.db-shm', 'knowledge'
+      ]) {
         const src = join(oldHome, sub);
         if (!existsSync(src)) continue;
         // cpSync copies the whole tree incl. .git and is cross-device safe (unlike
@@ -2794,6 +2968,15 @@ ipcMain.handle('config:changeHome', async (_evt, payload: unknown) => {
     } catch (e) {
       // Copy failed: recover IN PLACE against the unchanged old home (config never
       // repointed) so the user loses nothing, and surface the error — no relaunch.
+      //
+      // This is the ONE path out of this handler that does not end in a
+      // relaunch, so it is also the only one where the close above is not undone
+      // by a process restart. Nothing in the recovery below reopens `persist`,
+      // so without this the module-level handle stays CLOSED for the rest of the
+      // session and every kv/history write silently no-ops. The copy failed
+      // BEFORE writeConfig ran, so harnessHome is still oldHome and repoint()
+      // correctly reopens against the unchanged path.
+      try { persist.repoint(); } catch (err) { console.error('[changeHome] persist.repoint after copy failure:', err); }
       startHiveServices();
       const cfg = readConfig();
       if (cfg.slackEnabled && cfg.slackSigningSecret) void startSlackServer();
@@ -3351,6 +3534,61 @@ ipcMain.handle('history:list', (_evt, agentId: unknown, limit: unknown) =>
 ipcMain.handle('history:search', (_evt, query: unknown, limit: unknown) =>
   persist.searchHistory(typeof query === 'string' ? query : '', typeof limit === 'number' ? limit : undefined));
 
+// ─── IPC: SCALE-03 — the replayable day ─────────────────────────────────────
+//
+// Both handlers are THIN on purpose. Every piece of arithmetic, every bound and
+// every argument check lives in `timeline.ts`, which imports nothing and which
+// `test/timeline.test.cjs` therefore loads and drives directly. This file cannot
+// be loaded by any test in this repo, so anything computed here would be pinned
+// only by greps that a `return {}` also satisfies.
+//
+// ONE SHAPE ON EVERY PATH — `{ok:true, ...}` or `{ok:false, error}`, including
+// the store-unavailable guard below. NEVER a zeroed success: a consumer cannot
+// tell an empty-but-successful day apart from a genuinely quiet one, so a
+// rejected day would render as "nothing happened", which is the fabrication
+// D-27 exists to forbid.
+const timelineStoreReady = (): boolean => hive.enabled() && persist.isOpen;
+const TIMELINE_UNAVAILABLE = { ok: false as const, error: 'timeline store unavailable' };
+
+/** The rows both handlers read, fetched once per call. `dailyCostRows` scans
+ *  the whole (never-rotated) cost ledger; `eventsBetween` is one range scan off
+ *  idx_ev_ts. Called on an explicit day change, not per keystroke. */
+function timelineDay(dayStartMs: number): {
+  events: ReturnType<typeof persist.eventsBetween>;
+  costRows: ReturnType<typeof hive.dailyCostRows>;
+} {
+  const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000;
+  return { events: persist.eventsBetween(dayStartMs, dayEndMs), costRows: hive.dailyCostRows(dayStartMs, dayEndMs) };
+}
+
+ipcMain.handle('hive:timeline', (_evt, day: unknown): TimelineResult => {
+  const parsed = parseDayParam(day);
+  if (!parsed.ok) return parsed;
+  if (!timelineStoreReady()) return TIMELINE_UNAVAILABLE;
+  try {
+    const { events, costRows } = timelineDay(parsed.dayStartMs);
+    // firstTs is the earliest event STILL STORED, not the first ever — retention
+    // moves it forward, and 03-07's gap marker must describe the live store.
+    return summarizeDay(events, costRows, parsed.dayStartMs, persist.earliestEventTs());
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle('hive:timelineBucket', (_evt, day: unknown, bucketIndex: unknown): BucketDetailResult => {
+  const parsed = parseDayParam(day);
+  if (!parsed.ok) return parsed;
+  const index = validateBucketIndex(bucketIndex);
+  if (!index.ok) return index;
+  if (!timelineStoreReady()) return TIMELINE_UNAVAILABLE;
+  try {
+    const { events, costRows } = timelineDay(parsed.dayStartMs);
+    return bucketDetail(events, costRows, index.index, parsed.dayStartMs);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 // ─── IPC: quit confirmation ─────────────────────────────────────────────────
 /** Every background service this app starts, in the order it must be stopped.
  *  `floorShutdown()` (boot.ts's `SHUTDOWN_STEPS`) covers everything `bootFloor`
@@ -3478,7 +3716,14 @@ ipcMain.handle('hive:agentDirectory', () => {
   const usageById = new Map(snap.usage.map((u) => [u.agentId, u]));
   const now = Date.now();
   const agents = Object.entries(reg.agents).map(([id, a]) => {
-    const u = usageById.get(id);
+    // Same gated join writeFleetSnapshot does, for the same reason: `snapshot()`
+    // is live-OTel-only, so a transcript-only agent read $0 here — but a whole-cwd
+    // sum is only provably THIS agent's money when its transcript root is
+    // per-agent, which is codex and nothing else.
+    const own = hasOwnCostSource(reg.agents, id);
+    // `usageById` survives: it still carries live spend for an agent the
+    // predicate refuses.
+    const u = own ? telemetry.getAgentUsage(id) : (usageById.get(id) ?? null);
     const spans = snap.spans[id] ?? [];
     const tokens = u ? u.input + u.output + u.cacheRead + u.cacheCreation : 0;
     const ctx = hookServer.contextFor(id);
@@ -3501,7 +3746,18 @@ ipcMain.handle('hive:agentDirectory', () => {
       tokens,
       usd: u ? Number(u.usd.toFixed(4)) : 0,
       lastTool: spans.length ? spans[spans.length - 1].tool : null,
-      lastActiveSecAgo: u ? Math.round((now - u.ts) / 1000) : null,
+      // A fallback sample's `ts` is the READ time — the old expression rendered a
+      // dormant transcript-only agent as permanently "0s ago". `sessionId` is the
+      // discriminator the fallback already sets to `''`.
+      lastActiveSecAgo: u?.sessionId ? Math.round((now - u.ts) / 1000) : null,
+      // This spend is ALL-TIME cumulative, not spend since this spawn — so the
+      // card never puts it beside `up` as though the two shared a window.
+      costLifetime: u ? u.sessionId === '' : false,
+      // No sample and no provable source: a declared gap, not a measured $0.
+      costUnattributed: !u && !own,
+      // When the CURRENT PTY started — the clock a card's "up" reads. `null` for a
+      // registry entry written before the field existed.
+      spawnedAt: a.spawnedAt ?? null,
       contextTokens: ctx?.tokens ?? null,
       contextLimit: ctx?.limit ?? null,
       contextPct: ctx && ctx.limit > 0 ? Math.round((ctx.tokens / ctx.limit) * 100) : null
@@ -3527,6 +3783,25 @@ ipcMain.handle('telemetry:snapshot', () => telemetry.snapshot());
 ipcMain.handle('control:setBreakerState', (_evt, state: unknown) => {
   try { liveWebContents()?.send('control:breakerState', state); } catch { /* window tore down */ }
   return { ok: true };
+});
+
+// The PULL counterpart of that push. A card mounts with a fresh window and would
+// otherwise render `healthy` for every agent until the next ~30s beat — a stopped
+// agent reading as fine is the fail-UNSAFE direction. Every agent in the registry
+// gets a row: `snapshotAll()` only knows agents the breaker has ticked, so one the
+// beat has not reached yet is filled in as the `healthy` default it genuinely has.
+// Read-only; takes no renderer input beyond the invoke itself. Its one production
+// caller lands in 03-08 (agentView.ts's first-subscriber init) — the channel is
+// defined here because the main-process half is what the renderer cannot build.
+ipcMain.handle('control:breakerSnapshot', () => {
+  if (!hive.enabled()) return {};
+  const reg = hive.registry();
+  const seen = breaker.snapshotAll();
+  const out: Record<string, BreakerState> = {};
+  for (const id of Object.keys(reg.agents)) {
+    out[id] = seen[id] ?? { agentId: id, level: 'healthy', reason: '', ts: Date.now() };
+  }
+  return out;
 });
 
 // ─── IPC: operator control over agents (#7C.1–7C.3) ─────────────────────────
@@ -3567,6 +3842,40 @@ ipcMain.handle('control:halt', (_evt, agentId: unknown) => {
 });
 ipcMain.handle('control:snapshot', (_evt, agentId: unknown) =>
   typeof agentId === 'string' ? control.snapshot(agentId) : null);
+
+// ─── IPC: GATE-05 — the desktop's answer to an open tool approval ────────────
+// The ONE renderer→main route for an answer. `control:approvalRequest` is the
+// other direction and is reused unchanged; this needs a name of its own because
+// an ipcMain.handle must have one.
+//
+// The settle goes through `HookServer.answerApproval`, plan 04-15's named
+// accessor — the SAME entry point the phone's `POST /phone/api/answer` uses
+// (`answerToolAsk` above). Never a second registry: two registries means an ask
+// answered on the desktop stays open on the phone and the shim polls whichever
+// one it happened to be opened in. There is no agent id to compare against on an
+// operator surface and none is asked for — the unguessable single-use ask id IS
+// the capability here, which is GATE-05 ceiling item (f).
+//
+// The verdict rides the hook return from there. Nothing on this path types into
+// a live PTY (ADR-0001).
+ipcMain.handle('control:answerApproval', (_evt, askId: unknown, approved: unknown) => {
+  // `approved` is checked for `boolean` rather than coerced: a truthy string
+  // from a mangled call must not become a yes on the channel whose whole point
+  // is an explicit yes for an unrecoverable command (T-04-ASK-34's shape).
+  if (typeof askId !== 'string' || typeof approved !== 'boolean' || !floor) return null;
+  if (floor.hookServer.answerApproval(askId, approved)) return { settled: true };
+  // It did not settle, so it is gone. Rule G-2: WHICH way matters — expired
+  // means the command was denied, settled means it may already have run.
+  //
+  // CEILING, stated rather than hidden: `toolAskExpiry` is filled by
+  // `openPhoneAsks()`, so this reads `expired: false` for an ask no phone GET
+  // ever saw. The renderer does NOT rely on it — it holds `receivedAt +
+  // expiresInMs` from the push and derives expiry from its own anchor (rule
+  // G-3), which is skew-immune by construction. This flag confirms that reading
+  // on a floor whose phone is also live; it is never the only source.
+  const expiresAt = toolAskExpiry.get(askId);
+  return { settled: false, expired: expiresAt !== undefined && Date.now() >= expiresAt };
+});
 
 // ─── IPC: scheduled missions (recurring auto-dispatch) ──────────────────────
 ipcMain.handle('missions:list', () => readConfig().missions ?? []);

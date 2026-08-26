@@ -444,6 +444,119 @@ function ev(overrides = {}) {
     assert.strictEqual(stopCalls.length, 1);
   });
 
+  // ─── SCALE-04: postSlackDigest, and the four switches that gate it ─────────
+  //
+  // The POST is intercepted at `node:https` rather than mocked at the module
+  // boundary, so what is asserted is the REQUEST SLACK WOULD HAVE RECEIVED —
+  // the whole point of this function is one key that must not be in that body.
+
+  function interceptHttps(run) {
+    const https = require('node:https');
+    const real = https.request;
+    const calls = [];
+    https.request = (opts, cb) => {
+      const chunks = [];
+      const req = {
+        on: () => req,
+        write: (b) => { chunks.push(Buffer.from(b)); return true; },
+        end: () => {
+          calls.push({ opts, body: Buffer.concat(chunks).toString('utf8') });
+          const handlers = {};
+          const res = { on: (ev, h) => { handlers[ev] = h; return res; } };
+          cb(res);
+          handlers.data?.(Buffer.from('{"ok":true}', 'utf8'));
+          handlers.end?.();
+        }
+      };
+      return req;
+    };
+    return Promise.resolve(run(calls)).finally(() => { https.request = real; });
+  }
+
+  await test('postSlackDigest posts to the channel ROOT — no thread_ts key in the body at all', async () => {
+    const { postSlackDigest } = loadTs('src/main/slack.ts');
+    await interceptHttps(async (calls) => {
+      const res = await postSlackDigest({ botToken: 'xoxb-fixture', channel: 'C-DIGEST', text: 'yesterday' });
+      assert.strictEqual(res.ok, true);
+      assert.strictEqual(calls.length, 1, 'no POST was made');
+      assert.strictEqual(calls[0].opts.path, '/api/chat.postMessage');
+      const body = JSON.parse(calls[0].body);
+      assert.strictEqual(body.channel, 'C-DIGEST');
+      assert.strictEqual(body.text, 'yesterday');
+      assert.ok(!('thread_ts' in body),
+        `the digest body carries a thread_ts: ${calls[0].body}. A digest belongs at the channel `
+        + 'root; copying postSlackReply wholesale would have brought its CLAUSE-1 guard, which '
+        + 'refuses exactly the post this function exists to make');
+    });
+  });
+
+  await test('postSlackDigest fails CLOSED with no token or no channel — and makes no request', async () => {
+    const { postSlackDigest } = loadTs('src/main/slack.ts');
+    await interceptHttps(async (calls) => {
+      assert.strictEqual((await postSlackDigest({ botToken: '', channel: 'C1', text: 'x' })).ok, false);
+      assert.strictEqual((await postSlackDigest({ botToken: 'xoxb-x', channel: '  ', text: 'x' })).ok, false);
+      assert.strictEqual(calls.length, 0, 'a request went out without a token or without a channel');
+    });
+  });
+
+  await test('postSlackReply is untouched: CLAUSE-1 still refuses, and a real reply still threads', async () => {
+    const { postSlackReply } = loadTs('src/main/slack.ts');
+    await interceptHttps(async (calls) => {
+      const refused = await postSlackReply({ botToken: 'xoxb-x', channel: 'C1', thread_ts: '  ', text: 'x' });
+      assert.strictEqual(refused.ok, false);
+      assert.strictEqual(refused.error, 'missing explicit channel or thread_ts');
+      assert.strictEqual(calls.length, 0, 'CLAUSE-1 let a channel-root post through');
+
+      const ok = await postSlackReply({ botToken: 'xoxb-x', channel: 'C1', thread_ts: '123.456', text: 'hi' });
+      assert.strictEqual(ok.ok, true);
+      assert.strictEqual(JSON.parse(calls[0].body).thread_ts, '123.456',
+        'postSlackReply stopped threading — SCALE-04 must ADD a sibling, never edit this function');
+    });
+  });
+
+  await test('postSlackDigest never logs opts or the bot token (T-03-05a)', () => {
+    const src = loadTs('src/main/slack.ts').postSlackDigest.toString()
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const bad = src.match(/console\.[a-z]+\([^)]*(opts|botToken)/g) ?? [];
+    assert.deepStrictEqual(bad, [],
+      `postSlackDigest logs the token or the whole opts object: ${bad.join(' | ')}`);
+  });
+
+  // ─── T-03-05f: the four-switch gate, as its own testable predicate ─────────
+  //
+  // `digestSlackTarget` is the shipped gate — boot.ts's Slack arm dispatches
+  // only on what this returns — and it is a pure function of a config object,
+  // so the off-states can be driven here without booting a floor or opening a
+  // socket. The case that matters is `slackEnabled: false` WITH a valid token
+  // and a valid channel both present: an operator who flips the Slack master
+  // switch off reasonably believes nothing reaches Slack, and before this gate
+  // existed the presence of a token and a channel alone was enough.
+
+  const gate = (cfg) => loadTs('src/main/floor/boot.ts').digestSlackTarget(cfg);
+  const ALL_FOUR = {
+    dailyDigest: true, slackEnabled: true, slackBotToken: 'xoxb-fixture', slackDigestChannelId: 'C-DIGEST'
+  };
+
+  await test('the Slack arm fires when all four switches are set', () => {
+    assert.deepStrictEqual(gate(ALL_FOUR), { botToken: 'xoxb-fixture', channel: 'C-DIGEST' });
+  });
+
+  await test('slackEnabled: false stops the digest even with a valid token AND channel present', () => {
+    assert.strictEqual(gate({ ...ALL_FOUR, slackEnabled: false }), null,
+      'the Slack master switch is off and the digest would still have posted. Token+channel '
+      + 'presence is NOT consent — this is T-03-05f, the whole reason the gate has four clauses');
+  });
+
+  await test('dailyDigest: false stops it too — the toggle the operator actually sees', () => {
+    assert.strictEqual(gate({ ...ALL_FOUR, dailyDigest: false }), null);
+  });
+
+  await test('a missing bot token or a missing channel id stops it', () => {
+    assert.strictEqual(gate({ ...ALL_FOUR, slackBotToken: undefined }), null);
+    assert.strictEqual(gate({ ...ALL_FOUR, slackDigestChannelId: undefined }), null);
+    assert.strictEqual(gate({ ...ALL_FOUR, slackDigestChannelId: '' }), null);
+  });
+
   console.log(failures === 0 ? '\nall passed' : `\n${failures} failure(s)`);
   process.exit(failures === 0 ? 0 : 1);
 })();

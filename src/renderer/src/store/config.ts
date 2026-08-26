@@ -5,6 +5,7 @@ import {
   providerPreset,
   inferAgentProvider,
   isClaudeProvider,
+  sandboxFlagsForProvider,
   type AgentProvider
 } from '@shared/agentProvider';
 import type {
@@ -26,12 +27,14 @@ import {
 import { fmtCountdown, describeHealth, type PoolSnapshot, type AccountHealth } from '@shared/claudeAccountPool';
 import { providerCapabilities, remoteControlAvailability } from '@shared/providerAutomation';
 import { MCP_CATALOG, mcpWiredFor, type McpTier } from '@shared/mcpCatalog';
+import type { HireManifest } from '@shared/hire';
 
 export {
   AGENT_PROVIDER_PRESETS,
   providerPreset,
   inferAgentProvider,
   isClaudeProvider,
+  sandboxFlagsForProvider,
   type AgentProvider
 };
 export {
@@ -126,6 +129,13 @@ export interface HarnessConfig {
   /** Opt-in app/voice-initiated proactive Slack posting (default OFF). Mirrors
    *  src/main/config.ts; the Slack-origin done-reply round-trip is never gated. */
   slackProactivePosting?: boolean;
+  /** SCALE-04's daily digest (mirrors src/main/config.ts). `dailyDigest` gates
+   *  the toast and Slack arms; the file arm is unconditional, so a floor with
+   *  this off still leaves yesterday's digest in the hive folder. `digestHour`
+   *  absent = DIGEST_DEFAULT_HOUR in src/main/floor/boot.ts. */
+  dailyDigest?: boolean;
+  slackDigestChannelId?: string;
+  digestHour?: number;
   /** Free Flow voice dictation (mirrors src/main/config.ts). */
   freeflowEnabled?: boolean;
   groqApiKey?: string;
@@ -154,6 +164,11 @@ export interface HarnessConfig {
   providerBaseUrls?: Partial<Record<AgentProvider, string>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** GATE-04 / D-15. Per-CLI-provider sandbox opt-in. ABSENT === OFF, which is the
+   *  behaviour that shipped and therefore the verified fallback — no migration, no
+   *  explicit write. Only engines whose preset declares `sandboxFlags` can act on it
+   *  (codex alone today); it is inert for the rest. Mirrors src/main/config.ts. */
+  providerSandbox?: Partial<Record<AgentProvider, boolean>>;
   /** Claude account pool — NON-secret metadata only (mirrors src/main/config.ts).
    *  Tokens are write-only in the secret broker via the claudeAccount* bridge. */
   claudeAccounts?: ClaudeAccount[];
@@ -403,9 +418,10 @@ export function decodeProviderModel(value: string): {
  *  configured `defaultCommand`; other providers use their preset binary so the
  *  app works without Claude installed. */
 export function buildSpawnCommand(
-  config: Pick<HarnessConfig, 'defaultCommand' | 'autoMode'>,
+  config: Pick<HarnessConfig, 'defaultCommand' | 'autoMode' | 'providerSandbox'>,
   model?: string,
-  provider: AgentProvider = inferAgentProvider(config.defaultCommand)
+  provider: AgentProvider = inferAgentProvider(config.defaultCommand),
+  agentDir?: string
 ): string {
   const preset = providerPreset(provider);
   // Claude keeps the user's configured defaultCommand; custom falls back to it
@@ -427,8 +443,54 @@ export function buildSpawnCommand(
   // Auto (skip-permissions) mode appends each provider's own flag — Claude's
   // bypassPermissions, Codex's dangerous bypass, Grok's always-approve, Kimi's
   // auto, or agy's skip flag.
-  if (config.autoMode && preset.autoFlag) cmd = `${cmd} ${preset.autoFlag}`;
+  //
+  // …UNLESS the operator turned this engine's sandbox opt-in on (GATE-04/D-14), in
+  // which case the bypass is REPLACED by `-s workspace-write --add-dir <agentDir>`.
+  // Absent === off, so no config on disk changes behaviour; `sandboxFlagsForProvider`
+  // is '' for every engine with no sandbox the floor can turn on, so an opt-in set
+  // for such an engine falls through to that engine's own flag.
+  //
+  // L-08 — THIS IS ONE OF TWO INDEPENDENT ASSEMBLERS. `commandForAutoMode`
+  // (src/main/config.ts) does the same job for main, and the two live in DIFFERENT
+  // tsconfig projects, so `npm run typecheck` cannot see a drift between them. Any
+  // edit here must be mirrored there in the same commit;
+  // test/spawn-command-parity.test.cjs calls BOTH and asserts they agree, and it is
+  // the only thing that will catch you.
+  if (config.autoMode) {
+    const sandbox = config.providerSandbox?.[provider] ? sandboxFlagsForProvider(provider, agentDir) : '';
+    const flag = sandbox || preset.autoFlag;
+    if (flag) cmd = `${cmd} ${flag}`;
+  }
   return cmd;
+}
+
+/**
+ * The locally-built spawn command for an imported hire manifest: the provider
+ * preset + model from the LOCAL builder above, with the manifest's already-
+ * validated flags appended.
+ *
+ * THE SECURITY PROPERTY, which is the whole reason this is a function and not an
+ * interpolation at the call site: a manifest can never name the binary itself. The
+ * spawn command is rebuilt here from the operator's own config every time, so an
+ * imported file contributes a model string and a validated flag list — nothing that
+ * decides what actually executes.
+ *
+ * Lives beside `buildSpawnCommand` and `inferAgentProvider` because it is composed
+ * of exactly those two (RESEARCH.md suggested `src/shared/hire.ts`, which cannot
+ * import either without inventing a renderer→shared dependency). Shared by the
+ * single-hire form and the team-import bulk hire, so the two can never drift into
+ * building different commands from the same manifest.
+ *
+ * `commandFlags` is always absent on a TEAM member — `validateTeamManifest` deletes
+ * it (along with `skills` and `mcpServers`) because the team path has no per-member
+ * review surface for them. The branch below is therefore live only for the
+ * single-hire path; it is kept rather than asserted away so this stays a faithful
+ * shared implementation of both.
+ */
+export function hireCommandFor(m: HireManifest, config: HarnessConfig): string {
+  const prov: AgentProvider = m.provider ?? inferAgentProvider(config.defaultCommand);
+  const base = buildSpawnCommand(config, m.model, prov);
+  return m.commandFlags?.length ? `${base} ${m.commandFlags.join(' ')}` : base;
 }
 
 // ── PARITY-01b / DAEMON-04 (plan 02-06) ───────────────────────────────────────

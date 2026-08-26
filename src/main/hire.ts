@@ -10,13 +10,27 @@ import { lookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
 import {
   HIRE_MAX_BYTES,
+  HIRE_SPEC_V1,
+  HIRE_TEAM_SPEC_V1,
+  TEAM_MAX_BYTES,
   isAllowedManifestUrl,
   validateHireManifest,
+  validateTeamManifest,
   type HireManifest,
-  type HireValidation
+  type HireValidation,
+  type HireProvider,
+  type TeamManifest
 } from '../shared/hire';
 
 export type HireResult = { ok: true; manifest: HireManifest } | { ok: false; error: string };
+
+/** What a FILE import can produce. Deliberately wider than `HireResult`, and
+ *  deliberately only here: a `.json` the operator picks may be a single hire@1
+ *  manifest OR a team@1 wrapper, whereas `fetchHireManifest` (deep links) still
+ *  produces exactly one manifest and its callers still read `res.manifest`
+ *  without a guard. Widening the shared `HireResult` instead would have made
+ *  `manifest` optional on every existing call site. */
+export type HireFileResult = HireResult | { ok: true; team: TeamManifest };
 
 function finish(v: HireValidation): HireResult {
   if (v.ok && v.manifest) return { ok: true, manifest: v.manifest };
@@ -239,13 +253,110 @@ async function readBounded(res: Response, maxBytes: number): Promise<string | nu
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** Read + validate a hire manifest from a local JSON file (file import). */
-export function readHireManifestFile(path: string): HireResult {
+/**
+ * Read + validate a local JSON file: either one hire@1 manifest or a team@1 wrapper.
+ *
+ * TWO SIZE CHECKS, NOT ONE. The spec tag is not knowable before the parse, so the
+ * pre-parse gate has to use the LARGER cap (TEAM_MAX_BYTES) or no team file could
+ * ever be read. Left there, that would silently raise the single-manifest ceiling
+ * from 64 KB to 256 KB as a side effect of adding the team branch — so the moment
+ * the parse reveals this is NOT a team file, the tighter HIRE_MAX_BYTES cap is
+ * re-applied against the size we already measured, before the validator runs.
+ * `JSON.parse` never runs before a size check.
+ */
+export function readHireManifestFile(path: string): HireFileResult {
   try {
-    if (statSync(path).size > HIRE_MAX_BYTES) return { ok: false, error: 'manifest too large' };
+    const size = statSync(path).size;
+    if (size > TEAM_MAX_BYTES) return { ok: false, error: 'manifest too large' };
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+
+    // Branch on the RAW parsed spec tag, before any validator sees the document.
+    // validateHireManifest still hard-rejects every non-hire@1 spec, unchanged.
+    const spec = typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>).spec
+      : undefined;
+    if (spec === HIRE_TEAM_SPEC_V1) {
+      const v = validateTeamManifest(parsed);
+      if (!v.ok || !v.team) return { ok: false, error: `invalid team manifest: ${v.errors.join('; ')}` };
+      return { ok: true, team: v.team };
+    }
+
+    if (size > HIRE_MAX_BYTES) return { ok: false, error: 'manifest too large' };
     return finish(validateHireManifest(parsed));
   } catch (e) {
     return { ok: false, error: `could not read manifest: ${String(e)}` };
   }
+}
+
+/** Fields of a roster agent that a team@1 member may carry. Everything else is
+ *  dropped by omission. */
+const EXPORTABLE: readonly ['description', 'goal', 'character', 'accent', 'provider', 'model'] =
+  ['description', 'goal', 'character', 'accent', 'provider', 'model'];
+
+function pickString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
+
+/**
+ * Reduce ONE roster agent record to the fields a team@1 member may carry (D-16).
+ *
+ * AN ALLOWLIST OF FIELDS TO INCLUDE — never a denylist of fields to drop. A
+ * denylist has to be updated every time the renderer's `Agent` type grows a field,
+ * and the update that gets forgotten is the one that leaks. Seven fields must never
+ * appear in an exported file: `cwd`, `account`, `accountPolicy`, `worktreePath`,
+ * `ptyId`, the raw `command`, and `commandFlags`. Building the output fresh means
+ * they are absent as JSON KEYS, not merely undefined.
+ *
+ * NEVER RECONSTRUCT `commandFlags`. It is tempting to recover the flags an agent is
+ * actually running by diffing its live `command` against what the provider preset's
+ * spawn-command builder would have produced. Do not. That diff is exactly how a
+ * binary path smuggles itself back into a format whose entire purpose is to stay
+ * binary-free: the spawn binary must always come from the LOCAL provider preset on
+ * the importing machine, never from the file. The remainder after such a diff is
+ * whatever the exporting machine's shell had in it.
+ *
+ * The input is `Record<string, unknown>` because `RosterSnapshot.agents` is
+ * `unknown[]` by design — main never trusts the renderer's agent shape, so every
+ * field is read structurally and a junk entry produces a junk-but-safe manifest
+ * that `validateHireManifest` then rejects (see buildTeamExport).
+ */
+export function stripAgentForExport(agent: Record<string, unknown>): HireManifest {
+  const src = (agent ?? {}) as Record<string, unknown>;
+  const out: HireManifest = { spec: HIRE_SPEC_V1, name: pickString(src.name) ?? '' };
+  for (const field of EXPORTABLE) {
+    const value = pickString(src[field]);
+    if (value === undefined) continue;
+    if (field === 'provider') out.provider = value as HireProvider;
+    else out[field] = value;
+  }
+  return out;
+}
+
+/**
+ * Strip a whole roster for export, keeping only members that can be re-imported.
+ *
+ * THE VALIDATE-BEFORE-WRITE SELF-CHECK (T-03-04e). team@1's claim to be the only
+ * safe producer of a team file rests on the file actually round-tripping, and
+ * "field-shaped" is not the same as "re-importable": a description over 200 chars,
+ * a model id with a shell metacharacter, or a `custom`-provider agent all strip
+ * cleanly and are then rejected by the app's own validator on import. So every
+ * stripped member is run through `validateHireManifest` HERE, before anything is
+ * written. A member that fails is dropped and COUNTED — the caller surfaces the
+ * count, so the operator is told a member was left out rather than handed a file
+ * that silently loses agents.
+ *
+ * Lives here rather than inside the `team:export` handler because `index.ts` cannot
+ * be loaded by the test harness: logic written there can only ever be pinned by a
+ * grep that `return {}` would also satisfy.
+ */
+export function buildTeamExport(agents: readonly unknown[]): { members: HireManifest[]; skipped: number } {
+  const members: HireManifest[] = [];
+  let skipped = 0;
+  for (const agent of agents ?? []) {
+    const stripped = stripAgentForExport(agent as Record<string, unknown>);
+    const v = validateHireManifest(stripped);
+    if (v.ok && v.manifest) members.push(stripped);
+    else skipped++;
+  }
+  return { members, skipped };
 }

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 (the-daemon-and-the-protocol) COMPLETE -- plan 02-12 (the honesty ledger) landed, all 12 plans done. Phase 4 context gathering already ran concurrently (see 04-CONTEXT.md); the auto-advance hold on 02-12 is now clear.
-last_updated: "2026-08-24T18:15:00.000Z"
+stopped_at: "Phase 4 EXECUTED -- all 20 plans landed across 7 waves; phase does NOT close (nyquist_compliant FALSE, 5 of 7 Manual-Only items open, no Dimension 8 confirmation) -- see PR #83. Phase 3 is PLANNED and RED-TEAM CLOSED: RED_TEAM_CLEAN=true set 2026-08-25 on operator acceptance of 3 named residuals (03-CONTEXT.md Red-Team Log), NOT on a zero-finding round -- that distinction is deliberate; 10 review rounds, every finding closed, 4 mechanical auditors pass. Phase 3 EXECUTED on top of the Phase 4 tip -- all 9 plans landed across 7 waves. Suite 1262 tests / 1255 pass / 0 fail / 7 skipped, three consecutive runs; typecheck and lint clean. NEITHER SCALE criterion is ticked. SCALE-03: its RECORD-02 dependency IS discharged and the replay bound is now RETENTION not rotation (03-03 measured the ROADMAP caveat wrong -- the 8MB rotate never fired; the real wall was LOG_TAIL_BYTES=65,536), but the criterion is still NOT closeable because its own skeptic test ('pick a day whose log passed 8MB') can never fire, and 03-07 left two live UI probes MEASUREMENT UNAVAILABLE -- a corrected skeptic test is carried into Phase 6. An earlier draft of this line predicted 03-09 WOULD close SCALE-03; that prediction was wrong and 03-09 corrected it. SCALE-01: RECALL-02 unrun, isolation still a cooperative --wing flag -- and RECALL-02 alone is INSUFFICIENT (memory-only), so the task-ledger half is net-new work under either ordering. Three operator-owed items remain UNVERIFIED, incl. 03-08 Task 4, a BLOCKING checkpoint. Awaiting /gsd-verify-work and operator UAT."
+last_updated: "2026-08-26T00:00:00.000Z"
 progress:
   total_phases: 6
-  completed_phases: 0
-  total_plans: 43
-  completed_plans: 42
-  percent: 0
+  completed_phases: 1
+  total_plans: 72
+  completed_plans: 62
+  percent: 17
 ---
 
 # Project State
@@ -20,9 +20,57 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-20)
 
 **Core value:** You can leave it running and trust it.
-**Current focus:** Phase 02 — the-daemon-and-the-protocol
+**Current focus:** Phase 04 — overnight-on-a-repo-that-matters (executed, not closed)
 
 ## Current Position
+
+### Phase 04 (overnight-on-a-repo-that-matters) — ALL 20 PLANS EXECUTED, PHASE NOT CLOSED
+
+Executed 2026-08-25/26 across 7 waves on branch `worktree-gsd-plan-phase-04`.
+Every plan's work was merged wave-by-wave and the full gate re-run on each merged tree,
+not trusted from any SUMMARY.
+
+**Measured at the phase tip (this session, three consecutive runs):**
+`npm test` 1078 tests / 1071 pass / **0 fail** / 7 skipped / 24.2s worst wall.
+`npm run typecheck` 0 errors both projects. `npm run lint` exit 0. `npm run build` exit 0 (Node 22).
+Baseline at phase start was 843/836/0/7 — **+235 tests, zero regressions, zero new skips**.
+
+**`nyquist_compliant` remains FALSE. The phase does NOT close.** 5 of 7 Manual-Only items are
+open and no Dimension 8 confirmation exists in `.planning/`. Phase 2's audit had already moved
+this same flag true -> FALSE for three of the identical blockers; flipping it now would reverse
+that correction with less evidence. Awaiting `/gsd-verify-work` and operator UAT.
+
+**Four defects found that no acceptance criterion would have caught — each a feature that
+existed and did nothing:**
+- GATE-03 was dead on OpenCode: `tool.execute.before` posted no `tool_input`, so main answered
+  ALLOW on every call from an OpenCode agent (04-10).
+- GATE-03's command never reached the renderer: `preload/index.ts` typed the payload without it,
+  so it was unreachable by construction (04-14).
+- GATE-05's desktop half was dead: `emitControl` sent neither `askId` nor `expiresInMs`, and
+  `openApproval` called it without the entry it had opened six lines earlier (04-18).
+- The kanban renderer re-declares its own `HiveTask` and `parseTasks` is a whitelist, so
+  `updatedAt` and `released` would have arrived `undefined` at every card (04-12).
+
+Also: a test that PASSED while taking 240,728 ms (an ask sitting out its 120s TTL) — the suite
+had silently gone 26s -> 257s (04-16); a WCAG failure at 1.85:1 on the deny button in dark mode
+(04-14); titlebar constants ~107px stale from before this phase (04-18); and a genuine ~1-in-9
+flake caught by a 25-run probe (04-15).
+
+**RECORD-02 durability proven live:** real `SIGKILL` against a 160,712-byte uncheckpointed WAL;
+a second process answered both questions from disk.
+
+**Open, with named owners — see `04-19-SUMMARY.md` for all 14:**
+- GATE-04 is BUILT but NOT WIRED — no production caller passes `agentDir`; opt-in ON today gives
+  `-s workspace-write` WITHOUT the folder added. Must be threaded via `sandboxFlagsForProvider`.
+- GATE-04 LIVE-UNVERIFIED and `LIVE GATE-03 REFUSAL: no` — this machine's codex token is revoked
+  (`401 refresh_token_reused`). Absence of evidence, NOT evidence of absence.
+- The push leg is a declared stub in two places with one root cause: `webhook.ts` has no
+  `PushSubscription` intake route, so VIGIL-01 cannot reach a phone by push.
+- `resources/phone/sw.js:33-35` carries a KNOWN FALSE security comment (unowned).
+- `test/hive-durability.test.cjs:197`'s argument slice is inert — `indexOf` returns -1, the slice
+  runs 14,315 chars to EOF (unowned).
+- `hiveProvisioning.ts:230-231`'s comment is over-strong (unowned).
+
 
 Phase: 02 (the-daemon-and-the-protocol) — **COMPLETE, all 12 plans landed**
 Plans complete: **12 of 12** (counted off disk: `ls .planning/phases/02-*/02-*-SUMMARY.md | wc -l`).
@@ -413,7 +461,7 @@ Recent decisions affecting current work:
   and parity work opens exactly those seams anyway, and the extraction is what makes headless
   boot testable at all. Not Phase 1, so small localised fixes do not land in moving code.
 
-- [Roadmap]: GSD is Phase 6, deliberately last. Every trust property that makes a GSD phase on
+- [Roadmap]: GSD is Phase 7, deliberately last. Every trust property that makes a GSD phase on
   the floor better than a GSD phase in one terminal comes from earlier phases: wave gating needs
   VERDICT, unattended running needs VIGIL and GATE, resume-after-crash needs RECORD.
 
@@ -574,9 +622,12 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- **Operator decision, Phase 3 ordering.** Either run `1 → 2 → 4 → 5 → 3 → 6`, or run numeric
-  order and re-verify SCALE-01 and SCALE-03 after Phase 5 instead of closing them in Phase 3.
-  Default recorded in ROADMAP.md is numeric order with re-verification. See "Blockers" below.
+- **Operator decision, Phase 3 ordering — RESOLVED at the Phase 3 close (plan 03-09, D-05).**
+  Numeric order was kept, and the re-verification is no longer a prose line: **the post-Phase-5
+  re-verification phase now exists in ROADMAP.md with a real id**, carrying the two skeptic
+  tests verbatim, and the GSD phase was renumbered one later in the same edit across
+  ROADMAP.md, REQUIREMENTS.md and this file. SCALE-01 and SCALE-03 stay Pending in
+  REQUIREMENTS.md with that new phase named as their owner. See "Blockers" below.
 
 ### Blockers/Concerns
 
@@ -594,13 +645,22 @@ Recent decisions affecting current work:
 - **Phase 3 has two forward dependencies** (found while extending the roadmap; not resolved by
   moving requirements, because the pull-forward cascades):
 
-  - SCALE-03's replayable timeline reads storage that RECORD-02 (Phase 4) fixes — until then,
-    `LOG_ROTATE_BYTES` at `hive.ts:267` rotates at 8 MB keeping one generation, so a busy day
-    replays as a window rather than a day.
+  - **SCALE-03 — blocker LANDED, and the original diagnosis was wrong.** The claim that
+    `LOG_ROTATE_BYTES` "rotates at 8 MB keeping one generation, so a busy day replays as a
+    window" is refuted: that rotate (`hive.ts:375`, not the long-cited `:267`) has **never
+    fired** in measured use. The real wall was `LOG_TAIL_BYTES = 64 KB` (`hive.ts:383`), a
+    *read* cap 128x tighter — at 137,099 bytes `logTail()` had already lost the morning while
+    the rotate stayed dormant. RECORD-02 (Phase 4) has since landed the durable store
+    (`PersistStore.eventsBetween`, `db.ts:450`; `EVENT_RETENTION_MS` = 30 days, `db.ts:70`),
+    so **the replay bound is now retention, not rotation**. The skeptic test as written ("pick
+    a day whose log passed 8 MB") can never fire and is restated in the new phase.
 
-  - SCALE-01's isolation is enforced by a `--wing` flag the agent supplies and could omit until
-    RECALL-02 (Phase 5) makes the server enforce it. REQUIREMENTS.md says as much itself.
-  Neither may be checked off in Phase 3 without re-verification after Phase 5.
+  - **SCALE-01 — blocker NOT landed.** Isolation is still enforced by a `--wing` flag the agent
+    supplies and could simply omit; RECALL-02 (Phase 5) is unrun, so isolation remains
+    cooperative rather than enforced. RECALL-02 alone is also **not sufficient** — it is
+    memory-only, so this criterion's task-ledger half is net-new work for the re-verification
+    phase under either ordering.
+  Neither was checked off in Phase 3. Both are owned by the post-Phase-5 re-verification phase.
 
 - **Phase 2 is the largest single-phase risk.** Mitigated by making STRUCT-01/02 the phase's
   internal gate, but the mitigation only works if it is honoured at plan time.
@@ -613,7 +673,7 @@ Recent decisions affecting current work:
 - **DAEMON-02 (Phase 2)** needs a real Android device on the network for its last mile;
   otherwise a localhost-verified auth path, recorded as such.
 
-- **REACH-02 (Phase 6)** needs an AWS account with Bedrock model access; **REACH-03 (Phase 6)**
+- **REACH-02 (Phase 7)** needs an AWS account with Bedrock model access; **REACH-03 (Phase 7)**
   needs a real WSL2 install. Without them, both ship with the limitation stated in source, docs
   and UI — never claimed.
 
@@ -692,8 +752,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-24T12:06:12.976Z
-Stopped at: Phase 4 context gathered (04-CONTEXT.md + 04-DISCUSSION-LOG.md, 37 decisions); auto-advance to plan-phase HELD -- plan 02-12 still in flight, see D-37
+Last session: 2026-08-25T11:03:23.534Z
+Stopped at: Phase 3 PLANNED and RED-TEAMED CLOSED. RED_TEAM_CLEAN=true, set 2026-08-25 on operator acceptance of 3 named residuals (recorded in 03-CONTEXT.md Red-Team Log) — NOT on a zero-finding round; that distinction is deliberate. 10 review rounds, every finding closed; 4 mechanical auditors pass; suite 830/823/0/7. Ready for /gsd:execute-phase 03 (Wave 0 creates 5 new test files). Phase 2 verification reads gaps_found (STRUCT-01) but does not gate Phase 3.
 (16, then ~35, then 40+ findings; 15 BLOCKER in round 3). The step-11.5 iteration budget is
 exhausted, so RED_TEAM_CLEAN stays false and auto-advance to execute-phase is blocked. The defect
 rate did not converge and each round's fixes introduced new defects of the same class, so the
@@ -703,4 +763,4 @@ HIVE_SOCK_TOKEN (3 of 6 shim templates do not), so the fix, its criterion and th
 assertion all pass while the tier stays dead-hooked.
 filled in for all 71 v1 requirements and verified programmatically (71 mapped, 0 orphans,
 0 duplicates)
-Resume file: .planning/phases/04-overnight-on-a-repo-that-matters/04-CONTEXT.md
+Resume file: .planning/phases/03-scale-and-observability/03-CONTEXT.md

@@ -109,12 +109,66 @@ export interface WebhookTaskStatus {
 /** One open human-feedback ask, shaped for the phone's "ASK ME" screen
  *  (UI-SPEC S5 screen 1). Newest first. */
 export interface PhoneAsk {
+  /** UNCHANGED NAME (04-UI-SPEC rule G-1, locked). `resources/phone/sw.js` is
+   *  INSTALLED on the operator's phone and updates on its own schedule, so a
+   *  rename here is a live-device failure with no local reproduction. For
+   *  `kind:'tool'` this field carries the ASK id — same name, same regex. */
   taskId: string;
   title: string;
   question: string;
   agent?: string;
   askedAt?: string;
+  /** GATE-05. Absent === `'card'`, so every producer written before this field
+   *  existed stays valid. There is NO third kind: the floor-quiet alarm rides
+   *  the SAME response as a sibling field (rule Q-1b), because an alarm in the
+   *  asks array renders `NEEDS YOU 1` when in fact nothing is asking. */
+  kind?: 'card' | 'tool';
+  /** `kind:'tool'` only. A DURATION measured by the server at response time,
+   *  NEVER a deadline timestamp (rule G-3): the phone's clock is not the
+   *  floor's clock, and a deadline sent to a client is optimistic by its skew —
+   *  which tells the operator they have time to answer a question that has
+   *  already auto-denied. */
+  expiresInMs?: number;
 }
+
+/** VIGIL-01's floor-quiet alarm, as it appears on `GET /phone/api/asks` — a
+ *  SIBLING of `asks`, never an ask (04-UI-SPEC §S6a rule Q-1b). Declared here
+ *  rather than imported from `floor/watchdog.ts` for the same reason `PhoneAsk`
+ *  is: no `hive`/floor type ever enters this transport file. `index.ts` maps
+ *  the watchdog's `QuietSnapshot` onto this wire shape.
+ *
+ *  `sinceMs` is a DURATION. Absent === the floor is moving. */
+export interface PhoneFloorQuiet {
+  sinceMs: number;
+  inFlight: number;
+  /** The orchestrator's display name, when the god itself is what died. */
+  agent?: string;
+  /** The single in-flight card's title, when there is exactly one. */
+  card?: string;
+}
+
+/** What `answerAsk` may hand back (04-UI-SPEC rule G-2). The phone could not
+ *  tell "expired" from "answered on the desktop" from "server error" — and
+ *  those have OPPOSITE outcomes: expired means the command was denied,
+ *  answered-elsewhere means it may have run. At 3am that difference is the
+ *  whole point.
+ *
+ *  Back-compatible in both directions: the card path may keep returning a bare
+ *  boolean, an old phone reads `ok` and ignores `state`. */
+export type PhoneAnswerOutcome = boolean | { ok: boolean; state?: 'expired' | 'settled' };
+
+/**
+ * The ONLY two answers a `kind:'tool'` ask accepts, and this being an allowlist
+ * is a security decision rather than a parsing detail (T-04-ASK-34).
+ *
+ * `approved = answer !== 'deny'` is one character shorter and turns EVERY
+ * malformed body — a typo, a truncated payload, a stale client — into a YES, on
+ * the one channel whose entire purpose is an explicit yes for an unrecoverable
+ * command. Anything outside this list is refused with the same 400 a malformed
+ * body already gets, BEFORE `answerAsk` is called, so the ask stays pending and
+ * expires to deny on its own.
+ */
+export const PHONE_TOOL_ANSWERS: readonly string[] = ['approve', 'deny'];
 
 export interface WebhookServerOptions {
   /** Local TCP port the HTTP server binds to (and the tunnel forwards to). */
@@ -147,9 +201,16 @@ export interface WebhookServerOptions {
    *  Injected so no `hive` type ever has to enter this transport file. Absent
    *  or throwing → an empty list, never a 500. */
   openAsks?: () => PhoneAsk[];
-  /** Answer one open ask from the phone. Returns false on any failure so the
-   *  caller can report honestly (the draft stays, the button re-enables). */
-  answerAsk?: (taskId: string, answer: string) => boolean;
+  /** Answer one open ask from the phone. Returns false (or `{ok:false}`) on any
+   *  failure so the caller can report honestly (the draft stays, the button
+   *  re-enables). See {@link PhoneAnswerOutcome} for why the return widened. */
+  answerAsk?: (taskId: string, answer: string) => PhoneAnswerOutcome;
+  /** VIGIL-01 — the floor-quiet snapshot, emitted as a SIBLING of `asks` on
+   *  `GET /phone/api/asks`. Injected beside `openAsks` for the same reason:
+   *  `index.ts` reads `floor.watchdog.current()` and maps it, so no floor type
+   *  enters this file. Absent, null or throwing → no `floorQuiet` key at all,
+   *  which is what "the floor is moving" looks like on the wire. */
+  floorQuiet?: () => PhoneFloorQuiet | null;
   /** Injectable clock — tests move the enrollment TTL and the auth lockout
    *  forward without sleeping a real unit test. Defaults to `Date.now`. */
   now?: () => number;
@@ -282,7 +343,8 @@ export class WebhookServer {
   private readonly lookupStatus: (token: string) => WebhookTaskStatus | null;
   private readonly staticRootFn?: () => string | null;
   private readonly openAsksFn?: () => PhoneAsk[];
-  private readonly answerAskFn?: (taskId: string, answer: string) => boolean;
+  private readonly answerAskFn?: (taskId: string, answer: string) => PhoneAnswerOutcome;
+  private readonly floorQuietFn?: () => PhoneFloorQuiet | null;
   /** Injectable clock (tests only — defaults to `Date.now`). */
   private readonly now: () => number;
   /** Compared against when the requested id doesn't exist, purely so the failure
@@ -318,6 +380,7 @@ export class WebhookServer {
     this.staticRootFn = opts.staticRoot;
     this.openAsksFn = opts.openAsks;
     this.answerAskFn = opts.answerAsk;
+    this.floorQuietFn = opts.floorQuiet;
     this.now = opts.now ?? Date.now;
     this.setEndpoints(opts.endpoints);
   }
@@ -631,13 +694,30 @@ export class WebhookServer {
   }
 
   /** GET /phone/api/asks — the floor's open human-feedback asks, newest
-   *  first (UI-SPEC S5 screen 1). Absent/throwing `openAsks` → an empty list,
-   *  never a 500. */
+   *  first (UI-SPEC S5 screen 1), plus VIGIL-01's floor-quiet alarm as a
+   *  SIBLING field. Absent/throwing `openAsks` → an empty list, never a 500;
+   *  absent/throwing/null `floorQuiet` → no key at all, which is what "the
+   *  floor is moving" looks like on the wire (`undefined` is dropped by
+   *  `JSON.stringify`, so an old phone sees the byte-identical response it
+   *  saw before this field existed). */
   private handlePhoneAsks(req: IncomingMessage, res: ServerResponse): void {
     if (!this.phoneAuthGate(req, res)) return;
     let asks: PhoneAsk[] = [];
     try { asks = this.openAsksFn ? this.openAsksFn() : []; } catch { asks = []; }
-    json(res, 200, { ok: true, asks });
+    let floorQuiet: PhoneFloorQuiet | undefined;
+    try { floorQuiet = this.floorQuietFn?.() ?? undefined; } catch { floorQuiet = undefined; }
+    json(res, 200, { ok: true, asks, floorQuiet });
+  }
+
+  /** True when `id` is currently served as a `kind:'tool'` ask. Read off the
+   *  SAME `openAsks` thunk the GET serves, so the transport never learns a
+   *  floor concept: "is this a tool approval" is answered by the list it just
+   *  published. A throwing thunk answers false, which routes the answer down
+   *  the unchanged free-text card path rather than inventing a verdict. */
+  private isToolAsk(id: string): boolean {
+    try {
+      return (this.openAsksFn?.() ?? []).some((a) => a.taskId === id && a.kind === 'tool');
+    } catch { return false; }
   }
 
   /** POST /phone/api/answer — write the phone's answer through the injected
@@ -670,9 +750,21 @@ export class WebhookServer {
       if (!PHONE_TASK_ID_RE.test(taskId) || !answer) {
         json(res, 400, { ok: false, error: 'bad request' }); return;
       }
-      let ok = false;
-      try { ok = this.answerAskFn ? this.answerAskFn(taskId, answer) : false; } catch { ok = false; }
-      json(res, 200, { ok });
+      // T-04-ASK-34 — a tool approval takes exactly two literals and nothing
+      // else, refused HERE so the ask is never touched and stays pending to
+      // expire into its own deny. Same 400 body a malformed body already gets,
+      // byte for byte. A card ask keeps taking free text, unchanged.
+      if (this.isToolAsk(taskId) && !PHONE_TOOL_ANSWERS.includes(answer)) {
+        json(res, 400, { ok: false, error: 'bad request' }); return;
+      }
+      let outcome: PhoneAnswerOutcome = false;
+      try { outcome = this.answerAskFn ? this.answerAskFn(taskId, answer) : false; } catch { outcome = false; }
+      // Rule G-2: normalize both shapes to one response. `state` is undefined
+      // on the boolean path, and `JSON.stringify` drops it — so an old phone
+      // and an old producer both see exactly the wire they saw before.
+      const ok = typeof outcome === 'boolean' ? outcome : outcome.ok;
+      const state = typeof outcome === 'boolean' ? undefined : outcome.state;
+      json(res, 200, { ok, state });
     });
     req.on('error', () => { if (!aborted) { try { res.writeHead(400); res.end(); } catch { /* socket gone */ } } });
   }

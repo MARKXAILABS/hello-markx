@@ -1,5 +1,12 @@
 import { useState, useEffect, useRef, type CSSProperties } from 'react';
-import { AGENT_MODELS, type HarnessConfig } from '@/store/config';
+import { AGENT_MODELS, AGENT_PROVIDER_PRESETS, type AgentProvider, type HarnessConfig } from '@/store/config';
+import { sandboxCapableProviders } from '@shared/agentProvider';
+
+/** Spell a small count so the derived sentence reads as prose rather than as a
+ *  dashboard figure. Falls back to the numeral past the preset table's size — a
+ *  number that large means someone added engines, and a digit is honest there. */
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const numberWord = (n: number): string => NUMBER_WORDS[n] ?? String(n);
 import { useStore } from '@/store/store';
 import {
   CLONE_NODE_BLURB,
@@ -217,6 +224,23 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     try { await window.cth.updateConfig({ autoMode: next } as Partial<HarnessConfig>); }
     catch { setAutoModeOn(!next); }
   };
+  // GATE-04 / D-15 — the per-engine sandbox opt-in. Per-engine and DEFAULT OFF on
+  // purpose: eleven engines, three OSes and different sandbox semantics make a
+  // floor-wide flip's failure mode "the floor silently stops working at 3am", which is
+  // worse than the failure it prevents. The supported list is DERIVED from the preset
+  // table (`sandboxFlags`), so a second engine gaining support adds its row and drops
+  // the "other N" count with no edit here.
+  const sandboxEngines = sandboxCapableProviders();
+  const otherEngineCount = AGENT_PROVIDER_PRESETS.length - sandboxEngines.length;
+  const [sandboxOn, setSandboxOn] = useState<Partial<Record<AgentProvider, boolean>>>(
+    cfgX.providerSandbox ?? {}
+  );
+  const toggleSandbox = async (p: AgentProvider) => {
+    const next = { ...sandboxOn, [p]: !sandboxOn[p] };
+    setSandboxOn(next);
+    try { await window.cth.updateConfig({ providerSandbox: next } as Partial<HarnessConfig>); }
+    catch { setSandboxOn(sandboxOn); }
+  };
   const [defaultModelSel, setDefaultModelSel] = useState<string>(cfgX.defaultModel ?? 'claude-fable-5');
   const [defaultModelNote, setDefaultModelNote] = useState('');
   const saveDefaultModel = async (id: string) => {
@@ -294,6 +318,19 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
   // App/voice-initiated proactive posting (the "queued" ack). Default OFF —
   // the Slack-origin done-reply round-trip is unaffected by this toggle.
   const [slackProactivePosting, setSlackProactivePosting] = useState(config.slackProactivePosting ?? false);
+  // SCALE-04. Written through updateConfig, not through slackSetConfig: these
+  // two are HarnessConfig fields the digest reads at fire time, not part of the
+  // webhook server's start-up patch. `dailyDigest` gates the toast and Slack
+  // arms only — the file arm always writes, which is why the sub-label below
+  // talks about the process being alive rather than about this switch.
+  const [dailyDigest, setDailyDigest] = useState(config.dailyDigest ?? false);
+  const [digestChannel, setDigestChannel] = useState(config.slackDigestChannelId ?? '');
+  const toggleDailyDigest = async (): Promise<void> => {
+    const next = !dailyDigest;
+    setDailyDigest(next); // optimistic
+    try { await window.cth.updateConfig({ dailyDigest: next }); }
+    catch { setDailyDigest(!next); /* revert on failure */ }
+  };
   const [tunnelUrl, setTunnelUrl] = useState('');
   const [slackBusy, setSlackBusy] = useState(false);
   const [slackNote, setSlackNote] = useState('');
@@ -475,6 +512,8 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
       setSlackChannel(cc.slackChannelId ?? '');
       setSlackPort(String(cc.slackPort ?? 3847));
       setSlackProactivePosting(cc.slackProactivePosting ?? false);
+      setDailyDigest(cc.dailyDigest ?? false);
+      setDigestChannel(cc.slackDigestChannelId ?? '');
       const kgOn = (cc as { knowledgeGraph?: { enabled?: boolean } }).knowledgeGraph?.enabled === true;
       setKgEnabled(kgOn);
       setFreeflowEnabled(cc.freeflowEnabled !== false);
@@ -1312,6 +1351,49 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
+                      {/* SANDBOX — GATE-04. Directly below Autonomy because it is the
+                          one control that NARROWS what an autonomous agent can reach. */}
+                      <div>
+                        <div style={{
+                          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+                          color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 10
+                        }}>
+                          Sandbox
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          {sandboxEngines.map((p) => (
+                            <div key={p} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
+                                  {sandboxOn[p]
+                                    ? 'Codex — sandbox on, agent folder writable'
+                                    : "Codex — sandbox off (today's behaviour)"}
+                                </span>
+                                {/* The escape hatch is named ON PURPOSE. This feature's own
+                                    failure mode is a floor that silently stops working at 3am,
+                                    so the way back out has to be readable at the moment the
+                                    operator is reading the way in. */}
+                                <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
+                                  Applies to newly spawned agents. Turn it off if this engine stops writing.
+                                </span>
+                              </div>
+                              <PixelButton variant={sandboxOn[p] ? 'primary' : 'secondary'} size="sm"
+                                onClick={() => { void toggleSandbox(p); }}>
+                                {sandboxOn[p] ? 'on' : 'off'}
+                              </PixelButton>
+                            </div>
+                          ))}
+                          {/* One quiet line, not ten disabled rows: a disabled control implies
+                              the operator could enable it if they did something, and they
+                              cannot. ABSENT, WITH A SENTENCE. The count is derived. */}
+                          <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-500)' }}>
+                            {`The other ${numberWord(otherEngineCount)} engines have no sandbox the floor can turn on.`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
+
                       {/* Circuit breaker — the FULL unit (v0.3.4: all fields have UI) */}
                       <div>
                         <div style={{
@@ -1721,6 +1803,21 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                               </PixelButton>
                             </div>
 
+                            {/* SCALE-04's digest channel. Inside the slackEnabled
+                                block because it is only meaningful with Slack on —
+                                the digest TOGGLE itself sits outside, since the file
+                                and toast arms have nothing to do with Slack. */}
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={slackLabelStyle}>Daily digest channel id</span>
+                              <input
+                                value={digestChannel}
+                                onChange={(e) => setDigestChannel(e.target.value)}
+                                onBlur={() => { void window.cth.updateConfig({ slackDigestChannelId: digestChannel.trim() || undefined }); }}
+                                placeholder="C0123... — blank means the digest never posts to Slack"
+                                style={{ ...slackInputStyle, fontFamily: 'var(--cth-font-mono)' }}
+                              />
+                            </label>
+
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                               {/* Start disabled once connected; Stop only when running. */}
                               <PixelButton variant="primary" size="sm" onClick={startSlack} disabled={slackBusy || !slackSecret.trim() || running}>
@@ -1767,6 +1864,48 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                             </span>
                           </div>
                         )}
+                      </div>
+
+                      <div style={{ height: 2, background: 'var(--cth-ink-300)' }} />
+
+                      {/* SCALE-04 — the daily digest. OUTSIDE the slackEnabled
+                          block on purpose: two of its three arms (a file in the
+                          hive folder, an OS toast) never touch Slack, so a floor
+                          with Slack off must still be able to turn this on.
+                          The limitation sentence renders unconditionally, not only
+                          when the switch is on — it is what the operator needs
+                          BEFORE flipping it, and the app cannot deliver a 9am
+                          report from a process that is not running. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{
+                          fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)',
+                          color: 'var(--cth-ink-500)', textTransform: 'uppercase', marginBottom: 2
+                        }}>
+                          Daily digest
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)', color: 'var(--cth-ink-900)' }}>
+                              Daily digest — yesterday&apos;s spend, board and open questions
+                            </span>
+                            <span style={{ fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)', color: 'var(--cth-ink-500)' }}>
+                              Requires Open at login, which is set during onboarding and is not yet
+                              changeable here. Closing the window on Windows ends the process, and a
+                              closed process sends nothing.
+                            </span>
+                            <span style={{ fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)', color: 'var(--cth-ink-500)' }}>
+                              A copy is always written to your hive folder either way; this switch
+                              controls the desktop toast and the Slack post.
+                            </span>
+                          </div>
+                          <PixelButton
+                            variant={dailyDigest ? 'primary' : 'secondary'}
+                            size="sm"
+                            onClick={toggleDailyDigest}
+                          >
+                            {dailyDigest ? 'on' : 'off'}
+                          </PixelButton>
+                        </div>
                       </div>
 
                       <div style={{ height: 2, background: 'var(--cth-ink-300)' }} />

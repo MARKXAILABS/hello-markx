@@ -155,7 +155,23 @@ export interface AgentDirectoryEntry {
   /** Aggregate spend; carried for completeness — the voice layer speaks tokens. */
   usd: number;
   lastTool: string | null;
+  /** Seconds since this agent's last LIVE activity, or null when there is no
+   *  activity clock to read — a transcript-derived sample is stamped at READ
+   *  time, so reporting it as freshness would render a dormant agent as
+   *  permanently "0s ago". */
   lastActiveSecAgo: number | null;
+  /** `usd`/`tokens` above are an ALL-TIME cumulative total read off a transcript,
+   *  not spend since this spawn. Render it with its own label — never beside
+   *  `spawnedAt`-derived uptime as though the two shared a window. */
+  costLifetime: boolean;
+  /** `usd: 0` / `tokens: 0` here is a DECLARED GAP, not a measurement: this
+   *  agent's transcript root is shared (a cwd can hold another project's agent, a
+   *  deleted agent, or the operator's own CLI sessions), so no figure can be
+   *  proven to be its money. Render the gap, never the zero as a dollar amount. */
+  costUnattributed: boolean;
+  /** When the CURRENT PTY was spawned — the clock "up 4m" reads. Resets on every
+   *  respawn; null for a registry entry written before the field existed. */
+  spawnedAt: number | null;
   contextTokens: number | null;
   contextLimit: number | null;
   contextPct: number | null;
@@ -321,6 +337,13 @@ export interface HarnessConfig {
   slackChannelId?: string;
   slackPort?: number;
   slackProactivePosting?: boolean;
+  /** SCALE-04's daily digest. Mirrors main + renderer HarnessConfig.
+   *  `dailyDigest` gates the toast and Slack arms only — the file arm is
+   *  unconditional. `digestHour` absent = DIGEST_DEFAULT_HOUR in
+   *  src/main/floor/boot.ts, the single source of that number. */
+  dailyDigest?: boolean;
+  slackDigestChannelId?: string;
+  digestHour?: number;
   webhookEnabled?: boolean;
   webhookSecret?: string;
   webhookPort?: number;
@@ -785,6 +808,31 @@ const api = {
   hiveBoard: (): Promise<string> => ipcRenderer.invoke('hive:board'),
   hiveTasks: (): Promise<unknown> => ipcRenderer.invoke('hive:tasks'),
   hiveLog: (n?: number): Promise<unknown[]> => ipcRenderer.invoke('hive:log', n ?? 200),
+  /** SCALE-03 — a whole day as 96 bucket summaries. `day` is a 'YYYY-MM-DD'
+   *  LOCAL date, exactly what a native <input type="date"> hands back; main
+   *  rejects anything else rather than querying it.
+   *
+   *  ONE shape on every path. `ok === false` is the answer for a rejected day
+   *  AND for a store that is not open — there is deliberately no zeroed
+   *  success, because a caller cannot tell one apart from a genuinely quiet
+   *  day. `eventsAgedOut` outranks any firstTs-derived "no record" copy: it
+   *  means the events table was pruned past this day while the never-rotated
+   *  cost ledger still has its spend, so the day has real cost bars and no
+   *  events. `firstTs` is the earliest event STILL STORED, not the first ever. */
+  hiveTimeline: (day: string) => ipcRenderer.invoke('hive:timeline', day) as Promise<
+    | { ok: true; buckets: Array<{ index: number; startMs: number; events: number; envelopes: number; usd: number; tokens: number }>;
+        firstTs: number | null; eventsAgedOut: boolean }
+    | { ok: false; error: string }
+  >,
+  /** SCALE-03 — one bucket's merged event+cost rows. Bounded: `truncated` with
+   *  the real `total` when the bucket held more than the cap, never a silent
+   *  slice. Zero-delta cost rows are dropped main-side, so `total` counts only
+   *  rows worth drawing. */
+  hiveTimelineBucket: (day: string, bucketIndex: number) =>
+    ipcRenderer.invoke('hive:timelineBucket', day, bucketIndex) as Promise<
+      | { ok: true; rows: unknown[]; truncated: boolean; total: number }
+      | { ok: false; error: string }
+    >,
   hiveMemory: (id: string): Promise<string> => ipcRenderer.invoke('hive:memory', id),
   hiveInbox: (id: string): Promise<HiveMessage[]> => ipcRenderer.invoke('hive:inbox', id),
   /** FLOOR-14 (#42) — tell main an agent just TRANSITIONED into `blocked`, so it
@@ -1034,9 +1082,22 @@ const api = {
    *  links, links that arrived during load). Resolves the queued list. */
   drainPendingHires: (): Promise<HireManifest[]> =>
     ipcRenderer.invoke('hire:drainPending'),
-  /** Open a file picker and validate the chosen hire-manifest JSON. */
-  importHireFile: (): Promise<{ ok: boolean; manifest?: HireManifest; error?: string }> =>
-    ipcRenderer.invoke('hire:openFile'),
+  /** Open a file picker and validate the chosen JSON. The file may be a single
+   *  `hire@1` manifest (`manifest`) or a `hello-markx/team@1` wrapper (`team`) —
+   *  `readHireManifestFile` branches on the parsed spec tag, so importing a team
+   *  needs no channel of its own. */
+  importHireFile: (): Promise<{
+    ok: boolean;
+    manifest?: HireManifest;
+    team?: { members: HireManifest[] };
+    error?: string;
+  }> => ipcRenderer.invoke('hire:openFile'),
+  /** Write the current roster out as a `team@1` file the operator names.
+   *  `members` is how many were written; `skipped` is how many could not be
+   *  re-imported and were therefore left out — both must be shown, since a file
+   *  that quietly loses agents is worse than one that refuses. */
+  exportTeam: (): Promise<{ ok: boolean; members?: number; skipped?: number; error?: string }> =>
+    ipcRenderer.invoke('team:export'),
 
   // ─── Quit confirmation ───────────────────────────────────────────────────
   onCloseRequested: (cb: (info: { ptyCount: number }) => void): (() => void) => {
@@ -1122,6 +1183,12 @@ const api = {
   /** Push a breaker state to the renderer (Lane A's policy / interim glue calls this). */
   setBreakerState: (state: BreakerState): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('control:setBreakerState', state),
+  /** Pull the CURRENT breaker state for every registered agent, keyed by agent id.
+   *  `onBreakerState` only fires on the next ~30s beat, so a card that mounts with a
+   *  fresh window would render `healthy` for a stopped agent until then. `{}` when the
+   *  hive is disabled. */
+  getBreakerSnapshot: (): Promise<Record<string, BreakerState>> =>
+    ipcRenderer.invoke('control:breakerSnapshot'),
 
   // ─── Operator control over agents (#7C.1–7C.3) ──────────────────────────────
   /** Pause/unpause an agent — paused → its tool calls are denied at PreToolUse. */
@@ -1145,11 +1212,41 @@ const api = {
   /** Read an agent's current control snapshot. */
   controlSnapshot: (agentId: string): Promise<AgentControlSnapshot | null> =>
     ipcRenderer.invoke('control:snapshot', agentId),
-  /** Subscribe to gate/deny events (a tool was blocked); returns unsubscribe fn. */
-  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string }) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string }) => cb(payload);
+  /** Subscribe to gate/deny events (a tool was blocked); returns unsubscribe fn.
+   *
+   *  `askId`/`expiresInMs` are present only on a GATE-05 ask — an OPEN question
+   *  the floor is still blocking on, answerable through `answerApproval` below.
+   *  A GATE-03 refusal carries neither: it was already denied. `expiresInMs` is
+   *  a DURATION measured by main at emit time, never a deadline (rule G-3). */
+  onApprovalRequest: (cb: (e: { agentId: string; tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number }) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { agentId: string; tool?: string; reason?: string; command?: string; askId?: string; expiresInMs?: number }) => cb(payload);
     ipcRenderer.on('control:approvalRequest', listener);
     return () => ipcRenderer.removeListener('control:approvalRequest', listener);
+  },
+  /** GATE-05 — settle one tool approval from the desktop. The ONE renderer→main
+   *  route for an answer; the event above is the other direction and is reused
+   *  unchanged. The answer reaches `ApprovalRegistry.answer` and rides the hook
+   *  return — it is never typed into a live PTY (ADR-0001).
+   *
+   *  `{ settled: false }` means the ask is gone. `expired` tells the two apart
+   *  the way rule G-2 requires: expired means the command was DENIED, settled
+   *  means it may already have run — opposite outcomes at 3am. */
+  answerApproval: (askId: string, approved: boolean): Promise<{ settled: boolean; expired?: boolean } | null> =>
+    ipcRenderer.invoke('control:answerApproval', askId, approved),
+  /** VIGIL-01 — main's absence latch, pushed. Plan 04-11 declared the channel and
+   *  `boot.ts` is its one publisher: a `QuietSnapshot` on the setting edge, `null`
+   *  on the clearing edge. Never polled.
+   *
+   *  THE LITERAL LIVES HERE AND NOWHERE ELSE ON THE RENDERER SIDE.
+   *  `contextIsolation: true` plus the `cth` bridge means the renderer cannot reach
+   *  `ipcRenderer` at all — `useHive.ts` holds zero channel literals and subscribes
+   *  through `window.cth.*` alone. Shape copied verbatim from `onApprovalRequest`
+   *  above, unsubscribe included: an `on` without its `removeListener` leaks a
+   *  listener per remount. */
+  onFloorQuiet: (cb: (s: { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean } | null) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: { sinceMs: number; inFlight: Array<{ id: string; title: string; assignee?: string }>; godDead: boolean } | null) => cb(payload);
+    ipcRenderer.on('floor:quiet', listener);
+    return () => ipcRenderer.removeListener('floor:quiet', listener);
   },
 
   // ─── Task kanban (hive/tasks.json) ───────────────────────────────────────

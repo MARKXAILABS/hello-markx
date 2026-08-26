@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; img-src 'self' data:; manifest-src 'self'; script-src 'sha256-EtyV4iwjHDyNCCr1Hm+KnT4nQXdYDHo/DsYAJH53NwQ='; style-src 'sha256-NLGNADNkRikjoVfjWqk8uOuc4YI/OiS94hXK806cBwg='; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; img-src 'self' data:; manifest-src 'self'; script-src 'sha256-AovLKG61ybiKB/oW0/OZxYL+CfIQGo7jvMCxrL4KtKA='; style-src 'sha256-whMO5ZIY/BKeBZqG3wPjn6UKgAuUU15CV+S72D4CO2s='; base-uri 'none'; form-action 'none'">
 <link rel="manifest" href="./manifest.webmanifest">
 <title>Hello MarkX</title>
 <style>
@@ -20,6 +20,9 @@
   --p-accent: #A896E3; /* --cth-lilac (dark) */
   --p-accent-fill: #2B2740; /* --cth-lilac-light (dark) */
   --p-warn: #DF8078; /* --cth-status-blocked (dark) */
+  --p-warn-fill: #3B2724; /* --cth-coral-light (dark) — the warn register's fill partner.
+                             --p-text on it 10.13:1, --p-text-2 6.47:1, --p-warn rule 4.99:1.
+                             Two surfaces only: the tool-ask band and the floor-quiet strip. */
   --p-ok: #6FB88B; /* --cth-status-success (dark) */
   --p-on-accent: #1A1320; /* --cth-on-accent (theme-invariant, tokens.css:94) */
   --p-1: 4px;
@@ -92,6 +95,21 @@ button { font-family: var(--p-font); }
   line-height: 20px;
   border-radius: 8px;
 }
+/* VIGIL-01's floor-quiet strip — .p-offline-bar's geometry in the warn
+   register. Pinned directly BELOW the offline banner and above the list: a
+   floor-wide condition outranks any single ask, and the two are different
+   facts that can co-occur, so neither may overwrite the other's slot.
+   NOT interactive and it does not pretend to be — no cursor, no handler. */
+.p-quiet-bar {
+  margin: 0 var(--p-4) var(--p-3);
+  padding: var(--p-3);
+  background: var(--p-warn-fill);
+  color: var(--p-text);
+  font-size: var(--p-text-sm);
+  line-height: 20px;
+  border-radius: 8px;
+  box-shadow: inset 2px 0 0 var(--p-warn);
+}
 .p-empty { padding: 0 var(--p-4); }
 .p-empty-body { color: var(--p-text-3); font-size: var(--p-text-md); line-height: 24px; margin: var(--p-2) 0 0; }
 .p-list {
@@ -135,6 +153,22 @@ button { font-family: var(--p-font); }
   line-height: 24px;
   color: var(--p-text);
 }
+/* A kind:'tool' item is STRUCTURALLY identical to a card item and only
+   hue-different, so the list stays one scannable column (§S1b). */
+.p-ask-tool { border-left-color: var(--p-warn); background: var(--p-warn-fill); }
+.p-ask-cmd {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0;
+  font-family: var(--p-font-mono);
+  font-size: var(--p-text-sm);
+  line-height: 20px;
+  color: var(--p-text);
+  word-break: break-all;
+}
+.p-countdown { color: var(--p-warn); }
 
 /* ---- states shared by both screens ---- */
 .p-loading, .p-not-paired {
@@ -213,6 +247,41 @@ button { font-family: var(--p-font); }
 }
 .p-send:disabled { opacity: 0.6; cursor: default; }
 .p-send.p-send-sent { background: var(--p-ok); color: var(--p-on-accent); }
+
+/* ---- screen 2, kind:'tool': the command and the two decisions ---- */
+/* NEVER truncated here. A command the operator is being asked to authorise
+   must be readable in full or the question cannot honestly be answered. */
+.p-command {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--p-font-mono);
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  padding: 0 var(--p-4);
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 0 var(--p-4);
+  color: var(--p-text);
+}
+/* `deny` sits BELOW `approve` with 16px between them: the bottom button is the
+   thumb-reachable one on a one-handed phone at night, and the thumb-reachable
+   one must be the safe one. The gap means a slip off `deny` lands in dead
+   space rather than on `approve`. */
+.p-decide {
+  min-height: 56px;
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  font-size: var(--p-text-md);
+  line-height: 24px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.p-decide-approve { background: var(--p-warn); color: var(--p-on-accent); }
+.p-decide-deny { background: var(--p-raise); color: var(--p-text); box-shadow: inset 0 0 0 1px var(--p-line); }
+.p-decide:disabled { opacity: 0.6; cursor: default; }
+.p-decide-gap { height: var(--p-4); }
+.p-verdict { margin: 0; color: var(--p-ok); font-size: var(--p-text-md); line-height: 24px; font-weight: 600; text-align: center; }
 </style>
 </head>
 <body>
@@ -305,20 +374,56 @@ button { font-family: var(--p-font); }
     tokenUsed: 'That pairing code was already used. Generate a new QR on the desktop.',
     offline: "Can't reach your floor. The tunnel address changes every restart — scan the QR on the desktop again.",
     rateLimited: 'Too many requests — from your floor or from the tunnel. Wait a minute and try again.',
-    sendFailed: 'Not sent. Your answer is still here — try again.'
+    sendFailed: 'Not sent. Your answer is still here — try again.',
+    toolTitle: 'wants to run a command',
+    decideFailed: 'Not sent. Nothing was decided — try again.',
+    expiredCopy: 'This expired before you answered. The command was denied.',
+    settledCopy: 'This was already answered somewhere else.',
+    approved: 'approved',
+    denied: 'denied',
+    /* VIGIL-01's three cases, formatted HERE from floorQuiet's fields — the
+       strip never renders a server-authored sentence. */
+    floorQuiet: function (q) {
+      var been = humanDuration(q.sinceMs);
+      if (q.agent) {
+        return q.agent + ' is gone. The floor has no orchestrator, and nothing has moved for ' + been + '.';
+      }
+      var n = q.inFlight;
+      var flight = !n
+        ? 'No cards were in flight.'
+        : (n === 1 ? '1 card was in flight.' : n + ' cards were in flight.');
+      return 'The floor has stopped. Nothing has moved for ' + been + '. ' + flight;
+    }
   };
 
   var state = {
     screen: 'loading', // 'loading' | 'not-paired' | 'list' | 'detail'
     bearer: null,
     asks: [],
+    /* VIGIL-01. Its own slot, NOT state.banner: the offline banner and the
+       quiet alarm are different facts that can co-occur, and overloading one
+       slot would make one of them invisible. */
+    floorQuiet: null,
+    /* Rule G-3's anchor. `expiresInMs` is a DURATION the server measured at
+       response time, so the countdown is `receivedAt + expiresInMs - now` —
+       skew-immune. Replaced together with `asks` on every poll, atomically, so
+       a refresh re-anchors rather than compounding staleness. */
+    receivedAt: 0,
     offline: false,
     banner: '',
     selected: null,
     draft: '',
+    /* false, true, or — on a kind:'tool' screen — the literal being sent
+       ('approve' | 'deny'), so the tapped button alone reads `sending…`.
+       Truthy either way, so every existing `state.sending ||` guard holds. */
     sending: false,
     sent: false,
-    sendError: ''
+    sendError: '',
+    /* kind:'tool' only. '' | 'approved' | 'denied' — set ONLY from the server's
+       own response. There is no optimistic UI on a tool approval: that is
+       precisely how "an answer was accepted after the deadline passed" gets
+       told as a lie. */
+    verdict: ''
   };
 
   var root = document.getElementById('app');
@@ -335,15 +440,68 @@ button { font-family: var(--p-font); }
     return Math.floor(h / 24) + 'd ago';
   }
 
+  /* `32m`, `1h 4m`. Minutes are the resolution the operator reads at 3am; a
+     seconds field on a five-minute threshold is noise. */
+  function humanDuration(ms) {
+    var m = Math.max(0, Math.round(ms / 60000));
+    if (m < 60) return m + 'm';
+    return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+
+  /* Rule G-3's format table, and every branch of it is load-bearing.
+     Below ten seconds NO NUMBER is shown: the last ten seconds are the window
+     where clock skew and transit latency could lie, and a number that lies
+     there tells the operator they have time to answer a question that has
+     already auto-denied. At or below zero every decision control is disabled.
+
+     `timeAgo` is deliberately NOT overloaded — it takes an ISO string and
+     counts up; this takes a duration and counts down. */
+  function formatRemaining(ms) {
+    if (!(ms > 0)) return 'expired';
+    if (ms < 10000) return 'expiring';
+    var secs = Math.floor(ms / 1000);
+    if (secs < 60) return secs + 's left';
+    var m = Math.floor(secs / 60);
+    var s = secs % 60;
+    return m + 'm ' + (s < 10 ? '0' : '') + s + 's left';
+  }
+
+  /* Re-DERIVED from the anchor, never a decremented counter: a backgrounded tab
+     or a throttled interval makes a decremented counter drift arbitrarily far
+     in the optimistic direction, which is the one direction that is unsafe. */
+  function remainingFor(ask) {
+    if (!ask || typeof ask.expiresInMs !== 'number') return 0;
+    return ask.expiresInMs - (Date.now() - state.receivedAt);
+  }
+
+  function isTool(ask) { return !!ask && ask.kind === 'tool'; }
+
+  function askById(taskId) {
+    return state.asks.filter(function (a) { return a.taskId === taskId; })[0];
+  }
+
+  /* `ask.question` carries the COMMAND for kind:'tool', and a command is
+     agent-authored, LLM-controlled text landing in hand-built markup with no
+     framework escaping it for us. It goes through the SAME escapeHtml every
+     other interpolated field on this surface already uses — the tool branch
+     adds a new untrusted field, not a new escaping rule. */
   function askItemHtml(ask) {
-    var accessibleName = (ask.agent ? ask.agent + ' ' : '') + 'asks: ' + ask.title;
+    var tool = isTool(ask);
+    var agent = ask.agent || 'an agent';
+    var accessibleName = tool
+      ? agent + ' wants to run: ' + ask.question
+      : (ask.agent ? ask.agent + ' ' : '') + 'asks: ' + ask.title;
+    var metaHtml = tool
+      ? escapeHtml(agent) + ' · <span class="p-countdown" data-countdown="' + escapeHtml(ask.taskId) + '">'
+        + escapeHtml(formatRemaining(remainingFor(ask))) + '</span>'
+      : escapeHtml(agent + (ask.askedAt ? ' · ' + timeAgo(ask.askedAt) : ''));
     return '<li>'
-      + '<button type="button" class="p-ask" data-task-id="' + escapeHtml(ask.taskId) + '">'
+      + '<button type="button" class="p-ask' + (tool ? ' p-ask-tool' : '') + '" data-task-id="' + escapeHtml(ask.taskId) + '">'
       + '<span class="p-visually-hidden">' + escapeHtml(accessibleName) + '</span>'
       + '<span class="p-ask-row" aria-hidden="true">'
-      + '<span class="p-ask-agent">' + escapeHtml((ask.agent || 'an agent') + (ask.askedAt ? ' · ' + timeAgo(ask.askedAt) : '')) + '</span>'
-      + '<span class="p-ask-title">' + escapeHtml(ask.title) + '</span>'
-      + '<p class="p-ask-q">' + escapeHtml(ask.question) + '</p>'
+      + '<span class="p-ask-agent">' + metaHtml + '</span>'
+      + '<span class="p-ask-title">' + escapeHtml(tool ? COPY.toolTitle : ask.title) + '</span>'
+      + '<p class="' + (tool ? 'p-ask-cmd' : 'p-ask-q') + '">' + escapeHtml(ask.question) + '</p>'
       + '</span>'
       + '</button>'
       + '</li>';
@@ -356,6 +514,13 @@ button { font-family: var(--p-font); }
     var bannerHtml = state.banner
       ? '<p class="p-offline-bar">' + escapeHtml(state.banner) + '</p>'
       : '';
+    /* Below the offline banner, above the list. Not a <button>, no data-action,
+       no cursor, no handler: there is nothing to answer and — unlike the
+       desktop — no task board to open. No dismissal either; it is server state,
+       and it cannot be swiped away while the floor is still stopped. */
+    var quietHtml = state.floorQuiet
+      ? '<p class="p-quiet-bar" role="status">' + escapeHtml(COPY.floorQuiet(state.floorQuiet)) + '</p>'
+      : '';
     var bodyHtml = count > 0
       ? '<ol class="p-list' + (state.offline ? ' p-list-stale' : '') + '">' + state.asks.map(askItemHtml).join('') + '</ol>'
       : '<p class="p-empty-body">' + escapeHtml(COPY.emptyBody) + '</p>';
@@ -365,12 +530,46 @@ button { font-family: var(--p-font); }
       + '<button type="button" class="p-refresh" data-action="refresh">refresh</button>'
       + '</header>'
       + bannerHtml
+      + quietHtml
       + '<div class="p-empty">' + bodyHtml + '</div>';
+  }
+
+  /* The tool-approval screen: the same frame as the answer screen with the
+     textarea REMOVED. There is nothing to type and nothing to lose, so the
+     localStorage draft machinery is not engaged at all — a persisted "draft"
+     for a question that expired in 120 seconds is garbage that outlives its
+     ask. Both buttons are disabled while a POST is in flight, once a verdict
+     has come back, and once the countdown reaches zero. */
+  function screenToolHtml(ask) {
+    var remaining = remainingFor(ask);
+    var expired = !(remaining > 0);
+    var disabled = (state.sending || expired || !!state.verdict) ? ' disabled' : '';
+    var noticeHtml = state.verdict
+      ? '<p class="p-verdict">' + escapeHtml(state.verdict) + '</p>'
+      : (state.sendError ? '<p class="p-send-error">' + escapeHtml(state.sendError) + '</p>' : '');
+    var approveLabel = state.sending === 'approve' ? 'sending…' : 'approve';
+    var denyLabel = state.sending === 'deny' ? 'sending…' : 'deny';
+    return ''
+      + '<div class="p-detail">'
+      + '<button type="button" class="p-back" data-action="back">back</button>'
+      + '<p class="p-meta">' + escapeHtml(ask.agent || 'an agent')
+      + ' · <span class="p-countdown" data-countdown="' + escapeHtml(ask.taskId) + '">'
+      + escapeHtml(formatRemaining(remaining)) + '</span></p>'
+      + '<h1 class="p-title">' + escapeHtml(COPY.toolTitle) + '</h1>'
+      + '<p class="p-command">' + escapeHtml(ask.question) + '</p>'
+      + '<div class="p-actionbar">'
+      + noticeHtml
+      + '<button type="button" class="p-decide p-decide-approve" data-action="approve"' + disabled + '>' + escapeHtml(approveLabel) + '</button>'
+      + '<div class="p-decide-gap"></div>'
+      + '<button type="button" class="p-decide p-decide-deny" data-action="deny"' + disabled + '>' + escapeHtml(denyLabel) + '</button>'
+      + '</div>'
+      + '</div>';
   }
 
   function screenDetailHtml() {
     var ask = state.asks.filter(function (a) { return a.taskId === state.selected; })[0];
     if (!ask) return screenListHtml();
+    if (isTool(ask)) return screenToolHtml(ask);
     var sendLabel = state.sent ? 'sent' : (state.sending ? 'sending…' : 'send answer');
     var sendClass = 'p-send' + (state.sent ? ' p-send-sent' : '');
     var errorHtml = state.sendError ? '<p class="p-send-error">' + escapeHtml(state.sendError) + '</p>' : '';
@@ -414,9 +613,14 @@ button { font-family: var(--p-font); }
     if (backBtn) backBtn.addEventListener('click', function () {
       state.selected = null;
       state.sendError = '';
+      state.verdict = '';
       state.screen = 'list';
       render();
     });
+    var approveBtn = root.querySelector('[data-action="approve"]');
+    if (approveBtn) approveBtn.addEventListener('click', function () { sendDecision('approve'); });
+    var denyBtn = root.querySelector('[data-action="deny"]');
+    if (denyBtn) denyBtn.addEventListener('click', function () { sendDecision('deny'); });
     var textarea = root.querySelector('.p-textarea');
     if (textarea) textarea.addEventListener('input', function () {
       state.draft = textarea.value;
@@ -432,10 +636,13 @@ button { font-family: var(--p-font); }
   }
 
   function openAsk(taskId) {
+    var ask = askById(taskId);
     state.selected = taskId;
-    state.draft = getDraft(taskId);
+    // No draft persistence for a tool approval — see screenToolHtml.
+    state.draft = isTool(ask) ? '' : getDraft(taskId);
     state.sendError = '';
     state.sent = false;
+    state.verdict = '';
     state.screen = 'detail';
     render();
   }
@@ -468,7 +675,14 @@ button { font-family: var(--p-font); }
       if (!r.ok) { state.offline = true; state.banner = COPY.offline; render(); return; }
       state.offline = false;
       state.banner = '';
+      // A refresh RE-ANCHORS: the anchor and the durations it applies to are
+      // replaced together, atomically, or the countdown would apply a fresh
+      // duration to a stale anchor and read optimistically.
+      state.receivedAt = Date.now();
       state.asks = Array.isArray(r.data.asks) ? r.data.asks : [];
+      state.floorQuiet = (r.data.floorQuiet && typeof r.data.floorQuiet.sinceMs === 'number')
+        ? r.data.floorQuiet
+        : null;
       render();
     }).catch(function () {
       state.offline = true;
@@ -510,6 +724,86 @@ button { font-family: var(--p-font); }
       render();
     });
   }
+
+  /* Send one tool decision. NO optimistic UI: the screen says `approved` or
+     `denied` only once the server's response says so, because optimistic UI is
+     exactly how "an answer was accepted after the deadline passed" gets told as
+     a lie. The two literals are the only two the server accepts — anything else
+     is a 400 there, deliberately, rather than being read as a yes. */
+  function sendDecision(choice) {
+    var taskId = state.selected;
+    var ask = askById(taskId);
+    if (!taskId || !isTool(ask) || state.sending || state.verdict) return;
+    if (!(remainingFor(ask) > 0)) return; // expired: nothing to decide
+    state.sending = choice;
+    state.sendError = '';
+    render();
+    apiFetch('/phone/api/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ taskId: taskId, answer: choice })
+    }).then(function (r) {
+      state.sending = false;
+      if (r.status === 401) { handleUnauthorized(); return; }
+      if (r.status === 429) { state.sendError = COPY.rateLimited; render(); return; }
+      var data = r.data || {};
+      if (r.ok && data.ok === true) {
+        state.verdict = choice === 'approve' ? COPY.approved : COPY.denied;
+        render();
+        setTimeout(function () {
+          state.verdict = '';
+          state.asks = state.asks.filter(function (a) { return a.taskId !== taskId; });
+          state.selected = null;
+          state.screen = 'list';
+          render();
+        }, 1500);
+        return;
+      }
+      // The three refusals the phone must tell apart — expired means the
+      // command was DENIED, settled means it may already have run.
+      if (data.state === 'expired') state.sendError = COPY.expiredCopy;
+      else if (data.state === 'settled') state.sendError = COPY.settledCopy;
+      else state.sendError = COPY.decideFailed;
+      render();
+    }).catch(function () {
+      state.sending = false;
+      state.sendError = COPY.decideFailed;
+      render();
+    });
+  }
+
+  /* Rule G-3 clause 4 — re-derive every 1000ms FROM THE ANCHOR. Only the
+     countdown text is rewritten in place, so a card screen's textarea and its
+     caret survive; a full re-render happens exactly once per ask, on the
+     crossing into `expired`, because that is the moment the decision controls
+     must become disabled.
+     A9.2/A9.3: disabling the focused button would strand focus on <body>, so
+     focus moves to `back` in the same render — guarded on focus having been on
+     one of the two decision buttons. */
+  function tickCountdowns() {
+    var nodes = root.querySelectorAll('[data-countdown]');
+    if (!nodes.length) return;
+    var expiredNow = false;
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var ask = askById(el.getAttribute('data-countdown'));
+      if (!ask) continue;
+      var ms = remainingFor(ask);
+      var text = formatRemaining(ms);
+      if (el.textContent !== text) el.textContent = text;
+      if (ms <= 0 && !el.hasAttribute('data-expired')) { el.setAttribute('data-expired', '1'); expiredNow = true; }
+    }
+    if (!expiredNow) return;
+    var active = document.activeElement;
+    var onDecision = !!active && !!active.getAttribute
+      && (active.getAttribute('data-action') === 'approve' || active.getAttribute('data-action') === 'deny');
+    render();
+    if (onDecision) {
+      var back = root.querySelector('[data-action="back"]');
+      if (back) back.focus();
+    }
+  }
+  setInterval(tickCountdowns, 1000);
 
   function poll() {
     if (document.visibilityState !== 'visible') return;

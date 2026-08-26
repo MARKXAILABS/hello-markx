@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { mergeAgentViews } from '../store/agentView';
 
 /**
  * Renderer-side consumers of the live telemetry stream (#7B).
@@ -84,63 +85,122 @@ export interface FleetTelemetry {
   breakers: Record<string, BreakerState>;
 }
 
+// ── ONE fleet subscription, however many components ask for it ──────────────
+//
+// This used to be five independent React state slots and a `useEffect` INSIDE the hook,
+// so the four
+// components that mount it (AgentStrip, CommandCenterPanel, FullscreenTerminal,
+// ToolWaterfall) each ran their own cold-start `telemetrySnapshot()` backfill and their
+// own pair of IPC listeners over the same stream — four copies of one fleet, kept in
+// step only by all four happening to see the same pushes.
+//
+// Same module-singleton + `useSyncExternalStore` shape as `store/autoMode.ts` and
+// `store/agentView.ts`. The hook's PUBLIC signature is unchanged and none of the four
+// call sites was touched: the collapse is entirely internal to this file.
+
+const EMPTY_FLEET: FleetTelemetry = { samples: {}, spark: {}, rate: {}, lastTool: {}, breakers: {} };
+
+let fleet: FleetTelemetry = EMPTY_FLEET;
+const fleetListeners = new Set<() => void>();
+const rates: Record<string, Rate> = {};
+let offEvent: (() => void) | undefined;
+let offBreaker: (() => void) | undefined;
+
+/** Publish a NEW top-level snapshot. `useSyncExternalStore` compares by reference, so
+ *  an in-place mutation is a store that has silently stopped re-rendering. */
+function publishFleet(patch: Partial<FleetTelemetry>): void {
+  fleet = { ...fleet, ...patch };
+  for (const l of [...fleetListeners]) l();
+}
+
+function foldUsage(s: AgentUsageSample): void {
+  const total = totalTokens(s);
+  const r = rates[s.agentId];
+  if (!r) {
+    rates[s.agentId] = { deltas: [], firstTs: s.ts, firstTotal: total, lastTs: s.ts, lastTotal: total };
+    publishFleet({ samples: { ...fleet.samples, [s.agentId]: s } });
+    return;
+  }
+  const delta = Math.max(0, total - r.lastTotal);
+  r.deltas = [...r.deltas, delta].slice(-SPARK_LEN);
+  r.lastTs = s.ts;
+  r.lastTotal = total;
+  const minutes = Math.max(1 / 60, (r.lastTs - r.firstTs) / 60000);
+  publishFleet({
+    samples: { ...fleet.samples, [s.agentId]: s },
+    spark: { ...fleet.spark, [s.agentId]: r.deltas },
+    rate: { ...fleet.rate, [s.agentId]: (r.lastTotal - r.firstTotal) / minutes }
+  });
+}
+
+function startFleet(): void {
+  // Backfill from the snapshot (we missed every push before the first mount).
+  void window.cth.telemetrySnapshot?.().then((snap) => {
+    if (!snap) return;
+    for (const s of snap.usage ?? []) foldUsage(s as AgentUsageSample);
+    const tools: Record<string, string> = {};
+    for (const [id, spans] of Object.entries(snap.spans ?? {})) {
+      const arr = spans as ToolSpan[];
+      if (arr.length) tools[id] = arr[arr.length - 1].tool;
+    }
+    publishFleet({ lastTool: { ...tools, ...fleet.lastTool } });
+  }).catch(() => { /* collector not up — empty grid */ });
+
+  offEvent = window.cth.onTelemetryEvent?.((e: TelemetryEvent) => {
+    if (e.kind === 'usage') foldUsage(e.sample);
+    else if (e.kind === 'tool_result') {
+      publishFleet({ lastTool: { ...fleet.lastTool, [e.span.agentId]: e.span.tool } });
+    }
+  });
+  offBreaker = window.cth.onBreakerState?.((s: BreakerState) => {
+    publishFleet({ breakers: { ...fleet.breakers, [s.agentId]: s } });
+    // The same push, folded into the stat card's cache so a breaker that trips
+    // mid-beat reaches the card without waiting out agentView's 30s pull. Cost
+    // deliberately does NOT ride along: a dollar figure 30s stale is fine, a
+    // block state 30s stale is exactly the fail-unsafe window D-36 named.
+    mergeAgentViews({ [s.agentId]: { breaker: { level: s.level, reason: s.reason } } });
+  });
+}
+
+/** Subscribe to the shared fleet snapshot, starting the ONE subscription on the first
+ *  listener and tearing it down on the last. Exported for `node --test`, which has no
+ *  React and cannot mount the hook. */
+export function subscribeFleetTelemetry(listener: () => void): () => void {
+  const first = fleetListeners.size === 0;
+  fleetListeners.add(listener);
+  if (first && typeof window !== 'undefined' && window.cth) startFleet();
+  return () => {
+    fleetListeners.delete(listener);
+    if (fleetListeners.size === 0) {
+      offEvent?.(); offBreaker?.();
+      offEvent = undefined; offBreaker = undefined;
+    }
+  };
+}
+
+/** The current shared snapshot — and, being the `getServerSnapshot` too, what a
+ *  server-rendered test sees. */
+export function getFleetTelemetry(): FleetTelemetry {
+  return fleet;
+}
+
+/** Drop the shared state and detach. Test teardown only. */
+export function resetFleetTelemetry(): void {
+  offEvent?.(); offBreaker?.();
+  offEvent = undefined; offBreaker = undefined;
+  fleetListeners.clear();
+  for (const id of Object.keys(rates)) delete rates[id];
+  fleet = EMPTY_FLEET;
+}
+
 /**
- * Subscribe to the whole fleet's live telemetry. One instance (the fleet grid).
- * Backfills from the snapshot on mount, then folds in live pushes.
+ * Subscribe to the whole fleet's live telemetry.
+ *
+ * Unchanged signature and unchanged `FleetTelemetry` shape — every mount now reads the
+ * one shared subscription above instead of opening its own.
  */
 export function useFleetTelemetry(): FleetTelemetry {
-  const [samples, setSamples] = useState<Record<string, AgentUsageSample>>({});
-  const [spark, setSpark] = useState<Record<string, number[]>>({});
-  const [rate, setRate] = useState<Record<string, number>>({});
-  const [lastTool, setLastTool] = useState<Record<string, string>>({});
-  const [breakers, setBreakers] = useState<Record<string, BreakerState>>({});
-  const rates = useRef<Record<string, Rate>>({});
-
-  useEffect(() => {
-    let alive = true;
-
-    const foldUsage = (s: AgentUsageSample): void => {
-      setSamples((prev) => ({ ...prev, [s.agentId]: s }));
-      const total = totalTokens(s);
-      const r = rates.current[s.agentId];
-      if (!r) {
-        rates.current[s.agentId] = { deltas: [], firstTs: s.ts, firstTotal: total, lastTs: s.ts, lastTotal: total };
-      } else {
-        const delta = Math.max(0, total - r.lastTotal);
-        r.deltas = [...r.deltas, delta].slice(-SPARK_LEN);
-        r.lastTs = s.ts;
-        r.lastTotal = total;
-        const minutes = Math.max(1 / 60, (r.lastTs - r.firstTs) / 60000);
-        const perMin = (r.lastTotal - r.firstTotal) / minutes;
-        setSpark((prev) => ({ ...prev, [s.agentId]: r.deltas }));
-        setRate((prev) => ({ ...prev, [s.agentId]: perMin }));
-      }
-    };
-
-    // Backfill from the snapshot (we missed the pushes before mount).
-    window.cth.telemetrySnapshot?.().then((snap) => {
-      if (!alive || !snap) return;
-      for (const s of snap.usage ?? []) foldUsage(s as AgentUsageSample);
-      const tools: Record<string, string> = {};
-      for (const [id, spans] of Object.entries(snap.spans ?? {})) {
-        const arr = spans as ToolSpan[];
-        if (arr.length) tools[id] = arr[arr.length - 1].tool;
-      }
-      setLastTool((prev) => ({ ...tools, ...prev }));
-    }).catch(() => { /* collector not up — empty grid */ });
-
-    const offEvent = window.cth.onTelemetryEvent?.((e: TelemetryEvent) => {
-      if (e.kind === 'usage') foldUsage(e.sample);
-      else if (e.kind === 'tool_result') setLastTool((prev) => ({ ...prev, [e.span.agentId]: e.span.tool }));
-    });
-    const offBreaker = window.cth.onBreakerState?.((s: BreakerState) => {
-      setBreakers((prev) => ({ ...prev, [s.agentId]: s }));
-    });
-
-    return () => { alive = false; offEvent?.(); offBreaker?.(); };
-  }, []);
-
-  return { samples, spark, rate, lastTool, breakers };
+  return useSyncExternalStore(subscribeFleetTelemetry, getFleetTelemetry, getFleetTelemetry);
 }
 
 /**

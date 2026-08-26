@@ -123,7 +123,8 @@ export function MemoryPanel() {
                 <div style={{ marginTop: 6, color: 'var(--cth-ink-700)' }}>
                   Narrowing a search to one agent is a scope the ASKING agent supplies, so it
                   limits recall rather than enforcing isolation. Enforcement lands with RECALL-02
-                  in Phase 5. For real isolation today, switch memory scope to per-agent.
+                  in Phase 5. There is no per-agent memory setting to switch on in the meantime —
+                  treat every agent&rsquo;s memory as readable by all of them until then.
                 </div>
               </div>
             )}

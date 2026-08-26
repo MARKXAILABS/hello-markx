@@ -754,3 +754,163 @@ test('the window minimum lets the responsive collapse be reached, and both docs 
   assert.equal((design.match(/960/g) || []).length, 2, 'both statements corrected');
   assert.doesNotMatch(design, /bottom drawer/, 'App.tsx renders a right-edge overlay, not a drawer');
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Plan 03-02 Task 2 — T-03-02d / T-03-02g: whose money is on the card?
+//
+// Two symmetric information-disclosure bugs in the same read path, one per
+// direction:
+//
+//   d) A CODEX agent shares a repo cwd with a claude worker. `transcriptFallback`
+//      would call `resolveCwd` and read the NEIGHBOUR's `~/.claude/projects`
+//      transcripts — billing a codex agent for another agent's spend. The fix
+//      (`resolveCodexHome`) was declared on the options type but wired NOWHERE,
+//      so the guard existed and did nothing. That is exactly the defect class
+//      this project keeps paying for, so it is tested with a NEGATIVE CONTROL:
+//      the same fixture read through a collector built WITHOUT the option must
+//      still return the neighbour's totals. Without the control the case passes
+//      on a fixture where both sides happen to read zero.
+//
+//   g) Every OTHER agent. A cwd is not a per-agent transcript root — a
+//      whole-directory sum can include another PROJECT's agent, a deleted agent,
+//      or the operator's own Claude Code CLI sessions. `hasOwnCostSource` is the
+//      gate: TRUE for codex (per-agent CODEX_HOME by construction) and nothing
+//      else. It is a pure function so it is asserted over object literals here.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const { hasOwnCostSource } = loadTs('src/main/hive.ts');
+
+/** A rollout in the shape codex 0.128.0 really writes (the same fixture
+ *  test/engine-parity.test.cjs drives readCodexUsage with). */
+function seedCodexRollout(codexHome, input, cached, output) {
+  const dir = path.join(codexHome, 'sessions', '2026', '08', '26');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'rollout-2026-08-26T10-00-00-019e1250-177c-7b51-aa43-1bc553929cf8.jsonl'),
+    JSON.stringify({
+      timestamp: '2026-08-26T10:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: input, cached_input_tokens: cached, output_tokens: output,
+            reasoning_output_tokens: 0, total_tokens: input + output
+          }
+        }
+      }
+    }) + '\n',
+    'utf8'
+  );
+}
+
+/** One assistant record in the shape transcript.ts's parseUsageLines reads.
+ *  The trailing newline is load-bearing: only complete lines are consumed. */
+function seedClaudeTranscript(cwd, sid, usage) {
+  const dir = projectDir(cwd);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, `${sid}.jsonl`),
+    JSON.stringify({
+      type: 'assistant', sessionId: sid,
+      message: { model: 'claude-sonnet-4-6', usage }
+    }) + '\n',
+    'utf8'
+  );
+}
+
+test('T-03-02d: resolveCodexHome keeps a codex agent off its cwd-sharing neighbour transcripts', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-0302-home-'));
+  const prev = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  const sharedCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'md-0302-cwd-'));
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'md-0302-codex-'));
+  t.after(() => {
+    for (const k of ['HOME', 'USERPROFILE']) {
+      if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+    }
+    for (const d of [home, sharedCwd, codexHome]) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  // The neighbour's money, in the SHARED cwd. Deliberately unlike the codex
+  // figures so "which transcript did it read" is unambiguous.
+  seedClaudeTranscript(sharedCwd, 'sid-claude-1', {
+    input_tokens: 111, output_tokens: 222,
+    cache_creation_input_tokens: 333, cache_read_input_tokens: 444
+  });
+  // The codex agent's OWN money, in its own CODEX_HOME.
+  seedCodexRollout(codexHome, 5000, 1000, 700);
+
+  // The registry both collectors read, mirroring production: same cwd, two providers.
+  const agents = {
+    cx: { cwd: sharedCwd, provider: 'codex' },
+    cl: { cwd: sharedCwd, provider: 'claude' }
+  };
+  const resolveCwd = (id) => agents[id]?.cwd ?? null;
+
+  // Production wiring: gated on the registry's OWN recorded provider.
+  const gated = new TelemetryCollector({
+    resolveCwd,
+    resolveCodexHome: (id) => (agents[id]?.provider === 'codex' ? codexHome : null)
+  });
+  const cx = gated.getAgentUsage('cx');
+  assert.ok(cx, 'the codex agent read no usage at all — the fixture is not being parsed, so this case proves nothing');
+  assert.equal(cx.input, 4000, 'codex input is input_tokens - cached_input_tokens');
+  assert.equal(cx.cacheRead, 1000);
+  assert.equal(cx.output, 700, 'the codex agent must read its OWN rollout, not the neighbour output of 222');
+  assert.equal(cx.cacheCreation, 0, 'codex has no cache-creation concept — a 333 here is the claude neighbour bleeding through');
+
+  // NEGATIVE CONTROL. Same fixture, same id, collector built WITHOUT the option
+  // — i.e. production before this plan. It MUST bill the neighbour, or the
+  // assertions above are green for the wrong reason.
+  const ungated = new TelemetryCollector({ resolveCwd });
+  const leak = ungated.getAgentUsage('cx');
+  assert.ok(leak, 'the negative control read nothing — the shared-cwd claude fixture is not wired, so the case above cannot bite');
+  assert.equal(leak.input, 111, 'without resolveCodexHome the codex agent is billed the neighbour transcripts — if this is 4000 the control is not controlling');
+  assert.equal(leak.output, 222);
+  assert.equal(leak.cacheCreation, 333);
+  assert.notEqual(leak.output, cx.output, 'both sides read the same number — the fixture does not discriminate');
+
+  // And the claude agent itself is untouched by the wiring: resolveCwd still wins for it.
+  const cl = gated.getAgentUsage('cl');
+  assert.equal(cl.output, 222, 'a non-codex agent fallback must be exactly what it was before');
+});
+
+test('T-03-02g: hasOwnCostSource is true for codex and NOTHING else', () => {
+  const shared = '/repo/one';
+  const agents = {
+    cx: { cwd: shared, provider: 'codex' },       // shares a cwd, still true
+    solo: { cwd: '/repo/solo', provider: 'claude' },
+    twinA: { cwd: shared, provider: 'claude' },
+    twinB: { cwd: shared, provider: 'claude' },
+    other: { cwd: '/repo/other', provider: 'crush' },
+    legacy: { cwd: '/repo/legacy' }               // provider absent -> '?? claude'
+  };
+
+  assert.equal(hasOwnCostSource(agents, 'cx'), true,
+    'codex keeps its rollouts in a PER-AGENT CODEX_HOME this app derives — sharing a cwd is irrelevant to it');
+  assert.equal(hasOwnCostSource(agents, 'solo'), false,
+    'a cwd is not a per-agent transcript root even when this registry holds it alone: another PROJECT agent, '
+    + 'a deleted agent, or the operator own Claude Code CLI sessions can all be living in that directory');
+  assert.equal(hasOwnCostSource(agents, 'twinA'), false,
+    'two claude workers in one repo cannot be told apart by a whole-directory sum');
+  assert.equal(hasOwnCostSource(agents, 'twinB'), false);
+  assert.equal(hasOwnCostSource(agents, 'other'), false,
+    'an engine with no per-agent transcript reader of its own');
+  assert.equal(hasOwnCostSource(agents, 'nope'), false,
+    'an unknown id must not throw and must not be true');
+  assert.equal(hasOwnCostSource(agents, 'legacy'), false,
+    'an absent provider means claude (the `?? "claude"` default the rest of hive.ts uses), which is false');
+});
+
+// T-03-02c (spawnedAt) is NOT asserted here. It was, as a pair of source regexes
+// over hive.ts — which is the weaker claim: `spawnedAt: Date.now()` being spelled
+// in the upsert and the stamp actually ADVANCING on a respawn are different
+// facts, and only the second is the behaviour the card depends on. Worse, the
+// regex reddens on a refactor that keeps the behaviour exactly (hoisting the
+// `Date.now()` into a local), which is a gate that cries wolf.
+// The real guard drives the real `ensureAgent` twice:
+// test/hive-durability.test.cjs, '03-02: ensureAgent stamps spawnedAt, and a
+// RESPAWN advances it' — verified red against the `prev?.spawnedAt ?? Date.now()`
+// spelling this plan explicitly warns against.

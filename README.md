@@ -138,6 +138,9 @@ tmux-era MVP spec, kept for history — it no longer describes the app.
 - Every agent is an avatar on a pixel-art office floor whose state reflects real work.
 - An orchestrator you talk to — by text or, with **Talk**, by voice.
 - Optional per-agent git worktrees so parallel agents never collide on branches.
+- One project per running app. Each project keeps its own settings, agents, memory, tasks and
+  history in its own home folder, and switching relaunches the app into it — two projects never
+  run side by side at the same time.
 
 **Memory & coordination**
 - The hive — per-agent memory, atomic-file mailboxes, a shared blackboard, an append-only event
@@ -149,8 +152,8 @@ tmux-era MVP spec, kept for history — it no longer describes the app.
   agent can recall every other agent's notes; that is the feature and it is also the
   exposure. Recall can be narrowed to one agent, but the agent asking is the one that names
   the scope, so it limits what comes back rather than enforcing isolation. Server-side
-  enforcement lands with RECALL-02 in Phase 5. For real isolation today, set memory scope to
-  per-agent, which puts each agent in its own index rather than trusting a flag.
+  enforcement lands with RECALL-02 in Phase 5. There is no per-agent memory setting to turn on
+  in the meantime — until RECALL-02 lands, treat every agent's memory as readable by all of them.
 - A knowledge base of your own documents, queryable by any agent. **Off by default**; search
   is keyword scoring over text chunks, not entities or a graph.
 

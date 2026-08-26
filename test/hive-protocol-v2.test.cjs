@@ -767,3 +767,103 @@ test('integrate refuses rather than sweeping unrelated work into the merge', asy
   assert.equal(wrongBranch.ok, false);
   assert.match(wrongBranch.error, /not 'main'/);
 });
+
+// ─── SCALE-03 — the same diff, read by TIME instead of by card ──────────────
+//
+// `taskSpend` answers "what did card t-1 cost". The day band asks a different
+// question of the same rows — "what was spent between 09:15 and 09:30" — and
+// D-22 is explicit that a second lane must not re-derive the diff its own way.
+// So `applyCostRow` is hoisted out of the class, exported, and made to RETURN
+// the delta it already computed; `dailyCostRows` is a thin loop over it.
+//
+// The arithmetic is unchanged. What is new is the return channel, and the
+// null-`task_id` exit is the load-bearing half of it: that guard credits no
+// card (correctly — the spend belongs to no card), but the DAY total is not
+// card-scoped and must still see it. An exit that returns nothing loses every
+// between-cards cost sample from the day, silently.
+
+const { applyCostRow } = loadTs('src/main/hive.ts');
+
+test('SCALE-03: applyCostRow returns its delta on BOTH exits, including the null-task one', () => {
+  const carded = applyCostRow(new Map(), new Map(), {
+    agent_id: 'jim-1', session_id: 's1', task_id: 't-1', input: 2, output: 2, usd: 5
+  });
+  assert.deepEqual(carded, { tokens: 4, usd: 5 },
+    'the final `return delta` is missing — the carded exit hands dailyCostRows nothing to bill');
+
+  const between = applyCostRow(new Map(), new Map(), {
+    agent_id: 'jim-1', session_id: 's1', input: 1, output: 1, usd: 2
+  });
+  assert.deepEqual(between, { tokens: 2, usd: 2 },
+    'the `if (!taskId)` exit returned undefined. It still credits no card — that part is right — '
+    + 'but it must hand the caller the delta it already computed, or the day total silently drops '
+    + 'every cost sample recorded while an agent was between cards');
+
+  // The guard's SEMANTICS are unchanged by the widening: it still credits no card.
+  const byTask = new Map();
+  applyCostRow(byTask, new Map(), { agent_id: 'jim-1', session_id: 's1', input: 9, output: 9, usd: 9 });
+  assert.equal(byTask.size, 0,
+    'a null-task row was billed to a card. Returning the delta must not also start crediting it.');
+});
+
+test('SCALE-03: a mid-day session rollover opens a NEW series — its first row bills its own whole value', (t) => {
+  const { hive } = floor(t);
+  hive.writeTasks([card('t-roll', { status: 'doing', assignee: 'jim-1', budgetTokens: 100000 })]);
+
+  // The morning session runs a real cumulative total up to 600 tokens.
+  hive.appendCostLedger(cumulative('jim-1', 100, 50, 1.50, 's-morning'));  // opens at 150 → +150
+  hive.appendCostLedger(cumulative('jim-1', 400, 200, 6.00, 's-morning')); // 600 − 150   → +450
+  assert.equal(hive.taskSpend('t-roll').tokens, 600, 'the morning series did not add up');
+
+  // THE ROLLOVER — a genuinely new OTel session starting mid-sequence, not a
+  // transcript fallback. Its counter restarts at zero, so its first snapshot is
+  // far SMALLER than the morning's running total.
+  hive.appendCostLedger(cumulative('jim-1', 20, 10, 0.30, 's-afternoon'));
+  const spend = hive.taskSpend('t-roll');
+  assert.equal(spend.tokens, 630,
+    `the card reads ${spend.tokens} tokens after the rollover, not 630. Three ways to get here, all `
+    + 'wrong: keying the series on agent_id alone clamps 30 − 600 to 0 and the card gains nothing; '
+    + 'an unclamped agent-only key hands back a negative; summing the snapshots gives 780. The new '
+    + '(agent_id, session_id) pair has no predecessor, so its first row is its OWN whole value.');
+  assert.equal(Number(spend.usd.toFixed(2)), 6.30, 'usd must follow the same series rule as tokens');
+
+  // And the afternoon then diffs against ITSELF, not against the morning.
+  hive.appendCostLedger(cumulative('jim-1', 50, 25, 0.75, 's-afternoon'));
+  assert.equal(hive.taskSpend('t-roll').tokens, 675, '75 − 30 = 45 more, inside the new series');
+});
+
+test('SCALE-03: dailyCostRows diffs the whole ledger and keeps null-task rows in the DAY total', (t) => {
+  const { home, hive } = floor(t);
+  const DAY = 24 * 60 * 60 * 1000;
+  const dayStart = Date.UTC(2026, 0, 15, 0, 0, 0);
+  const dayEnd = dayStart + DAY;
+
+  const raw = (sessionId, taskId, ts, tokens, usd) => JSON.stringify({
+    agent_id: 'jim-1', session_id: sessionId, task_id: taskId, ts,
+    input: tokens, output: 0, cache_read: 0, cache_creation: 0, model: 'claude-x', usd
+  }) + '\n';
+
+  fs.writeFileSync(path.join(home, 'hive', 'cost-ledger.jsonl'), [
+    // BEFORE the day. Excluded from the answer, but it must still SEED the diff
+    // — otherwise the first in-day row looks like a series opening and bills its
+    // whole cumulative value instead of the day's actual spend.
+    raw('s1', 't-a', dayStart - 1000, 100, 1.00),
+    raw('s1', 't-a', dayStart + 60_000, 250, 2.50),   // 250 − 100 → +150 / +1.50
+    raw('s1', null, dayStart + 120_000, 300, 3.00),   // 300 − 250 → +50  / +0.50, no card
+    raw('s2', 't-b', dayStart + 180_000, 40, 0.40),   // new series → +40  / +0.40
+    raw('s2', 't-b', dayEnd + 1000, 90, 0.90)         // AFTER the day
+  ].join(''));
+
+  const rows = hive.dailyCostRows(dayStart, dayEnd);
+  assert.deepEqual(rows.map((r) => r.tokens), [150, 50, 40],
+    `dailyCostRows returned ${JSON.stringify(rows.map((r) => r.tokens))}. [250, 50, 40] means the `
+    + 'pre-boundary row did not seed the diff; a missing 50 means the null-task exit returned '
+    + 'undefined and the between-cards sample fell out of the day.');
+  assert.deepEqual(rows.map((r) => r.taskId), ['t-a', null, 't-b'],
+    'a null task_id is a real fact about the row (the agent was between cards) — it belongs in the '
+    + 'day total and must stay distinguishable from a card');
+  assert.deepEqual(rows.map((r) => Number(r.usd.toFixed(2))), [1.50, 0.50, 0.40]);
+  assert.deepEqual(rows.map((r) => r.ts), [dayStart + 60_000, dayStart + 120_000, dayStart + 180_000],
+    'rows outside [dayStart, dayEnd) must not be RETURNED, only used as diff seed');
+  assert.equal(rows.every((r) => r.agentId === 'jim-1'), true, 'each row must name its agent');
+});

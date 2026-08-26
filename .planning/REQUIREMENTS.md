@@ -180,8 +180,16 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 
 - [ ] **STRUCT-01**: `src/main/index.ts` is split along its seams (agent lifecycle, shutdown,
       scheduler, workers, IPC), each extraction landing tests that cannot exist today
-- [x] **STRUCT-02**: `src/main/hive.ts` is split (git committer, messaging, provider
-      provisioning, templates)
+- [x] **STRUCT-02**: `src/main/hive.ts` is split (git committer, provider provisioning,
+      templates) — `gitCommitter.ts`, `hiveProvisioning.ts` and `hiveTemplates.ts` are
+      genuinely extracted, but **messaging was not extracted**: `routeMessage`, `emitMessage`,
+      `terminalHandoff`, `startRouter`, `stopRouter` and `routeOnce` are all still
+      `HiveManager` methods in `hive.ts`, as are the task ledger and the cost ledger.
+      *Phase 3 adopts this overclaim as a named open item (03-09, D-01) rather than silently
+      absorbing it.* The residue is testability debt, not a Phase-3 blocker — SCALE-01's
+      isolation seam is `hive.root()` (`hive.ts:655`), a lazy `join(getHome(), 'hive')` that
+      the unextracted router already calls exactly as the extracted modules do; extracting
+      messaging would move that call, not change it (D-02).
 
 ### GATE — the trust boundary: what an agent may do, and who says yes
 
@@ -196,11 +204,44 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
 - [ ] **GATE-02**: `env` inside any agent terminal shows the hive's own variables and not the
       operator's cloud, git or API credentials — *distinct from FLOOR-04, which protects the
       hive's git history, not the child env of a shell an agent controls*
+      *Status: OPEN, ruled at the phase-4 close (plan 04-19) on wave-7 evidence.* The filter
+      ships at the three `...process.env` spreads it owns and is **live-verified in both
+      directions from inside a real authenticated `claude` agent's own `env`** — a planted
+      `HIVE_CANARY_KEEP` and `USERPROFILE` present, a planted `CANARY_DROP` and
+      `AWS_SECRET_ACCESS_KEY` absent, with the operator's re-admit hatch proven to work. **Two
+      named clauses remain unmet.** (a) **D-13's own condition — one live NON-Claude engine
+      still authenticates and completes a task under the filter — did not run.** Both installed
+      non-Claude engines fail auth (`codex`: `401 refresh_token_reused`; `gemini-cli`:
+      `IneligibleTierError`), and each failure reproduces byte-for-byte with the operator's
+      complete unfiltered environment and no `PtyManager` in the path, so attribution is proven
+      and the clause is simply unrunnable here. (b) **Ceiling item (j): two further
+      `...process.env` spawns in `src/main/` are still unfiltered** — `hive.ts`'s proxy sidecar
+      and `index.ts`'s codex app-server daemon. Neither is an agent *terminal*, which is why the
+      requirement's literal wording holds, and both are named in `SECURITY.md` rather than left
+      to be discovered. **Owner: the hive maintainer** for (b); (a) needs one authenticated
+      non-Claude account. One unmet clause is not closed — the same adjudication GATE-01 took.
 - [ ] **GATE-03**: A tool call is judged in main against the actual command string, on every
       engine — `sh -c "rm -rf …"`, `git push origin +main`, `curl … | sh` and a fetch to a host
       outside an allowlist are each refused for a Codex, Grok, pi or OpenCode agent, not only
       for Claude Code *(today `AGENT_DENY_RULES` is prefix matching written into one engine's
       settings file; the other ten take no settings file at all)*
+      *Status: OPEN, ruled at the phase-4 close (plan 04-19) on wave-7 evidence.* The judge ships
+      in main and is refused **through the real `HookServer`** for Claude-shaped and Codex-shaped
+      `PreToolUse` payloads, driven by the real shim as a child process, in **both** command
+      shapes and with a tool name that is not Claude's `Bash`. Main-side judging reaches **seven**
+      engines, not four. **But: NO LIVE AGENT HAS EVER BEEN OBSERVED REFUSED.** Plan 04-13 task 4
+      owned that measurement and recorded the machine-readable line `LIVE GATE-03 REFUSAL: no` —
+      which records that no live experiment ran (codex auth is revoked), **not** that a live agent
+      sailed through. **Three of this requirement's four named engines — Grok, pi, OpenCode — are
+      not installed on this machine and none was ever live-verified**; all three ship
+      `LIVE-UNVERIFIED` with the marker ledger reconciled, which is the prescribed outcome under
+      the zero-recurring-cost rule, not a pass. Two further clauses are unmet by construction and
+      named in `SECURITY.md`'s 13-item ceiling: `git clone`/`npm`/`pip` against an unlisted host
+      is **not reached** (the host arm is scoped to a downloader's own argument, measured after
+      the wider form produced a false-positive storm), and OpenCode's path arm cannot see a file
+      read (`output.args.filePath` vs the collected `file_path`/`path`/`notebook_path`).
+      **What would settle the live half: `codex login`, then one interactive agent asked to run
+      one of the four shapes inside its own worktree.**
 - [ ] **GATE-04**: An agent runs with its engine's own sandbox **on** and still completes hive
       housekeeping — it finishes a task, mails, and writes memory with no write refused
       *(disabled at `agentProvider.ts:216-226` because `workspace-write` blocked
@@ -209,22 +250,79 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       engines with different sandbox semantics across three OSes; the failure mode of a
       floor-wide flip is "the floor silently stops working at 3am", which is worse than the
       failure it prevents.
+      *Status: OPEN, ruled at the phase-4 close (plan 04-19) on wave-7 evidence.* Built exactly as
+      the ⚠️ rider demands — one engine, opt-in, default off, the flag text authored once by
+      `sandboxFlagsForProvider` and spliced identically at both independent command assemblers,
+      with the opt-in-off path byte-identical to a captured baseline. **Two things stop this
+      closing, and the second was not in any plan's scope.** (1) **The live run DID NOT RUN.**
+      This machine's stored ChatGPT refresh token is revoked (`401 refresh_token_reused`,
+      re-tested twice ~90 minutes apart), so no codex agent ever reached a model turn, no shell
+      tool call was emitted and **no write was ever attempted**. What *was* measured, twice: codex
+      0.128.0 on win32 admits the sibling agent dir into its writable-root set — the configuration
+      layer, not enforcement. openai/codex#23552 is OPEN and **neither reproduced nor ruled out**.
+      (2) **Built but NOT WIRED.** Both assemblers accept an `agentDir`; **no production caller
+      passes one** — every `buildSpawnCommand(config, model, provider)` site is three-argument —
+      so turning the opt-in on today yields `-s workspace-write` **without** the agent's folder
+      added, which is the very failure #23552 describes. Any wiring must go through
+      `sandboxFlagsForProvider`. **Owner: the hive maintainer.** Leave the opt-in off.
 - [ ] **GATE-05**: There is a third answer between allow and deny — an agent about to run
       something unrecoverable stops, the operator is asked wherever they are, and the call
       proceeds only on an explicit yes, with a bounded wait that times out to deny *(today
       `control.ts:97` returns `{deny}` synchronously and human approval "rides Claude's native
       prompt", which `autoMode: true` suppresses — the floor has deny and bypass, nothing
       between)*
+      *Status: OPEN, ruled at the phase-4 close (plan 04-19) on wave-7 evidence.* The third answer
+      exists and the bounded wait is real: `HookServer` owns an `ApprovalRegistry`, the shim polls
+      on a fresh short connection, and **eight integration cases drive the real shim's real stdout
+      as child processes on win32, zero skipped, in 10.5 s** — unanswered denies, an explicit yes
+      allows, a pre-ask dead socket allows, a mid-ask dead socket denies, a cross-agent poll is
+      rejected, a TTL past the boot timer still denies, and a poll that opens and never replies
+      denies on its own timer at >4 500 ms. The desktop banner and the phone's `GET /asks` /
+      `POST /answer` endpoints are both unit-verified. **Three clauses are unmet.** (a) **"Wherever
+      they are" does not reach a phone that is asleep.** `askPushPayload` **composes and is called
+      by nothing**; `push.ts` persists a VAPID keypair and `webhook.ts` has no
+      subscription-intake route, so **no `PushSubscription` has ever existed in this process**.
+      **Owner: whoever adds the intake route.** (b) **The physical-device half never ran** — no
+      Android device is reachable from this session (`adb` absent, no SDK), and Quick Tunnels mint
+      a new hostname per open so an installed PWA needs a fresh QR each time. Recorded as a
+      first-class outcome, exactly as Phase 2 did for DAEMON-02. (c) **On four engines the third
+      answer degrades back into the second** — pi, OpenCode, grok and agy take the reply's deny
+      and never poll, and the ask is still *opened* for them so the operator is paged and their
+      answer is inert. That is the safe side and it is in `SECURITY.md`'s ceiling as fail-open 4.
 
 ### RECORD — what happened is still on disk tomorrow
 
-- [ ] **RECORD-01**: "Who wrote this file, and what did the floor run overnight" is answerable
+- [x] **RECORD-01**: "Who wrote this file, and what did the floor run overnight" is answerable
       after a restart — every agent tool call is persisted with agent, timestamp, tool and
-      target *(today spans are an in-memory ring of 200 per agent, `telemetry.ts:126`, so the
+      target *(today spans are an in-memory ring of 200 per agent, `telemetry.ts:161`, so the
       record is thinnest exactly after a crash)*
-- [ ] **RECORD-02**: A day that has already happened is still fully readable — a busy day's
+      *Complete, ruled at the phase-4 close (plan 04-19).* `tool_calls` is written from the hook
+      socket — the one place agent, tool and **target** exist for every bridged engine — with a
+      **token-derived** `agent_id`, and a real row was observed landing in `floor.persist` on a
+      **really-booted floor**, so the writer is wired in production and not only in a unit.
+      **The crash test named by the requirement was RUN, not inferred:** a real process holding an
+      open `PersistStore` handle was `SIGKILL`ed with a **160 712-byte uncheckpointed WAL** and no
+      `close()`; a second, independent process then reopened the same file and answered both
+      questions from disk — *"who wrote this file"* → `a1 / Edit / SECURITY.md / allow`, and
+      *"what did the floor run overnight"* → all **3** tool_calls plus **2** events recovered.
+      **Two scope statements, so this is not read wider than it is.** (a) What was killed was a
+      real Node process holding the real store, **not the Electron app** — no GUI session exists
+      here; the mechanism under test (WAL recovery after an uncheckpointed kill) is identical and
+      the app-level teardown is separately pinned by `SHUTDOWN_STEPS`. (b) `synchronous = NORMAL`
+      under WAL survives a **process** crash and is **not** guaranteed against an OS or power loss
+      until the next checkpoint — the right trade, stated in `TELEMETRY.md` rather than silently
+      upgraded. The proxy-tier engines (qwen, crush) and copilot have no tool-call boundary to
+      record at, which is an architectural limit named in `SECURITY.md`, not a partial fix.
+- [x] **RECORD-02**: A day that has already happened is still fully readable — a busy day's
       events and cost have not been discarded by an 8 MB rotate-keeping-one-generation window
-      *(`LOG_ROTATE_BYTES`, `hive.ts:267` — this is the storage SCALE-03's replay reads)*
+      *(`LOG_ROTATE_BYTES`, `hive.ts:375` — this is the storage SCALE-03's replay reads)*
+      *Complete, ruled at the phase-4 close (plan 04-19).* `events` mirrors every hive event
+      verbatim beside the crash-safe JSONL (a mirror failure costs the mirror, never the log), and
+      `eventsBetween` is deliberately **unlimited** — a day minus whatever fell past a `LIMIT` is
+      precisely the one-generation rotate this requirement replaces. A day driven past **16 MiB**
+      through the real `appendLog` reads back **whole, from its first row**. The table is bounded
+      by a 30-day prune that deletes **strictly older** than its argument, so the retention
+      window's own edge is never eaten. Both events survived the real-`SIGKILL` restart above.
 - [x] **RECORD-03**: `taskSpend()` on a long, expensive card reports `over` true when it is
       true — spend is computed over all of that card's rows, not a 1 MB tail
       *(`COST_TAIL_BYTES`)* — **prerequisite of FLOOR-10**
@@ -232,13 +330,22 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       **difference** between cumulative usage snapshots, not their sum *(`AgentUsageSample`
       rows are documented cumulative at `telemetry.ts:11` and `db.ts:44`; `taskSpend()` sums
       them, over-counting roughly quadratically)* — **prerequisite of FLOOR-10**
-- [ ] **RECORD-05**: The operator can put one file back to how it was at 02:00 without losing
+- [x] **RECORD-05**: The operator can put one file back to how it was at 02:00 without losing
       three other agents' work — the floor writes periodic restore points that leave the
       operator's index, working tree, branches, `git status` and `git log` untouched
       *(`isolate` defaults to false, so the ordinary floor is N agents sharing one working tree
       with no restore point)*
       ⚠️ Must reuse the hive repo's existing `UNTRACK_PATHS` ignore discipline — a bare
       `add -A` over a tree with a fat untracked build directory produces enormous commits.
+      *Complete, ruled at the phase-4 close (plan 04-19).* Restore points ride a shadow `GIT_DIR`,
+      so the operator's own repo is never touched. Driven against real repositories at close
+      (**11 / 11, 0 fail**): one file of three restored, the other **two byte-identical**, and the
+      operator's `status --porcelain`, `rev-parse HEAD` and branch list all **unchanged**
+      afterwards; a gitignored directory contributes **0 entries**; a nested repo survives; the
+      store is excluded **twice** (an ignore seed and `UNTRACK_PATHS`), which is the ⚠️ rider; and
+      the sweep timer is in `SHUTDOWN_STEPS` and pinned there by name, so it cannot be dropped
+      silently. Identity is keyed on `realpathSync.native`, so a symlinked or `subst`ed root does
+      not open a second store on the same repo.
 
 ### VIGIL — the floor notices what is *not* happening
 
@@ -246,17 +353,71 @@ shipped half is recorded under "Validated" in `PROJECT.md`, not re-litigated her
       routes and no spend lands for longer than a threshold, the operator is told once, with
       what was in flight when it stopped, **including the case where the god itself died**
       *(every escalation today is edge-triggered; `HEARTBEAT_MISSION` ships disabled)*
-- [ ] **VIGIL-02**: A card whose owner died goes back on the board within a minute, naming who
+      *Status: OPEN, ruled at the phase-4 close (plan 04-19) on wave-7 evidence.* The watchdog is
+      real and level-triggered, lives in `floor/watchdog.ts`, and is torn down by
+      `floor.shutdown()` with the timer pinned by name. Verified at close (**11 / 11, 0 fail**):
+      silence past the threshold alarms **exactly once** (1, then 0 across 5 ticks, then 1), it
+      fires **when the god itself is the dead one** and is addressed to the operator rather than
+      to `god`, and the payload names the cards that were `doing` at the transition. The desktop
+      `QUIET` chip's route is asserted at **all three hops** on a really-booted floor.
+      **One clause is unmet: "the operator is told" reaches the desktop and nothing else.** The
+      alarm's push half **composes a payload and logs it** — the code says so in its own warning
+      line — because `webhook.ts` has no `PushSubscription` intake route and none has ever been
+      captured in this process. A floor that goes quiet while the operator is away from the desk
+      does not reach them. **Same single root cause as GATE-05's clause (a); one fix closes both.
+      Owner: whoever adds the intake route.**
+- [x] **VIGIL-02**: A card whose owner died goes back on the board within a minute, naming who
       dropped it and where their branch is, rather than reading as in-progress forever
       *(`teardownPty` clears breaker/control/telemetry and touches the ledger not at all)*
+      *Complete, ruled at the phase-4 close (plan 04-19).* Not "within a minute" — **in the
+      teardown tick, synchronously**, through `deps.hive`, so there is no window in which a dead
+      agent's card reads as in-progress. Verified at close (**20 / 20, 0 fail**): the release
+      names the dropping agent; a follow-up patch carries the branch and the
+      `worktreeHasUnintegratedWork` detail; a git failure **loses the branch and never the
+      release** (`released.branch === undefined`, asserted strictly); and a teardown with no card
+      writes nothing at all. The renderer puts `DROPPED BY` in the vacated slot with no branch
+      placeholder. *Residual, named rather than buried:* the follow-up patch reads-filters-then-
+      patches, so a sub-millisecond window exists in which another writer could take the card —
+      losing that race costs the branch **label** on a card already safely back on the board, and
+      `patchTask`'s `expectedRev` compare-and-swap still prevents any clobber. It is the same
+      window every main-side card mutation in this codebase has; closing it needs the `tasks.lock`
+      upgrade `hive.ts`'s `mutateTasks` already documents. **Owner: the hive maintainer.**
 - [ ] **VIGIL-03**: An agent blocked on a prompt is visibly blocked even when its terminal is
       not on screen, and is never flipped to idle by the quiesce backstop and then mailed more
       work *(only the mounted terminal is parsed today — `terminalPool.ts:57` has a single
       `onData` slot, and `useHive.ts:697-726` says so in its own comment)*
-- [ ] **VIGIL-04**: The board shows how long something has been waiting — every card and every
+      *Status: OPEN, ruled at the phase-4 close (plan 04-19) on wave-7 evidence.* Detection moved
+      into main and **works with no renderer module loaded at all** (proven by a `require.cache`
+      scan with a positive control), `BLOCK_HINTS` exists exactly once with the renderer's
+      duplicate deleted, and the two harms the requirement names are both closed and tested: a
+      blocked agent is **not** idled by quiesce and **not** mailed by the wake nudge, and
+      `blocked` is a **required** `DeliveryDeps` member so it cannot be forgotten at a call site.
+      `blocked` also beats `armed` on the roster badge, so it is visible off-screen. **One clause
+      is unmet, and it is the one this requirement's generality rests on: `BLOCK_HINTS` was moved
+      verbatim from Claude Code's TUI shapes and has never been observed matching ANY other
+      engine.** The phase's single opportunity to measure it — plan 04-13 task 4's live codex
+      agent — recorded `LIVE VIGIL-03 BLOCKED: no`, which means the experiment never ran, not that
+      the hints failed. So "an agent blocked on a prompt" is verified for Claude-shaped output and
+      **unmeasured for the other six engines**. *Second residual, accepted rather than hidden:*
+      `blockReason` is singular per agent, so a burst of refusals shows only the latest and there
+      is no floor-wide denial log. **What would settle the first: `codex login`, then watch one
+      agent sit on a prompt.**
+- [x] **VIGIL-04**: The board shows how long something has been waiting — every card and every
       unanswered ASK ME question renders its age, so a card nine hours in `doing` is
       distinguishable at a glance from one four minutes in *(`HiveTask` has `createdAt` and no
       `updatedAt`; `humanQA.askedAt` is parsed and rendered nowhere)*
+      *Complete, ruled at the phase-4 close (plan 04-19).* `HiveTask` now declares `updatedAt`,
+      stamped in `writeTasks` and **diff-driven**, so all five direct callers are covered by one
+      choke point and an unchanged card keeps its value; `add` / `patch` / `claim` / `done` each
+      stamp an ISO `updatedAt >= createdAt`, driven through `writeTasks` directly with an
+      unchanged-sibling assertion, and a legacy `createdAt`-only card round-trips untouched.
+      `relAge` matches the existing renderer copy at all five boundaries with negative and NaN
+      inputs degrading to `0s`, and age renders on **both** surfaces the requirement names — cards
+      (four channels at 9 h, none at 4 min, `done` taking no emphasis) and unanswered asks — with
+      the four-channel distinction asserted as one test across both. **45 renderer cases green at
+      close, 0 fail.** *One criterion was met executably rather than literally and is recorded as
+      such:* plan 04-04's stated `>= 4` count of `updatedAt` mentions in `hiveTemplates.ts`
+      measured **3**, and was discharged instead by four spawned-CLI cases proving the behaviour.
 
 ### VERDICT — "done" means someone else checked, with evidence
 
@@ -470,27 +631,27 @@ goals and success criteria each requirement rolls up into.
 | PARITY-01b | Phase 2 | Complete |
 | PARITY-02 | Phase 2 | Complete |
 | PARITY-03 | Phase 2 | Complete |
-| SCALE-01 | Phase 3 | Pending |
+| SCALE-01 | Phase 6 — Close the forward dependencies | Pending |
 | SCALE-02 | Phase 3 | Pending |
-| SCALE-03 | Phase 3 | Pending |
+| SCALE-03 | Phase 6 — Close the forward dependencies | Pending |
 | SCALE-04 | Phase 3 | Pending |
 | SCALE-05 | Phase 3 | Pending |
 | STRUCT-01 | Phase 2 | Pending |
 | STRUCT-02 | Phase 2 | Complete |
 | GATE-01 | Phase 1 | Pending |
-| GATE-02 | Phase 4 | Pending |
-| GATE-03 | Phase 4 | Pending |
-| GATE-04 | Phase 4 | Pending |
-| GATE-05 | Phase 4 | Pending |
-| RECORD-01 | Phase 4 | Pending |
-| RECORD-02 | Phase 4 | Pending |
+| GATE-02 | Phase 4 | Open — live non-Claude clause unrunnable here |
+| GATE-03 | Phase 4 | Open — no live agent ever observed refused |
+| GATE-04 | Phase 4 | Open — did not run (codex auth) and not wired |
+| GATE-05 | Phase 4 | Open — phone half device-unverified, push not delivered |
+| RECORD-01 | Phase 4 | Complete |
+| RECORD-02 | Phase 4 | Complete |
 | RECORD-03 | Phase 1 | Complete |
 | RECORD-04 | Phase 1 | Complete |
-| RECORD-05 | Phase 4 | Pending |
-| VIGIL-01 | Phase 4 | Pending |
-| VIGIL-02 | Phase 4 | Pending |
-| VIGIL-03 | Phase 4 | Pending |
-| VIGIL-04 | Phase 4 | Pending |
+| RECORD-05 | Phase 4 | Complete |
+| VIGIL-01 | Phase 4 | Open — alarm reaches the desktop only |
+| VIGIL-02 | Phase 4 | Complete |
+| VIGIL-03 | Phase 4 | Open — hints never observed on a non-Claude engine |
+| VIGIL-04 | Phase 4 | Complete |
 | VERDICT-01 | Phase 5 | Pending |
 | VERDICT-02 | Phase 1 | Complete |
 | VERDICT-03 | Phase 1 | Complete |
@@ -501,23 +662,23 @@ goals and success criteria each requirement rolls up into.
 | RECALL-05 | Phase 5 | Pending |
 | STANDING-01 | Phase 5 | Pending |
 | STANDING-02 | Phase 5 | Pending |
-| GSD-01 | Phase 6 | Pending |
-| GSD-02 | Phase 6 | Pending |
-| GSD-03 | Phase 6 | Pending |
-| GSD-04 | Phase 6 | Pending |
-| GSD-05 | Phase 6 | Pending |
+| GSD-01 | Phase 7 | Pending |
+| GSD-02 | Phase 7 | Pending |
+| GSD-03 | Phase 7 | Pending |
+| GSD-04 | Phase 7 | Pending |
+| GSD-05 | Phase 7 | Pending |
 | GSD-06 | Phase 2 | Complete |
-| DESK-01 | Phase 6 | Pending |
-| DESK-02 | Phase 6 | Pending |
-| DESK-03 | Phase 6 | Pending |
-| DESK-04 | Phase 6 | Pending |
-| REACH-01 | Phase 6 | Pending |
-| REACH-02 | Phase 6 | Pending |
-| REACH-03 | Phase 6 | Pending |
+| DESK-01 | Phase 7 | Pending |
+| DESK-02 | Phase 7 | Pending |
+| DESK-03 | Phase 7 | Pending |
+| DESK-04 | Phase 7 | Pending |
+| REACH-01 | Phase 7 | Pending |
+| REACH-02 | Phase 7 | Pending |
+| REACH-03 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: **71 total**
-- Mapped to phases: **71** (Phase 1: 23 · Phase 2: 12 · Phase 3: 5 · Phase 4: 11 · Phase 5: 8 · Phase 6: 12)
+- Mapped to phases: **71** (Phase 1: 23 · Phase 2: 12 · Phase 3: 5 · Phase 4: 11 · Phase 5: 8 · Phase 7: 12)
 - **Unmapped: 0** — verified programmatically against `ROADMAP.md`'s `**Requirements**:` lines:
   71 mapped, no orphans, no duplicates, no ids mapped that are not requirements. Every
   requirement is also cited by at least one success criterion inside its own phase.
@@ -535,7 +696,7 @@ criterion untrue if it lands after, so none is held for a later phase:
 Consequently four categories are **split across phases**, deliberately, and stated in the
 roadmap at both ends: GATE (01 in Phase 1, 02-05 in Phase 4), RECORD (03/04 in Phase 1,
 01/02/05 in Phase 4), VERDICT (02/03 in Phase 1, 01 in Phase 5) and GSD (06 in Phase 2,
-01-05 in Phase 6).
+01-05 in Phase 7).
 
 **Two further forward dependencies were found and are NOT resolved by moving requirements** —
 they are recorded in ROADMAP.md's Phase 3 block instead, because resolving them by pull-forward
@@ -544,7 +705,7 @@ cascades (RECALL-02 cannot be built without RECALL-01's server, which would holl
 | Criterion | Depends forward on | Resolution |
 |---|---|---|
 | SCALE-01 (Phase 3) | RECALL-02 (Phase 5) | isolation is `--wing`-flag deep until RECALL-02; re-verify after Phase 5 rather than close it in Phase 3 - or run Phase 3 after Phases 4-5 |
-| SCALE-03 (Phase 3) | RECORD-02 (Phase 4) | replay reads an 8 MB window, not a day, until RECORD-02; same resolution |
+| SCALE-03 (Phase 3) | RECORD-02 (Phase 4) — **landed** | The 8 MB rotate was never the mechanism: `LOG_ROTATE_BYTES` (`hive.ts:375`) has never fired in measured use. The real cap was the absence of a **time-range query** plus `LOG_TAIL_BYTES = 64 KB` (`hive.ts:383`), a *read* cap 128x tighter than the rotate. RECORD-02 closed both — `PersistStore.eventsBetween` (`db.ts:450`) is the time-range query, and the replay bound is now **retention** (`EVENT_RETENTION_MS`, 30 days, `db.ts:70`), not rotation. Re-verify SCALE-03 in the post-Phase-5 phase; not closed here (D-07, D-21) |
 
 ---
 *Requirements defined: 2026-08-20*

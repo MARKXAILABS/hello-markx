@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { Modal } from './Modal';
 import { PixelButton } from './PixelButton';
+import { TeamReviewModal } from './TeamReviewModal';
 import { SpritePortrait } from './SpritePortrait';
 import { Icon } from './Icon';
 import { ProviderLogo } from './ProviderLogo';
@@ -24,6 +25,7 @@ import {
   AUTO_ACCOUNT_LABEL,
   decodeAccountChoice,
   buildSpawnCommand,
+  hireCommandFor,
   tokenizeCommand,
   modelsForProvider,
   inferAgentProvider,
@@ -31,6 +33,7 @@ import {
   isClaudeProvider,
   capabilityGaps
 } from '@/store/config';
+import { batchAgentIds } from '@/hooks/bulkSpawn';
 
 const ACCENTS: AccentColorName[] = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'];
 
@@ -128,8 +131,55 @@ function basename(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path;
 }
 
+/** One agent id for the single-hire form.
+ *
+ *  A DELEGATE, deliberately: the slug/timestamp rule itself lives in
+ *  `batchAgentIds` (hooks/bulkSpawn.ts) and is shared with the team-import bulk
+ *  hire. While it lived here it was module-private, so UI-SPEC S3a's flagged
+ *  collision hazard — two same-named members hired in the same millisecond getting
+ *  the SAME id — could not be reached by any test at all. Routing this path through
+ *  the exported generator is what makes test/bulk-spawn.test.cjs a test of the code
+ *  the app runs rather than of a copy of the rule. */
 function uniqueId(name: string): string {
-  return `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`;
+  return batchAgentIds([name], Date.now())[0];
+}
+
+/** What `team:export` can come back with. */
+export interface TeamExportResult {
+  ok: boolean;
+  members?: number;
+  skipped?: number;
+  error?: string;
+}
+
+/**
+ * The message an export outcome deserves — error banner, status line, or neither.
+ *
+ * Exported as a pure function for the measured reason `formatRemaining` and
+ * `blockReasonFromApproval` are (see `test/renderer-components.test.cjs`): this rule
+ * table lives inside a click handler, and `renderToStaticMarkup` fires no events, so
+ * left inline it would be provable only by a grep over the source. Pulled out, every
+ * outcome is an assertion.
+ *
+ * The rule that matters: NEITHER "nothing was written" NOR "something was left out"
+ * may be silent. An export that quietly loses agents is worse than one that refuses,
+ * because the operator only finds out when the file fails to re-import.
+ */
+export function exportOutcomeText(res: TeamExportResult): { error?: string; notice?: string } {
+  if (!res.ok) {
+    // The operator closing the save dialog is not a failure. Every other error —
+    // including 'no roster to export' — flows through the existing error banner.
+    if (!res.error || res.error === 'cancelled') return {};
+    return { error: res.error };
+  }
+  const members = res.members ?? 0;
+  const skipped = res.skipped ?? 0;
+  const agents = (n: number): string => `${n} agent${n === 1 ? '' : 's'}`;
+  if (members === 0 && skipped === 0) return { notice: 'no agents to export' };
+  if (skipped > 0) {
+    return { notice: `Exported ${agents(members)} — ${agents(skipped)} left out (this app could not re-import them).` };
+  }
+  return { notice: `Exported ${agents(members)}.` };
 }
 
 export interface AddAgentModalProps {
@@ -152,12 +202,10 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     (ACCENTS.includes(a as AccentColorName) ? (a as AccentColorName) : 'sky');
   /** The locally-built spawn command for a manifest: provider preset + model
    *  from the LOCAL config builder, with the manifest's validated flags
-   *  appended. A manifest can never name the binary itself. */
-  const hireCommand = (m: HireManifest): string => {
-    const prov: AgentProvider = m.provider ?? inferAgentProvider(config.defaultCommand);
-    const base = buildSpawnCommand(config, m.model, prov);
-    return m.commandFlags?.length ? `${base} ${m.commandFlags.join(' ')}` : base;
-  };
+   *  appended. A manifest can never name the binary itself. The rule itself is
+   *  `hireCommandFor` in store/config.ts, shared with the team-import bulk hire so
+   *  the two paths cannot drift into building different commands. */
+  const hireCommand = (m: HireManifest): string => hireCommandFor(m, config);
 
   // Default provider follows whatever the global default command is (claude
   // unless the user reconfigured it); the model only carries over for Claude.
@@ -237,6 +285,15 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   // Note shown when the folder was auto-filled from the pasted session id.
   const [folderNote, setFolderNote] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
+  /** Non-error feedback. The modal had only `error` (a coral banner), and an
+   *  export that succeeded-but-left-members-out is not an error — showing it in
+   *  red would be as wrong as showing it nowhere. One line of state rather than a
+   *  second modal or a toast. */
+  const [notice, setNotice] = useState<string | undefined>();
+  /** The members of an imported team@1 file, awaiting review. Non-null opens the
+   *  review sheet over this modal — a team NEVER prefills this single-agent form,
+   *  and never spawns without passing through that sheet. */
+  const [teamToReview, setTeamToReview] = useState<HireManifest[] | null>(null);
   const [busy, setBusy] = useState(false);
   // Which config section the left sidebar index is showing.
   const [section, setSection] = useState<SectionKey>('identity');
@@ -318,11 +375,26 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
     setIsolate(m.isolate ?? false);
   };
 
+  /** One button, two formats (D-17): the main process branches on the parsed
+   *  `spec` and hands back EITHER a single manifest OR a team. A hire@1 file keeps
+   *  filling this form directly, exactly as before; a team@1 file opens the review
+   *  sheet instead, because a bulk hire needs a per-member confirmation this form
+   *  has nowhere to put. Neither ever auto-spawns. */
   const importHire = async () => {
     setError(undefined);
+    setNotice(undefined);
     const res = await window.cth.importHireFile();
     if (res.ok && res.manifest) applyManifest(res.manifest);
+    else if (res.ok && res.team) setTeamToReview(res.team.members);
     else if (res.error && res.error !== 'cancelled') setError(res.error);
+  };
+
+  /** Write the floor out as a team@1 file. The outcome's copy is
+   *  `exportOutcomeText` above — a pure function, so every branch is testable. */
+  const exportTeam = async () => {
+    const out = exportOutcomeText(await window.cth.exportTeam());
+    setError(out.error);
+    setNotice(out.notice);
   };
 
   const submit = async () => {
@@ -438,6 +510,7 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
   };
 
   return (
+    <>
     <Modal
       title="ADD AGENT"
       onClose={onClose}
@@ -968,7 +1041,16 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
                       </div>
                     )}
 
-                    <Row label={config.autoMode && preset.autoFlag ? 'Command (auto mode on)' : 'Command'}>
+                    {/* GATE-04: a READ-ONLY reflection of the Settings opt-in, never a
+                        second control. A per-engine setting with two controls in two
+                        places is how the two splice sites drift in the UI as well as in
+                        the code — the operator turns the sandbox on in Settings, and this
+                        label only reports what that did. */}
+                    <Row label={config.autoMode && preset.autoFlag
+                      ? (config.providerSandbox?.[provider] && preset.sandboxFlags
+                        ? 'Command (auto mode on · sandbox on)'
+                        : 'Command (auto mode on)')
+                      : 'Command'}>
                       <input
                         value={command}
                         onChange={(e) => setCommand(e.target.value)}
@@ -1045,6 +1127,18 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               </div>
             )}
 
+            {notice && (
+              <div style={{
+                padding: '6px 10px',
+                background: 'var(--cth-cream-100)',
+                boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+                fontSize: 'var(--cth-text-body-md)', lineHeight: 'var(--cth-lh-body-md)',
+                color: 'var(--cth-ink-900)'
+              }}>
+                {notice}
+              </div>
+            )}
+
             {/* Import-hire explainer + AI prompt generator (item 7) */}
             <div style={{
               padding: '8px 10px',
@@ -1097,18 +1191,50 @@ export function AddAgentModal({ onClose, config, onConfigChange }: AddAgentModal
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-              <PixelButton variant="secondary" size="md" onClick={importHire} disabled={busy} title="Import a hire manifest (.json)">
-                import hire…
-              </PixelButton>
-              <div style={{ flex: 1 }} />
-              <PixelButton variant="ghost" size="md" onClick={onClose} disabled={busy}>cancel</PixelButton>
-              <PixelButton variant="primary" size="md" onClick={submit} disabled={busy}>
-                {busy ? 'spawning...' : 'spawn'}
-              </PixelButton>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                {/* Paired with import so the two file actions read as one affordance
+                    (UI-SPEC S3b). Settings would have buried it beside resetAll —
+                    this repo already has one hiring feature nobody can find. */}
+                <PixelButton variant="secondary" size="md" onClick={exportTeam} disabled={busy} title="Export this floor as a team file (.json)">
+                  export team…
+                </PixelButton>
+                {/* Label names both formats (D-17). It used to name only the
+                    single-manifest case, which this same channel outgrew once it
+                    started accepting a team file too — at which point the old
+                    wording was a lie about what the button does. */}
+                <PixelButton variant="secondary" size="md" onClick={importHire} disabled={busy} title="Import a hire or a team file (.json)">
+                  import…
+                </PixelButton>
+                <div style={{ flex: 1 }} />
+                <PixelButton variant="ghost" size="md" onClick={onClose} disabled={busy}>cancel</PixelButton>
+                <PixelButton variant="primary" size="md" onClick={submit} disabled={busy}>
+                  {busy ? 'spawning...' : 'spawn'}
+                </PixelButton>
+              </div>
+              {/* D-16's operator-facing half: the lossiness is declared in the UI,
+                  not only in the file's doc comment. */}
+              <span style={{
+                fontSize: 'var(--cth-text-body-sm)', lineHeight: 'var(--cth-lh-body-sm)',
+                color: 'var(--cth-ink-500)'
+              }}>
+                A team file carries names, engines, models and goals. Folders, accounts and command flags stay on this machine.
+              </span>
             </div>
           </div>
     </Modal>
+    {/* A team@1 import reviews EVERY member before anything spawns (UI-SPEC S3a).
+        It shares this form's operator-picked folder — D-19: one root for the whole
+        team, never a per-member cwd. */}
+    {teamToReview ? (
+      <TeamReviewModal
+        members={teamToReview}
+        config={config}
+        cwd={cwd}
+        onClose={() => setTeamToReview(null)}
+      />
+    ) : null}
+    </>
   );
 }
 

@@ -100,6 +100,23 @@ export interface DeliveryDeps {
   write: (ptyId: string, data: string) => { ok: boolean; error?: string };
   /** Operator's auto-delivery pause for this agent (ControlRegistry). */
   paused: (agentId: string) => boolean;
+  /** Is this agent sitting on a prompt waiting for a human? (VIGIL-03)
+   *
+   *  REQUIRED, not optional, and the difference is the whole of the requirement.
+   *  An agent waiting on a prompt is quiet BY DEFINITION — it paints a static
+   *  frame and emits nothing further — so the quiesce backstop below cannot tell
+   *  it from a finished turn on output timing alone. Flipping it to idle and then
+   *  mailing it work is the failure VIGIL-03 names, and both halves happen on the
+   *  DURABLE path, where no renderer exists to correct them.
+   *
+   *  An optional dep would let a floor boot with no producer at all — a guard
+   *  reading `undefined` forever, which is the shipped-but-unreachable shape this
+   *  requirement exists to end. Required means the composition root must supply
+   *  it or fail to typecheck.
+   *
+   *  Same shape as `paused` above, wired the same way at boot.ts's composition
+   *  root — there, to `matchBlockHint(ptyManager.outputTail(ptyId))`. */
+  blocked: (agentId: string) => boolean;
   /**
    * The durable Stop-hook drain: advances the agent's cursor.json and returns the
    * continuation prompt. `delivered` lists the messages the cursor just passed,
@@ -735,6 +752,18 @@ export class DeliveryService {
       const painted = a.hasOutput && a.lastOutputAt > 0;
       const quiet = painted && now - a.lastOutputAt > QUIESCE_IDLE_MS;
       if (!quiet) { this.quiesced.delete(a.agentId); continue; }
+      // VIGIL-03. Silence is not a finished turn for an agent parked on a
+      // permission prompt: that prompt paints a static frame and emits nothing
+      // further, so it reads as quiet forever. Calling it idle erases the one cue
+      // that it needs a human — and does it on the DURABLE half, where there is
+      // no renderer to correct it (`stopArmDecision` in useHive.ts guards only
+      // the live event emitted below, and a headless floor has no renderer at all).
+      //
+      // Delete-and-continue, not a bare `continue`: an agent that unblocks and is
+      // still quiet must be able to announce a fresh transition, and a stale
+      // membership in `this.quiesced` would swallow it. Same pruning as the line
+      // above and as the roster prune at the top of this method.
+      if (this.deps.blocked(a.agentId)) { this.quiesced.delete(a.agentId); continue; }
       if (this.quiesced.has(a.agentId)) continue;   // already announced this spell
       this.quiesced.add(a.agentId);
       this.deps.setStatus?.(a.agentId, 'idle');
@@ -770,6 +799,12 @@ export class DeliveryService {
       for (const a of live) {
         if (this.switching.has(a.agentId)) continue;      // mid-respawn
         if (this.deps.paused(a.agentId)) continue;         // operator pause
+        // VIGIL-03. Every other filter here is about the FLOOR's state — a
+        // respawn in flight, an operator pause, a renderer veto, a booting TUI —
+        // and none about the AGENT's, which is exactly why a blocked agent gets
+        // mailed more work today: it is quiet, so it reads as ready. The nudge
+        // would land in the prompt's input box, not in a turn.
+        if (this.deps.blocked(a.agentId)) continue;        // parked on a prompt
         if (this.vetoed(a.agentId)) continue;              // human is typing
         if ((this.bootGraceUntil.get(a.ptyId) ?? 0) > now) continue;
         // Mid-turn — or being typed into: the child echoes the human's keystrokes,

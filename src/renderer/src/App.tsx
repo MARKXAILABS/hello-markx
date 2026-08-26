@@ -52,8 +52,63 @@ declare const __APP_VERSION__: string;
 // exactly (783px: no overflow, 782px: overflow) — below this the chip drops
 // the host and renders `PUBLIC` alone — step 2. The host is never truncated
 // at either step.
-const TUNNEL_CHIP_W1 = 833;
-const TUNNEL_CHIP_W2 = 783;
+// ─── RE-MEASURED 2026-08-26, plan 04-18 (VIGIL-01) ───────────────────────────
+//
+// This phase adds a SECOND chip to the same 36px strip, which invalidates any
+// threshold derived without it. All three values below were measured in one
+// session by the method above — a CDP `Emulation.setDeviceMetricsOverride` probe
+// over the REAL built renderer bundle, against the same 48-character probe host
+// — and each is the titlebar's natural content width in one degradation state,
+// summed from the LIVE layout (every child's measured `getBoundingClientRect`
+// width plus the real gap and padding read off `getComputedStyle`). Never
+// arithmetic on font metrics: adding an estimated chip width to 833 is exactly
+// what produced 01-14's zero-width-name defect.
+//
+// MEASURED, both configurations, identical probe:
+//   base (no QUIET chip)     step0 943  step1 840  step2 415
+//   head (both chips)        step0 1079 step1 976  step2 551  step3 505
+// where step0 = everything visible, step1 = auto-mode text hidden, step2 =
+// PUBLIC has also dropped its host, step3 = QUIET has also dropped its duration.
+// The QUIET chip costs a flat 136px at every step (124px chip + the strip's 12px
+// gap), which is the delta and the only delta.
+//
+// TWO FINDINGS, and the base run is what separates them:
+//   (a) THIS PHASE OVERFLOWS THE STRIP AT 800px. Measured at head with the old
+//       constants: scrollWidth 919 > clientWidth 800. Base at 800px: no overflow.
+//       T-04-ABS-09 exactly.
+//   (b) THE OLD CONSTANTS WERE ALREADY STALE BEFORE THIS PHASE, by ~107px:
+//       base step0 measures 943 against a shipped 833, and base step1 measures
+//       840 against a shipped 783. The app grew two 28px icon buttons and a
+//       longer version string in the titlebar since they were taken. Recorded
+//       rather than folded in silently — "it was already broken" and "this phase
+//       broke it" are different facts and the protocol exists to tell them apart.
+//
+// Each threshold is the natural width of the state ABOVE it, because a state
+// must yield as soon as it no longer fits: below W1 the auto-mode text hides,
+// below W2 the PUBLIC chip drops its host, below QUIET_CHIP_W the QUIET chip
+// drops its duration. Verified by a full 1600→400 downward scan of the built
+// head bundle: zero overflow flips at any width. The host is never truncated at
+// any step, and NEITHER CHIP IS EVER DROPPED ENTIRELY — presence is the signal
+// for both, and a strip that hides the fact the floor stopped has failed at the
+// one job this chip has.
+//
+// These are natural-content-width bounds, so they are conservative by however
+// much flex-shrink the row has left (measured 57px in the step-1 state): the
+// strip degrades a little earlier than it strictly must, never later. That
+// direction is the safe one and it is stated rather than tuned away.
+const TUNNEL_CHIP_W1 = 1079;
+const TUNNEL_CHIP_W2 = 976;
+const QUIET_CHIP_W = 551;
+
+/** `32m`, `1h 4m`. Byte-compatible with the phone's `humanDuration`
+ *  (resources/phone/index.html) — one operator reads both surfaces, and minutes
+ *  are the resolution they read at 3am; a seconds field on a five-minute
+ *  threshold is noise. */
+export function humanQuietFor(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
 
 export function App() {
   const agent = useStore(selectedAgent);
@@ -107,6 +162,23 @@ export function App() {
   // never polled.
   const [tunnelUp, setTunnelUp] = useState(false);
   const [tunnelHost, setTunnelHost] = useState('');
+  // VIGIL-01 titlebar chip. A MIRROR of main's latch (useHive effect 2b3 fills
+  // it from plan 04-11's one `floor:quiet` push); the chip renders iff it is
+  // non-null, so absence is the signal here exactly as it is for the tunnel.
+  const floorQuiet = useStore(s => s.floorQuiet);
+  // The label re-derives from `sinceMs + (now - receivedAt)`, so ONE push keeps
+  // counting. Ticked once a minute rather than once a second because the label's
+  // resolution IS minutes — and only while the latch is set, so a moving floor
+  // schedules nothing at all.
+  const [quietNow, setQuietNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!floorQuiet) return;
+    const id = setInterval(() => setQuietNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, [floorQuiet]);
+  const quietFor = humanQuietFor(
+    floorQuiet ? floorQuiet.sinceMs + Math.max(0, quietNow - floorQuiet.receivedAt) : 0
+  );
 
   // Deep link into Settings from anywhere in the tree. Settings' open state is
   // local to App, so a nested control (e.g. "set it now" beside a disabled Talk
@@ -443,6 +515,65 @@ export function App() {
                   {tunnelHost}
                 </span>
               </>
+            )}
+          </button>
+        )}
+        {/* VIGIL-01 — the floor stopped, and this is the persistent desktop half
+            of saying so. Rule Q-3: a STATE, not a repeat notification. It exists
+            while main's latch is set and disappears when the latch clears, which
+            is why plan 04-11 publishes `null` on the clearing edge rather than
+            leaving the last snapshot in place — presence is the signal, exactly
+            as it is for the PUBLIC chip above.
+
+            Geometry copied from that chip field for field, changing only the
+            background: `--cth-on-accent` on `--cth-coral` measures 5.34:1 light /
+            7.12:1 dark, both PASS, so this needs no new colour pairing.
+
+            Rule Q-2: it is a <button> and it opens the task board. "What was in
+            flight when it stopped" IS the DOING column, and with plan 04-12's age
+            on every card the operator sees at a glance that all of them have been
+            sitting for the same thirty-two minutes. VIGIL-01 composes with
+            VIGIL-04 and needs no surface of its own.
+
+            The two store calls are `OfficeFloor.tsx`'s task-board click verbatim,
+            in that ORDER and for a measured reason: `select()` sets
+            `ccTabRequest: null`, so requesting the tab first and selecting second
+            would clear the request it just made. The Command Center is the god's
+            panel (`AgentDetailPanel.tsx:70`), so the god has to be selected for
+            the tab to have anywhere to open. */}
+        {floorQuiet && (
+          <button
+            className="cth-titlebar-nodrag"
+            onClick={() => {
+              const st = useStore.getState();
+              const god = st.agents.find((a) => a.isGod);
+              if (god) st.select(god.id);
+              st.requestCommandCenterTab('tasks');
+            }}
+            // A1 — the visible `QUIET 32m` is not a sufficient accessible name:
+            // it says neither what is quiet nor what clicking does.
+            aria-label={`Floor quiet for ${quietFor} — ${floorQuiet.inFlight.length} ${floorQuiet.inFlight.length === 1 ? 'card' : 'cards'} in flight. Open the task board.`}
+            title="Nothing has moved on the floor. Click to open the task board and see what was in flight when it stopped."
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: 'var(--cth-coral)', color: 'var(--cth-on-accent)',
+              boxShadow: 'inset 0 0 0 1px var(--cth-ink-900)',
+              border: 'none', borderRadius: 0, cursor: 'pointer',
+              padding: '1px 4px 0', flexShrink: 0
+            }}
+          >
+            <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>
+              QUIET
+            </span>
+            {/* Degradation step 3 (new this phase) — below QUIET_CHIP_W the chip
+                drops the duration and renders bare. NEITHER chip is ever dropped
+                entirely: presence is the signal for both, and a 36px strip that
+                hides the fact that the floor stopped has failed at the one job
+                this chip has. */}
+            {!(vpWidth < QUIET_CHIP_W) && (
+              <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 'var(--cth-text-display-md)', lineHeight: 'var(--cth-lh-display-md)' }}>
+                {quietFor}
+              </span>
             )}
           </button>
         )}

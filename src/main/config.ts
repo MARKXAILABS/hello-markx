@@ -7,10 +7,12 @@ import {
   defaultCommandForProvider,
   inferAgentProvider,
   providerPreset,
+  sandboxFlagsForProvider,
   type AgentProvider
 } from '../shared/agentProvider';
 import { defaultMcpDefaults, MCP_CATALOG, MCP_GRANT_PREFIX } from '../shared/mcpCatalog';
 import { expandTilde, normalizeHiveHome } from './fs';
+import { DEFAULT_HOST_ALLOWLIST } from './commandShape';
 import { PersistStore } from './db';
 import { deleteSecret, deleteSecretsWithPrefix, getSecret, setSecret } from './integrations';
 import type { ClaudeAccount } from '../shared/claudeAccounts';
@@ -355,6 +357,11 @@ export interface HarnessConfig {
   providerBaseUrls?: Partial<Record<AgentProvider, string>>;
   /** Per-CLI-provider default model slug, used to pre-fill the model picker. */
   providerDefaultModels?: Partial<Record<AgentProvider, string>>;
+  /** GATE-04 / D-15. Per-CLI-provider sandbox opt-in. ABSENT === OFF, which is the
+   *  behaviour that shipped and therefore the verified fallback — no migration, no
+   *  explicit write. Only engines whose preset declares `sandboxFlags` can act on it
+   *  (codex alone today); it is inert for the rest. Mirrors the renderer store. */
+  providerSandbox?: Partial<Record<AgentProvider, boolean>>;
   /** Master toggle for the Slack → Michael's-queue integration. */
   slackEnabled?: boolean;
   /** Slack app signing secret (Basic Information → Signing Secret). Never logged. */
@@ -371,6 +378,26 @@ export interface HarnessConfig {
    *  done-reply round-trip (a user @-mention → task → result posted back to that
    *  thread) or an agent's own direct in-thread reply — those always stay on. */
   slackProactivePosting?: boolean;
+
+  // ─── SCALE-04 (the daily digest) ──────────────────────────────────────────
+  /** Master switch for the daily digest's TOAST and SLACK arms. Default OFF.
+   *  The file arm is deliberately NOT gated on this: a digest written to the
+   *  hive folder costs nothing and is the one delivery that survives a machine
+   *  with no window, no toast permission and no network. Kept separate from
+   *  `notifications` above, which is scoped to agent lifecycle events — sharing
+   *  one flag would make whichever switch the operator flipped a decoration. */
+  dailyDigest?: boolean;
+  /** Channel id the digest is posted to. A channel id is not a secret (same
+   *  treatment as `slackChannelId` and the webhook triggers' channel-shaped
+   *  fields), so it is deliberately NOT in SECRET_FIELDS. Absent = no Slack arm,
+   *  whatever the other three switches say. */
+  slackDigestChannelId?: string;
+  /** Local hour (0-23) the digest fires at. Absent = `DIGEST_DEFAULT_HOUR` in
+   *  src/main/floor/boot.ts, which is the SINGLE source of that number: it is
+   *  deliberately not restated in `DEFAULTS` below, because a second copy is a
+   *  second thing to keep in step and boot.ts cannot be imported here without
+   *  closing a require cycle (boot.ts imports this file). */
+  digestHour?: number;
 
   // ─── Free Flow (voice dictation → message queue) ───────────────────────────
   /** Master toggle for Free Flow push-to-talk dictation. Default OFF: with it off
@@ -454,6 +481,30 @@ export interface HarnessConfig {
   /** Never condense a file smaller than this; also the section-trigger byte floor.
    *  DECIDED: 16 KB. */
   reflectMinBytes?: number;
+
+  // ─── GATE-02: the operator's env escape hatch ──────────────────────────────
+  /** Additional `process.env` NAMES (never values) that agent spawns may inherit
+   *  past the `allowFromEnv` allowlist in shellEnv.ts — e.g. `['CODEX_API_KEY']`
+   *  for a BYOK engine whose key the operator exported in their own shell rather
+   *  than configuring in the app. Config-file only, by design: it WIDENS a
+   *  security boundary, so it should cost more than a checkbox. Default [].
+   *  Reaches the child through `SpawnOptions.envPassThrough` at both of
+   *  `spawnAgentCore`'s `ptyManager.spawn(` sites; `hiddenClaude.ts` and
+   *  `memory.ts` cannot read it (shellEnv.ts ceiling item (h)). */
+  envPassThrough?: string[];
+
+  // ─── GATE-03: the outbound host allowlist ──────────────────────────────────
+  /** The hosts an agent's commands may reach without the operator being asked —
+   *  matched EXACTLY, after normalization, so `evil.github.com` does not inherit
+   *  `github.com`. Defaults to `DEFAULT_HOST_ALLOWLIST` (commandShape.ts), which
+   *  is marked `[ASSUMED]` and known incomplete: extend it here when a refusal
+   *  names a host this floor legitimately needs.
+   *
+   *  EMPTYING IT IS A DECISION, not a reset. An operator who clears this list has
+   *  said "no outbound hosts", and the judge denies every one of them rather than
+   *  asking once per host at 3am. Deleting the KEY is a different fact — that is
+   *  "not configured", and it takes the default above. */
+  hostAllowlist?: string[];
 }
 
 const DEFAULTS: HarnessConfig = {
@@ -461,6 +512,11 @@ const DEFAULTS: HarnessConfig = {
   harnessHome: null,
   recentHives: [],
   registeredRepos: [],
+  // GATE-02: no name is re-admitted unless the operator names it themselves.
+  envPassThrough: [],
+  // GATE-03: the shipped default, so the judge's fail-closed branch is only ever
+  // reached by an operator who emptied this list themselves.
+  hostAllowlist: [...DEFAULT_HOST_ALLOWLIST],
   autoMode: true,
   defaultCommand: 'claude',
   godProvider: 'claude',
@@ -495,6 +551,11 @@ const DEFAULTS: HarnessConfig = {
   slackChannelId: undefined,
   slackPort: undefined,
   slackProactivePosting: false,
+  // SCALE-04. `digestHour` is deliberately absent, not `9`: boot.ts's
+  // DIGEST_DEFAULT_HOUR is the one place that number lives, and a restated
+  // literal here is exactly the silent disagreement the requirement forbids.
+  dailyDigest: false,
+  slackDigestChannelId: undefined,
   freeflowEnabled: true,
   groqApiKey: undefined,
   freeflowModel: 'whisper-large-v3-turbo',
@@ -674,6 +735,36 @@ const MISSION_FIRED_KEY = 'missionLastFiredAt';
 /** undefined = not opened yet; null = unavailable, so stamps stay in config.json. */
 let firedDb: PersistStore | null | undefined;
 
+/**
+ * `harnessHome` straight off the file, with NONE of `readConfig`'s pipeline.
+ *
+ * This is the getter `firedStore()` below injects, and it must NOT be
+ * `() => readConfig().harnessHome` however much shorter that reads.
+ * `firedStore()` is itself called from inside `readConfig` (via
+ * `withMissionStamps`/`stripMissionStamps`), so a getter that calls `readConfig`
+ * re-enters it — and `migrateMcpConsentV1` and `migrateTriggersV1` are ONE-SHOT
+ * migrations latched by a process-global boolean. The inner read burns the latch,
+ * the outer read then early-returns, and the migration silently never applies:
+ * measured as `test/mcp-per-agent.test.cjs` going red with floor-wide write/secret
+ * MCP consent left armed. A path lookup has no business running two schema
+ * migrations, a secret overlay and a config write.
+ *
+ * Un-cached on purpose: it is read once per `open()`, and `writeConfig` has
+ * already normalized whatever is in the file.
+ */
+function harnessHomeOnDisk(): string | null {
+  try {
+    const p = configPath();
+    if (!existsSync(p)) return null;
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as Partial<HarnessConfig>;
+    return typeof raw.harnessHome === 'string' && raw.harnessHome ? raw.harnessHome : null;
+  } catch {
+    // Unreadable/corrupt config: fall back to the userData path rather than
+    // failing the open. `readConfig` owns quarantining that file, not this.
+    return null;
+  }
+}
+
 function firedStore(): PersistStore | null {
   if (firedDb !== undefined) return firedDb;
   firedDb = null;
@@ -681,13 +772,30 @@ function firedStore(): PersistStore | null {
     // A second connection to the same harness.db index.ts already opens. SQLite in
     // WAL mode is fine with that, and it keeps config.ts free of an import from
     // index.ts — which imports config.
-    const s = new PersistStore();
+    //
+    // SCALE-01: harnessHome-aware, like boot.ts's handle — but through the
+    // file-level reader above, never readConfig(). See its comment.
+    const s = new PersistStore(undefined, harnessHomeOnDisk);
     s.open();
     firedDb = s;
   } catch (e) {
     console.warn('[config] mission stamps stay in config.json:', e instanceof Error ? e.message : String(e));
   }
   return firedDb;
+}
+
+/**
+ * Drop the memoized mission-stamps handle so the NEXT `firedStore()` reopens at
+ * the freshly-resolved default path — this file's own equivalent of
+ * `PersistStore.repoint()`, one memoization layer up.
+ *
+ * Called only from `config:update`'s `harnessHome: null -> set` transition, the
+ * one path that changes the home WITHOUT relaunching. Everywhere else
+ * (`changeHome`, `resetAll`) the process restarts and rebuilds this for free.
+ */
+export function repointFiredStore(): void {
+  firedDb?.close();
+  firedDb = undefined;
 }
 
 function withMissionStamps(cfg: HarnessConfig): HarnessConfig {
@@ -1054,17 +1162,35 @@ export function modelForRole(
  *  flag here removes the interactive tool-approval prompt entirely (#4). Nothing
  *  in this function can put a human back in the loop — the enforcement that
  *  survives a bypass is the `permissions.deny` list in the per-agent settings the
- *  hive writes, plus `control.toolDecision` at PreToolUse. */
+ *  hive writes, plus `control.toolDecision` at PreToolUse.
+ *
+ *  …UNLESS the operator turned this engine's sandbox opt-in on (GATE-04/D-14), in
+ *  which case the bypass is REPLACED by `-s workspace-write --add-dir <agentDir>`:
+ *  the sandbox stays up and the agent's own folder is added as a writable root, so
+ *  hive housekeeping still works. Default is off and is byte-identical to what
+ *  shipped (D-15's verified fallback).
+ *
+ *  L-08 — THIS IS ONE OF TWO INDEPENDENT ASSEMBLERS. `buildSpawnCommand`
+ *  (src/renderer/src/store/config.ts) does the same job for the renderer, and the two
+ *  live in DIFFERENT tsconfig projects, so `npm run typecheck` cannot see a drift
+ *  between them. Any edit here must be mirrored there in the same commit;
+ *  test/spawn-command-parity.test.cjs calls BOTH and asserts they agree, and it is
+ *  the only thing that will catch you. */
 export function commandForAutoMode(
   config: HarnessConfig,
-  provider?: AgentProvider
+  provider?: AgentProvider,
+  agentDir?: string
 ): string {
   const p = provider ?? inferAgentProvider(config.defaultCommand);
   const base = p === 'claude' || p === 'custom'
     ? config.defaultCommand
     : defaultCommandForProvider(p, config.defaultCommand);
   if (!config.autoMode) return base;
-  const flag = autoModeFlagForProvider(p);
+  // Absent === off, so no existing config on disk changes behaviour and no migration
+  // is needed. `sandboxFlagsForProvider` is '' for every engine with no sandbox the
+  // floor can turn on, so an opt-in set for such an engine falls through to the flag.
+  const sandbox = config.providerSandbox?.[p] ? sandboxFlagsForProvider(p, agentDir) : '';
+  const flag = sandbox || autoModeFlagForProvider(p);
   return flag ? `${base} ${flag}` : base;
 }
 
