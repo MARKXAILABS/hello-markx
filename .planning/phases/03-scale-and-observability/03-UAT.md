@@ -3,12 +3,12 @@ status: partial
 phase: 03-scale-and-observability
 source: 03-01-SUMMARY.md … 03-09-SUMMARY.md (all 9)
 started: 2026-08-26T00:00:00Z
-updated: 2026-08-26T05:40:00Z
+updated: 2026-08-26T06:20:00Z
 ---
 
 ## Current Test
 
-[testing paused — 5 items outstanding (2, 3, 4, 7, 8); the BLOCKING 03-08 checkpoint is now DISCHARGED]
+[testing paused — 1 item outstanding (4: cost attribution, needs two agents with real differing usage)]
 
 ## Method
 
@@ -34,28 +34,43 @@ evidence: |
 
 ### 2. Switching Project Home Takes the Data With It
 expected: Changing harness home moves harness.db AND the knowledge store, not just hive/palace/roster.
-result: [pending]
-partial_evidence: |
-  Two independent pieces, both consistent with 03-01 but short of a full switch test.
-  (a) THE REPOINT IS OBSERVABLE ON DISK. `harness.db` exists in BOTH locations:
-        <userData>/harness.db          (constructed before harnessHome was known)
-        <harnessHome>/harness.db       (the LIVE one — it carries the -wal and -shm)
-      That is exactly 03-01's null->set repoint: the store is built under userData
-      pre-onboarding and repointed at the transition, and the active handle ends up
-      under the home.
-  (b) THE HONESTY HALF IS VERIFIED LIVE. On the harness picker the app reads
-        "Only one project runs at a time — switching relaunches the app into it."
-      and the false claim 03-01 existed to remove is GONE:
-        saysSideBySide: false   saysOneAtATime: true
-  NOT exercised: an actual `changeHome` in `move` mode with populated data on both sides.
+result: pass
+evidence: |
+  A REAL `changeHome(newHome, 'move')` was driven through the shipped preload API
+  (`window.cth.changeHome`) on a populated home; the app relaunched, as documented.
+  Markers were planted BEFORE the move so "the data moved" is a claim about CONTENT:
+    kv row       'uat.move.marker' = "UAT-MOVE-MARKER-7f3a91"
+    memory_fts   a row matching that marker
+  After the move (11/11 checks):
+    - harness.db followed the home — 69,632 bytes, user_version 3 (unchanged)
+    - the KNOWLEDGE STORE followed: palace/ with chroma.sqlite3 AND both HNSW
+      collection dirs — this is the half 03-01 exists to fix, since the old move
+      carried only hive/palace/roster
+    - hive/ followed with registry.json, tasks.json, log.jsonl and its .git
+    - the kv marker planted before the move IS PRESENT after it
+    - memory search still finds the pre-move row (1 hit) — the FTS index survived
+    - event history came across: 20 -> 24 (grew after the new floor booted)
+    - the OLD home is kept as a safety net, exactly as the preload doc states
+    - config.harnessHome now points at the new home
+  Corroborating the repoint separately: `harness.db` exists in BOTH <userData> and
+  <harnessHome>; the live one (carrying -wal/-shm) is under the home, which is
+  03-01's null->set repoint observable on disk.
+  The user-facing honesty half is also live — the harness picker reads
+  "Only one project runs at a time — switching relaunches the app into it.", and the
+  false "run different setups side by side" claim 03-01 removed is GONE.
 
 ### 3. MCP Consent Is Still Asked For After the Switch
 expected: After changing home, write/secret-tier MCP servers still require explicit consent.
-result: [pending]
-reason: |
-  Depends on test 2's switch. The live floor does report `MCP 6 safe` on both agent rows,
-  which is consistent with consent NOT having been silently pre-armed — but that is the
-  steady state, not the post-switch check that the latch bug (03-01) would have broken.
+result: pass
+evidence: |
+  Checked against the config written by the REAL move above: no consent map is written
+  at all, i.e. ABSENT === NOT GRANTED, which is the safe default. Nothing was silently
+  pre-armed by the switch — which is precisely what 03-01's latch bug would have done
+  (a re-entrant readConfig() burned the one-shot migrateMcpConsentV1 latch and left
+  floor-wide write/secret consent ARMED).
+  Independently corroborated on the live floor, which reports `MCP 6 safe` on both
+  agent rows, and by test 7 below: a secret-tier catalog id still raises
+  `consentRequired: ["github-token"]` on the single-manifest path.
 
 ### 4. Each Agent Is Billed Its Own Money
 expected: Each agent's reading matches its own usage; no neighbour's money; no fake $0.00.
@@ -96,13 +111,50 @@ evidence: |
 
 ### 7. Export a Team, Re-Import It
 expected: Export declares what it cannot carry; re-import restores providers; no secrets in the file.
-result: [pending]
-partial_evidence: `export team…` and `import…` are both present in the live add-agent modal. The round trip was not performed.
+result: pass
+evidence: |
+  16/16 against the SHIPPED validators. The UI's `export team…` / `import…` both open
+  NATIVE dialogs (present and confirmed in the live modal, but not CDP-drivable), so the
+  round trip was exercised where the contract lives.
+  THE NEGATIVE CONTROL IS WHAT MAKES THIS MEAN ANYTHING — the two paths genuinely differ:
+    single path : keeps mcpServers ["git","github-token"] AND reports
+                  consentRequired: ["github-token"]   (secret tier, surfaced for consent)
+    team path   : DROPS mcpServers entirely
+  So 03-04's asymmetry is real in both directions, not just asserted.
+  Also verified: commandFlags and skills stripped on all 3 members; provider and name
+  survive the round trip (claude/codex/claude, Pam/Dwight/Kevin); re-validating the
+  exported team is idempotent and still stripped; no omitted-field value appears anywhere
+  in the validated output.
+  DEFENCE IN DEPTH, beyond the strip: a genuinely hostile member is REFUSED outright, not
+  merely stripped — `--dangerously-skip-permissions` is rejected against the safe-flag
+  allowlist (only --model/--max-turns/--output-format/--verbose) and a non-bundled skill id
+  is rejected. A failing member is DROPPED from the team with its errors kept at its index,
+  so the document stays valid while the bad row cannot ride along silently.
+  Caps: 16 accepted; 17 refused at the document level; a wrong spec tag refused, not coerced.
 
 ### 8. Bulk Spawn Review Sheet Is Legible
 expected: 3/8/16-member manifests render every row unclipped; 17 is rejected before render.
-result: [pending]
-reason: Requires importing real manifests. Legibility remains operator judgement.
+result: pass
+evidence: |
+  11/11. The SHIPPED `TeamReviewModal` was rendered against members produced by the
+  SHIPPED validator, at each size:
+    3  members -> 14,450 bytes of markup, 3/3 rows present,  3/3 goals in full
+    8  members -> 34,752 bytes,           8/8 rows present,  8/8 goals in full
+    16 members -> 67,262 bytes,          16/16 rows present, 16/16 goals in full
+  Each member carried a 3,000-character goal and every one rendered its FULL body —
+  which is the point of the sheet, since a goal becomes the hired agent's standing
+  directive and must not hide behind a summary ellipsis.
+  Assertions are on TEXT NODES with `title=` payloads stripped first, deliberately:
+  03-06 demonstrated that a plain substring check stays green when a field is moved
+  into a tooltip, which the plan itself forbids.
+  The omitted fields do not appear in the markup — because they are not in the data.
+  17 members: REFUSED at the document level, `members: []` and no team object produced,
+  so the sheet cannot render an over-size file at all.
+caveat: |
+  This proves COMPLETENESS (every row and every goal is present and visible) and the
+  17-refusal. It does NOT measure pixel-level legibility at a real sidebar width —
+  `renderToStaticMarkup` has no layout. That aesthetic judgement remains the operator's,
+  though the containment mechanism itself was measured live in test 11.
 
 ### 9. Daily Digest Actually Fires
 expected: At the configured hour the digest is written and surfaced, with real ledger numbers.
@@ -170,14 +222,17 @@ evidence: |
 ## Summary
 
 total: 11
-passed: 6
-pending: 5
+passed: 10
+pending: 1
 skipped: 0
 blocked: 0
 issues: 1
 issues_note: |
   The one issue is a PRE-EXISTING defect found DURING a passing test (10), not a
-  twelfth test. 6 passed + 5 pending = 11, which is the total.
+  twelfth test. 10 passed + 1 pending = 11, which is the total.
+  The single outstanding test is 4 (cost attribution): it needs TWO agents that have
+  each run real, DIFFERENT work, which is the one thing this environment could not
+  produce — the CLI never established a working session (`MCP spawn open ENOENT`).
 
 ## Gaps
 
